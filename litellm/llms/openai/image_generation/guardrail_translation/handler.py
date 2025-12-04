@@ -52,12 +52,13 @@ class OpenAIImageGenerationHandler(BaseTranslation):
 
         # Apply guardrail to the prompt
         if isinstance(prompt, str):
-            guardrailed_texts, _ = await guardrail_to_apply.apply_guardrail(
-                texts=[prompt],
+            guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+                inputs={"texts": [prompt]},
                 request_data=data,
                 input_type="request",
                 logging_obj=litellm_logging_obj,
             )
+            guardrailed_texts = guardrailed_inputs.get("texts", [])
             data["prompt"] = guardrailed_texts[0] if guardrailed_texts else prompt
 
             verbose_proxy_logger.debug(

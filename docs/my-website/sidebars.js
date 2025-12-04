@@ -316,6 +316,7 @@ const sidebars = {
         slug: "/supported_endpoints",
       },
       items: [
+        "a2a",
         "assistants",
         {
           type: "category",
@@ -827,6 +828,7 @@ const sidebars = {
             "projects/mini-swe-agent",
             "projects/openai-agents",
             "projects/Google ADK",
+            "projects/Agent Lightning",
             "projects/Harbor",
             "projects/Docq.AI",
             "projects/PDL",

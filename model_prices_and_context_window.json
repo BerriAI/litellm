@@ -16881,7 +16881,7 @@
         "output_cost_per_token": 9.9e-07,
         "supports_function_calling": true,
         "supports_reasoning": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_tool_choice": true
     },
     "groq/distil-whisper-large-v3-en": {
@@ -16900,7 +16900,7 @@
         "mode": "chat",
         "output_cost_per_token": 7e-08,
         "supports_function_calling": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_tool_choice": true
     },
     "groq/gemma2-9b-it": {
@@ -16912,7 +16912,7 @@
         "mode": "chat",
         "output_cost_per_token": 2e-07,
         "supports_function_calling": false,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_tool_choice": false
     },
     "groq/llama-3.1-405b-reasoning": {
@@ -16924,7 +16924,7 @@
         "mode": "chat",
         "output_cost_per_token": 7.9e-07,
         "supports_function_calling": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_tool_choice": true
     },
     "groq/llama-3.1-70b-versatile": {
@@ -16937,7 +16937,7 @@
         "mode": "chat",
         "output_cost_per_token": 7.9e-07,
         "supports_function_calling": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_tool_choice": true
     },
     "groq/llama-3.1-8b-instant": {
@@ -16949,7 +16949,7 @@
         "mode": "chat",
         "output_cost_per_token": 8e-08,
         "supports_function_calling": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_tool_choice": true
     },
     "groq/llama-3.2-11b-text-preview": {
@@ -16962,7 +16962,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.8e-07,
         "supports_function_calling": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_tool_choice": true
     },
     "groq/llama-3.2-11b-vision-preview": {
@@ -16975,7 +16975,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.8e-07,
         "supports_function_calling": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -16989,7 +16989,7 @@
         "mode": "chat",
         "output_cost_per_token": 4e-08,
         "supports_function_calling": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_tool_choice": true
     },
     "groq/llama-3.2-3b-preview": {
@@ -17002,7 +17002,7 @@
         "mode": "chat",
         "output_cost_per_token": 6e-08,
         "supports_function_calling": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_tool_choice": true
     },
     "groq/llama-3.2-90b-text-preview": {
@@ -17015,7 +17015,7 @@
         "mode": "chat",
         "output_cost_per_token": 9e-07,
         "supports_function_calling": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_tool_choice": true
     },
     "groq/llama-3.2-90b-vision-preview": {
@@ -17028,7 +17028,7 @@
         "mode": "chat",
         "output_cost_per_token": 9e-07,
         "supports_function_calling": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -17052,7 +17052,7 @@
         "mode": "chat",
         "output_cost_per_token": 7.9e-07,
         "supports_function_calling": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_tool_choice": true
     },
     "groq/llama-guard-3-8b": {
@@ -17073,7 +17073,7 @@
         "mode": "chat",
         "output_cost_per_token": 8e-07,
         "supports_function_calling": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_tool_choice": true
     },
     "groq/llama3-groq-70b-8192-tool-use-preview": {
@@ -17086,7 +17086,7 @@
         "mode": "chat",
         "output_cost_per_token": 8.9e-07,
         "supports_function_calling": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_tool_choice": true
     },
     "groq/llama3-groq-8b-8192-tool-use-preview": {
@@ -17099,7 +17099,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.9e-07,
         "supports_function_calling": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_tool_choice": true
     },
     "groq/meta-llama/llama-4-maverick-17b-128e-instruct": {
@@ -17145,7 +17145,7 @@
         "mode": "chat",
         "output_cost_per_token": 2.4e-07,
         "supports_function_calling": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_tool_choice": true
     },
     "groq/moonshotai/kimi-k2-instruct": {
@@ -17221,7 +17221,7 @@
         "output_cost_per_token": 5.9e-07,
         "supports_function_calling": true,
         "supports_reasoning": true,
-        "supports_response_schema": true,
+        "supports_response_schema": false,
         "supports_tool_choice": true
     },
     "groq/whisper-large-v3": {
@@ -18896,6 +18896,34 @@
         "supports_tool_choice": true,
         "supports_web_search": true
     },
+    "moonshot/kimi-k2-0905-preview": {
+        "cache_read_input_token_cost": 1.5e-07,
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "moonshot",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-06,
+        "source": "https://platform.moonshot.ai/docs/pricing/chat#generation-model-kimi-k2",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_web_search": true
+    },
+    "moonshot/kimi-k2-turbo-preview": {
+        "cache_read_input_token_cost": 1.5e-07,
+        "input_cost_per_token": 1.15e-06,
+        "litellm_provider": "moonshot",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 8e-06,
+        "source": "https://platform.moonshot.ai/docs/pricing/chat#generation-model-kimi-k2",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_web_search": true
+    },
     "moonshot/kimi-latest": {
         "cache_read_input_token_cost": 1.5e-07,
         "input_cost_per_token": 2e-06,
@@ -18953,14 +18981,15 @@
         "supports_vision": true
     },
     "moonshot/kimi-thinking-preview": {
-        "input_cost_per_token": 3e-05,
+        "cache_read_input_token_cost": 1.5e-07,
+        "input_cost_per_token": 6e-07,
         "litellm_provider": "moonshot",
         "max_input_tokens": 131072,
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 3e-05,
-        "source": "https://platform.moonshot.ai/docs/pricing",
+        "output_cost_per_token": 2.5e-06,
+        "source": "https://platform.moonshot.ai/docs/pricing/chat#generation-model-kimi-k2",
         "supports_vision": true
     },
     "moonshot/kimi-k2-thinking": {
@@ -18972,6 +19001,20 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 2.5e-6,
+        "source": "https://platform.moonshot.ai/docs/pricing/chat#generation-model-kimi-k2",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_web_search": true
+    },
+    "moonshot/kimi-k2-thinking-turbo": {
+        "cache_read_input_token_cost": 1.5e-7,
+        "input_cost_per_token": 1.15e-6,
+        "litellm_provider": "moonshot",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 8e-6,
         "source": "https://platform.moonshot.ai/docs/pricing/chat#generation-model-kimi-k2",
         "supports_function_calling": true,
         "supports_tool_choice": true,
@@ -26470,8 +26513,8 @@
         "max_tokens": 128000,
         "max_input_tokens": 128000,
         "max_output_tokens": 128000,
-        "input_cost_per_token": 0.135,
-        "output_cost_per_token": 0.4,
+        "input_cost_per_token": 6e-07,
+        "output_cost_per_token": 2.5e-06,
         "litellm_provider": "wandb",
         "mode": "chat"
     },

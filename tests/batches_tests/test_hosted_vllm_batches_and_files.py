@@ -26,6 +26,7 @@ SERVER_URL = "https://exampleopenaiendpoint-production-0ee2.up.railway.app/v1"
 
 
 @pytest.mark.asyncio()
+@pytest.mark.skip(reason="Local only test")
 async def test_hosted_vllm_full_workflow():
     """
     Test the complete workflow: create file -> create batch -> retrieve batch -> retrieve file.
