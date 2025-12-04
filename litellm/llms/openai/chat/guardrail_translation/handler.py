@@ -62,7 +62,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         # Step 1: Extract all text content, images, and tool calls
         for msg_idx, message in enumerate(messages):
-            self._extract_input_text_and_images(
+            self._extract_inputs(
                 message=message,
                 msg_idx=msg_idx,
                 texts_to_check=texts_to_check,
@@ -80,14 +80,15 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if tool_calls_to_check:
                 inputs["tool_calls"] = tool_calls_to_check  # type: ignore
 
-            guardrailed_texts, guardrailed_images = (
-                await guardrail_to_apply.apply_guardrail(
-                    inputs=inputs,
-                    request_data=data,
-                    input_type="request",
-                    logging_obj=litellm_logging_obj,
-                )
+            guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+                inputs=inputs,
+                request_data=data,
+                input_type="request",
+                logging_obj=litellm_logging_obj,
             )
+
+            guardrailed_texts = guardrailed_inputs.get("texts", [])
+            guardrailed_tool_calls = guardrailed_inputs.get("tools", [])
 
             # Step 3: Map guardrail responses back to original message structure
             if guardrailed_texts and texts_to_check:
@@ -98,12 +99,12 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 )
 
             # Step 4: Apply guardrailed tool calls back to messages
-            if tool_calls_to_check:
+            if guardrailed_tool_calls:
                 # Note: The guardrail may modify tool_calls_to_check in place
                 # or we may need to handle returned tool calls differently
                 await self._apply_guardrail_responses_to_input_tool_calls(
                     messages=messages,
-                    tool_calls=tool_calls_to_check,
+                    tool_calls=guardrailed_tool_calls,  # type: ignore
                     task_mappings=tool_call_task_mappings,
                 )
 
@@ -113,7 +114,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         return data
 
-    def _extract_input_text_and_images(
+    def _extract_inputs(
         self,
         message: Dict[str, Any],
         msg_idx: int,
@@ -153,7 +154,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                                 images_to_check.append(url)
 
         # Extract tool calls (typically in assistant messages)
-        tool_calls = message.get("tool_calls", None)
+        tool_calls = message.get("tools", None)
         if tool_calls is not None and isinstance(tool_calls, list):
             for tool_call_idx, tool_call in enumerate(tool_calls):
                 if isinstance(tool_call, dict):
@@ -300,7 +301,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if guardrailed_texts and texts_to_check:
                 await self._apply_guardrail_responses_to_output_texts(
                     response=response,
-                    responses=guardrailed_texts,
+                    responses=[guardrailed_texts],
                     task_mappings=text_task_mappings,
                 )
 
@@ -427,7 +428,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             # For each choice, replace the combined text across all chunks
             await self._apply_guardrail_responses_to_output_streaming(
                 responses=responses_so_far,
-                guardrailed_texts=guardrailed_texts,
+                guardrailed_texts=[guardrailed_texts],
                 task_mappings=task_mappings,
             )
 

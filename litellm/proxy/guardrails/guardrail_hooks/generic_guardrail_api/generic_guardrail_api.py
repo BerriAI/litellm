@@ -148,7 +148,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         request_data: dict,
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> Tuple[List[str], Optional[List[str]]]:
+    ) -> GenericGuardrailAPIInputs:
         """
         Apply the Generic Guardrail API to the given inputs.
 
@@ -174,6 +174,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         # Extract texts and images from inputs
         texts = inputs.get("texts", [])
         images = inputs.get("images")
+        tool_calls = inputs.get("tools")
 
         # Use provided request_data or create an empty dict
         if request_data is None:
@@ -199,6 +200,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             texts=texts,
             request_data=user_metadata,
             images=images,
+            tool_calls=tool_calls,
             additional_provider_specific_params=additional_params,
             input_type=input_type,
         )
@@ -236,17 +238,19 @@ class GenericGuardrailAPI(CustomGuardrail):
                 )
                 raise Exception(f"Content blocked by guardrail: {error_message}")
 
-            elif guardrail_response.action == "GUARDRAIL_INTERVENED":
-                # Content was modified by the guardrail
-                if guardrail_response.texts:
-                    verbose_proxy_logger.debug("Generic Guardrail API modified text")
-                    return guardrail_response.texts, guardrail_response.images
-
             # Action is NONE or no modifications needed
-            return (
-                guardrail_response.texts or texts,
-                guardrail_response.images or images,
-            )
+            return_inputs = GenericGuardrailAPIInputs(texts=texts)
+            if guardrail_response.texts:
+                return_inputs["texts"] = guardrail_response.texts
+            if guardrail_response.images:
+                return_inputs["images"] = guardrail_response.images
+            elif images:
+                return_inputs["images"] = images
+            if guardrail_response.tools:
+                return_inputs["tools"] = guardrail_response.tools
+            elif tool_calls:
+                return_inputs["tools"] = tool_calls
+            return return_inputs
 
         except Exception as e:
             # Check if it's already an exception we raised

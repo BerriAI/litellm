@@ -60,6 +60,7 @@ class GenericGuardrailAPIRequest:
         litellm_trace_id: Optional[str],
         additional_provider_specific_params: Optional[Dict[str, Any]] = None,
         images: Optional[List[str]] = None,
+        tool_calls: Optional[List[ChatCompletionToolCallChunk]] = None,
     ):
         self.texts = texts
         self.request_data = request_data
@@ -70,6 +71,7 @@ class GenericGuardrailAPIRequest:
         self.input_type = input_type
         self.litellm_call_id = litellm_call_id
         self.litellm_trace_id = litellm_trace_id
+        self.tool_calls = tool_calls
 
     def to_dict(self) -> dict:
         return {
@@ -88,6 +90,7 @@ class GenericGuardrailAPIResponse:
 
     texts: Optional[List[str]]
     images: Optional[List[str]]
+    tools: Optional[List[ChatCompletionToolCallChunk]]
     action: str
     blocked_reason: Optional[str]
 
@@ -97,11 +100,13 @@ class GenericGuardrailAPIResponse:
         texts: Optional[List[str]] = None,
         blocked_reason: Optional[str] = None,
         images: Optional[List[str]] = None,
+        tools: Optional[List[ChatCompletionToolCallChunk]] = None,
     ):
         self.action = action
         self.blocked_reason = blocked_reason
         self.texts = texts
         self.images = images
+        self.tools = tools
 
     @classmethod
     def from_dict(cls, data: dict) -> "GenericGuardrailAPIResponse":

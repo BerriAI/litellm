@@ -454,7 +454,7 @@ class CustomGuardrail(CustomLogger):
         request_data: dict,
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> Tuple[List[str], Optional[List[str]]]:
+    ) -> GenericGuardrailAPIInputs:
         """
         Apply your guardrail logic to the given inputs
 
@@ -476,9 +476,7 @@ class CustomGuardrail(CustomLogger):
                 - If the guardrail raises an exception
 
         """
-        texts = inputs.get("texts", [])
-        images = inputs.get("images")
-        return texts, images
+        return inputs
 
     def _process_response(
         self,

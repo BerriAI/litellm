@@ -744,4 +744,4 @@ class PatchGuardrailRequest(BaseModel):
 class GenericGuardrailAPIInputs(TypedDict, total=False):
     texts: List[str]
     images: List[str]
-    tool_calls: List[ChatCompletionToolCallChunk]
+    tools: List[ChatCompletionToolCallChunk]
