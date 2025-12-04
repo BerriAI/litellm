@@ -1,72 +1,70 @@
-# Adding an OpenAI-Compatible Provider
+---
+id: add_openai_compatible_provider
+title: Add OpenAI-Compatible Provider
+sidebar_label: Add OpenAI-Compatible Provider
+---
 
-For simple OpenAI-compatible providers, you can add support by editing a single JSON file.
+# Add OpenAI-Compatible Provider
 
-## Quick Start
+Quick guide to add a new OpenAI-compatible provider to LiteLLM.
 
-1. **Add your provider to `litellm/llms/openai_like/providers.json`**:
+## Simple Providers (via JSON)
+
+For providers that are fully OpenAI-compatible, just edit one JSON file.
+
+### Steps
+
+1. **Edit the JSON config file**
+
+   Open `litellm/llms/openai_like/providers.json` and add your provider:
+
+   ```json
+   {
+     "your_provider": {
+       "base_url": "https://api.yourprovider.com/v1",
+       "api_key_env": "YOUR_PROVIDER_API_KEY"
+     }
+   }
+   ```
+
+2. **Add to LlmProviders enum**
+
+   Add your provider to `litellm/types/utils.py`:
+
+   ```python
+   class LlmProviders(str, Enum):
+       # ... existing providers
+       YOUR_PROVIDER = "your_provider"
+   ```
+
+3. **Test it**
+
+   ```python
+   import litellm
+   import os
+
+   os.environ["YOUR_PROVIDER_API_KEY"] = "..."
+
+   response = litellm.completion(
+       model="your_provider/model-name",
+       messages=[{"role": "user", "content": "Hello"}]
+   )
+   ```
+
+That's it! Your provider is now integrated.
+
+## Optional JSON Fields
 
 ```json
 {
   "your_provider": {
     "base_url": "https://api.yourprovider.com/v1",
-    "api_key_env": "YOUR_PROVIDER_API_KEY"
-  }
-}
-```
-
-2. **Add provider to enum in `litellm/types/utils.py`**:
-
-```python
-class LlmProviders(str, Enum):
-    # ... existing providers
-    YOUR_PROVIDER = "your_provider"
-```
-
-3. **Test it**:
-
-```python
-import litellm
-import os
-
-os.environ["YOUR_PROVIDER_API_KEY"] = "your-key"
-
-response = litellm.completion(
-    model="your_provider/model-name",
-    messages=[{"role": "user", "content": "Hello!"}]
-)
-```
-
-That's it!
-
-## Configuration Options
-
-### Basic (Required)
-
-```json
-{
-  "provider": {
-    "base_url": "https://api.provider.com/v1",
-    "api_key_env": "PROVIDER_API_KEY"
-  }
-}
-```
-
-### With Optional Fields
-
-```json
-{
-  "provider": {
-    "base_url": "https://api.provider.com/v1",
-    "api_key_env": "PROVIDER_API_KEY",
+    "api_key_env": "YOUR_PROVIDER_API_KEY",
     
-    // Override base URL via environment variable
-    "api_base_env": "PROVIDER_API_BASE",
+    // Override base_url via environment variable
+    "api_base_env": "YOUR_PROVIDER_API_BASE",
     
-    // Base class: "openai_gpt" (default) or "openai_like"
-    "base_class": "openai_gpt",
-    
-    // Map OpenAI params to provider-specific names
+    // Parameter name mappings
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     },
@@ -74,10 +72,10 @@ That's it!
     // Parameter constraints
     "constraints": {
       "temperature_max": 1.0,
-      "temperature_min_with_n_gt_1": 0.3
+      "temperature_min": 0.0
     },
     
-    // Special handling flags
+    // Special handling
     "special_handling": {
       "convert_content_list_to_string": true
     }
@@ -85,81 +83,17 @@ That's it!
 }
 ```
 
-## Field Reference
+## When to Use Python Instead
 
-| Field | Required | Description | Example |
-|-------|----------|-------------|---------|
-| `base_url` | ✅ | API endpoint base URL | `"https://api.provider.com/v1"` |
-| `api_key_env` | ✅ | Environment variable for API key | `"PROVIDER_API_KEY"` |
-| `api_base_env` | ❌ | Env var to override base_url | `"PROVIDER_API_BASE"` |
-| `base_class` | ❌ | Base config class (default: `openai_gpt`) | `"openai_gpt"` or `"openai_like"` |
-| `param_mappings` | ❌ | Parameter name translations | `{"max_completion_tokens": "max_tokens"}` |
-| `constraints` | ❌ | Parameter limits | `{"temperature_max": 1.0}` |
-| `special_handling` | ❌ | Special behavior flags | `{"convert_content_list_to_string": true}` |
+Use a full Python implementation if you need:
+- Custom authentication (OAuth, API key rotation)
+- Complex request/response transformations
+- Provider-specific streaming logic
+- Non-standard endpoints
 
-## Parameter Mappings
+For Python implementations, see [existing providers](https://github.com/BerriAI/litellm/tree/main/litellm/llms).
 
-Use `param_mappings` when the provider uses different parameter names than OpenAI:
-
-```json
-{
-  "param_mappings": {
-    "max_completion_tokens": "max_tokens",
-    "frequency_penalty": "repetition_penalty"
-  }
-}
-```
-
-## Constraints
-
-### Temperature Constraints
-
-```json
-{
-  "constraints": {
-    "temperature_min": 0.0,
-    "temperature_max": 1.0,
-    "temperature_clamp": true
-  }
-}
-```
-
-### Conditional Constraints
-
-```json
-{
-  "constraints": {
-    // When n > 1, ensure temperature >= 0.3
-    "temperature_min_with_n_gt_1": 0.3
-  }
-}
-```
-
-## Special Handling
-
-### Convert Content List to String
-
-Some providers don't support content as a list of objects:
-
-```json
-{
-  "special_handling": {
-    "convert_content_list_to_string": true
-  }
-}
-```
-
-This converts:
-```python
-{"role": "user", "content": [{"type": "text", "text": "Hello"}]}
-```
-
-To:
-```python
-{"role": "user", "content": "Hello"}
-```
-
-## Complete Example: PublicAI
+## Example: PublicAI
 
 ```json
 {
@@ -167,7 +101,6 @@ To:
     "base_url": "https://api.publicai.co/v1",
     "api_key_env": "PUBLICAI_API_KEY",
     "api_base_env": "PUBLICAI_API_BASE",
-    "base_class": "openai_gpt",
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     },
@@ -177,89 +110,3 @@ To:
   }
 }
 ```
-
-Usage:
-
-```python
-import litellm
-import os
-
-os.environ["PUBLICAI_API_KEY"] = "your-key"
-
-# Basic completion
-response = litellm.completion(
-    model="publicai/swiss-ai/apertus-8b-instruct",
-    messages=[{"role": "user", "content": "Hello!"}],
-)
-
-# Streaming
-response = litellm.completion(
-    model="publicai/swiss-ai/apertus-8b-instruct",
-    messages=[{"role": "user", "content": "Hello!"}],
-    stream=True,
-)
-for chunk in response:
-    print(chunk.choices[0].delta.content, end="")
-```
-
-## When to Use Python Instead
-
-Use a Python config class if you need:
-- Custom authentication (OAuth, token rotation)
-- Complex request/response transformations
-- Provider-specific streaming logic
-- Advanced tool calling transformations
-
-For these cases, create a provider in `litellm/llms/your_provider/` following existing patterns.
-
-## Testing
-
-After adding your provider, test with:
-
-```python
-import litellm
-import os
-
-os.environ["YOUR_PROVIDER_API_KEY"] = "test-key"
-
-# Test basic completion
-response = litellm.completion(
-    model="your_provider/model-name",
-    messages=[{"role": "user", "content": "test"}],
-    max_tokens=10,
-)
-assert response.choices[0].message.content
-
-# Test streaming
-response = litellm.completion(
-    model="your_provider/model-name",
-    messages=[{"role": "user", "content": "test"}],
-    stream=True,
-)
-for chunk in response:
-    assert chunk is not None
-```
-
-## Troubleshooting
-
-### Provider not found
-
-Ensure:
-1. Provider is in `litellm/llms/openai_like/providers.json`
-2. Provider is added to `LlmProviders` enum in `litellm/types/utils.py`
-3. JSON is valid (use a JSON validator)
-
-### API errors
-
-Check:
-1. `base_url` is correct
-2. API key environment variable is set
-3. Model name is correct for the provider
-4. Provider endpoint is `/chat/completions` compatible
-
-### Parameter errors
-
-If parameters aren't being accepted:
-1. Check if parameter names need mapping (`param_mappings`)
-2. Verify parameter constraints (`constraints`)
-3. Check provider documentation for supported parameters
