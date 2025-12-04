@@ -263,6 +263,7 @@ class UnifiedLLMGuardrails(CustomLogger):
 
             # Process chunk based on sampling rate
             if chunk_counter % sampling_rate == 0:
+
                 verbose_proxy_logger.debug(
                     "Processing streaming chunk %s (sampling_rate=%s) with guardrail %s",
                     chunk_counter,
