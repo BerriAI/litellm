@@ -316,6 +316,7 @@ const sidebars = {
         slug: "/supported_endpoints",
       },
       items: [
+        "a2a",
         "assistants",
         {
           type: "category",
