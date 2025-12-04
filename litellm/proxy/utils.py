@@ -1417,6 +1417,7 @@ class ProxyLogging:
         3. /image/generation
         4. /files
         """
+
         from litellm.types.guardrails import GuardrailEventHooks
 
         guardrail_callbacks: List[CustomGuardrail] = []
@@ -1451,6 +1452,7 @@ class ProxyLogging:
                     continue
 
                 guardrail_response: Optional[Any] = None
+
                 if "apply_guardrail" in type(callback).__dict__:
                     data["guardrail_to_apply"] = callback
                     guardrail_response = (
@@ -1562,6 +1564,7 @@ class ProxyLogging:
         """
 
         for callback in litellm.callbacks:
+
             _callback: Optional[CustomLogger] = None
             if isinstance(callback, str):
                 _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
@@ -1575,6 +1578,7 @@ class ProxyLogging:
                 ) or _callback.should_run_guardrail(
                     data=request_data, event_type=GuardrailEventHooks.post_call
                 ):
+
                     if "apply_guardrail" in type(callback).__dict__:
                         request_data["guardrail_to_apply"] = callback
                         response = (
