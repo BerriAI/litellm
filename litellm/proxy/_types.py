@@ -2444,6 +2444,7 @@ class CallInfo(LiteLLMPydanticObjectBase):
     user_id: Optional[str] = None
     team_id: Optional[str] = None
     team_alias: Optional[str] = None
+    organization_id: Optional[str] = None
     user_email: Optional[str] = None
     key_alias: Optional[str] = None
     projected_exceeded_date: Optional[str] = None
@@ -3440,9 +3441,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     team_id_upsert: bool = False
     team_ids_jwt_field: Optional[str] = None
     upsert_sso_user_to_team: bool = False
-    team_allowed_routes: List[
-        Literal["openai_routes", "info_routes", "management_routes"]
-    ] = ["openai_routes", "info_routes"]
+    team_allowed_routes: List[str] = ["openai_routes", "info_routes"]
     team_id_default: Optional[str] = Field(
         default=None,
         description="If no team_id given, default permissions/spend-tracking to this team.s",

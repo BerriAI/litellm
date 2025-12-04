@@ -22,6 +22,9 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    update_responses_input_with_model_file_ids,
+)
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.responses.litellm_completion_transformation.handler import (
@@ -37,9 +40,6 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ToolChoice,
     ToolParam,
-)
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    update_responses_input_with_model_file_ids,
 )
 
 # Handle ResponseText import with fallback
@@ -168,7 +168,8 @@ async def aresponses_api_with_mcp(
     ) = LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(tools)
 
     # Process MCP tools through the complete pipeline (fetch + filter + deduplicate + transform)
-    user_api_key_auth = kwargs.get("user_api_key_auth")
+    # Extract user_api_key_auth from litellm_metadata (where it's added by add_user_api_key_auth_to_request_metadata)
+    user_api_key_auth = kwargs.get("user_api_key_auth") or kwargs.get("litellm_metadata", {}).get("user_api_key_auth")
 
     # Get original MCP tools (for events) and OpenAI tools (for LLM) by reusing existing methods
     (
