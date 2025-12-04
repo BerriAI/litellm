@@ -34,6 +34,7 @@ class VertexAIModelRoute(str, Enum):
     BGE = "bge"
     MODEL_GARDEN = "model_garden"
     NON_GEMINI = "non_gemini"
+    OPENAI_COMPATIBLE = "openai"
 
 VERTEX_AI_MODEL_ROUTES = [f"{route.value}/" for route in VertexAIModelRoute]
 
@@ -179,8 +180,6 @@ def get_vertex_base_model_name(model: str) -> str:
     """
     # Derive routing prefixes from VertexAIModelRoute enum
     # Map specific routes to their prefixes (some routes like PARTNER_MODELS, GEMINI don't have prefixes)
-    
-    
     for route in VERTEX_AI_MODEL_ROUTES:
         if model.startswith(route):
             return model.replace(route, "", 1)
