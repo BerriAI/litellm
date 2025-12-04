@@ -1546,6 +1546,8 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     """
 
     vector_stores: Optional[List[str]] = []
+    agents: Optional[List[str]] = []
+    agent_access_groups: Optional[List[str]] = []
 
 
 class LiteLLM_TeamTable(TeamBase):
