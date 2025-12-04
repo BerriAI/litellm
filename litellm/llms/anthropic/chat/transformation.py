@@ -119,6 +119,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def get_config(cls):
         return super().get_config()
 
+    def _is_claude_opus_4_5(self, model: str) -> bool:
+        """Check if the model is Claude Opus 4.5."""
+        return "opus-4-5" in model.lower() or "opus_4_5" in model.lower()
+
     def get_supported_openai_params(self, model: str):
         params = [
             "stream",
@@ -626,7 +630,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         return hosted_web_search_tool
 
-    def map_openai_params(
+    def map_openai_params(  # noqa: PLR0915
         self,
         non_default_params: dict,
         optional_params: dict,
@@ -712,9 +716,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if param == "thinking":
                 optional_params["thinking"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
-                optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
-                    value
-                )
+                # For Claude Opus 4.5, map reasoning_effort to output_config
+                if self._is_claude_opus_4_5(model):
+                    optional_params["output_config"] = {"effort": value}
+                else:
+                    # For other models, map to thinking parameter
+                    optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
+                        value
+                    )
             elif param == "web_search_options" and isinstance(value, dict):
                 hosted_web_search_tool = self.map_web_search_tool(
                     cast(OpenAIWebSearchOptions, value)
@@ -777,6 +786,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 valid_content: bool = False
                 system_message_block = ChatCompletionSystemMessage(**message)
                 if isinstance(system_message_block["content"], str):
+                    # Skip empty text blocks - Anthropic API raises errors for empty text
+                    if not system_message_block["content"]:
+                        continue
                     anthropic_system_message_content = AnthropicSystemMessageContent(
                         type="text",
                         text=system_message_block["content"],
@@ -791,10 +803,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     valid_content = True
                 elif isinstance(message["content"], list):
                     for _content in message["content"]:
+                        # Skip empty text blocks - Anthropic API raises errors for empty text
+                        text_value = _content.get("text")
+                        if _content.get("type") == "text" and not text_value:
+                            continue
                         anthropic_system_message_content = (
                             AnthropicSystemMessageContent(
                                 type=_content.get("type"),
-                                text=_content.get("text"),
+                                text=text_value,
                             )
                         )
                         if "cache_control" in _content:

@@ -41,7 +41,8 @@ Check this in code, [here](../completion/input.md#translated-openai-params)
 "extra_headers",
 "parallel_tool_calls",
 "response_format",
-"user"
+"user",
+"reasoning_effort",
 ```
 
 :::info
@@ -49,6 +50,7 @@ Check this in code, [here](../completion/input.md#translated-openai-params)
 **Notes:**
 - Anthropic API fails requests when `max_tokens` are not passed. Due to this litellm passes `max_tokens=4096` when no `max_tokens` are passed.
 - `response_format` is fully supported for Claude Sonnet 4.5 and Opus 4.1 models (see [Structured Outputs](#structured-outputs) section)
+- `reasoning_effort` is automatically mapped to `output_config={"effort": ...}` for Claude Opus 4.5 models (see [Effort Parameter](./anthropic_effort.md))
 
 :::
 
@@ -198,6 +200,30 @@ Without `LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX`:
 
 With `LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX=true`:
 - Base URL `https://my-proxy.com/custom/path` → `https://my-proxy.com/custom/path` (unchanged)
+
+### Azure AI Foundry (Alternative Method)
+
+:::tip Recommended Method
+For full Azure support including Azure AD authentication, use the dedicated [Azure Anthropic provider](./azure/azure_anthropic) with `azure_ai/` prefix.
+:::
+
+As an alternative, you can use the `anthropic/` provider directly with your Azure endpoint since Azure exposes Claude using Anthropic's native API.
+
+```python
+from litellm import completion
+
+response = completion(
+    model="anthropic/claude-sonnet-4-5",
+    api_base="https://<your-resource>.services.ai.azure.com/anthropic",
+    api_key="<your-azure-api-key>",
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+print(response)
+```
+
+:::info
+**Finding your Azure endpoint:** Go to Azure AI Foundry → Your deployment → Overview. Your base URL will be `https://<resource-name>.services.ai.azure.com/anthropic`
+:::
 
 ## Usage
 

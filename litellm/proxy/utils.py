@@ -1072,6 +1072,7 @@ class ProxyLogging:
             "user_budget",
             "soft_budget",
             "team_budget",
+            "organization_budget",
             "proxy_budget",
             "projected_limit_exceeded",
         ],
@@ -1416,6 +1417,7 @@ class ProxyLogging:
         3. /image/generation
         4. /files
         """
+
         from litellm.types.guardrails import GuardrailEventHooks
 
         guardrail_callbacks: List[CustomGuardrail] = []
@@ -1450,6 +1452,7 @@ class ProxyLogging:
                     continue
 
                 guardrail_response: Optional[Any] = None
+
                 if "apply_guardrail" in type(callback).__dict__:
                     data["guardrail_to_apply"] = callback
                     guardrail_response = (
@@ -1559,7 +1562,9 @@ class ProxyLogging:
         Covers:
         1. /chat/completions
         """
+
         for callback in litellm.callbacks:
+
             _callback: Optional[CustomLogger] = None
             if isinstance(callback, str):
                 _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
@@ -1573,11 +1578,22 @@ class ProxyLogging:
                 ) or _callback.should_run_guardrail(
                     data=request_data, event_type=GuardrailEventHooks.post_call
                 ):
-                    response = _callback.async_post_call_streaming_iterator_hook(
-                        user_api_key_dict=user_api_key_dict,
-                        response=response,
-                        request_data=request_data,
-                    )
+
+                    if "apply_guardrail" in type(callback).__dict__:
+                        request_data["guardrail_to_apply"] = callback
+                        response = (
+                            unified_guardrail.async_post_call_streaming_iterator_hook(
+                                user_api_key_dict=user_api_key_dict,
+                                request_data=request_data,
+                                response=response,
+                            )
+                        )
+                    else:
+                        response = _callback.async_post_call_streaming_iterator_hook(
+                            user_api_key_dict=user_api_key_dict,
+                            response=response,
+                            request_data=request_data,
+                        )
         return response
 
     def _init_response_taking_too_long_task(self, data: Optional[dict] = None):

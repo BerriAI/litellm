@@ -11,13 +11,29 @@
 import asyncio
 import json
 from datetime import datetime
-from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncGenerator,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import aiohttp
 
 import litellm  # noqa: E401
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
+from litellm.types.guardrails import GenericGuardrailAPIInputs
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
 from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
 from litellm.exceptions import BlockedPiiEntityError
@@ -699,23 +715,29 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
     async def apply_guardrail(
         self,
-        text: str,
-        language: Optional[str] = None,
-        entities: Optional[List[PiiEntityType]] = None,
-        request_data: Optional[dict] = None,
-    ) -> str:
+        inputs: "GenericGuardrailAPIInputs",
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+    ) -> "GenericGuardrailAPIInputs":
         """
         UI will call this function to check:
             1. If the connection to the guardrail is working
             2. When Testing the guardrail with some text, this function will be called with the input text and returns a text after applying the guardrail
         """
-        text = await self.check_pii(
-            text=text,
-            output_parse_pii=self.output_parse_pii,
-            presidio_config=None,
-            request_data=request_data or {},
-        )
-        return text
+        texts = inputs.get("texts", [])
+
+        new_texts = []
+        for text in texts:
+            modified_text = await self.check_pii(
+                text=text,
+                output_parse_pii=self.output_parse_pii,
+                presidio_config=None,
+                request_data=request_data or {},
+            )
+            new_texts.append(modified_text)
+        inputs["texts"] = new_texts
+        return inputs
 
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
         """

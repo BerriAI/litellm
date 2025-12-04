@@ -2,6 +2,7 @@ import base64
 from typing import (
     Any,
     Dict,
+    Iterable,
     List,
     Optional,
     Type,
@@ -23,7 +24,12 @@ from litellm.types.llms.openai import (
     ResponseText,
 )
 from litellm.types.responses.main import DecodedResponseId
-from litellm.types.utils import PromptTokensDetails, SpecialEnums, Usage
+from litellm.types.utils import (
+    CompletionTokensDetailsWrapper,
+    PromptTokensDetails,
+    SpecialEnums,
+    Usage,
+)
 
 
 class ResponsesAPIRequestUtils:
@@ -350,6 +356,66 @@ class ResponsesAPIRequestUtils:
                 return text
         return text
 
+    @staticmethod
+    def extract_mcp_headers_from_request(
+        secret_fields: Optional[Dict[str, Any]],
+        tools: Optional[Iterable[Any]],
+    ) -> tuple[
+        Optional[str],
+        Optional[Dict[str, Dict[str, str]]],
+        Optional[Dict[str, str]],
+        Optional[Dict[str, str]],
+    ]:
+        """
+        Extract MCP auth headers from the request to pass to MCP server.
+        Headers from tools.headers in request body should be passed to MCP server.
+        """
+        from starlette.datastructures import Headers
+
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+
+        # Extract headers from secret_fields which contains the original request headers
+        raw_headers_from_request: Optional[Dict[str, str]] = None
+        if secret_fields and isinstance(secret_fields, dict):
+            raw_headers_from_request = secret_fields.get("raw_headers")
+        
+        # Extract MCP-specific headers using MCPRequestHandler methods
+        mcp_auth_header: Optional[str] = None
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None
+        oauth2_headers: Optional[Dict[str, str]] = None
+        
+        if raw_headers_from_request:
+            headers_obj = Headers(raw_headers_from_request)
+            mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers_obj)
+            mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers_obj)
+            oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers_obj)
+
+        if tools:
+            for tool in tools:
+                if isinstance(tool, dict) and tool.get("type") == "mcp":
+                    tool_headers = tool.get("headers", {})
+                    if tool_headers and isinstance(tool_headers, dict):
+                        # Merge tool headers into mcp_server_auth_headers
+                        # Extract server-specific headers from tool.headers
+                        headers_obj_from_tool = Headers(tool_headers)
+                        tool_mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers_obj_from_tool)
+                        if tool_mcp_server_auth_headers:
+                            if mcp_server_auth_headers is None:
+                                mcp_server_auth_headers = {}
+                            # Merge the headers from tool into existing headers
+                            for server_alias, headers_dict in tool_mcp_server_auth_headers.items():
+                                if server_alias not in mcp_server_auth_headers:
+                                    mcp_server_auth_headers[server_alias] = {}
+                                mcp_server_auth_headers[server_alias].update(headers_dict)
+                        # Also merge raw headers (non-prefixed headers from tool.headers)
+                        if raw_headers_from_request is None:
+                            raw_headers_from_request = {}
+                        raw_headers_from_request.update(tool_headers)
+        
+        return mcp_auth_header, mcp_server_auth_headers, oauth2_headers, raw_headers_from_request
+
 
 class ResponseAPILoggingUtils:
     @staticmethod
@@ -385,11 +451,20 @@ class ResponseAPILoggingUtils:
                 cached_tokens=response_api_usage.input_tokens_details.cached_tokens,
                 audio_tokens=response_api_usage.input_tokens_details.audio_tokens,
             )
+        completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
+        if response_api_usage.output_tokens_details:
+            completion_tokens_details = CompletionTokensDetailsWrapper(
+                reasoning_tokens=getattr(
+                    response_api_usage.output_tokens_details, "reasoning_tokens", None
+                )
+            )
+            
         chat_usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
             prompt_tokens_details=prompt_tokens_details,
+            completion_tokens_details=completion_tokens_details,
         )
 
         # Preserve cost attribute if it exists on ResponseAPIUsage

@@ -1,15 +1,26 @@
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Type, Union, get_args
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Type,
+    Union,
+    get_args,
+)
 
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.guardrails import (
     DynamicGuardrailParams,
+    GenericGuardrailAPIInputs,
     GuardrailEventHooks,
     LitellmParams,
     Mode,
-    PiiEntityType,
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
@@ -20,6 +31,8 @@ from litellm.types.utils import (
     StandardLoggingGuardrailInformation,
 )
 
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 dc = DualCache()
 
 
@@ -437,30 +450,33 @@ class CustomGuardrail(CustomLogger):
 
     async def apply_guardrail(
         self,
-        text: str,
-        language: Optional[str] = None,
-        entities: Optional[List[PiiEntityType]] = None,
-        request_data: Optional[dict] = None,
-    ) -> str:
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+    ) -> GenericGuardrailAPIInputs:
         """
-        Apply your guardrail logic to the given text
+        Apply your guardrail logic to the given inputs
 
         Args:
-            text: The text to apply the guardrail to
-            language: The language of the text
-            entities: The entities to mask, optional
-            request_data: The request data dictionary to store guardrail metadata
+            inputs: Dictionary containing:
+                - texts: List of texts to apply the guardrail to
+                - images: Optional list of images to apply the guardrail to
+                - tool_calls: Optional list of tool calls to apply the guardrail to
+            request_data: The request data dictionary - containing user api key metadata (e.g. user_id, team_id, etc.)
+            input_type: The type of input to apply the guardrail to - "request" or "response"
+            logging_obj: Optional logging object for tracking the guardrail execution
 
         Any of the custom guardrails can override this method to provide custom guardrail logic
 
-        Returns the text with the guardrail applied
+        Returns the texts with the guardrail applied and the images with the guardrail applied (if any)
 
         Raises:
             Exception:
                 - If the guardrail raises an exception
 
         """
-        return text
+        return inputs
 
     def _process_response(
         self,
