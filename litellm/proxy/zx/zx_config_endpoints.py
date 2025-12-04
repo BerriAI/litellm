@@ -353,7 +353,7 @@ async def cli_get_config_yaml(token: Annotated[str | None, Header()] = None):
         }
     litellm_user_id = litellm_user_info.user_id
 
-    with open(os.path.join('/app/zx', 'llm_config_zixun.yaml'), 'r', encoding='utf-8') as file:
+    with open(os.path.join('/app/zx', 'llm_ide_continue_config_zixun.yaml'), 'r', encoding='utf-8') as file:
         content = file.read()
     return {
         "data": content.replace('<UTOKEN>', litellm_user_id)

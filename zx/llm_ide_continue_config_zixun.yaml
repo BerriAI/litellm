@@ -23,9 +23,20 @@ models:
     capabilities:
       - tool_use
       - image_input
-  - name: Anthropic Claude 3.7 Sonnet
+  - name: Anthropic Claude 4 Sonnet
     <<: *model_defaults
-    model: claude-3.7-sonnet
+    model: claude-4-sonnet
+    capabilities:
+      - tool_use
+      - image_input
+  - name: Anthropic Claude 4.5 Haiku
+    <<: *model_defaults
+    model: claude-haiku-4-5
+    capabilities:
+      - tool_use
+  - name: Anthropic Claude 4.5 Sonnet
+    <<: *model_defaults
+    model: claude-sonnet-4-5
     capabilities:
       - tool_use
       - image_input
@@ -43,24 +54,3 @@ models:
       - image_input
     roles:
       - autocomplete
-
-# mcpServers:
-#   - name: server-everything
-#     command: npx
-#     args:
-#       - -y
-#       - "@modelcontextprotocol/server-everything"
-#     env: {}
-
-data:
-  - name: DevelopmentData
-    destination: "<SERVER_URL>/zx/continue_plugin/dev_data"
-    schema: 0.2.0
-    level: all
-    # level: noCode
-    # events:
-    #   - autocomplete
-    #   - chatInteraction
-    requestOptions:
-      headers:
-        utoken: "<UTOKEN>"
