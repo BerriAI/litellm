@@ -72,11 +72,27 @@ def test_process_response_blocks_when_threshold_exceeded() -> None:
         event_hook=GuardrailEventHooks.pre_call,
     )
 
+    # Test block mode with input violation (pre_call)
     with pytest.raises(HTTPException) as exc:
-        guardrail._process_grayswan_response({"violation": 0.5, "violated_rules": [1]})
+        guardrail._process_grayswan_response(
+            {"violation": 0.5, "violated_rules": [1]},
+            hook_type=GuardrailEventHooks.pre_call,
+        )
 
     assert exc.value.status_code == 400
     assert exc.value.detail["violation"] == 0.5
+    assert exc.value.detail["detected_in"] == "input"
+
+    # Test block mode with output violation (post_call)
+    with pytest.raises(HTTPException) as exc:
+        guardrail._process_grayswan_response(
+            {"violation": 0.5, "violated_rules": [1]},
+            hook_type=GuardrailEventHooks.post_call,
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail["violation"] == 0.5
+    assert exc.value.detail["detected_in"] == "output"
 
 
 class _DummyResponse:
@@ -265,13 +281,13 @@ def test_process_response_passthrough_does_not_raise_if_under_threshold() -> Non
 
 
 def test_format_violation_message() -> None:
-    """Test that violation message is formatted correctly."""
+    """Test that violation message is formatted correctly for input violations."""
     guardrail = GraySwanGuardrail(
         guardrail_name="grayswan-passthrough",
         api_key="test-key",
         on_flagged_action="passthrough",
         violation_threshold=0.5,
-        event_hook=GuardrailEventHooks.post_call,
+        event_hook=GuardrailEventHooks.pre_call,
     )
 
     detections = [
@@ -285,13 +301,22 @@ def test_format_violation_message() -> None:
         }
     ]
 
-    message = guardrail._format_violation_message(detections)
+    # Test input violation message (pre_call/during_call)
+    message = guardrail._format_violation_message(detections, is_output=False)
 
-    # Check new message format
     assert "Sorry I can't help with that" in message
     assert "Gray Swan Cygnal Guardrail" in message
-    assert "violation score of 0.85" in message
+    assert "the input query has a violation score of 0.85" in message
     assert "violating the rule(s): 1, 3, 5" in message
     assert "Mutation effort to make the harmful intention disguised was DETECTED" in message
     # IPI should not be in message since it's False
     assert "Indirect Prompt Injection was DETECTED" not in message
+
+    # Test output violation message (post_call)
+    message = guardrail._format_violation_message(detections, is_output=True)
+
+    assert "Sorry I can't help with that" in message
+    assert "Gray Swan Cygnal Guardrail" in message
+    assert "the model response has a violation score of 0.85" in message
+    assert "violating the rule(s): 1, 3, 5" in message
+    assert "Mutation effort to make the harmful intention disguised was DETECTED" in message
