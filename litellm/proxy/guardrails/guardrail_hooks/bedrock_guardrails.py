@@ -1250,7 +1250,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         request_data: dict,
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> Tuple[List[str], Optional[List[str]]]:
+    ) -> "GenericGuardrailAPIInputs":
         """
         Apply Bedrock guardrail to a batch of texts for testing purposes.
 
@@ -1264,13 +1264,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             logging_obj: Optional logging object
 
         Returns:
-            Tuple of (processed_texts, images) - texts may be masked, images unchanged
+            GenericGuardrailAPIInputs - processed_texts may be masked, images unchanged
 
         Raises:
             Exception: If content is blocked by Bedrock guardrail
         """
         texts = inputs.get("texts", [])
-        images = inputs.get("images")
         try:
             verbose_proxy_logger.debug(
                 f"Bedrock Guardrail: Applying guardrail to {len(texts)} text(s)"
@@ -1329,7 +1328,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 "Bedrock Guardrail: Successfully applied guardrail"
             )
 
-            return masked_texts, images
+            inputs["texts"] = masked_texts
+            return inputs
 
         except Exception as e:
             verbose_proxy_logger.error(

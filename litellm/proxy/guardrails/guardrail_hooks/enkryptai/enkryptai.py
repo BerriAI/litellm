@@ -15,7 +15,6 @@ from typing import (
     List,
     Literal,
     Optional,
-    Tuple,
     Union,
 )
 
@@ -485,7 +484,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
         request_data: dict,
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> Tuple[List[str], Optional[List[str]]]:
+    ) -> "GenericGuardrailAPIInputs":
         """
         Apply EnkryptAI guardrail to a batch of texts.
 
@@ -496,13 +495,12 @@ class EnkryptAIGuardrails(CustomGuardrail):
             logging_obj: Optional logging object
 
         Returns:
-            Tuple of (texts, images) - texts unchanged if passed, images unchanged
+            GenericGuardrailAPIInputs - texts unchanged if passed, images unchanged
 
         Raises:
             ValueError: If any attacks are detected
         """
         texts = inputs.get("texts", [])
-        images = inputs.get("images")
 
         # Check each text for attacks
         for text in texts:
@@ -519,7 +517,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
                 error_message = self._create_error_message(processed_result)
                 raise ValueError(error_message)
 
-        return texts, images
+        return inputs
 
     async def async_post_call_streaming_iterator_hook(
         self,

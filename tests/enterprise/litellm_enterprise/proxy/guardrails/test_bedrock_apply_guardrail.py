@@ -39,11 +39,12 @@ async def test_bedrock_apply_guardrail_success():
         mock_api_request.return_value = mock_response
 
         # Test the apply_guardrail method with new signature
-        result, _ = await guardrail.apply_guardrail(
+        guardrailed_inputs = await guardrail.apply_guardrail(
             inputs={"texts": ["This is a test message with some content"]},
             request_data={},
             input_type="request",
         )
+        result = guardrailed_inputs.get("texts", [])
 
         # Verify the result
         assert result == ["This is a test message with some content"]
@@ -102,11 +103,12 @@ async def test_bedrock_apply_guardrail_with_masking():
         mock_api_request.return_value = mock_response
 
         # Test the apply_guardrail method with new signature
-        result, _ = await guardrail.apply_guardrail(
+        guardrailed_inputs = await guardrail.apply_guardrail(
             inputs={"texts": ["This is a test message with sensitive content"]},
             request_data={},
             input_type="request",
         )
+        result = guardrailed_inputs.get("texts", [])
 
         # Verify the result contains the masked content
         assert result == ["This is a test message with [REDACTED] content"]
@@ -219,11 +221,12 @@ async def test_bedrock_apply_guardrail_filters_request_messages_when_flag_enable
     ) as mock_api:
         mock_api.return_value = {"action": "ALLOWED"}
 
-        result, _ = await guardrail.apply_guardrail(
+        guardrailed_inputs = await guardrail.apply_guardrail(
             inputs={"texts": ["latest question"]},
             request_data=request_data,
             input_type="request",
         )
+        result = guardrailed_inputs.get("texts", [])
 
         assert mock_api.called
         _, kwargs = mock_api.call_args

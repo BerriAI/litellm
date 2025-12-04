@@ -289,20 +289,20 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if tool_calls_to_check:
                 inputs["tool_calls"] = tool_calls_to_check  # type: ignore
 
-            guardrailed_texts, guardrailed_images = (
-                await guardrail_to_apply.apply_guardrail(
-                    inputs=inputs,
-                    request_data=request_data,
-                    input_type="response",
-                    logging_obj=litellm_logging_obj,
-                )
+            guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="response",
+                logging_obj=litellm_logging_obj,
             )
+
+            guardrailed_texts = guardrailed_inputs.get("texts", [])
 
             # Step 3: Map guardrail responses back to original response structure
             if guardrailed_texts and texts_to_check:
                 await self._apply_guardrail_responses_to_output_texts(
                     response=response,
-                    responses=[guardrailed_texts],
+                    responses=guardrailed_texts,
                     task_mappings=text_task_mappings,
                 )
 
@@ -416,20 +416,20 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
                 inputs["images"] = images_to_check
-            guardrailed_texts, guardrailed_images = (
-                await guardrail_to_apply.apply_guardrail(
-                    inputs=inputs,
-                    request_data=request_data,
-                    input_type="response",
-                    logging_obj=litellm_logging_obj,
-                )
+            guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="response",
+                logging_obj=litellm_logging_obj,
             )
+
+            guardrailed_texts = guardrailed_inputs.get("texts", [])
 
             # Step 4: Apply guardrailed text back to all streaming chunks
             # For each choice, replace the combined text across all chunks
             await self._apply_guardrail_responses_to_output_streaming(
                 responses=responses_so_far,
-                guardrailed_texts=[guardrailed_texts],
+                guardrailed_texts=guardrailed_texts,
                 task_mappings=task_mappings,
             )
 

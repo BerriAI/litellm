@@ -309,7 +309,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         request_data: dict,
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> Tuple[List[str], Optional[List[str]]]:
+    ) -> "GenericGuardrailAPIInputs":
         """
         Apply content filtering guardrail to a batch of texts.
 
@@ -323,13 +323,12 @@ class ContentFilterGuardrail(CustomGuardrail):
             logging_obj: Optional logging object
 
         Returns:
-            Tuple of (processed_texts, images) - texts may be masked, images unchanged
+            GenericGuardrailAPIInputs - processed_texts may be masked, images unchanged
 
         Raises:
             HTTPException: If sensitive content is detected and action is BLOCK
         """
         texts = inputs.get("texts", [])
-        images = inputs.get("images")
 
         verbose_proxy_logger.debug(
             f"ContentFilterGuardrail: Applying guardrail to {len(texts)} text(s)"
@@ -389,7 +388,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         verbose_proxy_logger.debug(
             "ContentFilterGuardrail: Guardrail applied successfully"
         )
-        return processed_texts, images
+        inputs["texts"] = processed_texts
+        return inputs
 
     async def async_post_call_streaming_iterator_hook(
         self,
@@ -426,10 +426,16 @@ class ContentFilterGuardrail(CustomGuardrail):
                         if isinstance(choice.delta.content, str):
                             # Check the chunk content using apply_guardrail
                             try:
-                                processed_content = await self.apply_guardrail(
+                                guardrailed_inputs = await self.apply_guardrail(
                                     inputs={"texts": [choice.delta.content]},
                                     input_type="response",
                                     request_data=request_data,
+                                )
+                                processed_texts = guardrailed_inputs.get("texts", [])
+                                processed_content = (
+                                    processed_texts[0]
+                                    if processed_texts
+                                    else choice.delta.content
                                 )
                                 if processed_content != choice.delta.content:
                                     choice.delta.content = processed_content

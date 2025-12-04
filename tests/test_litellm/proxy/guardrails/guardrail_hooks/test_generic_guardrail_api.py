@@ -344,11 +344,13 @@ class TestGuardrailActions:
         with patch.object(
             generic_guardrail.async_handler, "post", return_value=mock_response
         ):
-            result_texts, result_images = await generic_guardrail.apply_guardrail(
+            guardrailed_inputs = await generic_guardrail.apply_guardrail(
                 inputs={"texts": ["Who is Ishaan?"]},
                 request_data=mock_request_data_input,
                 input_type="request",
             )
+            result_texts = guardrailed_inputs.get("texts", [])
+            result_images = guardrailed_inputs.get("images", None)
 
             assert result_texts == ["Who is Ishaan?"]
             assert result_images is None
@@ -393,11 +395,13 @@ class TestGuardrailActions:
         with patch.object(
             generic_guardrail.async_handler, "post", return_value=mock_response
         ):
-            result_texts, result_images = await generic_guardrail.apply_guardrail(
+            guardrailed_inputs = await generic_guardrail.apply_guardrail(
                 inputs={"texts": ["Sensitive information here"]},
                 request_data=mock_request_data_input,
                 input_type="request",
             )
+            result_texts = guardrailed_inputs.get("texts", [])
+            result_images = guardrailed_inputs.get("images", None)
 
             assert result_texts == ["[REDACTED]"]
             assert result_images is None
@@ -422,7 +426,7 @@ class TestImageSupport:
         with patch.object(
             generic_guardrail.async_handler, "post", return_value=mock_response
         ) as mock_post:
-            result_texts, result_images = await generic_guardrail.apply_guardrail(
+            guardrailed_inputs = await generic_guardrail.apply_guardrail(
                 inputs={
                     "texts": ["What's in this image?"],
                     "images": ["https://example.com/image.jpg"],
@@ -430,6 +434,8 @@ class TestImageSupport:
                 request_data=mock_request_data_input,
                 input_type="request",
             )
+            result_texts = guardrailed_inputs.get("texts", [])
+            result_images = guardrailed_inputs.get("images", None)
 
             # Verify API was called with images
             call_args = mock_post.call_args

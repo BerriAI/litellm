@@ -4,7 +4,7 @@
 #
 # +-------------------------------------------------------------+
 import os
-from typing import TYPE_CHECKING, List, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Literal, Optional
 
 from fastapi import HTTPException
 
@@ -76,7 +76,7 @@ class ZscalerAIGuard(CustomGuardrail):
         request_data: dict,
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> Tuple[List[str], Optional[List[str]]]:
+    ) -> "GenericGuardrailAPIInputs":
         """
         Apply Zscaler AI Guard guardrail to batch of texts.
 
@@ -87,13 +87,12 @@ class ZscalerAIGuard(CustomGuardrail):
             logging_obj: Optional logging object
 
         Returns:
-            Tuple of (processed_texts, images) - texts unchanged if passed, images unchanged
+            GenericGuardrailAPIInputs - texts unchanged if passed, images unchanged
 
         Raises:
             Exception: If content is blocked by Zscaler AI Guard
         """
         texts = inputs.get("texts", [])
-        images = inputs.get("images")
         try:
             verbose_proxy_logger.debug(f"ZscalerAIGuard: Checking {len(texts)} text(s)")
 
@@ -145,7 +144,7 @@ class ZscalerAIGuard(CustomGuardrail):
             raise e
 
         verbose_proxy_logger.debug("ZscalerAIGuard: Successfully applied guardrail.")
-        return texts, images
+        return inputs
 
     def extract_blocking_info(self, response):
         """
