@@ -355,10 +355,16 @@ class ContentFilterGuardrail(CustomGuardrail):
                     text = text.replace(matched_text, redaction_tag)
                     verbose_proxy_logger.info(f"Masked {pattern_name} in content")
 
-            # Check blocked words
-            word_match = self._check_blocked_words(text)
-            if word_match:
-                keyword, action, description = word_match
+            # Check blocked words - iterate through ALL blocked words
+            # to ensure all matching keywords are processed, not just the first one
+            text_lower = text.lower()
+            for keyword, (action, description) in self.blocked_words.items():
+                if keyword not in text_lower:
+                    continue
+
+                verbose_proxy_logger.debug(
+                    f"Blocked word '{keyword}' found with action {action}"
+                )
 
                 if action == ContentFilterAction.BLOCK:
                     error_msg = f"Content blocked: keyword '{keyword}' detected"
@@ -381,6 +387,8 @@ class ContentFilterGuardrail(CustomGuardrail):
                         text,
                         flags=re.IGNORECASE,
                     )
+                    # Update text_lower after masking to avoid re-matching
+                    text_lower = text.lower()
                     verbose_proxy_logger.info(f"Masked keyword '{keyword}' in content")
 
             processed_texts.append(text)
