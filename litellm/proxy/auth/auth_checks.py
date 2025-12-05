@@ -9,6 +9,7 @@ Run checks for:
 3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
 """
 import asyncio
+import os
 import re
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
@@ -554,13 +555,23 @@ async def common_checks(  # noqa: PLR0915
             and user_object is not None
             and user_object.max_budget is not None
         ):
-            user_budget = user_object.max_budget
-            if user_budget < user_object.spend:
-                raise litellm.BudgetExceededError(
-                    current_cost=user_object.spend,
-                    max_budget=user_budget,
-                    message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_object.spend}, Budget={user_budget}",
+            # Check if model is in free models list (bypass budget check for internal models)
+            FREE_MODELS_ENV = os.getenv("FREE_MODELS", "")
+            FREE_MODELS = [m.strip() for m in FREE_MODELS_ENV.split(",") if m.strip()]
+
+            # Skip budget check for free models
+            if _model and FREE_MODELS and _model in FREE_MODELS:
+                verbose_proxy_logger.debug(
+                    f"Skipping user budget check for free model: {_model}"
                 )
+            else:
+                user_budget = user_object.max_budget
+                if user_budget < user_object.spend:
+                    raise litellm.BudgetExceededError(
+                        current_cost=user_object.spend,
+                        max_budget=user_budget,
+                        message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_object.spend}, Budget={user_budget}",
+                    )
 
         ## 4.2 check team member budget, if team key
         with tracer.trace("litellm.proxy.auth.common_checks.check_team_member_budget"):
@@ -2911,13 +2922,24 @@ async def _virtual_key_max_budget_check(
     valid_token: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLogging,
     user_obj: Optional[LiteLLM_UserTable] = None,
+    model: Optional[str] = None,
 ):
     """
     Raises:
         BudgetExceededError if the token is over it's max budget.
         Triggers a budget alert if the token is over it's max budget.
 
+    Args:
+        model: The model being requested. If it's a free model, budget check is skipped.
     """
+    # Check if model is in free models list (bypass budget check for internal models)
+    FREE_MODELS_ENV = os.getenv("FREE_MODELS", "")
+    FREE_MODELS = [m.strip() for m in FREE_MODELS_ENV.split(",") if m.strip()]
+
+    if model and FREE_MODELS and model in FREE_MODELS:
+        verbose_proxy_logger.debug(f"Skipping budget check for free model: {model}")
+        return  # Skip budget check for free models
+
     if valid_token.max_budget is not None:
         from litellm.proxy.proxy_server import get_current_spend
 
