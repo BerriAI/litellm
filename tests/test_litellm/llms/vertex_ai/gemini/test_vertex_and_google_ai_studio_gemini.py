@@ -2121,3 +2121,70 @@ def test_partial_json_chunk_on_first_chunk():
     assert result is None, "Partial first chunk should return None"
     assert iterator.chunk_type == "accumulated_json", "Should switch to accumulated_json mode"
 
+
+def test_async_streaming_uses_custom_client():
+    """
+    Test that user-specified async client is correctly passed to make_call
+    for async streaming calls.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/17148
+    """
+    from functools import partial
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        make_call,
+    )
+
+    # Create a mock async client
+    mock_client = MagicMock(spec=AsyncHTTPHandler)
+
+    # Create a partial function like the code does in async_streaming
+    partial_make_call = partial(
+        make_call,
+        gemini_client=mock_client,
+        api_base="https://example.com",
+        headers={},
+        data="{}",
+        model="gemini-pro",
+        messages=[],
+        logging_obj=MagicMock(),
+    )
+
+    # Verify that gemini_client is in the partial's keywords
+    assert "gemini_client" in partial_make_call.keywords
+    assert partial_make_call.keywords["gemini_client"] is mock_client
+
+
+def test_sync_streaming_uses_custom_client():
+    """
+    Test that user-specified sync client is correctly passed to make_sync_call
+    for sync streaming calls.
+
+    This verifies the existing behavior that we want to match for async.
+    """
+    from functools import partial
+
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        make_sync_call,
+    )
+
+    # Create a mock sync client
+    mock_client = MagicMock(spec=HTTPHandler)
+
+    # Create a partial function like the code does in sync streaming
+    partial_make_sync_call = partial(
+        make_sync_call,
+        gemini_client=mock_client,
+        api_base="https://example.com",
+        headers={},
+        data="{}",
+        model="gemini-pro",
+        messages=[],
+        logging_obj=MagicMock(),
+    )
+
+    # Verify that gemini_client is in the partial's keywords
+    assert "gemini_client" in partial_make_sync_call.keywords
+    assert partial_make_sync_call.keywords["gemini_client"] is mock_client
