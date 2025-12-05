@@ -37,11 +37,41 @@ CARTO maintains a fork of [BerriAI/litellm](https://github.com/BerriAI/litellm) 
 
 ---
 
-## When creating PRs
+## ⚠️ CRITICAL: Pull Request Rules
 
-- Always use the --repo CartoDB/litellm by default. Only use Upstream repo to PR if explicify written in the prompt. 
-- Always create in Draft. 
-- Follow the claude.md global configuration. 
+### NEVER Create PRs Against Upstream!
+
+**This is CARTO's fork. ALL PRs MUST target `CartoDB/litellm`, NOT `BerriAI/litellm`.**
+
+The default `gh pr create` WILL target the upstream repo. You MUST always use `--repo CartoDB/litellm`.
+
+### ALWAYS Check for Existing PRs First!
+
+Before creating a new PR, check if one already exists for your branch:
+```bash
+gh pr list --repo CartoDB/litellm --head <branch-name>
+```
+
+If a PR exists, just push your commits - the PR will update automatically. Do NOT create a duplicate PR.
+
+### Creating a New PR
+
+```bash
+# 1. First, check if PR already exists
+gh pr list --repo CartoDB/litellm --head $(git branch --show-current)
+
+# 2. If no PR exists, create one (ALWAYS specify --repo!)
+gh pr create --repo CartoDB/litellm --base main --draft --title "..." --body "..."
+```
+
+### Rules Summary
+
+| Rule | Command |
+|------|---------|
+| **Check existing PRs** | `gh pr list --repo CartoDB/litellm --head <branch>` |
+| **Create PR** | `gh pr create --repo CartoDB/litellm --base main ...` |
+| **Always draft** | Use `--draft` flag |
+| **Never upstream** | NEVER omit `--repo CartoDB/litellm` | 
 
 ## Branch Strategy
 
