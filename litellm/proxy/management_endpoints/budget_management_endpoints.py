@@ -110,7 +110,7 @@ async def update_budget(
     response = await prisma_client.db.litellm_budgettable.update(
         where={"budget_id": budget_obj.budget_id},
         data={
-            **budget_obj.model_dump(exclude_none=True),  # type: ignore
+            **budget_obj.model_dump(exclude_unset=True),  # type: ignore
             "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
         },  # type: ignore
     )
