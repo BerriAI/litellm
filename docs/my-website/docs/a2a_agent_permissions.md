@@ -204,12 +204,12 @@ flowchart TD
     I -->|No| K[Return 403 Forbidden]
 ```
 
-| Scenario | Result |
-|----------|--------|
-| No agents configured on key or team | Access to ALL agents |
-| Agents configured on key only | Only those agents allowed |
-| Agents configured on team only | Key inherits team's agents |
-| Agents on both key AND team | Intersection (most restrictive) |
+| Key Permissions | Team Permissions | Result | Notes |
+|-----------------|------------------|--------|-------|
+| None | None | Key can access **all** agents | Open access by default when no restrictions are set |
+| `["agent-1", "agent-2"]` | None | Key can access `agent-1` and `agent-2` | Key uses its own permissions |
+| None | `["agent-1", "agent-3"]` | Key can access `agent-1` and `agent-3` | Key inherits team's permissions |
+| `["agent-1", "agent-2"]` | `["agent-1", "agent-3"]` | Key can access `agent-1` only | Intersection of both lists (most restrictive wins) |
 
 ## Viewing Permissions
 
