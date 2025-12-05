@@ -720,9 +720,12 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                     parent_otel_span=litellm_parent_otel_span,
                 )
 
+                # Only log 'priority' if it's known safe; otherwise, redact.
+                SAFE_PRIORITIES = {"low", "medium", "high", "default"}
+                logged_priority = key_priority if key_priority in SAFE_PRIORITIES else "REDACTED"
                 verbose_proxy_logger.debug(
                     f"[Dynamic Rate Limiter] Incremented tokens by {total_tokens} for "
-                    f"model={model_group}, priority={key_priority or 'default'}"
+                    f"model={model_group}, priority={logged_priority}"
                 )
 
         except Exception as e:
