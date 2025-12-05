@@ -21,7 +21,10 @@ from litellm.llms.anthropic.experimental_pass_through.adapters.transformation im
 )
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.types.guardrails import GenericGuardrailAPIInputs
-from litellm.types.llms.anthropic import AllAnthropicToolsValues
+from litellm.types.llms.anthropic import (
+    AllAnthropicToolsValues,
+    AnthropicMessagesRequest,
+)
 from litellm.types.llms.openai import ChatCompletionToolParam
 
 if TYPE_CHECKING:
@@ -61,9 +64,19 @@ class AnthropicMessagesHandler(BaseTranslation):
         if messages is None:
             return data
 
+        chat_completion_compatible_request = (
+            LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+                anthropic_message_request=cast(AnthropicMessagesRequest, data)
+            )
+        )
+
+        structured_messages = chat_completion_compatible_request.get("messages", [])
+
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
-        tools_to_check: List[ChatCompletionToolParam] = []
+        tools_to_check: List[ChatCompletionToolParam] = (
+            chat_completion_compatible_request.get("tools", [])
+        )
         task_mappings: List[Tuple[int, Optional[int]]] = []
         # Track (message_index, content_index) for each text
         # content_index is None for string content, int for list content
@@ -78,12 +91,6 @@ class AnthropicMessagesHandler(BaseTranslation):
                 task_mappings=task_mappings,
             )
 
-        if tools is not None:
-            self._extract_input_tools(
-                tools=tools,
-                tools_to_check=tools_to_check,
-            )
-
         # Step 2: Apply guardrail to all texts in batch
         if texts_to_check:
             inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
@@ -91,6 +98,8 @@ class AnthropicMessagesHandler(BaseTranslation):
                 inputs["images"] = images_to_check
             if tools_to_check:
                 inputs["tools"] = tools_to_check
+            if structured_messages:
+                inputs["structured_messages"] = structured_messages
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=data,
