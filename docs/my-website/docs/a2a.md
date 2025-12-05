@@ -2,7 +2,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 import Image from '@theme/IdealImage';
 
-# /a2a - Agent Gateway (A2A Protocol)
+# Agent Gateway (A2A Protocol) - Overview
 
 | Feature | Supported | 
 |---------|-----------|

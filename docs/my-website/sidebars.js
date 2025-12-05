@@ -329,7 +329,7 @@ const sidebars = {
       items: [
         {
           type: "category",
-          label: "A2A",
+          label: "/a2a - A2A Agent Gateway",
           items: [
             "a2a",
             "a2a_agent_permissions",
