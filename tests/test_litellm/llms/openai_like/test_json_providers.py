@@ -132,10 +132,11 @@ class TestPublicAIIntegration:
 
     def test_publicai_completion_basic(self):
         """Test basic completion call to PublicAI"""
-        # Set API key from the one provided
-        os.environ["PUBLICAI_API_KEY"] = (
-            "zpka_9ea399e9e81b4ece8af0fe88d2561c4f_4e4e9dec"
-        )
+        # Skip test if API key not set in environment
+        if not os.environ.get("PUBLICAI_API_KEY"):
+            if pytest:
+                pytest.skip("PUBLICAI_API_KEY not set")
+            return
 
         try:
             response = litellm.completion(
@@ -166,9 +167,11 @@ class TestPublicAIIntegration:
 
     def test_publicai_completion_with_streaming(self):
         """Test streaming completion with PublicAI"""
-        os.environ["PUBLICAI_API_KEY"] = (
-            "zpka_9ea399e9e81b4ece8af0fe88d2561c4f_4e4e9dec"
-        )
+        # Skip test if API key not set in environment
+        if not os.environ.get("PUBLICAI_API_KEY"):
+            if pytest:
+                pytest.skip("PUBLICAI_API_KEY not set")
+            return
 
         try:
             response = litellm.completion(
@@ -203,9 +206,11 @@ class TestPublicAIIntegration:
 
     def test_publicai_parameter_mapping(self):
         """Test that max_completion_tokens is mapped to max_tokens"""
-        os.environ["PUBLICAI_API_KEY"] = (
-            "zpka_9ea399e9e81b4ece8af0fe88d2561c4f_4e4e9dec"
-        )
+        # Skip test if API key not set in environment
+        if not os.environ.get("PUBLICAI_API_KEY"):
+            if pytest:
+                pytest.skip("PUBLICAI_API_KEY not set")
+            return
 
         try:
             # Use max_completion_tokens (OpenAI's newer parameter)
@@ -228,9 +233,11 @@ class TestPublicAIIntegration:
 
     def test_publicai_content_list_conversion(self):
         """Test that content list format is converted to string"""
-        os.environ["PUBLICAI_API_KEY"] = (
-            "zpka_9ea399e9e81b4ece8af0fe88d2561c4f_4e4e9dec"
-        )
+        # Skip test if API key not set in environment
+        if not os.environ.get("PUBLICAI_API_KEY"):
+            if pytest:
+                pytest.skip("PUBLICAI_API_KEY not set")
+            return
 
         try:
             # Send message with content as list (should be converted to string)
