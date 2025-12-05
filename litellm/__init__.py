@@ -571,6 +571,7 @@ ovhcloud_models: Set = set()
 ovhcloud_embedding_models: Set = set()
 lemonade_models: Set = set()
 docker_model_runner_models: Set = set()
+zai_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -811,6 +812,8 @@ def add_known_models():
             lemonade_models.add(key)
         elif value.get("litellm_provider") == "docker_model_runner":
             docker_model_runner_models.add(key)
+        elif value.get("litellm_provider") == "zai":
+            zai_models.add(key)
 
 
 add_known_models()
@@ -1009,6 +1012,7 @@ models_by_provider: dict = {
     "wandb": wandb_models,
     "ovhcloud": ovhcloud_models | ovhcloud_embedding_models,
     "lemonade": lemonade_models,
+    "zai": zai_models,
     "clarifai": clarifai_models,
 }
 
