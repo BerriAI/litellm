@@ -1767,15 +1767,15 @@ def test_temperature_default_for_gemini_3():
 def test_media_resolution_from_detail_parameter():
     """Test that OpenAI's detail parameter is correctly mapped to media_resolution"""
     from litellm.llms.vertex_ai.gemini.transformation import (
+        _convert_detail_to_media_resolution_enum,
         _gemini_convert_messages_with_history,
-        _map_openai_detail_to_media_resolution,
     )
 
-    # Test detail -> media_resolution mapping
-    assert _map_openai_detail_to_media_resolution("low") == "low"
-    assert _map_openai_detail_to_media_resolution("high") == "high"
-    assert _map_openai_detail_to_media_resolution("auto") is None
-    assert _map_openai_detail_to_media_resolution(None) is None
+    # Test detail -> media_resolution enum mapping
+    assert _convert_detail_to_media_resolution_enum("low") == {"level": "MEDIA_RESOLUTION_LOW"}
+    assert _convert_detail_to_media_resolution_enum("high") == {"level": "MEDIA_RESOLUTION_HIGH"}
+    assert _convert_detail_to_media_resolution_enum("auto") is None
+    assert _convert_detail_to_media_resolution_enum(None) is None
 
     # Test with actual message transformation using base64 image
     # Using a minimal valid base64-encoded 1x1 PNG
@@ -1799,25 +1799,24 @@ def test_media_resolution_from_detail_parameter():
         messages=messages, model="gemini-3-pro-preview"
     )
     
-    # Verify media_resolution is set in the inline_data
-    # Note: Gemini adds a blank text part when there's no text, so we expect 2 parts
+    # Verify media_resolution is set at the Part level (not inside inline_data)
     assert len(contents) == 1
     assert len(contents[0]["parts"]) >= 1
     # Find the part with inline_data
     image_part = None
     for part in contents[0]["parts"]:
-        if "inline_data" in part:
+        if "inline_data" in part or "inlineData" in part:
             image_part = part
             break
     assert image_part is not None
-    assert "inline_data" in image_part
-    # The TypedDict uses snake_case internally, and we keep it as snake_case
-    assert "media_resolution" in image_part["inline_data"]
-    assert image_part["inline_data"]["media_resolution"] == "high"
+    # media_resolution should be at the Part level, not inside inline_data
+    assert "media_resolution" in image_part
+    media_res = image_part.get("media_resolution")
+    assert media_res == {"level": "MEDIA_RESOLUTION_HIGH"}
 
 
 def test_media_resolution_low_detail():
-    """Test that detail='low' maps to media_resolution='low'"""
+    """Test that detail='low' maps to media_resolution enum with MEDIA_RESOLUTION_LOW"""
     from litellm.llms.vertex_ai.gemini.transformation import (
         _gemini_convert_messages_with_history,
     )
@@ -1851,7 +1850,9 @@ def test_media_resolution_low_detail():
             break
     assert image_part is not None
     assert "inline_data" in image_part
-    assert image_part["inline_data"]["media_resolution"] == "low"
+    # media_resolution should be at the Part level, not inside inline_data
+    assert "media_resolution" in image_part
+    assert image_part["media_resolution"] == {"level": "MEDIA_RESOLUTION_LOW"}
 
 
 def test_media_resolution_auto_detail():
@@ -1888,8 +1889,8 @@ def test_media_resolution_auto_detail():
             break
     assert image_part is not None
     assert "inline_data" in image_part
-    # media_resolution should not be set for auto
-    assert "media_resolution" not in image_part["inline_data"] or image_part["inline_data"].get("media_resolution") is None
+    # media_resolution should not be set for auto (check Part level, not inline_data)
+    assert "media_resolution" not in image_part
 
     # Test with None
     messages_none = [
@@ -1915,8 +1916,8 @@ def test_media_resolution_auto_detail():
             break
     assert image_part is not None
     assert "inline_data" in image_part
-    # media_resolution should not be set
-    assert "media_resolution" not in image_part["inline_data"] or image_part["inline_data"].get("media_resolution") is None
+    # media_resolution should not be set (check Part level, not inline_data)
+    assert "media_resolution" not in image_part
 
 
 def test_media_resolution_per_part():
@@ -1966,16 +1967,20 @@ def test_media_resolution_per_part():
     # First image should have low resolution (first part is the image)
     image1_part = contents[0]["parts"][0]
     assert "inline_data" in image1_part
-    assert image1_part["inline_data"]["media_resolution"] == "low"
+    # media_resolution should be at the Part level, not inside inline_data
+    assert "media_resolution" in image1_part
+    assert image1_part["media_resolution"] == {"level": "MEDIA_RESOLUTION_LOW"}
     
     # Second image should have high resolution (third part is the second image)
     image2_part = contents[0]["parts"][2]
     assert "inline_data" in image2_part
-    assert image2_part["inline_data"]["media_resolution"] == "high"
+    # media_resolution should be at the Part level, not inside inline_data
+    assert "media_resolution" in image2_part
+    assert image2_part["media_resolution"] == {"level": "MEDIA_RESOLUTION_HIGH"}
 
 
 def test_media_resolution_only_for_gemini_3_models():
-    """Ensure mediaResolution is not added for non-Gemini 3 models."""
+    """Ensure media_resolution is not added for non-Gemini 3 models."""
     from litellm.llms.vertex_ai.gemini.transformation import (
         _gemini_convert_messages_with_history,
     )
@@ -2006,7 +2011,9 @@ def test_media_resolution_only_for_gemini_3_models():
             break
     assert image_part is not None
     assert "inline_data" in image_part
-    assert "mediaResolution" not in image_part["inline_data"]
+    # media_resolution should not be at the Part level for non-Gemini 3 models
+    assert "media_resolution" not in image_part
+    assert "mediaResolution" not in image_part
 
 
 def test_gemini_3_image_models_no_thinking_config():
