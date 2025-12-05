@@ -326,11 +326,16 @@ class LiteLLMCompletionResponsesConfig:
                 function_call=input_item
             )
         else:
+            content = input_item.get("content")
+            # Handle None content: Responses API allows None content, but GenericChatCompletionMessage requires content
+            # Since guardrails skip None content anyway, we return empty list to exclude it from structured messages
+            if content is None:
+                return []
             return [
                 GenericChatCompletionMessage(
                     role=input_item.get("role") or "user",
                     content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
-                        input_item.get("content")
+                        content
                     ),
                 )
             ]
@@ -508,8 +513,8 @@ class LiteLLMCompletionResponsesConfig:
         Callers should check for None before calling this function.
         """
         if content is None:
-            # This should not happen - callers should check for None first
-            # Return empty string as fallback
+            # Defensive check: should not happen if callers check first
+            # Return empty string as fallback to avoid type errors
             return ""
         elif isinstance(content, str):
             return content
@@ -929,14 +934,17 @@ class LiteLLMCompletionResponsesConfig:
                 )
             else:
                 # transform as generic ResponseOutputItem
-                messages.append(
-                    GenericChatCompletionMessage(
-                        role=str(output_item.get("role")) or "user",
-                        content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
-                            output_item.get("content")
-                        ),
+                content = output_item.get("content")
+                # Skip if content is None (GenericChatCompletionMessage requires content)
+                if content is not None:
+                    messages.append(
+                        GenericChatCompletionMessage(
+                            role=str(output_item.get("role")) or "user",
+                            content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+                                content
+                            ),
+                        )
                     )
-                )
         return messages
 
     @staticmethod
