@@ -62,6 +62,7 @@ async def test_ui_view_users_with_null_email(mocker, caplog):
         user_api_key_dict=UserAPIKeyAuth(user_id="test_user"),
         user_id="test_user",
         user_email=None,
+        organization_id=None,
         page=1,
         page_size=50,
     )
@@ -315,14 +316,14 @@ async def test_user_info_url_encoding_plus_character(mocker):
 
     # Mock the prisma client
     mock_prisma_client = mocker.MagicMock()
-    
+
     # Create a real LiteLLM_UserTable instance (BaseModel) so isinstance check passes
     mock_user = LiteLLM_UserTable(
         user_id="machine-user+alp-air-admin-b58-b@tempus.com",
         user_email="machine-user+alp-air-admin-b58-b@tempus.com",
         teams=[],
     )
-    
+
     # Mock get_data to return user when called with user_id, empty list for keys
     async def mock_get_data(*args, **kwargs):
         if kwargs.get("table_name") == "key":
@@ -332,7 +333,7 @@ async def test_user_info_url_encoding_plus_character(mocker):
         elif kwargs.get("user_id") is not None:
             return mock_user
         return None
-    
+
     mock_prisma_client.get_data = mocker.AsyncMock(side_effect=mock_get_data)
 
     # Mock list_team to return None (patch it from where it's imported)
@@ -360,7 +361,7 @@ async def test_user_info_url_encoding_plus_character(mocker):
         "machine-user alp-air-admin-b58-b@tempus.com"  # What FastAPI gives us
     )
     expected_user_id = "machine-user+alp-air-admin-b58-b@tempus.com"
-    
+
     response = await user_info(
         user_id=decoded_user_id,
         user_api_key_dict=mock_user_api_key_dict,
@@ -374,7 +375,7 @@ async def test_user_info_url_encoding_plus_character(mocker):
         if call.kwargs.get("user_id") and not call.kwargs.get("table_name"):
             user_call = call
             break
-    
+
     assert user_call is not None, "get_data should be called with user_id"
     assert user_call.kwargs["user_id"] == expected_user_id
 
@@ -391,7 +392,7 @@ async def test_user_info_nonexistent_user(mocker):
 
     # Mock the prisma client
     mock_prisma_client = mocker.MagicMock()
-    
+
     # Mock get_data to return None (user doesn't exist)
     async def mock_get_data(*args, **kwargs):
         if kwargs.get("table_name") == "key":
@@ -399,7 +400,7 @@ async def test_user_info_nonexistent_user(mocker):
         elif kwargs.get("user_id") is not None:
             return None  # User not found
         return None
-    
+
     mock_prisma_client.get_data = mocker.AsyncMock(side_effect=mock_get_data)
 
     # Patch the prisma client import in the endpoint
@@ -415,7 +416,7 @@ async def test_user_info_nonexistent_user(mocker):
 
     # Call user_info function with a non-existent user_id
     nonexistent_user_id = "nonexistent-user@example.com"
-    
+
     # Should raise ProxyException with 404 status code (HTTPException is converted by decorator)
     with pytest.raises(ProxyException) as exc_info:
         await user_info(
@@ -773,7 +774,7 @@ async def test_check_duplicate_user_email_case_insensitive(mocker):
 def test_process_keys_for_user_info_filters_dashboard_keys(monkeypatch):
     """
     Test that _process_keys_for_user_info filters out keys with team_id='litellm-dashboard'
-    
+
     UI session tokens (team_id='litellm-dashboard') should be excluded from user info responses
     to prevent confusion, as these are automatically created during dashboard login.
     """
@@ -792,7 +793,7 @@ def test_process_keys_for_user_info_filters_dashboard_keys(monkeypatch):
         "user_id": "test-user",
         "key_alias": "dashboard-session-key",
     }
-    
+
     mock_key_regular = MagicMock()
     mock_key_regular.model_dump.return_value = {
         "token": "sk-regular-token",
@@ -800,7 +801,7 @@ def test_process_keys_for_user_info_filters_dashboard_keys(monkeypatch):
         "user_id": "test-user",
         "key_alias": "regular-key",
     }
-    
+
     mock_key_no_team = MagicMock()
     mock_key_no_team.model_dump.return_value = {
         "token": "sk-no-team-token",
@@ -826,20 +827,24 @@ def test_process_keys_for_user_info_filters_dashboard_keys(monkeypatch):
 
     # Verify that dashboard key is filtered out
     assert len(result) == 2, "Should return 2 keys (dashboard key filtered out)"
-    
+
     # Verify dashboard key is not in results
     result_team_ids = [key.get("team_id") for key in result]
-    assert UI_SESSION_TOKEN_TEAM_ID not in result_team_ids, "Dashboard key should be filtered out"
-    
+    assert (
+        UI_SESSION_TOKEN_TEAM_ID not in result_team_ids
+    ), "Dashboard key should be filtered out"
+
     # Verify regular keys are included
     assert "regular-team" in result_team_ids, "Regular team key should be included"
     assert None in result_team_ids, "No-team key should be included"
-    
+
     # Verify the correct keys are returned
     result_tokens = [key.get("token") for key in result]
     assert "sk-regular-token" in result_tokens, "Regular key should be included"
     assert "sk-no-team-token" in result_tokens, "No-team key should be included"
-    assert "sk-dashboard-token" not in result_tokens, "Dashboard key should not be included"
+    assert (
+        "sk-dashboard-token" not in result_tokens
+    ), "Dashboard key should not be included"
 
 
 def test_process_keys_for_user_info_handles_none_keys(monkeypatch):
