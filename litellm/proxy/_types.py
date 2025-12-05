@@ -2325,6 +2325,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "is active as a reminder that hard enforcement is relaxed."
         ),
     )
+    vision_fallback_model: Optional[str] = Field(
+        None,
+        description="Fallback model to use when a request contains images but the requested model doesn't support vision. The fallback model must support vision and be available in model_list.",
+    )
 
 
 class ConfigYAML(LiteLLMPydanticObjectBase):
