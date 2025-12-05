@@ -33,6 +33,10 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 from openai import BaseModel
 
 from litellm._logging import verbose_proxy_logger
+from litellm.completion_extras.litellm_responses_transformation.transformation import (
+    LiteLLMResponsesTransformationHandler,
+    OpenAiResponsesToChatCompletionStreamIterator,
+)
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
@@ -355,6 +359,56 @@ class OpenAIResponsesHandler(BaseTranslation):
         """
         Process output streaming response by applying guardrails to text content.
         """
+
+        final_chunk = responses_so_far[-1]
+        if final_chunk.get("type") == "response.output_item.done":
+            # convert openai response to model response
+            model_response_stream = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+                final_chunk
+            )
+
+            tool_calls = model_response_stream.choices[0].delta.tool_calls
+            if tool_calls:
+                _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+                    inputs={
+                        "tool_calls": cast(
+                            List[ChatCompletionToolCallChunk], tool_calls
+                        )
+                    },
+                    request_data={},
+                    input_type="response",
+                    logging_obj=litellm_logging_obj,
+                )
+                return responses_so_far
+        elif final_chunk.get("type") == "response.completed":
+            # convert openai response to model response
+            outputs = final_chunk.get("response", {}).get("output", [])
+
+            model_response_choices = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+                output_items=outputs,
+                handle_raw_dict_callback=None,
+            )
+
+            tool_calls = model_response_choices[0].message.tool_calls
+            text = model_response_choices[0].message.content
+            guardrail_inputs = GenericGuardrailAPIInputs()
+            if text:
+                guardrail_inputs["texts"] = [text]
+            if tool_calls:
+                guardrail_inputs["tool_calls"] = cast(
+                    List[ChatCompletionToolCallChunk], tool_calls
+                )
+            if tool_calls:
+                _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+                    inputs=guardrail_inputs,
+                    request_data={},
+                    input_type="response",
+                    logging_obj=litellm_logging_obj,
+                )
+                return responses_so_far
+        # model_response_stream = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(final_chunk)
+        # tool_calls = model_response_stream.choices[0].tool_calls
+        # convert openai response to model response
         string_so_far = self.get_streaming_string_so_far(responses_so_far)
         _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
             inputs={"texts": [string_so_far]},
@@ -363,6 +417,15 @@ class OpenAIResponsesHandler(BaseTranslation):
             logging_obj=litellm_logging_obj,
         )
         return responses_so_far
+
+    def _check_streaming_has_ended(self, responses_so_far: List[Any]) -> bool:
+        """
+        Check if the streaming has ended.
+        """
+        return all(
+            response.choices[0].finish_reason is not None
+            for response in responses_so_far
+        )
 
     def get_streaming_string_so_far(self, responses_so_far: List[Any]) -> str:
         """
