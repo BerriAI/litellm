@@ -59,7 +59,6 @@ async def responses_api(
     }'
     ```
     """
-    from datetime import datetime, timezone
     from litellm.proxy.proxy_server import (
         _read_request_body,
         general_settings,
