@@ -7023,11 +7023,13 @@ class ProviderConfigManager:
         """
 
         # Check JSON providers FIRST
-        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
         from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
         if JSONProviderRegistry.exists(provider.value):
             provider_config = JSONProviderRegistry.get(provider.value)
+            if provider_config is None:
+                raise ValueError(f"Provider {provider.value} not found")
             return create_config_class(provider_config)()
 
         if (

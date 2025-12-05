@@ -409,7 +409,7 @@ def _build_model_param_to_info_mapping(model_list: list) -> dict:
     Returns:
         Dictionary mapping model parameter to list of model info dicts
     """
-    model_param_to_info = {}
+    model_param_to_info: dict = {}
     for model in model_list:
         model_info = model.get("model_info", {})
         model_name = model.get("model_name")

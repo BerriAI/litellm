@@ -116,7 +116,7 @@ def _process_gemini_image(
             is not None
         ):
             file_data = FileDataType(file_uri=image_url, mime_type=image_type)
-            part: PartType = {"file_data": file_data}
+            part = {"file_data": file_data}
             
             if media_resolution_enum is not None and model is not None:
                 from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
@@ -129,7 +129,7 @@ def _process_gemini_image(
             image = convert_to_anthropic_image_obj(image_url, format=format)
             _blob: BlobType = {"data": image["data"], "mime_type": image["media_type"]}
             
-            part: PartType = {"inline_data": cast(BlobType, _blob)}
+            part = {"inline_data": cast(BlobType, _blob)}
             
             if media_resolution_enum is not None and model is not None:
                 from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
