@@ -6,13 +6,13 @@ This requires websockets, and is currently only supported on LiteLLM Proxy.
 
 from typing import Any, Optional, cast
 
+from litellm._logging import verbose_proxy_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ....litellm_core_utils.realtime_streaming import RealTimeStreaming
 from ....llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 from ..azure import AzureChatCompletion
-from litellm._logging import verbose_proxy_logger
 
 # BACKEND_WS_URL = "ws://localhost:8080/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01"
 
@@ -94,7 +94,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
             ssl_context = get_shared_realtime_ssl_context()
             async with websockets.connect(  # type: ignore
                 url,
-                extra_headers={
+                additional_headers={
                     "api-key": api_key,  # type: ignore
                 },
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
