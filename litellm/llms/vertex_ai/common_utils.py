@@ -280,18 +280,24 @@ def _get_gemini_url(
     stream: Optional[bool],
     gemini_api_key: Optional[str],
 ) -> Tuple[str, str]:
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+    
     _gemini_model_name = "models/{}".format(model)
+    api_version = "v1alpha" if VertexGeminiConfig._is_gemini_3_or_newer(model) else "v1beta"
+    
     if mode == "chat":
         endpoint = "generateContent"
         if stream is True:
             endpoint = "streamGenerateContent"
-            url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}&alt=sse".format(
-                _gemini_model_name, endpoint, gemini_api_key
+            url = "https://generativelanguage.googleapis.com/{}/{}:{}?key={}&alt=sse".format(
+                api_version, _gemini_model_name, endpoint, gemini_api_key
             )
         else:
             url = (
-                "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
-                    _gemini_model_name, endpoint, gemini_api_key
+                "https://generativelanguage.googleapis.com/{}/{}:{}?key={}".format(
+                    api_version, _gemini_model_name, endpoint, gemini_api_key
                 )
             )
     elif mode == "embedding":
