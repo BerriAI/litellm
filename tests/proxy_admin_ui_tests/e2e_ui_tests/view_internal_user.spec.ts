@@ -31,6 +31,7 @@ test("view internal user page", async ({ page }) => {
   // Wait for the table to load
   await page.waitForSelector("tbody tr", { timeout: 10000 });
   await page.waitForTimeout(2000); // Additional wait for table to stabilize
+  await page.waitForLoadState("networkidle");
 
   // Test all expected fields are present
   // Verify that the API Keys column is rendered for all users
