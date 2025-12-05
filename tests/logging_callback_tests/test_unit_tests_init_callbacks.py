@@ -175,11 +175,7 @@ async def use_callback_in_llm_call(
         expected_class = CustomLoggerRegistry.CALLBACK_CLASS_STR_TO_CLASS_TYPE[callback]
 
         if used_in == "callbacks":
-            assert isinstance(litellm._async_success_callback[0], expected_class)
-            assert isinstance(litellm._async_failure_callback[0], expected_class)
-            assert isinstance(litellm.success_callback[0], expected_class)
-            assert isinstance(litellm.failure_callback[0], expected_class)
-
+            # Check length first to avoid IndexError if callbacks haven't been initialized yet
             assert (
                 len(litellm._async_success_callback) == 1
             ), f"Got={litellm._async_success_callback}"
@@ -187,13 +183,22 @@ async def use_callback_in_llm_call(
             assert len(litellm.success_callback) == 1
             assert len(litellm.failure_callback) == 1
             assert len(litellm.callbacks) == 1
+            
+            # Now safe to access [0] since we've verified the lists are non-empty
+            assert isinstance(litellm._async_success_callback[0], expected_class)
+            assert isinstance(litellm._async_failure_callback[0], expected_class)
+            assert isinstance(litellm.success_callback[0], expected_class)
+            assert isinstance(litellm.failure_callback[0], expected_class)
         elif used_in == "success_callback":
             print(f"litellm.success_callback: {litellm.success_callback}")
             print(f"litellm._async_success_callback: {litellm._async_success_callback}")
-            assert isinstance(litellm.success_callback[0], expected_class)
+            # Check length first to avoid IndexError if callbacks haven't been initialized yet
             assert len(litellm.success_callback) == 1  # ["lago", LagoLogger]
-            assert isinstance(litellm._async_success_callback[0], expected_class)
             assert len(litellm._async_success_callback) == 1
+            
+            # Now safe to access [0] since we've verified the lists are non-empty
+            assert isinstance(litellm.success_callback[0], expected_class)
+            assert isinstance(litellm._async_success_callback[0], expected_class)
 
             # TODO also assert that it's not set for failure_callback
             # As of Oct 21 2024, it's currently set
