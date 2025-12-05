@@ -5164,6 +5164,19 @@
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
+    "azure_ai/mistral-large-3": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 8191,
+        "max_tokens": 8191,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-06,
+        "source": "https://azure.microsoft.com/en-us/blog/introducing-mistral-large-3-in-microsoft-foundry-open-capable-and-ready-for-production-workloads/",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "azure_ai/mistral-medium-2505": {
         "input_cost_per_token": 4e-07,
         "litellm_provider": "azure_ai",
@@ -18744,6 +18757,21 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
+    },
+    "mistral/mistral-large-3": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 8191,
+        "max_tokens": 8191,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-06,
+        "source": "https://docs.mistral.ai/models/mistral-large-3-25-12",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "mistral/mistral-medium": {
         "input_cost_per_token": 2.7e-06,
