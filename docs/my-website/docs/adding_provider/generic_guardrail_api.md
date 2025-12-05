@@ -54,7 +54,7 @@ Implement `POST /beta/litellm_basic_guardrail_api`
 {
   "texts": ["extracted text from the request"],  // array of text strings
   "images": ["base64_encoded_image_data"],  // optional array of images
-  "tools": [  // optional array of tool definitions (OpenAI ChatCompletionToolParam format)
+  "tools": [  // tool calls sent to the LLM (in the OpenAI Chat Completions spec)
     {
       "type": "function",
       "function": {
@@ -69,7 +69,7 @@ Implement `POST /beta/litellm_basic_guardrail_api`
       }
     }
   ],
-  "tool_calls": [  // optional array of tool calls being invoked (OpenAI ChatCompletionMessageToolCall format)
+  "tool_calls": [  // tool calls received from the LLM (in the OpenAI Chat Completions spec)
     {
       "id": "call_abc123",
       "type": "function",
