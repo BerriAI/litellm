@@ -182,7 +182,7 @@ export interface ProviderCredentialFieldMetadata {
   placeholder?: string | null;
   tooltip?: string | null;
   required?: boolean;
-  field_type?: "text" | "password" | "select" | "upload";
+  field_type?: "text" | "password" | "select" | "upload" | "textarea";
   options?: string[] | null;
   default_value?: string | null;
 }
