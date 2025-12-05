@@ -6,7 +6,6 @@ from typing import (
     List,
     Literal,
     Optional,
-    Tuple,
     Type,
     Union,
     get_args,
@@ -17,6 +16,7 @@ from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.guardrails import (
     DynamicGuardrailParams,
+    GenericGuardrailAPIInputs,
     GuardrailEventHooks,
     LitellmParams,
     Mode,
@@ -449,20 +449,22 @@ class CustomGuardrail(CustomLogger):
 
     async def apply_guardrail(
         self,
-        texts: List[str],
+        inputs: GenericGuardrailAPIInputs,
         request_data: dict,
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
-        images: Optional[List[str]] = None,
-    ) -> Tuple[List[str], Optional[List[str]]]:
+    ) -> GenericGuardrailAPIInputs:
         """
-        Apply your guardrail logic to the given text
+        Apply your guardrail logic to the given inputs
 
         Args:
-            texts: The texts to apply the guardrail to
-            images: The images to apply the guardrail to
+            inputs: Dictionary containing:
+                - texts: List of texts to apply the guardrail to
+                - images: Optional list of images to apply the guardrail to
+                - tool_calls: Optional list of tool calls to apply the guardrail to
             request_data: The request data dictionary - containing user api key metadata (e.g. user_id, team_id, etc.)
             input_type: The type of input to apply the guardrail to - "request" or "response"
+            logging_obj: Optional logging object for tracking the guardrail execution
 
         Any of the custom guardrails can override this method to provide custom guardrail logic
 
@@ -473,7 +475,7 @@ class CustomGuardrail(CustomLogger):
                 - If the guardrail raises an exception
 
         """
-        return texts, images
+        return inputs
 
     def _process_response(
         self,

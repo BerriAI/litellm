@@ -29,7 +29,8 @@ litellm_settings:
   request_timeout: 10 # (int) llm requesttimeout in seconds. Raise Timeout error if call takes longer than 10s. Sets litellm.request_timeout 
   force_ipv4: boolean # If true, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6 + Anthropic API
   
-  set_verbose: boolean # sets litellm.set_verbose=True to view verbose debug logs. DO NOT LEAVE THIS ON IN PRODUCTION
+  # Debugging - see debugging docs for more options
+  # Use `--debug` or `--detailed_debug` CLI flags, or set LITELLM_LOG env var to "INFO", "DEBUG", or "ERROR"
   json_logs: boolean # if true, logs will be in json format
 
   # Fallbacks, reliability
@@ -171,7 +172,7 @@ router_settings:
 | redact_user_api_key_info | boolean | If true, redacts information about the user api key from logs [Proxy Logging](logging#redacting-userapikeyinfo) |
 | mcp_aliases | object | Maps friendly aliases to MCP server names for easier tool access. Only the first alias for each server is used. [MCP Aliases](../mcp#mcp-aliases) |
 | langfuse_default_tags | array of strings | Default tags for Langfuse Logging. Use this if you want to control which LiteLLM-specific fields are logged as tags by the LiteLLM proxy. By default LiteLLM Proxy logs no LiteLLM-specific fields as tags. [Further docs](./logging#litellm-specific-tags-on-langfuse---cache_hit-cache_key) |
-| set_verbose | boolean | If true, sets litellm.set_verbose=True to view verbose debug logs. DO NOT LEAVE THIS ON IN PRODUCTION |
+| set_verbose | boolean | [DEPRECATED - see debugging docs](./debugging) Use `--debug` or `--detailed_debug` CLI flags, or set `LITELLM_LOG` env var to "INFO", "DEBUG", or "ERROR" instead. |
 | json_logs | boolean | If true, logs will be in json format. If you need to store the logs as JSON, just set the `litellm.json_logs = True`. We currently just log the raw POST request from litellm as a JSON [Further docs](./debugging) |
 | default_fallbacks | array of strings | List of fallback models to use if a specific model group is misconfigured / bad. [Further docs](./reliability#default-fallbacks) |
 | request_timeout | integer | The timeout for requests in seconds. If not set, the default value is `6000 seconds`. [For reference OpenAI Python SDK defaults to `600 seconds`.](https://github.com/openai/openai-python/blob/main/src/openai/_constants.py) |
@@ -333,7 +334,7 @@ router_settings:
 | caching_groups | Optional[List[tuple]] | List of model groups for caching across model groups. Defaults to None. - e.g. caching_groups=[("openai-gpt-3.5-turbo", "azure-gpt-3.5-turbo")]|
 | alerting_config | AlertingConfig | [SDK-only arg] Slack alerting configuration. Defaults to None. [Further Docs](../routing.md#alerting-) |
 | assistants_config | AssistantsConfig | Set on proxy via `assistant_settings`. [Further docs](../assistants.md) |
-| set_verbose | boolean | [DEPRECATED PARAM - see debug docs](./debugging.md) If true, sets the logging level to verbose. |
+| set_verbose | boolean | [DEPRECATED PARAM - see debug docs](./debugging) If true, sets the logging level to verbose. |
 | retry_after | int | Time to wait before retrying a request in seconds. Defaults to 0. If `x-retry-after` is received from LLM API, this value is overridden. |
 | provider_budget_config | ProviderBudgetConfig | Provider budget configuration. Use this to set llm_provider budget limits. example $100/day to OpenAI, $100/day to Azure, etc. Defaults to None. [Further Docs](./provider_budget_routing.md) |
 | enable_pre_call_checks | boolean | If true, checks if a call is within the model's context window before making the call. [More information here](reliability) |
@@ -359,6 +360,7 @@ router_settings:
 | AISPEND_ACCOUNT_ID | Account ID for AI Spend
 | AISPEND_API_KEY | API Key for AI Spend
 | AIOHTTP_CONNECTOR_LIMIT | Connection limit for aiohttp connector. When set to 0, no limit is applied. **Default is 0**
+| AIOHTTP_CONNECTOR_LIMIT_PER_HOST | Connection limit per host for aiohttp connector. When set to 0, no limit is applied. **Default is 0**
 | AIOHTTP_KEEPALIVE_TIMEOUT | Keep-alive timeout for aiohttp connections in seconds. **Default is 120**
 | AIOHTTP_TRUST_ENV | Flag to enable aiohttp trust environment. When this is set to True, aiohttp will respect HTTP(S)_PROXY env vars. **Default is False**
 | AIOHTTP_TTL_DNS_CACHE | DNS cache time-to-live for aiohttp in seconds. **Default is 300**
@@ -377,6 +379,8 @@ router_settings:
 | ATHINA_API_KEY | API key for Athina service
 | ATHINA_BASE_URL | Base URL for Athina service (defaults to `https://log.athina.ai`)
 | AUTH_STRATEGY | Strategy used for authentication (e.g., OAuth, API key)
+| AUTO_REDIRECT_UI_LOGIN_TO_SSO | Flag to enable automatic redirect of UI login page to SSO when SSO is configured. Default is **true**
+| AUDIO_SPEECH_CHUNK_SIZE | Chunk size for audio speech processing. Default is 1024
 | ANTHROPIC_API_KEY | API key for Anthropic service
 | ANTHROPIC_API_BASE | Base URL for Anthropic API. Default is https://api.anthropic.com
 | AWS_ACCESS_KEY_ID | Access Key ID for AWS services
@@ -439,6 +443,7 @@ router_settings:
 | CYBERARK_CLIENT_CERT | Path to client certificate for CyberArk authentication
 | CYBERARK_CLIENT_KEY | Path to client key for CyberArk authentication
 | CYBERARK_USERNAME | Username for CyberArk authentication
+| CYBERARK_SSL_VERIFY | Flag to enable or disable SSL certificate verification for CyberArk. Default is True
 | CONFIDENT_API_KEY | API key for DeepEval integration
 | CUSTOM_TIKTOKEN_CACHE_DIR | Custom directory for Tiktoken cache
 | CONFIDENT_API_KEY | API key for Confident AI (Deepeval) Logging service
@@ -653,6 +658,8 @@ router_settings:
 | LITERAL_API_URL | API URL for Literal service
 | LITERAL_BATCH_SIZE | Batch size for Literal operations
 | LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX | Disable automatic URL suffix appending for Anthropic API base URLs. When set to `true`, prevents LiteLLM from automatically adding `/v1/messages` or `/v1/complete` to custom Anthropic API endpoints
+| LITELLM_DD_AGENT_HOST | Hostname or IP of DataDog agent for LiteLLM-specific logging. When set, logs are sent to agent instead of direct API
+| LITELLM_DD_AGENT_PORT | Port of DataDog agent for LiteLLM-specific log intake. Default is 10518
 | LITELLM_DONT_SHOW_FEEDBACK_BOX | Flag to hide feedback box in LiteLLM UI
 | LITELLM_DROP_PARAMS | Parameters to drop in LiteLLM requests
 | LITELLM_MODIFY_PARAMS | Parameters to modify in LiteLLM requests
@@ -797,7 +804,7 @@ router_settings:
 | SEND_USER_API_KEY_ALIAS | Flag to send user API key alias to Zscaler AI Guard. Default is False
 | SEND_USER_API_KEY_TEAM_ID | Flag to send user API key team ID to Zscaler AI Guard. Default is False
 | SEND_USER_API_KEY_USER_ID | Flag to send user API key user ID to Zscaler AI Guard. Default is False
-| SET_VERBOSE | Flag to enable verbose logging
+| SET_VERBOSE | [DEPRECATED] Use `LITELLM_LOG` instead with values "INFO", "DEBUG", or "ERROR". See [debugging docs](./debugging)
 | SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD | Minimum number of requests to consider "reasonable traffic" for single-deployment cooldown logic. Default is 1000
 | SLACK_DAILY_REPORT_FREQUENCY | Frequency of daily Slack reports (e.g., daily, weekly)
 | SLACK_WEBHOOK_URL | Webhook URL for Slack integration
@@ -839,6 +846,9 @@ router_settings:
 | UPSTREAM_LANGFUSE_SECRET_KEY | Secret key for upstream Langfuse authentication
 | USE_AWS_KMS | Flag to enable AWS Key Management Service for encryption
 | USE_PRISMA_MIGRATE | Flag to use prisma migrate instead of prisma db push. Recommended for production environments.
+| WANDB_API_KEY | API key for Weights & Biases (W&B) logging integration
+| WANDB_HOST | Host URL for Weights & Biases (W&B) service
+| WANDB_PROJECT_ID | Project ID for Weights & Biases (W&B) logging integration
 | WEBHOOK_URL | URL for receiving webhooks from external services
 | SPEND_LOG_RUN_LOOPS | Constant for setting how many runs of 1000 batch deletes should spend_log_cleanup task run
 | SPEND_LOG_CLEANUP_BATCH_SIZE | Number of logs deleted per batch during cleanup. Default is 1000

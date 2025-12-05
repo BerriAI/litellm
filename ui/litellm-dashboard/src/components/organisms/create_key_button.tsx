@@ -33,6 +33,7 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapDisplayToInternalNames } from "../callback_info_helpers";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
+import AgentSelector from "../agent_management/AgentSelector";
 import ModelAliasManager from "../common_components/ModelAliasManager";
 import NotificationsManager from "../molecules/notifications_manager";
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
@@ -383,6 +384,26 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         formValues.object_permission.mcp_access_groups = formValues.allowed_mcp_access_groups;
         // Remove the original field as it's now part of object_permission
         delete formValues.allowed_mcp_access_groups;
+      }
+
+      // Transform allowed_agents_and_groups into object_permission format
+      if (
+        formValues.allowed_agents_and_groups &&
+        (formValues.allowed_agents_and_groups.agents?.length > 0 ||
+          formValues.allowed_agents_and_groups.accessGroups?.length > 0)
+      ) {
+        if (!formValues.object_permission) {
+          formValues.object_permission = {};
+        }
+        const { agents, accessGroups } = formValues.allowed_agents_and_groups;
+        if (agents && agents.length > 0) {
+          formValues.object_permission.agents = agents;
+        }
+        if (accessGroups && accessGroups.length > 0) {
+          formValues.object_permission.agent_access_groups = accessGroups;
+        }
+        // Remove the original field as it's now part of object_permission
+        delete formValues.allowed_agents_and_groups;
       }
 
       // Add model_aliases if any are defined
@@ -1087,6 +1108,33 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                             />
                           </div>
                         )}
+                      </Form.Item>
+                    </AccordionBody>
+                  </Accordion>
+
+                  <Accordion className="mt-4 mb-4">
+                    <AccordionHeader>
+                      <b>Agent Settings</b>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <Form.Item
+                        label={
+                          <span>
+                            Allowed Agents{" "}
+                            <Tooltip title="Select which agents or access groups this key can access">
+                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                            </Tooltip>
+                          </span>
+                        }
+                        name="allowed_agents_and_groups"
+                        help="Select agents or access groups this key can access"
+                      >
+                        <AgentSelector
+                          onChange={(val: any) => form.setFieldValue("allowed_agents_and_groups", val)}
+                          value={form.getFieldValue("allowed_agents_and_groups")}
+                          accessToken={accessToken}
+                          placeholder="Select agents or access groups (optional)"
+                        />
                       </Form.Item>
                     </AccordionBody>
                   </Accordion>

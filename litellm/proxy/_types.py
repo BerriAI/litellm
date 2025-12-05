@@ -401,6 +401,15 @@ class LiteLLMRoutes(enum.Enum):
         "/mcp/tools/call",
     ]
 
+    agent_routes = [
+        "/v1/agents",
+        "/agents",
+
+        "/a2a/{agent_id}",
+        "/a2a/{agent_id}/message/send",
+        "/a2a/{agent_id}/message/stream",
+    ]
+
     google_routes = [
         "/v1beta/models/{model_name}:countTokens",
         "/v1beta/models/{model_name}:generateContent",
@@ -423,6 +432,7 @@ class LiteLLMRoutes(enum.Enum):
         + apply_guardrail_routes
         + mcp_routes
         + litellm_native_routes
+        + agent_routes
     )
     info_routes = [
         "/key/info",
@@ -511,6 +521,7 @@ class LiteLLMRoutes(enum.Enum):
         "/global/predict/spend/logs",
         "/global/spend/report",
         "/global/spend/provider",
+        "/global/spend/tags",
     ]
 
     public_routes = set(
@@ -547,6 +558,7 @@ class LiteLLMRoutes(enum.Enum):
         "/global/spend/logs",
         "/global/spend/keys",
         "/global/spend/models",
+        "/global/spend/tags",
         "/global/predict/spend/logs",
         "/global/activity",
         "/health/services",
@@ -777,6 +789,8 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     mcp_access_groups: Optional[List[str]] = None
     mcp_tool_permissions: Optional[Dict[str, List[str]]] = None
     vector_stores: Optional[List[str]] = None
+    agents: Optional[List[str]] = None
+    agent_access_groups: Optional[List[str]] = None
 
 
 class GenerateRequestBase(LiteLLMPydanticObjectBase):
@@ -1546,6 +1560,8 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     """
 
     vector_stores: Optional[List[str]] = []
+    agents: Optional[List[str]] = []
+    agent_access_groups: Optional[List[str]] = []
 
 
 class LiteLLM_TeamTable(TeamBase):

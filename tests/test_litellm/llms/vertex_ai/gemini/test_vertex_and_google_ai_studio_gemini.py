@@ -1767,15 +1767,15 @@ def test_temperature_default_for_gemini_3():
 def test_media_resolution_from_detail_parameter():
     """Test that OpenAI's detail parameter is correctly mapped to media_resolution"""
     from litellm.llms.vertex_ai.gemini.transformation import (
+        _convert_detail_to_media_resolution_enum,
         _gemini_convert_messages_with_history,
-        _map_openai_detail_to_media_resolution,
     )
 
-    # Test detail -> media_resolution mapping
-    assert _map_openai_detail_to_media_resolution("low") == "low"
-    assert _map_openai_detail_to_media_resolution("high") == "high"
-    assert _map_openai_detail_to_media_resolution("auto") is None
-    assert _map_openai_detail_to_media_resolution(None) is None
+    # Test detail -> media_resolution enum mapping
+    assert _convert_detail_to_media_resolution_enum("low") == {"level": "MEDIA_RESOLUTION_LOW"}
+    assert _convert_detail_to_media_resolution_enum("high") == {"level": "MEDIA_RESOLUTION_HIGH"}
+    assert _convert_detail_to_media_resolution_enum("auto") is None
+    assert _convert_detail_to_media_resolution_enum(None) is None
 
     # Test with actual message transformation using base64 image
     # Using a minimal valid base64-encoded 1x1 PNG
@@ -1795,27 +1795,28 @@ def test_media_resolution_from_detail_parameter():
         }
     ]
 
-    contents = _gemini_convert_messages_with_history(messages=messages)
+    contents = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-3-pro-preview"
+    )
     
-    # Verify media_resolution is set in the inline_data
-    # Note: Gemini adds a blank text part when there's no text, so we expect 2 parts
+    # Verify media_resolution is set at the Part level (not inside inline_data)
     assert len(contents) == 1
     assert len(contents[0]["parts"]) >= 1
     # Find the part with inline_data
     image_part = None
     for part in contents[0]["parts"]:
-        if "inline_data" in part:
+        if "inline_data" in part or "inlineData" in part:
             image_part = part
             break
     assert image_part is not None
-    assert "inline_data" in image_part
-    # The TypedDict uses snake_case internally, but mediaResolution is camelCase in the dict
-    assert "mediaResolution" in image_part["inline_data"]
-    assert image_part["inline_data"]["mediaResolution"] == "high"
+    # media_resolution should be at the Part level, not inside inline_data
+    assert "media_resolution" in image_part
+    media_res = image_part.get("media_resolution")
+    assert media_res == {"level": "MEDIA_RESOLUTION_HIGH"}
 
 
 def test_media_resolution_low_detail():
-    """Test that detail='low' maps to media_resolution='low'"""
+    """Test that detail='low' maps to media_resolution enum with MEDIA_RESOLUTION_LOW"""
     from litellm.llms.vertex_ai.gemini.transformation import (
         _gemini_convert_messages_with_history,
     )
@@ -1837,7 +1838,9 @@ def test_media_resolution_low_detail():
         }
     ]
 
-    contents = _gemini_convert_messages_with_history(messages=messages)
+    contents = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-3-pro-preview"
+    )
     
     # Find the part with inline_data
     image_part = None
@@ -1847,7 +1850,9 @@ def test_media_resolution_low_detail():
             break
     assert image_part is not None
     assert "inline_data" in image_part
-    assert image_part["inline_data"]["mediaResolution"] == "low"
+    # media_resolution should be at the Part level, not inside inline_data
+    assert "media_resolution" in image_part
+    assert image_part["media_resolution"] == {"level": "MEDIA_RESOLUTION_LOW"}
 
 
 def test_media_resolution_auto_detail():
@@ -1884,8 +1889,8 @@ def test_media_resolution_auto_detail():
             break
     assert image_part is not None
     assert "inline_data" in image_part
-    # mediaResolution should not be set for auto
-    assert "mediaResolution" not in image_part["inline_data"] or image_part["inline_data"].get("mediaResolution") is None
+    # media_resolution should not be set for auto (check Part level, not inline_data)
+    assert "media_resolution" not in image_part
 
     # Test with None
     messages_none = [
@@ -1911,8 +1916,8 @@ def test_media_resolution_auto_detail():
             break
     assert image_part is not None
     assert "inline_data" in image_part
-    # mediaResolution should not be set
-    assert "mediaResolution" not in image_part["inline_data"] or image_part["inline_data"].get("mediaResolution") is None
+    # media_resolution should not be set (check Part level, not inline_data)
+    assert "media_resolution" not in image_part
 
 
 def test_media_resolution_per_part():
@@ -1951,7 +1956,9 @@ def test_media_resolution_per_part():
         }
     ]
 
-    contents = _gemini_convert_messages_with_history(messages=messages)
+    contents = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-3-pro-preview"
+    )
     
     # Should have one content with multiple parts
     assert len(contents) == 1
@@ -1960,12 +1967,53 @@ def test_media_resolution_per_part():
     # First image should have low resolution (first part is the image)
     image1_part = contents[0]["parts"][0]
     assert "inline_data" in image1_part
-    assert image1_part["inline_data"]["mediaResolution"] == "low"
+    # media_resolution should be at the Part level, not inside inline_data
+    assert "media_resolution" in image1_part
+    assert image1_part["media_resolution"] == {"level": "MEDIA_RESOLUTION_LOW"}
     
     # Second image should have high resolution (third part is the second image)
     image2_part = contents[0]["parts"][2]
     assert "inline_data" in image2_part
-    assert image2_part["inline_data"]["mediaResolution"] == "high"
+    # media_resolution should be at the Part level, not inside inline_data
+    assert "media_resolution" in image2_part
+    assert image2_part["media_resolution"] == {"level": "MEDIA_RESOLUTION_HIGH"}
+
+
+def test_media_resolution_only_for_gemini_3_models():
+    """Ensure media_resolution is not added for non-Gemini 3 models."""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    base64_image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": base64_image,
+                        "detail": "high",
+                    },
+                }
+            ],
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-2.5-pro"
+    )
+    image_part = None
+    for part in contents[0]["parts"]:
+        if "inline_data" in part:
+            image_part = part
+            break
+    assert image_part is not None
+    assert "inline_data" in image_part
+    # media_resolution should not be at the Part level for non-Gemini 3 models
+    assert "media_resolution" not in image_part
+    assert "mediaResolution" not in image_part
 
 
 def test_gemini_3_image_models_no_thinking_config():
@@ -2061,4 +2109,63 @@ def test_gemini_image_models_excluded_from_thinking():
 
         # None of these should have thinkingConfig
         assert "thinkingConfig" not in result, f"Model {model} should not have thinkingConfig"
+
+
+def test_partial_json_chunk_after_first_chunk():
+    """
+    Test that partial JSON chunks are handled correctly even AFTER the first chunk.
+
+    This tests the fix for:
+    - https://github.com/BerriAI/litellm/issues/16562
+    - https://github.com/BerriAI/litellm/issues/16037
+    - https://github.com/BerriAI/litellm/issues/14747
+    - https://github.com/BerriAI/litellm/issues/10410
+    - https://github.com/BerriAI/litellm/issues/5650
+
+    The bug was that accumulation mode only activated on the first chunk.
+    If chunk 1 was valid and chunk 5 arrived partial, it would crash.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(),
+        sync_stream=True,
+        logging_obj=MagicMock(),
+    )
+
+    # First chunk arrives COMPLETE - this sets sent_first_chunk = True
+    first_chunk = '{"candidates": [{"content": {"parts": [{"text": "Hello"}]}}]}'
+    result1 = iterator.handle_valid_json_chunk(first_chunk)
+    assert result1 is not None, "First complete chunk should parse OK"
+    assert iterator.sent_first_chunk is True, "sent_first_chunk should be True after first chunk"
+
+    # Later chunk arrives PARTIAL (simulating network fragmentation)
+    partial_chunk = '{"candidates": [{"content":'
+    result2 = iterator.handle_valid_json_chunk(partial_chunk)
+
+    # Should switch to accumulation mode instead of crashing
+    assert result2 is None, "Partial chunk should return None while accumulating"
+    assert iterator.chunk_type == "accumulated_json", "Should switch to accumulated_json mode"
+
+
+def test_partial_json_chunk_on_first_chunk():
+    """Test that first chunk being partial still works (existing behavior)."""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(),
+        sync_stream=True,
+        logging_obj=MagicMock(),
+    )
+
+    # First chunk is partial
+    partial = '{"candidates": [{"content":'
+    result = iterator.handle_valid_json_chunk(partial)
+
+    assert result is None, "Partial first chunk should return None"
+    assert iterator.chunk_type == "accumulated_json", "Should switch to accumulated_json mode"
 

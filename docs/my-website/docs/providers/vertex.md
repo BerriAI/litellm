@@ -1604,6 +1604,53 @@ litellm.vertex_location = "us-central1 # Your Location
 | gemini-2.5-flash-preview-09-2025   | `completion('gemini-2.5-flash-preview-09-2025', messages)`, `completion('vertex_ai/gemini-2.5-flash-preview-09-2025', messages)` |
 | gemini-2.5-flash-lite-preview-09-2025   | `completion('gemini-2.5-flash-lite-preview-09-2025', messages)`, `completion('vertex_ai/gemini-2.5-flash-lite-preview-09-2025', messages)` |
 
+## Private Service Connect (PSC) Endpoints
+
+LiteLLM supports Vertex AI models deployed to Private Service Connect (PSC) endpoints, allowing you to use custom `api_base` URLs for private deployments.
+
+### Usage
+
+```python
+from litellm import completion
+
+# Use PSC endpoint with custom api_base
+response = completion(
+    model="vertex_ai/1234567890",  # Numeric endpoint ID
+    messages=[{"role": "user", "content": "Hello!"}],
+    api_base="http://10.96.32.8",  # Your PSC endpoint
+    vertex_project="my-project-id",
+    vertex_location="us-central1"
+)
+```
+
+**Key Features:**
+- Supports both numeric endpoint IDs and custom model names
+- Works with both completion and embedding endpoints
+- Automatically constructs full PSC URL: `{api_base}/v1/projects/{project}/locations/{location}/endpoints/{model}:{endpoint}`
+- Compatible with streaming requests
+
+### Configuration
+
+Add PSC endpoints to your `config.yaml`:
+
+```yaml
+model_list:
+  - model_name: psc-gemini
+    litellm_params:
+      model: vertex_ai/1234567890  # Numeric endpoint ID
+      api_base: "http://10.96.32.8"  # Your PSC endpoint
+      vertex_project: "my-project-id"
+      vertex_location: "us-central1"
+      vertex_credentials: "/path/to/service_account.json"
+  - model_name: psc-embedding
+    litellm_params:
+      model: vertex_ai/text-embedding-004
+      api_base: "http://10.96.32.8"  # Your PSC endpoint
+      vertex_project: "my-project-id"
+      vertex_location: "us-central1"
+      vertex_credentials: "/path/to/service_account.json"
+```
+
 ## Fine-tuned Models
 
 You can call fine-tuned Vertex AI Gemini models through LiteLLM

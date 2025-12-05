@@ -51,6 +51,10 @@ import { fetchAvailableModels, ModelGroup } from "../llm_calls/fetch_models";
 import { makeOpenAIImageEditsRequest } from "../llm_calls/image_edits";
 import { makeOpenAIImageGenerationRequest } from "../llm_calls/image_generation";
 import { makeOpenAIResponsesRequest } from "../llm_calls/responses_api";
+import { Agent, fetchAvailableAgents } from "../llm_calls/fetch_agents";
+import { makeA2AStreamMessageRequest } from "../llm_calls/a2a_send_message";
+import A2AMetrics from "./A2AMetrics";
+import { A2ATaskMetadata } from "./types";
 import MCPEventsDisplay, { MCPEvent } from "./MCPEventsDisplay";
 import { EndpointType, getEndpointType } from "./mode_endpoint_mapping";
 import ReasoningContent from "./ReasoningContent";
@@ -124,6 +128,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [selectedModel, setSelectedModel] = useState<string | undefined>(undefined);
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
+  const [agentInfo, setAgentInfo] = useState<Agent[]>([]);
+  const [selectedAgent, setSelectedAgent] = useState<string | undefined>(undefined);
   const customModelTimeout = useRef<NodeJS.Timeout | null>(null);
   const [endpointType, setEndpointType] = useState<string>(
     () => sessionStorage.getItem("endpointType") || EndpointType.CHAT,
@@ -340,6 +346,29 @@ const ChatUI: React.FC<ChatUIProps> = ({
     loadMCPTools();
   }, [accessToken, userID, userRole, apiKeySource, apiKey, token]);
 
+  // Fetch agents when A2A endpoint is selected
+  useEffect(() => {
+    const userApiKey = apiKeySource === "session" ? accessToken : apiKey;
+    if (!userApiKey || endpointType !== EndpointType.A2A_AGENTS) {
+      return;
+    }
+
+    const loadAgents = async () => {
+      try {
+        const agents = await fetchAvailableAgents(userApiKey);
+        setAgentInfo(agents);
+        // Clear selection if current agent not in list
+        if (selectedAgent && !agents.some((a) => a.agent_name === selectedAgent)) {
+          setSelectedAgent(undefined);
+        }
+      } catch (error) {
+        console.error("Error fetching agents:", error);
+      }
+    };
+
+    loadAgents();
+  }, [accessToken, apiKeySource, apiKey, endpointType]);
+
   useEffect(() => {
     // Scroll to the bottom of the chat whenever chatHistory updates
     if (chatEndRef.current) {
@@ -462,6 +491,23 @@ const ChatUI: React.FC<ChatUIProps> = ({
         };
         console.log("Updated message:", updatedMessage);
 
+        return [...prevHistory.slice(0, prevHistory.length - 1), updatedMessage];
+      }
+
+      return prevHistory;
+    });
+  };
+
+  const updateA2AMetadata = (a2aMetadata: A2ATaskMetadata) => {
+    console.log("Received A2A metadata:", a2aMetadata);
+    setChatHistory((prevHistory) => {
+      const lastMessage = prevHistory[prevHistory.length - 1];
+
+      if (lastMessage && lastMessage.role === "assistant") {
+        const updatedMessage = {
+          ...lastMessage,
+          a2aMetadata,
+        };
         return [...prevHistory.slice(0, prevHistory.length - 1), updatedMessage];
       }
 
@@ -681,6 +727,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
     // For audio transcriptions, require audio file
     if (endpointType === EndpointType.TRANSCRIPTION && !uploadedAudio) {
       NotificationsManager.fromBackend("Please upload an audio file for transcription");
+      return;
+    }
+
+    // For A2A agents, require agent selection
+    if (endpointType === EndpointType.A2A_AGENTS && !selectedAgent) {
+      NotificationsManager.fromBackend("Please select an agent to send a message");
       return;
     }
 
@@ -908,6 +960,20 @@ const ChatUI: React.FC<ChatUIProps> = ({
           }
         }
       }
+
+      // Handle A2A agent calls (separate from model-based calls) - use streaming
+      if (endpointType === EndpointType.A2A_AGENTS && selectedAgent) {
+        await makeA2AStreamMessageRequest(
+          selectedAgent,
+          inputMessage,
+          (chunk, model) => updateTextUI("assistant", chunk, model),
+          effectiveApiKey,
+          signal,
+          updateTimingData,
+          updateTotalLatency,
+          updateA2AMetadata,
+        );
+      }
     } catch (error) {
       if (signal.aborted) {
         console.log("Request was cancelled");
@@ -1038,11 +1104,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   endpointType={endpointType}
                   onEndpointChange={(value) => {
                     setEndpointType(value);
-                    // Clear model selection when switching endpoint type
+                    // Clear model/agent selection when switching endpoint type
                     setSelectedModel(undefined);
+                    setSelectedAgent(undefined);
                     setShowCustomModelInput(false);
                     try {
                       sessionStorage.removeItem("selectedModel");
+                      sessionStorage.removeItem("selectedAgent");
                     } catch {}
                   }}
                   className="mb-4"
@@ -1077,103 +1145,145 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 />
               </div>
 
-              <div>
-                <Text className="font-medium block mb-2 text-gray-700 flex items-center justify-between">
-                  <span className="flex items-center">
-                    <RobotOutlined className="mr-2" /> Select Model
-                  </span>
-                  {isChatModel() ? (
-                    <Popover
-                      content={
-                        <AdditionalModelSettings
-                          temperature={temperature}
-                          maxTokens={maxTokens}
-                          useAdvancedParams={useAdvancedParams}
-                          onTemperatureChange={setTemperature}
-                          onMaxTokensChange={setMaxTokens}
-                          onUseAdvancedParamsChange={setUseAdvancedParams}
+              {/* Model Selector - shown when NOT using A2A Agents */}
+              {endpointType !== EndpointType.A2A_AGENTS && (
+                <div>
+                  <Text className="font-medium block mb-2 text-gray-700 flex items-center justify-between">
+                    <span className="flex items-center">
+                      <RobotOutlined className="mr-2" /> Select Model
+                    </span>
+                    {isChatModel() ? (
+                      <Popover
+                        content={
+                          <AdditionalModelSettings
+                            temperature={temperature}
+                            maxTokens={maxTokens}
+                            useAdvancedParams={useAdvancedParams}
+                            onTemperatureChange={setTemperature}
+                            onMaxTokensChange={setMaxTokens}
+                            onUseAdvancedParamsChange={setUseAdvancedParams}
+                          />
+                        }
+                        title="Model Settings"
+                        trigger="click"
+                        placement="right"
+                      >
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<SettingOutlined />}
+                          className="text-gray-500 hover:text-gray-700"
                         />
-                      }
-                      title="Model Settings"
-                      trigger="click"
-                      placement="right"
-                    >
-                      <Button
-                        type="text"
-                        size="small"
-                        icon={<SettingOutlined />}
-                        className="text-gray-500 hover:text-gray-700"
-                      />
-                    </Popover>
-                  ) : (
-                    <Tooltip title="Advanced parameters are only supported for chat models currently">
-                      <Button
-                        type="text"
-                        size="small"
-                        icon={<SettingOutlined />}
-                        className="text-gray-300 cursor-not-allowed"
-                        disabled
-                      />
-                    </Tooltip>
-                  )}
-                </Text>
-                <Select
-                  value={selectedModel}
-                  placeholder="Select a Model"
-                  onChange={onModelChange}
-                  options={[
-                    ...Array.from(
-                      new Set(
-                        modelInfo
-                          .filter((option) => {
-                            if (!option.mode) {
-                              //If no mode, show all models
-                              return true;
-                            }
-                            const optionEndpoint = getEndpointType(option.mode);
-                            // Show chat models for responses/anthropic_messages endpoints as they are compatible
-                            if (
-                              endpointType === EndpointType.RESPONSES ||
-                              endpointType === EndpointType.ANTHROPIC_MESSAGES
-                            ) {
-                              return optionEndpoint === endpointType || optionEndpoint === EndpointType.CHAT;
-                            }
-                            // Show image models for image_edits endpoint as they are compatible
-                            if (endpointType === EndpointType.IMAGE_EDITS) {
-                              return optionEndpoint === endpointType || optionEndpoint === EndpointType.IMAGE;
-                            }
-                            return optionEndpoint === endpointType;
-                          })
-                          .map((option) => option.model_group),
-                      ),
-                    ).map((model_group, index) => ({
-                      value: model_group,
-                      label: model_group,
-                      key: index,
-                    })),
-                    { value: "custom", label: "Enter custom model", key: "custom" },
-                  ]}
-                  style={{ width: "100%" }}
-                  showSearch={true}
-                  className="rounded-md"
-                />
-                {showCustomModelInput && (
-                  <TextInput
-                    className="mt-2"
-                    placeholder="Enter custom model name"
-                    onValueChange={(value) => {
-                      // Using setTimeout to create a simple debounce effect
-                      if (customModelTimeout.current) {
-                        clearTimeout(customModelTimeout.current);
-                      }
-
-                      customModelTimeout.current = setTimeout(() => {
-                        setSelectedModel(value);
-                      }, 500); // 500ms delay after typing stops
-                    }}
+                      </Popover>
+                    ) : (
+                      <Tooltip title="Advanced parameters are only supported for chat models currently">
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<SettingOutlined />}
+                          className="text-gray-300 cursor-not-allowed"
+                          disabled
+                        />
+                      </Tooltip>
+                    )}
+                  </Text>
+                  <Select
+                    value={selectedModel}
+                    placeholder="Select a Model"
+                    onChange={onModelChange}
+                    options={[
+                      ...Array.from(
+                        new Set(
+                          modelInfo
+                            .filter((option) => {
+                              if (!option.mode) {
+                                //If no mode, show all models
+                                return true;
+                              }
+                              const optionEndpoint = getEndpointType(option.mode);
+                              // Show chat models for responses/anthropic_messages endpoints as they are compatible
+                              if (
+                                endpointType === EndpointType.RESPONSES ||
+                                endpointType === EndpointType.ANTHROPIC_MESSAGES
+                              ) {
+                                return optionEndpoint === endpointType || optionEndpoint === EndpointType.CHAT;
+                              }
+                              // Show image models for image_edits endpoint as they are compatible
+                              if (endpointType === EndpointType.IMAGE_EDITS) {
+                                return optionEndpoint === endpointType || optionEndpoint === EndpointType.IMAGE;
+                              }
+                              return optionEndpoint === endpointType;
+                            })
+                            .map((option) => option.model_group),
+                        ),
+                      ).map((model_group, index) => ({
+                        value: model_group,
+                        label: model_group,
+                        key: index,
+                      })),
+                      { value: "custom", label: "Enter custom model", key: "custom" },
+                    ]}
+                    style={{ width: "100%" }}
+                    showSearch={true}
+                    className="rounded-md"
                   />
-                )}
-              </div>
+                  {showCustomModelInput && (
+                    <TextInput
+                      className="mt-2"
+                      placeholder="Enter custom model name"
+                      onValueChange={(value) => {
+                        // Using setTimeout to create a simple debounce effect
+                        if (customModelTimeout.current) {
+                          clearTimeout(customModelTimeout.current);
+                        }
+
+                        customModelTimeout.current = setTimeout(() => {
+                          setSelectedModel(value);
+                        }, 500); // 500ms delay after typing stops
+                      }}
+                    />
+                  )}
+                </div>
+              )}
+
+              {/* Agent Selector - shown ONLY for A2A Agents endpoint */}
+              {endpointType === EndpointType.A2A_AGENTS && (
+                <div>
+                  <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+                    <RobotOutlined className="mr-2" /> Select Agent
+                  </Text>
+                  <Select
+                    value={selectedAgent}
+                    placeholder="Select an Agent"
+                    onChange={(value) => setSelectedAgent(value)}
+                    options={agentInfo.map((agent) => ({
+                      value: agent.agent_name,
+                      label: agent.agent_name || agent.agent_id,
+                      key: agent.agent_id,
+                    }))}
+                    style={{ width: "100%" }}
+                    showSearch={true}
+                    className="rounded-md"
+                    optionLabelProp="label"
+                  >
+                    {agentInfo.map((agent) => (
+                      <Select.Option key={agent.agent_id} value={agent.agent_name} label={agent.agent_name || agent.agent_id}>
+                        <div className="flex flex-col py-1">
+                          <span className="font-medium">{agent.agent_name || agent.agent_id}</span>
+                          {agent.agent_card_params?.description && (
+                            <span className="text-xs text-gray-500 mt-1">{agent.agent_card_params.description}</span>
+                          )}
+                        </div>
+                      </Select.Option>
+                    ))}
+                  </Select>
+                  {agentInfo.length === 0 && (
+                    <Text className="text-xs text-gray-500 mt-2 block">
+                      No agents found. Create agents via /v1/agents endpoint.
+                    </Text>
+                  )}
+                </div>
+              )}
 
               <div>
                 <Text className="font-medium block mb-2 text-gray-700 flex items-center">
@@ -1440,7 +1550,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         )}
 
                         {message.role === "assistant" &&
-                          (message.timeToFirstToken || message.totalLatency || message.usage) && (
+                          (message.timeToFirstToken || message.totalLatency || message.usage) &&
+                          !message.a2aMetadata && (
                             <ResponseMetrics
                               timeToFirstToken={message.timeToFirstToken}
                               totalLatency={message.totalLatency}
@@ -1448,6 +1559,15 @@ const ChatUI: React.FC<ChatUIProps> = ({
                               toolName={message.toolName}
                             />
                           )}
+
+                        {/* A2A Metrics - show for A2A agent responses */}
+                        {message.role === "assistant" && message.a2aMetadata && (
+                          <A2AMetrics
+                            a2aMetadata={message.a2aMetadata}
+                            timeToFirstToken={message.timeToFirstToken}
+                            totalLatency={message.totalLatency}
+                          />
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1685,13 +1805,15 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       endpointType === EndpointType.RESPONSES ||
                       endpointType === EndpointType.ANTHROPIC_MESSAGES
                         ? "Type your message... (Shift+Enter for new line)"
-                        : endpointType === EndpointType.IMAGE_EDITS
-                          ? "Describe how you want to edit the image..."
-                          : endpointType === EndpointType.SPEECH
-                            ? "Enter text to convert to speech..."
-                            : endpointType === EndpointType.TRANSCRIPTION
-                              ? "Optional: Add context or prompt for transcription..."
-                              : "Describe the image you want to generate..."
+                        : endpointType === EndpointType.A2A_AGENTS
+                          ? "Send a message to the A2A agent..."
+                          : endpointType === EndpointType.IMAGE_EDITS
+                            ? "Describe how you want to edit the image..."
+                            : endpointType === EndpointType.SPEECH
+                              ? "Enter text to convert to speech..."
+                              : endpointType === EndpointType.TRANSCRIPTION
+                                ? "Optional: Add context or prompt for transcription..."
+                                : "Describe the image you want to generate..."
                     }
                     disabled={isLoading}
                     className="flex-1"

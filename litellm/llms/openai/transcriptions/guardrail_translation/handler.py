@@ -88,12 +88,13 @@ class OpenAIAudioTranscriptionHandler(BaseTranslation):
             if user_metadata:
                 request_data["litellm_metadata"] = user_metadata
 
-            guardrailed_texts, _ = await guardrail_to_apply.apply_guardrail(
-                texts=[original_text],
+            guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+                inputs={"texts": [original_text]},
                 request_data=request_data,
                 input_type="response",
                 logging_obj=litellm_logging_obj,
             )
+            guardrailed_texts = guardrailed_inputs.get("texts", [])
             response.text = guardrailed_texts[0] if guardrailed_texts else original_text
 
             verbose_proxy_logger.debug(

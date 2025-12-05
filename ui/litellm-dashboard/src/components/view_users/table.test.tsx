@@ -105,7 +105,7 @@ describe("UserDataTable", () => {
       "Spend (USD)",
       "Budget (USD)",
       "SSO ID",
-      "API Keys",
+      "Virtual Keys",
       "Created At",
       "Updated At",
       "Actions",

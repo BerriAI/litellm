@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -87,7 +87,7 @@ class BaseTranslation(ABC):
 
     async def process_output_streaming_response(
         self,
-        response: Any,
+        responses_so_far: List[Any],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
@@ -97,4 +97,4 @@ class BaseTranslation(ABC):
 
         Optional to override in subclasses.
         """
-        return response
+        return responses_so_far

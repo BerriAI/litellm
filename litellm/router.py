@@ -43,6 +43,10 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.exception_mapping_utils
 from litellm import get_secret_str
+from litellm.router_utils.common_utils import (
+    filter_team_based_models,
+    filter_web_search_deployments,
+)
 from litellm._logging import verbose_router_logger
 from litellm._uuid import uuid
 from litellm.caching.caching import (
@@ -153,11 +157,7 @@ from litellm.types.utils import (
 )
 from litellm.types.utils import ModelInfo
 from litellm.types.utils import ModelInfo as ModelMapInfo
-from litellm.types.utils import (
-    ModelResponseStream,
-    StandardLoggingPayload,
-    Usage,
-)
+from litellm.types.utils import ModelResponseStream, StandardLoggingPayload, Usage
 from litellm.utils import (
     CustomStreamWrapper,
     EmbeddingResponse,
@@ -779,6 +779,9 @@ class Router:
         self.aanthropic_messages = self.factory_function(
             litellm.anthropic_messages, call_type="anthropic_messages"
         )
+        self.anthropic_messages = self.factory_function(
+            litellm.anthropic_messages, call_type="anthropic_messages"
+        )
         self.agenerate_content = self.factory_function(
             litellm.agenerate_content, call_type="agenerate_content"
         )
@@ -886,6 +889,7 @@ class Router:
         from litellm.vector_store_files.main import (
             update as vector_store_file_update_fn,
         )
+
         self.avector_store_file_create = self.factory_function(
             avector_store_file_create_fn, call_type="avector_store_file_create"
         )
@@ -3865,6 +3869,7 @@ class Router:
             "retrieve_container",
             "delete_container",
         ):
+
             def sync_wrapper(
                 custom_llm_provider: Optional[str] = None,
                 client: Optional[Any] = None,
@@ -5944,36 +5949,38 @@ class Router:
         """
         Get API credentials and provider info from a model name in model_list.
         Useful for passthrough endpoints (files, batches, etc.) that need credentials.
-        
+
         This method tries to find a deployment by model_id first, and if not found,
         it tries to find by model_group_name (model_name).
-        
+
         Args:
             model_id: Model ID or model name from model_list (e.g., "gpt-4o-litellm")
-        
+
         Returns:
             Dictionary containing api_key, api_base, custom_llm_provider, etc.
             Returns None if model not found.
-        
+
         Example:
             credentials = router.get_deployment_credentials_with_provider("gpt-4o-litellm")
             # Returns: {"api_key": "sk-...", "custom_llm_provider": "openai", ...}
         """
         # Try to get deployment by model_id first
         deployment = self.get_deployment(model_id=model_id)
-        
+
         # If not found, try by model_group_name
         if deployment is None:
-            deployment = self.get_deployment_by_model_group_name(model_group_name=model_id)
-        
+            deployment = self.get_deployment_by_model_group_name(
+                model_group_name=model_id
+            )
+
         if deployment is None:
             return None
-        
+
         # Get basic credentials
         credentials = CredentialLiteLLMParams(
             **deployment.litellm_params.model_dump(exclude_none=True)
         ).model_dump(exclude_none=True)
-        
+
         # Add custom_llm_provider
         if deployment.litellm_params.custom_llm_provider:
             credentials["custom_llm_provider"] = (
@@ -5986,7 +5993,7 @@ class Router:
             )[0]
         else:
             credentials["custom_llm_provider"] = "openai"  # default
-        
+
         return credentials
 
     @overload
@@ -7442,7 +7449,6 @@ class Router:
         *OR*
         - Dict, if specific model chosen
         """
-        from litellm.router_utils.common_utils import filter_team_based_models
 
         model, healthy_deployments = self._common_checks_available_deployment(
             model=model,
@@ -7458,6 +7464,15 @@ class Router:
             healthy_deployments=healthy_deployments,
             request_kwargs=request_kwargs,
         )
+
+        verbose_router_logger.debug(f"healthy_deployments after team filter: {healthy_deployments}")
+
+        healthy_deployments = filter_web_search_deployments(
+            healthy_deployments=healthy_deployments,
+            request_kwargs=request_kwargs,
+        )
+
+        verbose_router_logger.debug(f"healthy_deployments after web search filter: {healthy_deployments}")
 
         if isinstance(healthy_deployments, dict):
             return healthy_deployments

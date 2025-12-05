@@ -191,7 +191,9 @@ class TestContentFilterGuardrail:
 
         with pytest.raises(HTTPException) as exc_info:
             await guardrail.apply_guardrail(
-                texts=["My SSN is 123-45-6789"], request_data={}, input_type="request"
+                inputs={"texts": ["My SSN is 123-45-6789"]},
+                request_data={},
+                input_type="request",
             )
 
         assert exc_info.value.status_code == 400
@@ -215,11 +217,12 @@ class TestContentFilterGuardrail:
             patterns=patterns,
         )
 
-        result, _ = await guardrail.apply_guardrail(
-            texts=["Contact me at test@example.com"],
+        guardrailed_inputs = await guardrail.apply_guardrail(
+            inputs={"texts": ["Contact me at test@example.com"]},
             request_data={},
             input_type="request",
         )
+        result = guardrailed_inputs.get("texts", [])
 
         assert result is not None
         assert len(result) == 1
@@ -243,11 +246,12 @@ class TestContentFilterGuardrail:
             blocked_words=blocked_words,
         )
 
-        result, _ = await guardrail.apply_guardrail(
-            texts=["This is PROPRIETARY information"],
+        guardrailed_inputs = await guardrail.apply_guardrail(
+            inputs={"texts": ["This is PROPRIETARY information"]},
             request_data={},
             input_type="request",
         )
+        result = guardrailed_inputs.get("texts", [])
 
         assert result is not None
         assert len(result) == 1
@@ -277,11 +281,12 @@ class TestContentFilterGuardrail:
             patterns=patterns,
         )
 
-        result, _ = await guardrail.apply_guardrail(
-            texts=["Contact user@test.com or SSN: 123-45-6789"],
+        guardrailed_inputs = await guardrail.apply_guardrail(
+            inputs={"texts": ["Contact user@test.com or SSN: 123-45-6789"]},
             request_data={},
             input_type="request",
         )
+        result = guardrailed_inputs.get("texts", [])
 
         assert result is not None
         assert len(result) == 1
@@ -381,10 +386,17 @@ class TestContentFilterGuardrail:
         assert result is not None
         assert result[1] == "aws_access_key"
 
+    @pytest.mark.skip(
+        reason="Masking in streaming responses is no longer supported after unified_guardrail.py changes. Only blocking/rejecting is supported for responses."
+    )
     @pytest.mark.asyncio
     async def test_streaming_hook_mask(self):
         """
         Test streaming hook with MASK action
+
+        Note: After changes to unified_guardrail.py, masking responses to users
+        is no longer supported. This test is skipped as the feature is deprecated.
+        Only BLOCK actions (test_streaming_hook_block) are supported for streaming responses.
         """
         from unittest.mock import AsyncMock
 
@@ -431,7 +443,7 @@ class TestContentFilterGuardrail:
         user_api_key_dict = MagicMock()
         request_data = {}
 
-        # Process streaming response
+        # Process streaming response - no masking expected
         result_chunks = []
         async for chunk in guardrail.async_post_call_streaming_iterator_hook(
             user_api_key_dict=user_api_key_dict,
@@ -440,12 +452,8 @@ class TestContentFilterGuardrail:
         ):
             result_chunks.append(chunk)
 
+        # Chunks should pass through unchanged since masking is no longer supported
         assert len(result_chunks) == 2
-        # First chunk should have email masked
-        assert "[EMAIL_REDACTED]" in result_chunks[0].choices[0].delta.content
-        assert "test@example.com" not in result_chunks[0].choices[0].delta.content
-        # Second chunk should be unchanged
-        assert result_chunks[1].choices[0].delta.content == " for more info"
 
     @pytest.mark.asyncio
     async def test_streaming_hook_block(self):
@@ -547,3 +555,119 @@ class TestContentFilterGuardrail:
         assert guardrail.blocked_words["langchain"] == ("BLOCK", None)
         assert "openai" in guardrail.blocked_words
         assert guardrail.blocked_words["openai"] == ("MASK", "Competitor name")
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_masks_all_different_blocked_keywords(self):
+        """
+        Test that ALL different blocked keywords are masked, not just the first one.
+
+        Regression test for GitHub issue #17517:
+        https://github.com/BerriAI/litellm/issues/17517
+
+        Before fix:
+            Input: "Keyword01 Keyword01 Keyword02"
+            Output: "[KEYWORD_REDACTED] [KEYWORD_REDACTED] Keyword02"
+            (only first matching keyword type was replaced)
+
+        After fix:
+            Input: "Keyword01 Keyword01 Keyword02"
+            Output: "[KEYWORD_REDACTED] [KEYWORD_REDACTED] [KEYWORD_REDACTED]"
+            (all matching keywords are replaced)
+        """
+        blocked_words = [
+            BlockedWord(
+                keyword="keyword01",
+                action=ContentFilterAction.MASK,
+            ),
+            BlockedWord(
+                keyword="keyword02",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-multiple-keywords",
+            blocked_words=blocked_words,
+        )
+
+        # Test case from issue #17517
+        guardrailed_inputs = await guardrail.apply_guardrail(
+            inputs={"texts": ["Keyword01 Keyword01 Keyword02"]},
+            request_data={},
+            input_type="request",
+        )
+        result = guardrailed_inputs.get("texts", [])
+
+        assert result is not None
+        assert len(result) == 1
+        # All keywords should be redacted
+        assert result[0] == "[KEYWORD_REDACTED] [KEYWORD_REDACTED] [KEYWORD_REDACTED]"
+        assert "Keyword01" not in result[0]
+        assert "Keyword02" not in result[0]
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_masks_multiple_keywords_different_order(self):
+        """
+        Test that keyword order in input doesn't affect masking all keywords.
+
+        Additional test for GitHub issue #17517.
+        """
+        blocked_words = [
+            BlockedWord(
+                keyword="keyword01",
+                action=ContentFilterAction.MASK,
+            ),
+            BlockedWord(
+                keyword="keyword02",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-multiple-keywords-order",
+            blocked_words=blocked_words,
+        )
+
+        # Test with keyword02 appearing first
+        guardrailed_inputs = await guardrail.apply_guardrail(
+            inputs={"texts": ["Keyword02 Keyword01 Keyword02"]},
+            request_data={},
+            input_type="request",
+        )
+        result = guardrailed_inputs.get("texts", [])
+
+        assert result is not None
+        assert len(result) == 1
+        assert result[0] == "[KEYWORD_REDACTED] [KEYWORD_REDACTED] [KEYWORD_REDACTED]"
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_blocks_on_any_blocked_keyword(self):
+        """
+        Test that if any keyword has BLOCK action, it blocks even if others have MASK.
+        """
+        blocked_words = [
+            BlockedWord(
+                keyword="safe_word",
+                action=ContentFilterAction.MASK,
+            ),
+            BlockedWord(
+                keyword="danger_word",
+                action=ContentFilterAction.BLOCK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-block-priority",
+            blocked_words=blocked_words,
+        )
+
+        # Should block when danger_word is present, even if safe_word is also there
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["safe_word and danger_word together"]},
+                request_data={},
+                input_type="request",
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "danger_word" in str(exc_info.value.detail)

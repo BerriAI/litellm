@@ -1214,13 +1214,15 @@ async def apply_guardrail(
                 detail=f"Guardrail '{request.guardrail_name}' not found. Please ensure the guardrail is configured in your LiteLLM proxy.",
             )
 
-        response_text = await active_guardrail.apply_guardrail(
-            texts=[request.text],
+        guardrailed_inputs = await active_guardrail.apply_guardrail(
+            inputs={"texts": [request.text]},
             request_data={},
             input_type="request",
-            images=None,
         )
+        response_text = guardrailed_inputs.get("texts", [])
 
-        return ApplyGuardrailResponse(response_text=response_text[0][0])
+        return ApplyGuardrailResponse(
+            response_text=response_text[0] if response_text else request.text
+        )
     except Exception as e:
         raise handle_exception_on_proxy(e)

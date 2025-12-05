@@ -50,12 +50,13 @@ class OpenAITextToSpeechHandler(BaseTranslation):
             return data
 
         if isinstance(input_text, str):
-            guardrailed_texts, _ = await guardrail_to_apply.apply_guardrail(
-                texts=[input_text],
+            guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+                inputs={"texts": [input_text]},
                 request_data=data,
                 input_type="request",
                 logging_obj=litellm_logging_obj,
             )
+            guardrailed_texts = guardrailed_inputs.get("texts", [])
             data["input"] = guardrailed_texts[0] if guardrailed_texts else input_text
 
             verbose_proxy_logger.debug(

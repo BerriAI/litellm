@@ -61,6 +61,7 @@ model LiteLLM_AgentsTable {
   agent_name String @unique
   litellm_params Json?
   agent_card_params Json
+  agent_access_groups String[]       @default([])
   created_at    DateTime               @default(now()) @map("created_at")
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
@@ -172,6 +173,8 @@ model LiteLLM_ObjectPermissionTable {
   mcp_access_groups     String[]       @default([])
   mcp_tool_permissions  Json?          // Tool-level permissions for MCP servers. Format: {"server_id": ["tool_name_1", "tool_name_2"]}
   vector_stores         String[]       @default([])
+  agents                String[]       @default([])
+  agent_access_groups   String[]       @default([])
   teams                 LiteLLM_TeamTable[]
   verification_tokens   LiteLLM_VerificationToken[]
   organizations         LiteLLM_OrganizationTable[]

@@ -361,41 +361,6 @@ async def health():
     return {"status": "healthy"}
 
 
-@app.post(
-    "/guardrail/{guardrailIdentifier}/version/{guardrailVersion}/apply",
-    response_model=BedrockGuardrailResponse,
-)
-async def apply_guardrail(
-    guardrailIdentifier: str,
-    guardrailVersion: str,
-    request: BedrockRequest,
-    token: str = Depends(verify_bearer_token),
-) -> BedrockGuardrailResponse:
-    """
-    Apply guardrail to input or output content.
-
-    This endpoint mimics the AWS Bedrock ApplyGuardrail API.
-
-    Args:
-        guardrailIdentifier: The guardrail ID
-        guardrailVersion: The guardrail version
-        request: The guardrail request containing content to analyze
-        token: Bearer token (verified by dependency)
-
-    Returns:
-        BedrockGuardrailResponse with analysis results
-    """
-    # Process the request
-    response, output_texts = process_guardrail_request(request)
-
-    # Log the request (optional, for debugging)
-    print(f"Guardrail applied: {guardrailIdentifier} v{guardrailVersion}")
-    print(f"Source: {request.source}")
-    print(f"Action: {response.action}")
-
-    return response
-
-
 """
 LiteLLM exposes a basic guardrail API with the text extracted from the request and sent to the guardrail API, as well as the received request body for any further processing. 
 
@@ -426,9 +391,14 @@ This is a beta API. Please help us improve it.
 class LitellmBasicGuardrailRequest(BaseModel):
     texts: List[str]
     images: Optional[List[str]] = None
+    tools: Optional[List[dict]] = None
+    tool_calls: Optional[List[dict]] = None
     request_data: Dict[str, Any] = Field(default_factory=dict)
     additional_provider_specific_params: Dict[str, Any] = Field(default_factory=dict)
     input_type: Literal["request", "response"]
+    litellm_call_id: Optional[str] = None
+    litellm_trace_id: Optional[str] = None
+    structured_messages: Optional[List[Dict[str, Any]]] = None
 
 
 class LitellmBasicGuardrailResponse(BaseModel):

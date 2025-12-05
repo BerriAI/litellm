@@ -162,7 +162,12 @@ class LicenseCheck:
 
             from litellm.proxy._types import EnterpriseLicenseData
 
-            # Decode the license key
+            # Decode the license key - add padding if needed for base64
+            # Base64 strings need to be a multiple of 4 characters
+            padding_needed = len(license_key) % 4
+            if padding_needed:
+                license_key += "=" * (4 - padding_needed)
+            
             decoded = base64.b64decode(license_key)
             message, signature = decoded.split(b".", 1)
 

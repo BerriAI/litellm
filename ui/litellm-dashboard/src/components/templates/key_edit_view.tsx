@@ -10,6 +10,7 @@ import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata
 import { KeyResponse } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
+import AgentSelector from "../agent_management/AgentSelector";
 import NotificationsManager from "../molecules/notifications_manager";
 import { fetchMCPAccessGroups, getPromptsList, modelAvailableCall, tagListCall } from "../networking";
 import { fetchTeamModels } from "../organisms/create_key_button";
@@ -175,6 +176,10 @@ export function KeyEditView({
       accessGroups: keyData.object_permission?.mcp_access_groups || [],
     },
     mcp_tool_permissions: keyData.object_permission?.mcp_tool_permissions || {},
+    agents_and_groups: {
+      agents: keyData.object_permission?.agents || [],
+      accessGroups: keyData.object_permission?.agent_access_groups || [],
+    },
     logging_settings: extractLoggingSettings(keyData.metadata),
     disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
       ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
@@ -509,6 +514,15 @@ export function KeyEditView({
             />
           </div>
         )}
+      </Form.Item>
+
+      <Form.Item label="Agents / Access Groups" name="agents_and_groups">
+        <AgentSelector
+          onChange={(val) => form.setFieldValue("agents_and_groups", val)}
+          value={form.getFieldValue("agents_and_groups")}
+          accessToken={accessToken || ""}
+          placeholder="Select agents or access groups (optional)"
+        />
       </Form.Item>
 
       <Form.Item label="Team ID" name="team_id">
