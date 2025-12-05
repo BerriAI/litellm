@@ -54,7 +54,7 @@ Implement `POST /beta/litellm_basic_guardrail_api`
 {
   "texts": ["extracted text from the request"],  // array of text strings
   "images": ["base64_encoded_image_data"],  // optional array of images
-  "tools": [  // optional array of tools (OpenAI ChatCompletionToolParam format)
+  "tools": [  // optional array of tool definitions (OpenAI ChatCompletionToolParam format)
     {
       "type": "function",
       "function": {
@@ -66,6 +66,16 @@ Implement `POST /beta/litellm_basic_guardrail_api`
             "location": {"type": "string"}
           }
         }
+      }
+    }
+  ],
+  "tool_calls": [  // optional array of tool calls being invoked (OpenAI ChatCompletionMessageToolCall format)
+    {
+      "id": "call_abc123",
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "arguments": "{\"location\": \"San Francisco\"}"
       }
     }
   ],
@@ -141,8 +151,8 @@ The `tools` parameter provides information about available function/tool definit
 }
 ```
 
-**Limitations:**
-- **Input only:** Tools are only passed for `input_type="request"` (pre-call guardrails). Output/response guardrails do not currently receive tool information.
+**Availability:**
+- **Input only:** Tools are only passed for `input_type="request"` (pre-call guardrails). Output/response guardrails do not currently receive tool definitions.
 - **Supported endpoints:** The `tools` parameter is supported on: `/v1/chat/completions`, `/v1/responses`, and `/v1/messages`. Other endpoints do not have tool support.
 
 **Use cases:**
@@ -150,6 +160,40 @@ The `tools` parameter provides information about available function/tool definit
 - Validate tool schemas before sending to LLM
 - Log tool usage for audit purposes
 - Block sensitive tools based on user context
+
+### `tool_calls` Parameter
+
+The `tool_calls` parameter contains actual function/tool invocations being made in the request or response.
+
+**Format:** OpenAI `ChatCompletionMessageToolCall` format (see [OpenAI API reference](https://platform.openai.com/docs/api-reference/chat/object#chat/object-tool_calls))
+
+**Example:**
+```json
+{
+  "id": "call_abc123",
+  "type": "function",
+  "function": {
+    "name": "get_weather",
+    "arguments": "{\"location\": \"San Francisco\", \"unit\": \"celsius\"}"
+  }
+}
+```
+
+**Key Difference from `tools`:**
+- **`tools`** = Tool definitions/schemas (what tools are *available*)
+- **`tool_calls`** = Tool invocations/executions (what tools are *being called* with what arguments)
+
+**Availability:**
+- **Both input and output:** Tool calls can be present in both `input_type="request"` (assistant messages requesting tool calls) and `input_type="response"` (LLM responses with tool calls).
+- **Supported endpoints:** The `tool_calls` parameter is supported on: `/v1/chat/completions`, `/v1/responses`, and `/v1/messages`.
+
+**Use cases:**
+- Validate tool call arguments before execution
+- Redact sensitive data from tool call arguments (e.g., PII)
+- Log tool invocations for audit/debugging
+- Block tool calls with dangerous parameters
+- Modify tool call arguments (e.g., enforce constraints, sanitize inputs)
+- Monitor tool usage patterns across users/teams
 
 ### `structured_messages` Parameter
 
@@ -237,7 +281,8 @@ app = FastAPI()
 class GuardrailRequest(BaseModel):
     texts: List[str]
     images: Optional[List[str]] = None
-    tools: Optional[List[Dict[str, Any]]] = None  # OpenAI ChatCompletionToolParam format
+    tools: Optional[List[Dict[str, Any]]] = None  # OpenAI ChatCompletionToolParam format (tool definitions)
+    tool_calls: Optional[List[Dict[str, Any]]] = None  # OpenAI ChatCompletionMessageToolCall format (tool invocations)
     structured_messages: Optional[List[Dict[str, Any]]] = None  # OpenAI messages format (for chat endpoints)
     request_data: Dict[str, Any]
     input_type: str  # "request" or "response"
@@ -263,17 +308,37 @@ async def apply_guardrail(request: GuardrailRequest):
                 blocked_reason="Content contains prohibited terms"
             )
     
-    # Example: Check tools (if present in request)
+    # Example: Check tool definitions (if present in request)
     if request.tools:
         for tool in request.tools:
             if tool.get("type") == "function":
                 function_name = tool.get("function", {}).get("name", "")
-                # Block sensitive tools
+                # Block sensitive tool definitions
                 if function_name in ["delete_data", "access_admin_panel"]:
                     return GuardrailResponse(
                         action="BLOCKED",
                         blocked_reason=f"Tool '{function_name}' is not allowed"
                     )
+    
+    # Example: Check tool calls (if present in request or response)
+    if request.tool_calls:
+        for tool_call in request.tool_calls:
+            if tool_call.get("type") == "function":
+                function_name = tool_call.get("function", {}).get("name", "")
+                arguments_str = tool_call.get("function", {}).get("arguments", "{}")
+                
+                # Parse arguments and validate
+                import json
+                try:
+                    arguments = json.loads(arguments_str)
+                    # Block dangerous arguments
+                    if "file_path" in arguments and ".." in str(arguments["file_path"]):
+                        return GuardrailResponse(
+                            action="BLOCKED",
+                            blocked_reason="Tool call contains path traversal attempt"
+                        )
+                except json.JSONDecodeError:
+                    pass
     
     # Example: Check structured messages (if present in request)
     if request.structured_messages:
