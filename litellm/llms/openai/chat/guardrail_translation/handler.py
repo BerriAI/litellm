@@ -261,7 +261,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         # Step 1: Extract all text content, images, and tool calls from response choices
         for choice_idx, choice in enumerate(response.choices):
-            self._extract_output_text_and_images(
+            self._extract_output_text_images_and_tool_calls(
                 choice=choice,
                 choice_idx=choice_idx,
                 texts_to_check=texts_to_check,
@@ -478,7 +478,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                             return True
         return False
 
-    def _extract_output_text_and_images(
+    def _extract_output_text_images_and_tool_calls(
         self,
         choice: Union[Choices, StreamingChoices],
         choice_idx: int,
