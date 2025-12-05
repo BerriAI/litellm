@@ -216,6 +216,7 @@ def test_gpt5_1_model_detection(gpt5_config: OpenAIGPT5Config):
     """Test that GPT-5.1 models are correctly detected."""
     assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1")
     assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1-codex")
+    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1-codex-max")
     assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1-chat")
     assert not gpt5_config.is_model_gpt_5_1_model("gpt-5")
     assert not gpt5_config.is_model_gpt_5_1_model("gpt-5-mini")
