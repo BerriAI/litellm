@@ -326,11 +326,16 @@ class LiteLLMCompletionResponsesConfig:
                 function_call=input_item
             )
         else:
+            content = input_item.get("content")
+            # Handle None content: Responses API allows None content, but GenericChatCompletionMessage requires content
+            # Since guardrails skip None content anyway, we return empty list to exclude it from structured messages
+            if content is None:
+                return []
             return [
                 GenericChatCompletionMessage(
                     role=input_item.get("role") or "user",
                     content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
-                        input_item.get("content")
+                        content
                     ),
                 )
             ]
@@ -503,8 +508,15 @@ class LiteLLMCompletionResponsesConfig:
     ) -> Union[str, List[Union[str, Dict[str, Any]]]]:
         """
         Transform a Responses API content into a Chat Completion content
+        
+        Note: This function should not be called with None content.
+        Callers should check for None before calling this function.
         """
-        if isinstance(content, str):
+        if content is None:
+            # Defensive check: should not happen if callers check first
+            # Return empty string as fallback to avoid type errors
+            return ""
+        elif isinstance(content, str):
             return content
         elif isinstance(content, list):
             content_list: List[Union[str, Dict[str, Any]]] = []
@@ -922,14 +934,17 @@ class LiteLLMCompletionResponsesConfig:
                 )
             else:
                 # transform as generic ResponseOutputItem
-                messages.append(
-                    GenericChatCompletionMessage(
-                        role=str(output_item.get("role")) or "user",
-                        content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
-                            output_item.get("content")
-                        ),
+                content = output_item.get("content")
+                # Skip if content is None (GenericChatCompletionMessage requires content)
+                if content is not None:
+                    messages.append(
+                        GenericChatCompletionMessage(
+                            role=str(output_item.get("role")) or "user",
+                            content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+                                content
+                            ),
+                        )
                     )
-                )
         return messages
 
     @staticmethod
