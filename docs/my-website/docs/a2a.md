@@ -33,10 +33,12 @@ The URL should be the invocation URL for your A2A agent (e.g., `http://localhost
 
 ## Invoking your Agents
 
-Use the [A2A Python SDK](https://pypi.org/project/a2a/) to invoke agents through LiteLLM:
+Use the [A2A Python SDK](https://pypi.org/project/a2a/) to invoke agents through LiteLLM.
 
-- `base_url`: Your LiteLLM proxy URL + `/a2a/{agent_name}`
-- `headers`: Include your LiteLLM Virtual Key for authentication
+This example shows how to:
+1. **List available agents** - Query `/v1/agents` to see which agents your key can access
+2. **Select an agent** - Pick an agent from the list
+3. **Invoke via A2A** - Use the A2A protocol to send messages to the agent
 
 ```python showLineNumbers title="invoke_a2a_agent.py"
 from uuid import uuid4
@@ -48,20 +50,36 @@ from a2a.types import MessageSendParams, SendMessageRequest
 # === CONFIGURE THESE ===
 LITELLM_BASE_URL = "http://localhost:4000"  # Your LiteLLM proxy URL
 LITELLM_VIRTUAL_KEY = "sk-1234"             # Your LiteLLM Virtual Key
-LITELLM_AGENT_NAME = "ij-local"             # Agent name registered in LiteLLM
 # =======================
 
 async def main():
-    base_url = f"{LITELLM_BASE_URL}/a2a/{LITELLM_AGENT_NAME}"
     headers = {"Authorization": f"Bearer {LITELLM_VIRTUAL_KEY}"}
     
-    async with httpx.AsyncClient(headers=headers) as httpx_client:
-        # Resolve agent card and create client
-        resolver = A2ACardResolver(httpx_client=httpx_client, base_url=base_url)
+    async with httpx.AsyncClient(headers=headers) as client:
+        # Step 1: List available agents
+        response = await client.get(f"{LITELLM_BASE_URL}/v1/agents")
+        agents = response.json()
+        
+        print("Available agents:")
+        for agent in agents:
+            print(f"  - {agent['agent_name']} (ID: {agent['agent_id']})")
+        
+        if not agents:
+            print("No agents available for this key")
+            return
+        
+        # Step 2: Select an agent and invoke it
+        selected_agent = agents[0]
+        agent_id = selected_agent["agent_id"]
+        agent_name = selected_agent["agent_name"]
+        print(f"\nInvoking: {agent_name}")
+        
+        # Step 3: Use A2A protocol to invoke the agent
+        base_url = f"{LITELLM_BASE_URL}/a2a/{agent_id}"
+        resolver = A2ACardResolver(httpx_client=client, base_url=base_url)
         agent_card = await resolver.get_agent_card()
-        client = A2AClient(httpx_client=httpx_client, agent_card=agent_card)
-
-        # Send a message
+        a2a_client = A2AClient(httpx_client=client, agent_card=agent_card)
+        
         request = SendMessageRequest(
             id=str(uuid4()),
             params=MessageSendParams(
@@ -72,8 +90,8 @@ async def main():
                 }
             ),
         )
-        response = await client.send_message(request)
-        print(response.model_dump(mode="json", exclude_none=True))
+        response = await a2a_client.send_message(request)
+        print(f"Response: {response.model_dump(mode='json', exclude_none=True, indent=4)}")
 
 if __name__ == "__main__":
     asyncio.run(main())
