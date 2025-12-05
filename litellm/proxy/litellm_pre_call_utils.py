@@ -1248,8 +1248,24 @@ def _apply_vision_fallback_if_needed(
 
     has_images = False
     for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            for c in content:
+                # Check inside tool_result for images
+                if isinstance(c, dict) and c.get("type") == "tool_result":
+                    tool_content = c.get("content")
+                    if isinstance(tool_content, list):
+                        for tc in tool_content:
+                            if isinstance(tc, dict) and tc.get("type") == "image":
+                                has_images = True
+                                break
+                    elif isinstance(tool_content, str) and ("base64" in tool_content or "data:image" in tool_content):
+                        has_images = True
+                if has_images:
+                    break
         if _audio_or_image_in_message_content(msg):
             has_images = True
+        if has_images:
             break
 
     if not has_images:
