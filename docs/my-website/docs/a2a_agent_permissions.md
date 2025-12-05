@@ -25,6 +25,11 @@ This example shows how to create a key with agent permissions and test access.
 ### 1. Get Your Agent ID
 
 <Tabs>
+<TabItem value="ui" label="UI">
+
+[TODO: Add screenshot of agents list in UI]
+
+</TabItem>
 <TabItem value="api" label="API">
 
 ```bash title="List all agents" showLineNumbers
@@ -43,16 +48,16 @@ Response:
 ```
 
 </TabItem>
-<TabItem value="ui" label="UI">
-
-[TODO: Add screenshot of agents list in UI]
-
-</TabItem>
 </Tabs>
 
 ### 2. Create a Key with Agent Permissions
 
 <Tabs>
+<TabItem value="ui" label="UI">
+
+[TODO: Add screenshot of key creation with agent permissions]
+
+</TabItem>
 <TabItem value="api" label="API">
 
 ```bash title="Create key with agent permissions" showLineNumbers
@@ -65,11 +70,6 @@ curl -X POST "http://localhost:4000/key/generate" \
     }
   }'
 ```
-
-</TabItem>
-<TabItem value="ui" label="UI">
-
-[TODO: Add screenshot of key creation with agent permissions]
 
 </TabItem>
 </Tabs>
@@ -109,6 +109,11 @@ Restrict all keys belonging to a team to only access specific agents.
 ### 1. Create a Team with Agent Permissions
 
 <Tabs>
+<TabItem value="ui" label="UI">
+
+[TODO: Add screenshot of team creation with agent permissions]
+
+</TabItem>
 <TabItem value="api" label="API">
 
 ```bash title="Create team with agent permissions" showLineNumbers
@@ -132,16 +137,16 @@ Response:
 ```
 
 </TabItem>
-<TabItem value="ui" label="UI">
-
-[TODO: Add screenshot of team creation with agent permissions]
-
-</TabItem>
 </Tabs>
 
 ### 2. Create a Key for the Team
 
 <Tabs>
+<TabItem value="ui" label="UI">
+
+[TODO: Add screenshot of key creation for team]
+
+</TabItem>
 <TabItem value="api" label="API">
 
 ```bash title="Create key for team" showLineNumbers
@@ -152,11 +157,6 @@ curl -X POST "http://localhost:4000/key/generate" \
     "team_id": "team-abc-123"
   }'
 ```
-
-</TabItem>
-<TabItem value="ui" label="UI">
-
-[TODO: Add screenshot of key creation for team]
 
 </TabItem>
 </Tabs>
@@ -214,17 +214,17 @@ flowchart TD
 ## Viewing Permissions
 
 <Tabs>
+<TabItem value="ui" label="UI">
+
+[TODO: Add screenshot showing agent permissions in key/team info view]
+
+</TabItem>
 <TabItem value="api" label="API">
 
 ```bash title="Get key info" showLineNumbers
 curl "http://localhost:4000/key/info?key=sk-your-key" \
   -H "Authorization: Bearer sk-master-key"
 ```
-
-</TabItem>
-<TabItem value="ui" label="UI">
-
-[TODO: Add screenshot showing agent permissions in key/team info view]
 
 </TabItem>
 </Tabs>
