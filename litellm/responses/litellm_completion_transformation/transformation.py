@@ -503,8 +503,15 @@ class LiteLLMCompletionResponsesConfig:
     ) -> Union[str, List[Union[str, Dict[str, Any]]]]:
         """
         Transform a Responses API content into a Chat Completion content
+        
+        Note: This function should not be called with None content.
+        Callers should check for None before calling this function.
         """
-        if isinstance(content, str):
+        if content is None:
+            # This should not happen - callers should check for None first
+            # Return empty string as fallback
+            return ""
+        elif isinstance(content, str):
             return content
         elif isinstance(content, list):
             content_list: List[Union[str, Dict[str, Any]]] = []
