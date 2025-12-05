@@ -1619,7 +1619,8 @@ response = completion(
     messages=[{"role": "user", "content": "Hello!"}],
     api_base="http://10.96.32.8",  # Your PSC endpoint
     vertex_project="my-project-id",
-    vertex_location="us-central1"
+    vertex_location="us-central1",
+    use_psc_endpoint_format=True
 )
 ```
 
@@ -1642,6 +1643,7 @@ model_list:
       vertex_project: "my-project-id"
       vertex_location: "us-central1"
       vertex_credentials: "/path/to/service_account.json"
+      use_psc_endpoint_format: True
   - model_name: psc-embedding
     litellm_params:
       model: vertex_ai/text-embedding-004
@@ -1649,6 +1651,7 @@ model_list:
       vertex_project: "my-project-id"
       vertex_location: "us-central1"
       vertex_credentials: "/path/to/service_account.json"
+      use_psc_endpoint_format: True
 ```
 
 ## Fine-tuned Models

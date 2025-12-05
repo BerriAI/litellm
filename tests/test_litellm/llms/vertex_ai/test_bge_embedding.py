@@ -214,7 +214,8 @@ def test_vertex_ai_bge_psc_endpoint_url_construction():
             api_base="http://10.128.16.2",
             vertex_project="gen-lang-client-0682925754",
             vertex_location="us-central1",
-            client=client
+            client=client,
+            use_psc_endpoint_format=True  # Enable PSC endpoint format for this test
         )
         
         mock_post.assert_called_once()

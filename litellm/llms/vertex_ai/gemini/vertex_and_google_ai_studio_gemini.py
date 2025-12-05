@@ -2123,6 +2123,9 @@ class VertexLLM(VertexBase):
             custom_llm_provider=custom_llm_provider,
         )
 
+        # Extract use_psc_endpoint_format from optional_params
+        use_psc_endpoint_format = optional_params.get("use_psc_endpoint_format", False)
+
         auth_header, api_base = self._get_token_and_url(
             model=model,
             gemini_api_key=gemini_api_key,
@@ -2134,6 +2137,7 @@ class VertexLLM(VertexBase):
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             should_use_v1beta1_features=should_use_v1beta1_features,
+            use_psc_endpoint_format=use_psc_endpoint_format,
         )
 
         headers = VertexGeminiConfig().validate_environment(
@@ -2217,6 +2221,9 @@ class VertexLLM(VertexBase):
             custom_llm_provider=custom_llm_provider,
         )
 
+        # Extract use_psc_endpoint_format from optional_params
+        use_psc_endpoint_format = optional_params.get("use_psc_endpoint_format", False)
+
         auth_header, api_base = self._get_token_and_url(
             model=model,
             gemini_api_key=gemini_api_key,
@@ -2228,6 +2235,7 @@ class VertexLLM(VertexBase):
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             should_use_v1beta1_features=should_use_v1beta1_features,
+            use_psc_endpoint_format=use_psc_endpoint_format,
         )
 
         headers = VertexGeminiConfig().validate_environment(
@@ -2401,6 +2409,9 @@ class VertexLLM(VertexBase):
             custom_llm_provider=custom_llm_provider,
         )
 
+        # Extract use_psc_endpoint_format from optional_params
+        use_psc_endpoint_format = optional_params.get("use_psc_endpoint_format", False)
+
         auth_header, url = self._get_token_and_url(
             model=model,
             gemini_api_key=gemini_api_key,
@@ -2412,6 +2423,7 @@ class VertexLLM(VertexBase):
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             should_use_v1beta1_features=should_use_v1beta1_features,
+            use_psc_endpoint_format=use_psc_endpoint_format,
         )
         headers = VertexGeminiConfig().validate_environment(
             api_key=auth_header,
