@@ -8,7 +8,10 @@ from typing import Any, Dict, List, Optional
 
 import litellm
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
-from litellm.types.llms.openai import OpenAIAudioTranscriptionOptionalParams
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    OpenAIAudioTranscriptionOptionalParams,
+)
 from litellm.types.llms.watsonx import WatsonXAudioTranscriptionRequestBody
 from litellm.types.utils import FileTypes
 
@@ -31,6 +34,35 @@ class IBMWatsonXAudioTranscriptionConfig(
     inherits from OpenAIWhisperAudioTranscriptionConfig and uses IBMWatsonXMixin
     for authentication and URL construction.
     """
+
+    def validate_environment(
+        self,
+        headers: Dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: Dict,
+        litellm_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> Dict:
+        """
+        Validate environment for audio transcription.
+        
+        Removes Content-Type header so httpx can set multipart/form-data automatically.
+        """
+        result = IBMWatsonXMixin.validate_environment(
+            self,
+            headers=headers,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            api_key=api_key,
+            api_base=api_base,
+        )
+        # Remove Content-Type so httpx sets multipart/form-data automatically
+        result.pop("Content-Type", None)
+        return result
 
     def get_supported_openai_params(
         self, model: str
