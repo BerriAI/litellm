@@ -54,6 +54,7 @@ from litellm.types.utils import (
     TokenCountResponse,
 )
 from litellm.utils import load_credentials_from_list
+from litellm.proxy.common_utils.callback_utils import process_callback
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -168,6 +169,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
@@ -9475,8 +9477,10 @@ async def get_config():  # noqa: PLR0915
         _general_settings = config_data.get("general_settings", {})
         environment_variables = config_data.get("environment_variables", {})
 
-        # check if "langfuse" in litellm_settings
         _success_callbacks = _litellm_settings.get("success_callback", [])
+        _failure_callbacks = _litellm_settings.get("failure_callback", [])
+        _success_and_failure_callbacks = _litellm_settings.get("callbacks", [])
+        
         _data_to_return = []
         """
         [
@@ -9487,70 +9491,20 @@ async def get_config():  # noqa: PLR0915
                     "LANGFUSE_SECRET_KEY": "value",
                     "LANGFUSE_HOST": "value"
                 },
+                "type": "success"
             }
         ]
 
         """
+        
         for _callback in _success_callbacks:
-            if _callback != "langfuse":
-                if _callback == "openmeter":
-                    env_vars = [
-                        "OPENMETER_API_KEY",
-                    ]
-                elif _callback == "braintrust":
-                    env_vars = [
-                        "BRAINTRUST_API_KEY",
-                        "BRAINTRUST_API_BASE",
-                    ]
-                elif _callback == "traceloop":
-                    env_vars = ["TRACELOOP_API_KEY"]
-                elif _callback == "custom_callback_api":
-                    env_vars = ["GENERIC_LOGGER_ENDPOINT"]
-                elif _callback == "otel":
-                    env_vars = ["OTEL_EXPORTER", "OTEL_ENDPOINT", "OTEL_HEADERS"]
-                elif _callback == "langsmith":
-                    env_vars = [
-                        "LANGSMITH_API_KEY",
-                        "LANGSMITH_PROJECT",
-                        "LANGSMITH_DEFAULT_RUN_NAME",
-                    ]
-                else:
-                    env_vars = []
-
-                env_vars_dict = {}
-                for _var in env_vars:
-                    env_variable = environment_variables.get(_var, None)
-                    if env_variable is None:
-                        env_vars_dict[_var] = None
-                    else:
-                        # decode + decrypt the value
-                        decrypted_value = decrypt_value_helper(
-                            value=env_variable, key=_var
-                        )
-                        env_vars_dict[_var] = decrypted_value
-
-                _data_to_return.append({"name": _callback, "variables": env_vars_dict})
-            elif _callback == "langfuse":
-                _langfuse_vars = [
-                    "LANGFUSE_PUBLIC_KEY",
-                    "LANGFUSE_SECRET_KEY",
-                    "LANGFUSE_HOST",
-                ]
-                _langfuse_env_vars = {}
-                for _var in _langfuse_vars:
-                    env_variable = environment_variables.get(_var, None)
-                    if env_variable is None:
-                        _langfuse_env_vars[_var] = None
-                    else:
-                        # decode + decrypt the value
-                        decrypted_value = decrypt_value_helper(
-                            value=env_variable, key=_var
-                        )
-                        _langfuse_env_vars[_var] = decrypted_value
-
-                _data_to_return.append(
-                    {"name": _callback, "variables": _langfuse_env_vars}
-                )
+            _data_to_return.append(process_callback(_callback, "success", environment_variables))
+        
+        for _callback in _failure_callbacks:
+            _data_to_return.append(process_callback(_callback, "failure", environment_variables))
+        
+        for _callback in _success_and_failure_callbacks:
+            _data_to_return.append(process_callback(_callback, "success_and_failure", environment_variables))
 
         # Check if slack alerting is on
         _alerting = _general_settings.get("alerting", [])
