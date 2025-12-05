@@ -18,6 +18,8 @@ name: CARTO - Slack Changelog
 
 on:
   # Trigger on PR merge to carto/main (claude-code-action supports pull_request)
+  push:
+    branches: [carto/main]
   pull_request:
     types: [closed]
     branches: [carto/main]
