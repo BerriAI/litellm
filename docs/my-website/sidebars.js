@@ -448,6 +448,7 @@ const sidebars = {
         "realtime",
         "rerank",
         "response_api",
+        "proxy/cursor",
         {
           type: "category",
           label: "/search",
