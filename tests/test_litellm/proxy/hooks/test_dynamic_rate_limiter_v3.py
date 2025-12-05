@@ -1323,3 +1323,187 @@ async def test_default_priority_shared_pool():
     print(f"   - 3 keys without priority share ONE pool: {desc_a[0]['value']}")
     print(f"   - Shared pool limit: {desc_a[0]['rate_limit']['requests_per_unit']} RPM")
     print(f"   - Explicit priority 'prod' uses separate pool: {desc_prod[0]['value']}")
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_increments_by_actual_tokens():
+    """
+    Test that async_log_success_event increments token counters by actual token usage.
+    
+    This validates the fix for Bug 1: Token count was incrementing by 1 instead of actual usage.
+    The async_log_success_event should increment both model_saturation_check and priority_model
+    counters by the actual completion_tokens (when rate_limit_type=output).
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.types.utils import ModelResponse, Usage
+    
+    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    litellm.priority_reservation = {"dev": 0.1, "prod": 0.9}
+    
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+    
+    model = "test-token-increment"
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "tpm": 1000,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+    
+    # Track what gets incremented
+    increment_calls = []
+    
+    async def mock_increment(pipeline_operations, parent_otel_span=None):
+        for op in pipeline_operations:
+            increment_calls.append({
+                "key": op["key"],
+                "increment_value": op["increment_value"],
+            })
+    
+    handler.v3_limiter.async_increment_tokens_with_ttl_preservation = mock_increment
+    
+    # Create mock response with 50 completion tokens
+    mock_response = MagicMock(spec=ModelResponse)
+    mock_response.usage = MagicMock(spec=Usage)
+    mock_response.usage.prompt_tokens = 10
+    mock_response.usage.completion_tokens = 50
+    mock_response.usage.total_tokens = 60
+    
+    # Create kwargs with priority in user_api_key_auth_metadata
+    kwargs = {
+        "standard_logging_object": {
+            "metadata": {
+                "user_api_key_auth_metadata": {"priority": "dev"},
+            },
+            "model_group": model,
+        },
+        "litellm_params": {
+            "metadata": {"model_group": model},
+        },
+    }
+    
+    with patch(
+        "litellm.proxy.common_utils.callback_utils.get_model_group_from_litellm_kwargs",
+        return_value=model,
+    ):
+        await handler.async_log_success_event(
+            kwargs=kwargs,
+            response_obj=mock_response,
+            start_time=None,
+            end_time=None,
+        )
+    
+    # Verify increments happened with actual token count (50 completion tokens)
+    assert len(increment_calls) == 2, f"Expected 2 increment calls, got {len(increment_calls)}"
+    
+    # Both should increment by 50 (completion_tokens, since rate_limit_type defaults to 'output')
+    for call in increment_calls:
+        assert call["increment_value"] == 50, (
+            f"Expected increment of 50 tokens, got {call['increment_value']} for key {call['key']}"
+        )
+    
+    # Verify correct keys were used
+    keys = [call["key"] for call in increment_calls]
+    assert any("model_saturation_check" in k for k in keys), "Should increment model_saturation_check"
+    assert any("priority_model" in k and "dev" in k for k in keys), "Should increment priority_model with 'dev' priority"
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_uses_team_priority_from_auth_metadata():
+    """
+    Test that async_log_success_event correctly retrieves priority from user_api_key_auth_metadata.
+    
+    This validates the fix where priority is retrieved from standard_logging_metadata.user_api_key_auth_metadata
+    instead of just standard_logging_metadata.priority. This is important for team-based priority inheritance.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.types.utils import ModelResponse, Usage
+    
+    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    litellm.priority_reservation = {"team_priority": 0.8, "default": 0.2}
+    
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+    
+    model = "test-team-priority"
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "tpm": 1000,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+    
+    # Track incremented keys to verify priority is used correctly
+    incremented_keys = []
+    
+    async def mock_increment(pipeline_operations, parent_otel_span=None):
+        for op in pipeline_operations:
+            incremented_keys.append(op["key"])
+    
+    handler.v3_limiter.async_increment_tokens_with_ttl_preservation = mock_increment
+    
+    # Create mock response
+    mock_response = MagicMock(spec=ModelResponse)
+    mock_response.usage = MagicMock(spec=Usage)
+    mock_response.usage.prompt_tokens = 10
+    mock_response.usage.completion_tokens = 20
+    mock_response.usage.total_tokens = 30
+    
+    # Simulate team metadata inheritance: priority is in user_api_key_auth_metadata
+    # This is how the proxy passes team metadata to the callback
+    kwargs = {
+        "standard_logging_object": {
+            "metadata": {
+                # Priority NOT at top level (this would fail before the fix)
+                # Priority IS in user_api_key_auth_metadata (team inheritance)
+                "user_api_key_auth_metadata": {"priority": "team_priority"},
+            },
+            "model_group": model,
+        },
+        "litellm_params": {
+            "metadata": {"model_group": model},
+        },
+    }
+    
+    with patch(
+        "litellm.proxy.common_utils.callback_utils.get_model_group_from_litellm_kwargs",
+        return_value=model,
+    ):
+        await handler.async_log_success_event(
+            kwargs=kwargs,
+            response_obj=mock_response,
+            start_time=None,
+            end_time=None,
+        )
+    
+    # Verify the priority_model key uses 'team_priority' (not 'default_pool')
+    priority_keys = [k for k in incremented_keys if "priority_model" in k]
+    assert len(priority_keys) == 1, f"Expected 1 priority_model key, got {len(priority_keys)}"
+    
+    # The key should contain 'team_priority', not 'default_pool'
+    assert "team_priority" in priority_keys[0], (
+        f"Expected priority key to use 'team_priority' from user_api_key_auth_metadata, "
+        f"got key: {priority_keys[0]}"
+    )
+    assert "default_pool" not in priority_keys[0], (
+        f"Priority key should NOT use 'default_pool', should use team's priority. Got: {priority_keys[0]}"
+    )
