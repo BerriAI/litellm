@@ -31,6 +31,8 @@ from litellm.proxy._types import (
     NewTeamRequest,
     NewUserRequest,
     NewUserResponse,
+    ProxyErrorTypes,
+    ProxyException,
     TeamMemberAddRequest,
     TeamMemberDeleteRequest,
     UserAPIKeyAuth,
@@ -797,6 +799,9 @@ async def patch_team_membership(
 ) -> bool:
     """
     Add or remove user from teams
+    
+    Handles duplicate membership gracefully (idempotent operation).
+    If a user is already in a team, that's fine - we don't treat it as an error.
     """
     for _team_id in teams_ids_to_add_user_to:
         try:
@@ -809,6 +814,16 @@ async def patch_team_membership(
                     user_role=LitellmUserRoles.PROXY_ADMIN
                 ),
             )
+        except ProxyException as e:
+            # Handle duplicate membership gracefully - this is idempotent
+            if e.type == ProxyErrorTypes.team_member_already_in_team:
+                verbose_proxy_logger.debug(
+                    f"User {user_id} is already in team {_team_id}, skipping add"
+                )
+            else:
+                verbose_proxy_logger.exception(
+                    f"Error adding user to team {_team_id}: {e}"
+                )
         except Exception as e:
             verbose_proxy_logger.exception(f"Error adding user to team {_team_id}: {e}")
 
@@ -1302,7 +1317,7 @@ async def patch_group(
             patch_ops, existing_team, prisma_client
         )
 
-        # Track current members for comparison
+        # Track current members BEFORE update for comparison
         current_members = set(await _get_team_member_user_ids_from_team(existing_team))
 
         # Apply updates to the database
@@ -1310,12 +1325,34 @@ async def patch_group(
             group_id, update_data, final_members, prisma_client
         )
 
+        # Refresh team data from database to get the latest state after concurrent updates
+        # This prevents race conditions when multiple PATCH requests come in simultaneously
+        refreshed_team = await prisma_client.db.litellm_teamtable.find_unique(
+            where={"team_id": group_id}
+        )
+        if refreshed_team:
+            # Re-read current members from refreshed team to account for concurrent updates
+            refreshed_current_members = set(
+                await _get_team_member_user_ids_from_team(
+                    LiteLLM_TeamTable(**refreshed_team.model_dump())
+                )
+            )
+            # Use the refreshed members for comparison
+            current_members = refreshed_current_members
+
         # Handle user-team relationship changes
         await _handle_group_membership_changes(group_id, current_members, final_members)
 
+        # Refresh team one more time to get final state after membership changes
+        final_team = await prisma_client.db.litellm_teamtable.find_unique(
+            where={"team_id": group_id}
+        )
+        if final_team:
+            updated_team = final_team
+
         # Convert to SCIM format and return
         scim_group = await ScimTransformations.transform_litellm_team_to_scim_group(
-            updated_team
+            LiteLLM_TeamTable(**updated_team.model_dump())
         )
         return scim_group
 
