@@ -1,7 +1,6 @@
+import { Text, TextInput } from "@tremor/react";
+import { Button as AntButton, Form, Modal, Select } from "antd";
 import React, { useEffect } from "react";
-import { Modal, Form, Button as AntButton } from "antd";
-import { Select, SelectItem, TextInput } from "@tremor/react";
-import { Text } from "@tremor/react";
 import NumericalInput from "../shared/numerical_input";
 
 interface BaseMember {
@@ -135,9 +134,9 @@ const MemberModal = <T extends BaseMember>({
         return (
           <Select>
             {field.options?.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
+              <Select.Option key={option.value} value={option.value}>
                 {option.label}
-              </SelectItem>
+              </Select.Option>
             ))}
           </Select>
         );
@@ -199,14 +198,14 @@ const MemberModal = <T extends BaseMember>({
                   // Then all other roles
                   ...config.roleOptions.filter((option) => option.value !== initialData.role),
                 ].map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
+                  <Select.Option key={option.value} value={option.value}>
                     {option.label}
-                  </SelectItem>
+                  </Select.Option>
                 ))
               : config.roleOptions.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
+                  <Select.Option key={option.value} value={option.value}>
                     {option.label}
-                  </SelectItem>
+                  </Select.Option>
                 ))}
           </Select>
         </Form.Item>
