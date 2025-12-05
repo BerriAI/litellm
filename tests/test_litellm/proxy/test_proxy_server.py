@@ -252,13 +252,13 @@ def test_get_config_custom_callback_api_env_vars(monkeypatch):
     """
     from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
 
-    # Mock config with custom_callback_api enabled and custom env vars present
+    # Mock config with custom_callback_api enabled and generic logger env vars present
     config_data = {
         "litellm_settings": {"success_callback": ["custom_callback_api"]},
         "general_settings": {},
         "environment_variables": {
-            "custom_callback_api_url": "https://callback.example.com",
-            "custom_callback_api_headers": "Auth: token",
+            "GENERIC_LOGGER_ENDPOINT": "https://callback.example.com",
+            "GENERIC_LOGGER_HEADER": "Auth: token",
         },
     }
 
@@ -288,10 +288,9 @@ def test_get_config_custom_callback_api_env_vars(monkeypatch):
 
     assert custom_cb is not None
     assert custom_cb["variables"] == {
-        "custom_callback_api_url": "https://callback.example.com",
-        "custom_callback_api_headers": "Auth: token",
+        "GENERIC_LOGGER_ENDPOINT": "https://callback.example.com",
+        "GENERIC_LOGGER_HEADER": "Auth: token",
     }
-    assert "GENERIC_LOGGER_ENDPOINT" not in custom_cb["variables"]
 
 
 # Mock Prisma
