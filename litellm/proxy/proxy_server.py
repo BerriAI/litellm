@@ -1578,7 +1578,7 @@ async def _run_background_health_check():
     Update health_check_results, based on this.
     Uses shared health check state when Redis is available to coordinate across pods.
     """
-    global health_check_results, llm_model_list, health_check_interval, health_check_details, use_shared_health_check, redis_usage_cache
+    global health_check_results, llm_model_list, health_check_interval, health_check_details, use_shared_health_check, redis_usage_cache, prisma_client
 
     if (
         health_check_interval is None
@@ -1644,6 +1644,34 @@ async def _run_background_health_check():
         health_check_results["unhealthy_endpoints"] = unhealthy_endpoints
         health_check_results["healthy_count"] = len(healthy_endpoints)
         health_check_results["unhealthy_count"] = len(unhealthy_endpoints)
+
+        # Save background health checks to database (non-blocking)
+        if prisma_client is not None:
+            import time as time_module
+
+            from litellm.proxy.health_endpoints._health_endpoints import (
+                _save_background_health_checks_to_db,
+            )
+
+            # Use pod_id or a system identifier for checked_by if shared health check is enabled
+            checked_by = None
+            if shared_health_manager is not None:
+                checked_by = shared_health_manager.pod_id
+            else:
+                # Use a system identifier for background health checks
+                checked_by = "background_health_check"
+            
+            start_time = time_module.time()
+            asyncio.create_task(
+                _save_background_health_checks_to_db(
+                    prisma_client,
+                    _llm_model_list,
+                    healthy_endpoints,
+                    unhealthy_endpoints,
+                    start_time,
+                    checked_by=checked_by,
+                )
+            )
 
         await asyncio.sleep(health_check_interval)
 
