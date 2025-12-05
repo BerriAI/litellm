@@ -105,6 +105,7 @@ const sidebars = {
       items: [
         "tutorials/claude_responses_api",
         "tutorials/cost_tracking_coding",
+        "tutorials/cursor_integration",
         "tutorials/github_copilot_integration",
         "tutorials/litellm_gemini_cli",
         "tutorials/litellm_qwen_code_cli",
@@ -129,16 +130,6 @@ const sidebars = {
       },
       items: [
         "proxy/docker_quick_start",
-        {
-          type: "link",
-          label: "A2A Agent Gateway",
-          href: "https://docs.litellm.ai/docs/a2a",
-        },
-        {
-          type: "link",
-          label: "MCP Gateway",
-          href: "https://docs.litellm.ai/docs/mcp",
-        },
         {
           "type": "category",
           "label": "Config.yaml",
@@ -195,7 +186,6 @@ const sidebars = {
           label: "Architecture",
           items: [
             "proxy/architecture",
-            "proxy/multi_tenant_architecture",
             "proxy/control_plane_and_data_plane",
             "proxy/db_deadlocks",
             "proxy/db_info",
@@ -327,14 +317,6 @@ const sidebars = {
         slug: "/supported_endpoints",
       },
       items: [
-        {
-          type: "category",
-          label: "/a2a - A2A Agent Gateway",
-          items: [
-            "a2a",
-            "a2a_agent_permissions",
-          ],
-        },
         "assistants",
         {
           type: "category",
@@ -448,7 +430,6 @@ const sidebars = {
         "realtime",
         "rerank",
         "response_api",
-        "proxy/cursor",
         {
           type: "category",
           label: "/search",
@@ -490,11 +471,6 @@ const sidebars = {
           type: "doc",
           id: "provider_registration/index",
           label: "Integrate as a Model Provider",
-        },
-        {
-          type: "doc",
-          id: "contributing/adding_openai_compatible_providers",
-          label: "Add OpenAI-Compatible Provider (JSON)",
         },
         {
           type: "doc",
@@ -820,7 +796,6 @@ const sidebars = {
           type: "category",
           label: "Adding Providers",
           items: [
-            "contributing/adding_openai_compatible_providers",
             "adding_provider/directory_structure",
             "adding_provider/new_rerank_provider",
           ]
