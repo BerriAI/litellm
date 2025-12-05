@@ -175,6 +175,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         texts = inputs.get("texts", [])
         images = inputs.get("images")
         tools = inputs.get("tools")
+        tool_calls = inputs.get("tool_calls")
 
         # Use provided request_data or create an empty dict
         if request_data is None:
@@ -201,6 +202,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             request_data=user_metadata,
             images=images,
             tools=tools,
+            tool_calls=tool_calls,
             additional_provider_specific_params=additional_params,
             input_type=input_type,
         )
@@ -214,7 +216,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             # Make the API request
             response = await self.async_handler.post(
                 url=self.api_base,
-                json=guardrail_request.to_dict(),
+                json=guardrail_request.model_dump(),
                 headers=headers,
             )
 

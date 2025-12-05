@@ -1031,15 +1031,25 @@ class ProxyLogging:
                     )
                 else:
                     user_api_key_auth_dict = user_api_key_dict
-
                 # Add task to list for parallel execution
-                guardrail_tasks.append(
-                    callback.async_moderation_hook(
+                if (
+                    "apply_guardrail" in type(callback).__dict__
+                    and user_api_key_dict is not None
+                ):
+                    data["guardrail_to_apply"] = callback
+                    guardrail_task = unified_guardrail.async_moderation_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        data=data,
+                        call_type=call_type,
+                    )
+                else:
+
+                    guardrail_task = callback.async_moderation_hook(
                         data=data,
                         user_api_key_dict=user_api_key_auth_dict,  # type: ignore
                         call_type=call_type,  # type: ignore
                     )
-                )
+                guardrail_tasks.append(guardrail_task)
 
         # Step 2: Run all guardrail tasks in parallel
         if guardrail_tasks:

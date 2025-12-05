@@ -179,7 +179,7 @@ class TestMetadataExtraction:
             generic_guardrail.async_handler, "post", return_value=mock_response
         ) as mock_post:
             await generic_guardrail.apply_guardrail(
-                inputs=GenericGuardrailAPIInputs(texts=["Who is Ishaan?"]),
+                inputs={"texts": ["Who is Ishaan?"]},
                 request_data=mock_request_data_input,
                 input_type="request",
             )
