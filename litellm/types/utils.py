@@ -1601,6 +1601,9 @@ class ModelResponseBase(OpenAIObject):
     backend changes have been made that might impact determinism.
     """
 
+    usage: Optional[Usage] = None
+    """The token usage statistics for the completion."""
+
     _hidden_params: dict = {}
 
     _response_headers: Optional[dict] = None
