@@ -1,6 +1,7 @@
 suite: test deployment command, args, and deploymentLabels
 templates:
   - deployment.yaml
+  - configmap-litellm.yaml
 tests:
   - it: should override args when custom args specified
     template: deployment.yaml
