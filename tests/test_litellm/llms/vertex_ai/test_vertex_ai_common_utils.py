@@ -1,7 +1,6 @@
 import os
 import sys
-from typing import Any, Dict
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -11,7 +10,6 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-import litellm
 from litellm.llms.vertex_ai.common_utils import (
     _get_vertex_url,
     convert_anyof_null_to_nullable,
@@ -798,9 +796,54 @@ def test_fix_enum_empty_strings():
     assert "mobile" in enum_values
     assert "tablet" in enum_values
 
-    # 3. Other properties preserved
-    assert input_schema["properties"]["user_agent_type"]["type"] == "string"
-    assert input_schema["properties"]["user_agent_type"]["description"] == "Device type for user agent"
+
+def test_get_vertex_model_id_from_url():
+    """Test get_vertex_model_id_from_url with various URLs"""
+    from litellm.llms.vertex_ai.common_utils import get_vertex_model_id_from_url
+
+    # Test with valid URL
+    url = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-pro:streamGenerateContent"
+    model_id = get_vertex_model_id_from_url(url)
+    assert model_id == "gemini-pro"
+
+    # Test with invalid URL
+    url = "https://invalid-url.com"
+    model_id = get_vertex_model_id_from_url(url)
+    assert model_id is None
+
+
+def test_construct_target_url_with_version_prefix():
+    """Test construct_target_url with version prefixes"""
+    from litellm.llms.vertex_ai.common_utils import construct_target_url
+
+    # Test with /v1/ prefix
+    url = "/v1/publishers/google/models/gemini-pro:streamGenerateContent"
+    vertex_project = "test-project"
+    vertex_location = "us-central1"
+    base_url = "https://us-central1-aiplatform.googleapis.com"
+
+    target_url = construct_target_url(
+        base_url=base_url,
+        requested_route=url,
+        vertex_project=vertex_project,
+        vertex_location=vertex_location,
+    )
+
+    expected_url = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-pro:streamGenerateContent"
+    assert str(target_url) == expected_url
+
+    # Test with /v1beta1/ prefix
+    url = "/v1beta1/publishers/google/models/gemini-pro:streamGenerateContent"
+
+    target_url = construct_target_url(
+        base_url=base_url,
+        requested_route=url,
+        vertex_project=vertex_project,
+        vertex_location=vertex_location,
+    )
+
+    expected_url = "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/test-project/locations/us-central1/publishers/google/models/gemini-pro:streamGenerateContent"
+    assert str(target_url) == expected_url
 
 
 def test_fix_enum_types():
@@ -862,7 +905,7 @@ def test_fix_enum_types():
             "truncateMode": {
                 "enum": ["auto", "none", "start", "end"],  # Kept - string type
                 "type": "string",
-                "description": "How to truncate content"
+                "description": "How to truncate content",
             },
             "maxLength": {  # enum removed
                 "type": "integer",

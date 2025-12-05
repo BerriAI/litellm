@@ -1547,6 +1547,7 @@ async def _base_vertex_proxy_route(
     from litellm.llms.vertex_ai.common_utils import (
         construct_target_url,
         get_vertex_location_from_url,
+        get_vertex_model_id_from_url,
         get_vertex_project_id_from_url,
     )
 
@@ -1575,6 +1576,21 @@ async def _base_vertex_proxy_route(
         vertex_project=vertex_project,
         vertex_location=vertex_location,
     )
+
+    if vertex_project is None or vertex_location is None:
+        # Check if model is in router config
+        model_id = get_vertex_model_id_from_url(endpoint)
+        if model_id:
+            from litellm.proxy.proxy_server import llm_router
+
+            if llm_router:
+                deployments = llm_router.get_model_list(model_name=model_id)
+                if deployments:
+                    deployment = deployments[0]
+                    litellm_params = deployment.get("litellm_params", {})
+                    if litellm_params.get("use_in_pass_through"):
+                        vertex_project = litellm_params.get("vertex_project")
+                        vertex_location = litellm_params.get("vertex_location")
 
     vertex_credentials = passthrough_endpoint_router.get_vertex_credentials(
         project_id=vertex_project,
