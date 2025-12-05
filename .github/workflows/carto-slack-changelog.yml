@@ -131,7 +131,7 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           show_full_output: false
-          claude_args: "--model claude-haiku-4-5-20251101 --max-turns 20 --allowed-tools Read,Bash,Grep,Glob"
+          claude_args: "--model claude-haiku-4-5-20251101 --max-turns 20 --allowed-tools Read,Write,Bash,Grep,Glob"
           prompt: |
             # Slack Changelog Generation
 
