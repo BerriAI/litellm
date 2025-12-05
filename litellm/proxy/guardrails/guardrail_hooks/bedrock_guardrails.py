@@ -42,7 +42,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.guardrails import GenericGuardrailAPIInputs, GuardrailEventHooks
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockContentItem,
@@ -51,6 +51,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockRequest,
     BedrockTextContent,
 )
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj

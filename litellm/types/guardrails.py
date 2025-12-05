@@ -740,13 +740,3 @@ class PatchGuardrailRequest(BaseModel):
     guardrail_name: Optional[str] = None
     litellm_params: Optional[BaseLitellmParams] = None
     guardrail_info: Optional[Dict[str, Any]] = None
-
-
-class GenericGuardrailAPIInputs(TypedDict, total=False):
-    texts: List[str]  # extracted text from the LLM response - for basic text guardrails
-    images: List[str]  # extracted images from the LLM response - for image guardrails
-    tools: List[ChatCompletionToolParam]  # tools sent to the LLM
-    tool_calls: List[ChatCompletionToolCallChunk]  # tool calls sent from the LLM
-    structured_messages: List[
-        AllMessageValues
-    ]  # structured messages sent to the LLM - indicates if text is from system or user

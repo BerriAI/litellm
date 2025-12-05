@@ -23,14 +23,13 @@ from litellm.llms import get_guardrail_translation_mapping
 from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
 )
-from litellm.types.guardrails import GenericGuardrailAPIInputs
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
     OutputFunctionToolCall,
     OutputText,
 )
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
 
 
 class MockGuardrail(CustomGuardrail):

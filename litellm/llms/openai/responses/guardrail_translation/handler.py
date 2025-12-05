@@ -37,7 +37,6 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTra
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
-from litellm.types.guardrails import GenericGuardrailAPIInputs
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolParam,
@@ -47,6 +46,7 @@ from litellm.types.responses.main import (
     OutputFunctionToolCall,
     OutputText,
 )
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail

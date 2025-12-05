@@ -16,7 +16,6 @@ from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.guardrails import (
     DynamicGuardrailParams,
-    GenericGuardrailAPIInputs,
     GuardrailEventHooks,
     LitellmParams,
     Mode,
@@ -25,6 +24,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import (
     CallTypes,
+    GenericGuardrailAPIInputs,
     GuardrailStatus,
     LLMResponseTypes,
     StandardLoggingGuardrailInformation,

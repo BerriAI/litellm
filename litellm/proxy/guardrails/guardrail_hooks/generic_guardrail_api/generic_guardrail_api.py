@@ -14,12 +14,13 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.types.guardrails import GenericGuardrailAPIInputs, GuardrailEventHooks
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPIMetadata,
     GenericGuardrailAPIRequest,
     GenericGuardrailAPIResponse,
 )
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj

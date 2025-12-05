@@ -958,7 +958,13 @@ class ModelResponseIterator:
                 str_line = str_line[index:]
 
         if str_line.startswith("data:"):
-            data_json = json.loads(str_line[5:])
+            try:
+                # Extract just the JSON line (first line after "data:")
+                # SSE format can have multiple lines, so split and take first
+                json_str = str_line[5:].split("\n")[0].strip()
+                data_json = json.loads(json_str)
+            except json.JSONDecodeError:
+                raise ValueError(f"Failed to decode JSON from chunk: {str_line}")
             return self.chunk_parser(chunk=data_json)
         else:
             return ModelResponseStream(id=self.response_id)
