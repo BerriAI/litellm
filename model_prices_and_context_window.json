@@ -12104,6 +12104,7 @@
         "max_tokens": 65536,
         "mode": "image_generation",
         "output_cost_per_image": 0.134,
+        "output_cost_per_image_token": 1.2e-04,
         "output_cost_per_token": 1.2e-05,
         "output_cost_per_token_batches": 6e-06,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
@@ -13841,6 +13842,7 @@
         "max_tokens": 65536,
         "mode": "image_generation",
         "output_cost_per_image": 0.134,
+        "output_cost_per_image_token": 1.2e-04,
         "output_cost_per_token": 1.2e-05,
         "rpm": 1000,
         "tpm": 4000000,
@@ -25714,6 +25716,7 @@
         "max_tokens": 65536,
         "mode": "image_generation",
         "output_cost_per_image": 0.134,
+        "output_cost_per_image_token": 1.2e-04,
         "output_cost_per_token": 1.2e-05,
         "output_cost_per_token_batches": 6e-06,
         "source": "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-pro-image"
