@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 class AzurePassthroughConfig(BasePassthroughConfig):
     def is_streaming_request(self, endpoint: str, request_data: dict) -> bool:
-        return "stream" in request_data
+        return request_data.get('stream', False)
 
     def get_complete_url(
         self,
