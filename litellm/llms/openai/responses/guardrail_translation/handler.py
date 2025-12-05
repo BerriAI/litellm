@@ -38,8 +38,15 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
 from litellm.types.guardrails import GenericGuardrailAPIInputs
-from litellm.types.llms.openai import ChatCompletionToolParam
-from litellm.types.responses.main import GenericResponseOutputItem, OutputText
+from litellm.types.llms.openai import (
+    ChatCompletionToolCallChunk,
+    ChatCompletionToolParam,
+)
+from litellm.types.responses.main import (
+    GenericResponseOutputItem,
+    OutputFunctionToolCall,
+    OutputText,
+)
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -74,6 +81,13 @@ class OpenAIResponsesHandler(BaseTranslation):
         if input_data is None:
             return data
 
+        structured_messages = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                input=input_data,
+                responses_api_request=data,
+            )
+        )
+
         # Handle simple string input
         if isinstance(input_data, str):
             inputs = GenericGuardrailAPIInputs(texts=[input_data])
@@ -84,6 +98,8 @@ class OpenAIResponsesHandler(BaseTranslation):
                 self._extract_and_transform_tools(data["tools"], tools_to_check)
                 if tools_to_check:
                     inputs["tools"] = tools_to_check
+            if structured_messages:
+                inputs["structured_messages"] = structured_messages  # type: ignore
 
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
@@ -127,6 +143,8 @@ class OpenAIResponsesHandler(BaseTranslation):
                 inputs["images"] = images_to_check
             if tools_to_check:
                 inputs["tools"] = tools_to_check
+            if structured_messages:
+                inputs["structured_messages"] = structured_messages  # type: ignore
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=data,
@@ -251,7 +269,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         user_api_key_dict: Optional[Any] = None,
     ) -> Any:
         """
-        Process output response by applying guardrails to text content.
+        Process output response by applying guardrails to text content and tool calls.
 
         Args:
             response: LiteLLM ResponsesAPIResponse object
@@ -264,22 +282,19 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         Response Format Support:
             - response.output is a list of output items
-            - Each output item has a content list with OutputText objects
+            - Each output item can be:
+              * GenericResponseOutputItem with a content list of OutputText objects
+              * OutputFunctionToolCall with tool call data
             - Each OutputText object has a text field
         """
-        # Step 0: Check if response has any text content to process
-        if not self._has_text_content(response):
-            verbose_proxy_logger.warning(
-                "OpenAI Responses API: No text content in response, skipping guardrail"
-            )
-            return response
 
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
+        tool_calls_to_check: List[ChatCompletionToolCallChunk] = []
         task_mappings: List[Tuple[int, int]] = []
         # Track (output_item_index, content_index) for each text
 
-        # Step 1: Extract all text content from response output
+        # Step 1: Extract all text content and tool calls from response output
         for output_idx, output_item in enumerate(response.output):
             self._extract_output_text_and_images(
                 output_item=output_item,
@@ -287,10 +302,11 @@ class OpenAIResponsesHandler(BaseTranslation):
                 texts_to_check=texts_to_check,
                 images_to_check=images_to_check,
                 task_mappings=task_mappings,
+                tool_calls_to_check=tool_calls_to_check,
             )
 
         # Step 2: Apply guardrail to all texts in batch
-        if texts_to_check:
+        if texts_to_check or tool_calls_to_check:
             # Create a request_data dict with response info and user API key metadata
             request_data: dict = {"response": response}
 
@@ -304,6 +320,9 @@ class OpenAIResponsesHandler(BaseTranslation):
             inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
                 inputs["images"] = images_to_check
+            if tool_calls_to_check:
+                inputs["tool_calls"] = tool_calls_to_check
+
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=request_data,
@@ -398,12 +417,57 @@ class OpenAIResponsesHandler(BaseTranslation):
         texts_to_check: List[str],
         images_to_check: List[str],
         task_mappings: List[Tuple[int, int]],
+        tool_calls_to_check: Optional[List[ChatCompletionToolCallChunk]] = None,
     ) -> None:
         """
-        Extract text content and images from a response output item.
+        Extract text content, images, and tool calls from a response output item.
 
-        Override this method to customize text/image extraction logic.
+        Override this method to customize text/image/tool extraction logic.
         """
+        # Check if this is a tool call (OutputFunctionToolCall)
+        if isinstance(output_item, OutputFunctionToolCall):
+            if tool_calls_to_check is not None:
+                tool_call_dict = LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
+                    tool_call_item=output_item,
+                    index=output_idx,
+                )
+                tool_calls_to_check.append(
+                    cast(ChatCompletionToolCallChunk, tool_call_dict)
+                )
+            return
+        elif (
+            isinstance(output_item, BaseModel)
+            and hasattr(output_item, "type")
+            and getattr(output_item, "type") == "function_call"
+        ):
+            if tool_calls_to_check is not None:
+                tool_call_dict = LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
+                    tool_call_item=output_item,
+                    index=output_idx,
+                )
+                tool_calls_to_check.append(
+                    cast(ChatCompletionToolCallChunk, tool_call_dict)
+                )
+            return
+        elif (
+            isinstance(output_item, dict) and output_item.get("type") == "function_call"
+        ):
+            # Handle dict representation of tool call
+            if tool_calls_to_check is not None:
+                # Convert dict to OutputFunctionToolCall for processing
+                try:
+                    tool_call_obj = OutputFunctionToolCall(**output_item)
+                    tool_call_dict = LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
+                        tool_call_item=tool_call_obj,
+                        index=output_idx,
+                    )
+                    tool_calls_to_check.append(
+                        cast(ChatCompletionToolCallChunk, tool_call_dict)
+                    )
+                except Exception:
+                    pass
+            return
+
         # Handle both GenericResponseOutputItem and dict
         content: Optional[Union[List[OutputText], List[dict]]] = None
         if isinstance(output_item, BaseModel):

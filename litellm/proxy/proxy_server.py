@@ -54,6 +54,7 @@ from litellm.types.utils import (
     TokenCountResponse,
 )
 from litellm.utils import load_credentials_from_list
+from litellm.proxy.common_utils.callback_utils import process_callback
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -168,6 +169,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
@@ -1578,7 +1580,7 @@ async def _run_background_health_check():
     Update health_check_results, based on this.
     Uses shared health check state when Redis is available to coordinate across pods.
     """
-    global health_check_results, llm_model_list, health_check_interval, health_check_details, use_shared_health_check, redis_usage_cache
+    global health_check_results, llm_model_list, health_check_interval, health_check_details, use_shared_health_check, redis_usage_cache, prisma_client
 
     if (
         health_check_interval is None
@@ -1644,6 +1646,34 @@ async def _run_background_health_check():
         health_check_results["unhealthy_endpoints"] = unhealthy_endpoints
         health_check_results["healthy_count"] = len(healthy_endpoints)
         health_check_results["unhealthy_count"] = len(unhealthy_endpoints)
+
+        # Save background health checks to database (non-blocking)
+        if prisma_client is not None:
+            import time as time_module
+
+            from litellm.proxy.health_endpoints._health_endpoints import (
+                _save_background_health_checks_to_db,
+            )
+
+            # Use pod_id or a system identifier for checked_by if shared health check is enabled
+            checked_by = None
+            if shared_health_manager is not None:
+                checked_by = shared_health_manager.pod_id
+            else:
+                # Use a system identifier for background health checks
+                checked_by = "background_health_check"
+            
+            start_time = time_module.time()
+            asyncio.create_task(
+                _save_background_health_checks_to_db(
+                    prisma_client,
+                    _llm_model_list,
+                    healthy_endpoints,
+                    unhealthy_endpoints,
+                    start_time,
+                    checked_by=checked_by,
+                )
+            )
 
         await asyncio.sleep(health_check_interval)
 
@@ -9447,8 +9477,10 @@ async def get_config():  # noqa: PLR0915
         _general_settings = config_data.get("general_settings", {})
         environment_variables = config_data.get("environment_variables", {})
 
-        # check if "langfuse" in litellm_settings
         _success_callbacks = _litellm_settings.get("success_callback", [])
+        _failure_callbacks = _litellm_settings.get("failure_callback", [])
+        _success_and_failure_callbacks = _litellm_settings.get("callbacks", [])
+        
         _data_to_return = []
         """
         [
@@ -9459,78 +9491,20 @@ async def get_config():  # noqa: PLR0915
                     "LANGFUSE_SECRET_KEY": "value",
                     "LANGFUSE_HOST": "value"
                 },
+                "type": "success"
             }
         ]
 
         """
+        
         for _callback in _success_callbacks:
-            if _callback != "langfuse":
-                if _callback == "openmeter":
-                    env_vars = [
-                        "OPENMETER_API_KEY",
-                    ]
-                elif _callback == "braintrust":
-                    env_vars = [
-                        "BRAINTRUST_API_KEY",
-                        "BRAINTRUST_API_BASE",
-                    ]
-                elif _callback == "traceloop":
-                    env_vars = ["TRACELOOP_API_KEY"]
-                elif _callback == "custom_callback_api":
-                    custom_callback_url = environment_variables.get(
-                        "custom_callback_api_url"
-                    )
-                    custom_callback_headers = environment_variables.get(
-                        "custom_callback_api_headers"
-                    )
-                    if custom_callback_url is not None and custom_callback_headers is not None:
-                        env_vars = [
-                            "custom_callback_api_url",
-                            "custom_callback_api_headers",
-                        ]
-                    else:
-                        env_vars = ["GENERIC_LOGGER_ENDPOINT", "GENERIC_LOGGER_HEADER"]
-                elif _callback == "otel":
-                    env_vars = ["OTEL_EXPORTER", "OTEL_ENDPOINT", "OTEL_HEADERS"]
-                elif _callback == "langsmith":
-                    env_vars = [
-                        "LANGSMITH_API_KEY",
-                        "LANGSMITH_PROJECT",
-                        "LANGSMITH_DEFAULT_RUN_NAME",
-                    ]
-                else:
-                    env_vars = []
-
-                env_vars_dict = {}
-                for _var in env_vars:
-                    env_variable = environment_variables.get(_var, None)
-                    if env_variable is None:
-                        env_vars_dict[_var] = None
-                    else:
-                        env_vars_dict[_var] = env_variable
-
-                _data_to_return.append({"name": _callback, "variables": env_vars_dict})
-            elif _callback == "langfuse":
-                _langfuse_vars = [
-                    "LANGFUSE_PUBLIC_KEY",
-                    "LANGFUSE_SECRET_KEY",
-                    "LANGFUSE_HOST",
-                ]
-                _langfuse_env_vars = {}
-                for _var in _langfuse_vars:
-                    env_variable = environment_variables.get(_var, None)
-                    if env_variable is None:
-                        _langfuse_env_vars[_var] = None
-                    else:
-                        # decode + decrypt the value
-                        decrypted_value = decrypt_value_helper(
-                            value=env_variable, key=_var
-                        )
-                        _langfuse_env_vars[_var] = decrypted_value
-
-                _data_to_return.append(
-                    {"name": _callback, "variables": _langfuse_env_vars}
-                )
+            _data_to_return.append(process_callback(_callback, "success", environment_variables))
+        
+        for _callback in _failure_callbacks:
+            _data_to_return.append(process_callback(_callback, "failure", environment_variables))
+        
+        for _callback in _success_and_failure_callbacks:
+            _data_to_return.append(process_callback(_callback, "success_and_failure", environment_variables))
 
         # Check if slack alerting is on
         _alerting = _general_settings.get("alerting", [])

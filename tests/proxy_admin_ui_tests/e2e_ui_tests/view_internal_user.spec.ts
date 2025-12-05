@@ -31,6 +31,7 @@ test("view internal user page", async ({ page }) => {
   // Wait for the table to load
   await page.waitForSelector("tbody tr", { timeout: 10000 });
   await page.waitForTimeout(2000); // Additional wait for table to stabilize
+  await page.waitForLoadState("networkidle");
 
   // Test all expected fields are present
   // Verify that the API Keys column is rendered for all users
@@ -39,7 +40,7 @@ test("view internal user page", async ({ page }) => {
   expect(rowCount).toBeGreaterThan(0);
 
   const userIdHeader = page.locator("th", { hasText: "User ID" });
-  page.screenshot({ path: "user_id_header.png" });
+  page.screenshot({ path: "test-results/user_id_header.png" });
   await expect(userIdHeader).toBeVisible();
 
   // test pagination

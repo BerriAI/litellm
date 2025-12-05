@@ -7022,6 +7022,14 @@ class ProviderConfigManager:
         Returns the provider config for a given provider.
         """
 
+        # Check JSON providers FIRST
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+
+        if JSONProviderRegistry.exists(provider.value):
+            provider_config = JSONProviderRegistry.get(provider.value)
+            return create_config_class(provider_config)()
+
         if (
             provider == LlmProviders.OPENAI
             and litellm.openaiOSeriesConfig.is_model_o_series_model(model=model)

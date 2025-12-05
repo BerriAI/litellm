@@ -80,6 +80,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 inputs["images"] = images_to_check
             if tool_calls_to_check:
                 inputs["tool_calls"] = tool_calls_to_check  # type: ignore
+            if messages:
+                inputs["structured_messages"] = (
+                    messages  # pass the openai /chat/completions messages to the guardrail, as-is
+                )
 
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
@@ -89,7 +93,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             )
 
             guardrailed_texts = guardrailed_inputs.get("texts", [])
-            guardrailed_tool_calls = guardrailed_inputs.get("tools", [])
+            guardrailed_tool_calls = guardrailed_inputs.get("tool_calls", [])
 
             # Step 3: Map guardrail responses back to original message structure
             if guardrailed_texts and texts_to_check:
@@ -155,7 +159,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                                 images_to_check.append(url)
 
         # Extract tool calls (typically in assistant messages)
-        tool_calls = message.get("tools", None)
+        tool_calls = message.get("tool_calls", None)
         if tool_calls is not None and isinstance(tool_calls, list):
             for tool_call_idx, tool_call in enumerate(tool_calls):
                 if isinstance(tool_call, dict):
@@ -261,7 +265,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         # Step 1: Extract all text content, images, and tool calls from response choices
         for choice_idx, choice in enumerate(response.choices):
-            self._extract_output_text_and_images(
+            self._extract_output_text_images_and_tool_calls(
                 choice=choice,
                 choice_idx=choice_idx,
                 texts_to_check=texts_to_check,
@@ -478,7 +482,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                             return True
         return False
 
-    def _extract_output_text_and_images(
+    def _extract_output_text_images_and_tool_calls(
         self,
         choice: Union[Choices, StreamingChoices],
         choice_idx: int,
