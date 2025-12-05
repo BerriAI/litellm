@@ -1044,9 +1044,9 @@ def test_convert_model_response_object():
             "The sky is a canvas of blue",
         ),
         (
-            "<budget:thinking>\nLet me work through this step by step.\n</budget:thinking>\n\nYou have **8 fruits** remaining.",
-            "\nLet me work through this step by step.\n",
-            "\n\nYou have **8 fruits** remaining.",
+            "<budget:thinking>I am thinking here</budget:thinking>The sky is a canvas of blue",
+            "I am thinking here",
+            "The sky is a canvas of blue",
         ),
         ("I am a regular response", None, "I am a regular response"),
     ],
