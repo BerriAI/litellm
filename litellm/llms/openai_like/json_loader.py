@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Dict, Optional
 
+from litellm._logging import verbose_logger
+
 
 class SimpleProviderConfig:
     """Simple data class for JSON provider config"""
@@ -49,7 +51,7 @@ class JSONProviderRegistry:
 
             cls._loaded = True
         except Exception as e:
-            print(f"Warning: Failed to load JSON provider configs: {e}")
+            verbose_logger.warning(f"Warning: Failed to load JSON provider configs: {e}")
             cls._loaded = True
 
     @classmethod

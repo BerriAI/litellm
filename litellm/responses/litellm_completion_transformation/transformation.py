@@ -713,11 +713,6 @@ class LiteLLMCompletionResponsesConfig:
         Returns:
             Dictionary in ChatCompletionToolCallChunk format
         """
-        from litellm.types.llms.openai import (
-            ChatCompletionToolCallChunk,
-            ChatCompletionToolCallFunctionChunk,
-        )
-
         # Extract provider_specific_fields if present
         provider_specific_fields = getattr(
             tool_call_item, "provider_specific_fields", None
