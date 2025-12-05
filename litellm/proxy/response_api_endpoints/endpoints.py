@@ -6,6 +6,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.types.responses.main import DeleteResponseResult
 
 router = APIRouter()
 
@@ -113,7 +114,7 @@ async def responses_api(
         polling_id = ResponsePollingHandler.generate_polling_id()
         
         # Create initial state in Redis
-        await polling_handler.create_initial_state(
+        initial_state = await polling_handler.create_initial_state(
             polling_id=polling_id,
             request_data=data,
         )
@@ -143,15 +144,7 @@ async def responses_api(
         
         # Return OpenAI Response object format (initial state)
         # https://platform.openai.com/docs/api-reference/responses/object
-        return {
-            "id": polling_id,
-            "object": "response",
-            "status": "queued",
-            "output": [],
-            "usage": None,
-            "metadata": data.get("metadata", {}),
-            "created_at": int(datetime.now(timezone.utc).timestamp()),
-        }
+        return initial_state
     
     # Normal response flow
     processor = ProxyBaseLLMRequestProcessing(data=data)
@@ -372,11 +365,11 @@ async def delete_response(
         success = await polling_handler.delete_polling(response_id)
         
         if success:
-            return {
-                "id": response_id,
-                "object": "response",
-                "deleted": True
-            }
+            return DeleteResponseResult(
+                id=response_id,
+                object="response",
+                deleted=True
+            )
         else:
             raise HTTPException(
                 status_code=500,
