@@ -940,3 +940,241 @@ def test_callback_failure_metric_different_callbacks(prometheus_logger):
 # ==============================================================================
 # END CALLBACK FAILURE METRICS TESTS
 # ==============================================================================
+
+
+# ==============================================================================
+# API_PROVIDER AND API_BASE LABEL TESTS
+# ==============================================================================
+
+
+def test_api_provider_and_api_base_labels_in_metrics():
+    """
+    Test that api_provider and api_base labels are included in the expected metrics.
+    These labels were added to allow filtering/grouping metrics by LLM provider.
+    """
+    # List of metrics that should now have api_provider and api_base labels
+    metrics_with_provider_labels = [
+        "litellm_request_total_latency_metric",
+        "litellm_requests_metric",
+        "litellm_spend_metric",
+        "litellm_input_tokens_metric",
+        "litellm_output_tokens_metric",
+    ]
+
+    for metric_name in metrics_with_provider_labels:
+        labels = PrometheusMetricLabels.get_labels(metric_name)
+        assert "api_provider" in labels, (
+            f"api_provider should be in {metric_name} labels. "
+            f"Current labels: {labels}"
+        )
+        assert "api_base" in labels, (
+            f"api_base should be in {metric_name} labels. "
+            f"Current labels: {labels}"
+        )
+
+    print(f"✓ api_provider and api_base labels verified for {len(metrics_with_provider_labels)} metrics")
+
+
+def test_api_provider_label_factory_integration():
+    """
+    Test that api_provider and api_base values are correctly extracted
+    by the prometheus_label_factory when present in enum_values.
+    """
+    test_api_provider = "openai"
+    test_api_base = "https://api.openai.com/v1"
+
+    enum_values = UserAPIKeyLabelValues(
+        end_user="test_user",
+        hashed_api_key="test_key",
+        api_key_alias="test_alias",
+        team="test_team",
+        team_alias="test_team_alias",
+        user="test_user",
+        requested_model="gpt-4",
+        model="gpt-4",
+        litellm_model_name="gpt-4",
+        api_provider=test_api_provider,
+        api_base=test_api_base,
+    )
+
+    # Test with litellm_request_total_latency_metric
+    supported_labels = PrometheusMetricLabels.get_labels("litellm_request_total_latency_metric")
+    filtered_labels = prometheus_label_factory(
+        supported_enum_labels=supported_labels,
+        enum_values=enum_values,
+    )
+
+    assert filtered_labels.get("api_provider") == test_api_provider, (
+        f"api_provider should be '{test_api_provider}', got '{filtered_labels.get('api_provider')}'"
+    )
+    assert filtered_labels.get("api_base") == test_api_base, (
+        f"api_base should be '{test_api_base}', got '{filtered_labels.get('api_base')}'"
+    )
+
+    print("✓ api_provider and api_base label factory integration test passed")
+
+
+def test_api_provider_with_different_providers():
+    """
+    Test that api_provider label works correctly with different LLM providers.
+    """
+    providers_to_test = [
+        ("openai", "https://api.openai.com/v1"),
+        ("azure", "https://my-resource.openai.azure.com"),
+        ("anthropic", "https://api.anthropic.com"),
+        ("bedrock", "https://bedrock-runtime.us-east-1.amazonaws.com"),
+        ("vertex_ai", "https://us-central1-aiplatform.googleapis.com"),
+    ]
+
+    for provider, api_base in providers_to_test:
+        enum_values = UserAPIKeyLabelValues(
+            hashed_api_key="test_key",
+            api_key_alias="test_alias",
+            team="test_team",
+            team_alias="test_team_alias",
+            user="test_user",
+            requested_model="test-model",
+            model="test-model",
+            api_provider=provider,
+            api_base=api_base,
+        )
+
+        supported_labels = PrometheusMetricLabels.get_labels("litellm_spend_metric")
+        filtered_labels = prometheus_label_factory(
+            supported_enum_labels=supported_labels,
+            enum_values=enum_values,
+        )
+
+        assert filtered_labels.get("api_provider") == provider, (
+            f"api_provider should be '{provider}'"
+        )
+        assert filtered_labels.get("api_base") == api_base, (
+            f"api_base should be '{api_base}'"
+        )
+
+    print(f"✓ api_provider test passed for {len(providers_to_test)} different providers")
+
+
+@pytest.mark.asyncio
+async def test_api_provider_in_success_event(mock_prometheus_logger):
+    """
+    Test that api_provider and api_base are correctly recorded in success events.
+    """
+    from datetime import datetime, timedelta
+
+    test_provider = "openai"
+    test_api_base = "https://api.openai.com/v1"
+
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "litellm_params": {
+            "metadata": {},
+            "custom_llm_provider": test_provider,
+        },
+        "start_time": datetime.now() - timedelta(seconds=1),
+        "end_time": datetime.now(),
+        "api_call_start_time": datetime.now() - timedelta(seconds=0.5),
+        "standard_logging_object": {
+            "total_tokens": 100,
+            "prompt_tokens": 60,
+            "completion_tokens": 40,
+            "response_cost": 0.001,
+            "model_group": "gpt-3.5-turbo",
+            "model_id": "test-model-id",
+            "api_base": test_api_base,
+            "custom_llm_provider": test_provider,
+            "stream": False,
+            "request_tags": [],
+            "metadata": {
+                "user_api_key_user_id": "test-user",
+                "user_api_key_hash": "test-hash",
+                "user_api_key_alias": "test-alias",
+                "user_api_key_team_id": "test-team",
+                "user_api_key_team_alias": "test-team-alias",
+                "user_api_key_user_email": "test@example.com",
+            },
+            "hidden_params": {
+                "additional_headers": {},
+            },
+        },
+    }
+
+    await mock_prometheus_logger.async_log_success_event(
+        kwargs, None, kwargs["start_time"], kwargs["end_time"]
+    )
+
+    # Verify that metrics were called with api_provider in their labels
+    spend_metric = mock_prometheus_logger.litellm_spend_metric
+    assert len(spend_metric.labels_calls) > 0, "Spend metric should have been called"
+
+    # Check that api_provider was included in the labels
+    for labels_call in spend_metric.labels_calls:
+        assert "api_provider" in labels_call, (
+            f"api_provider should be in spend metric labels. Got: {labels_call}"
+        )
+        assert labels_call["api_provider"] == test_provider, (
+            f"api_provider should be '{test_provider}', got '{labels_call.get('api_provider')}'"
+        )
+
+    print("✓ api_provider in success event test passed")
+
+
+def test_prometheus_config_with_api_provider_labels():
+    """
+    Test that prometheus_metrics_config can filter to only include api_provider labels.
+    """
+    clear_prometheus_registry()
+
+    # Note: Each metric has different valid labels, so we need separate configs
+    test_config = [
+        {
+            "group": "latency_metrics",
+            "metrics": [
+                "litellm_request_total_latency_metric",
+            ],
+            "include_labels": [
+                "api_provider",
+                "api_base",
+                "requested_model",
+            ],
+        },
+        {
+            "group": "spend_metrics",
+            "metrics": [
+                "litellm_spend_metric",
+            ],
+            "include_labels": [
+                "api_provider",
+                "api_base",
+                "model",  # litellm_spend_metric uses 'model' not 'requested_model'
+            ],
+        }
+    ]
+
+    litellm.prometheus_metrics_config = test_config
+
+    try:
+        logger = PrometheusLogger()
+
+        # Verify the filtered labels only include the configured ones
+        latency_labels = logger.get_labels_for_metric("litellm_request_total_latency_metric")
+        assert "api_provider" in latency_labels
+        assert "api_base" in latency_labels
+        assert "requested_model" in latency_labels
+        # Other labels should be filtered out
+        assert "end_user" not in latency_labels
+        assert "team" not in latency_labels
+
+        spend_labels = logger.get_labels_for_metric("litellm_spend_metric")
+        assert "api_provider" in spend_labels
+        assert "api_base" in spend_labels
+
+        print("✓ prometheus_metrics_config with api_provider labels test passed")
+
+    finally:
+        litellm.prometheus_metrics_config = None
+
+
+# ==============================================================================
+# END API_PROVIDER AND API_BASE LABEL TESTS
+# ==============================================================================
