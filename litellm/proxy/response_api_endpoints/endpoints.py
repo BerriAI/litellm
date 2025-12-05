@@ -79,55 +79,18 @@ async def responses_api(
 
     data = await _read_request_body(request=request)
     
-    # Check if polling via cache is enabled (using global config vars)
-    background_mode = data.get("background", False)
+    # Check if polling via cache should be used for this request
+    from litellm.proxy.response_polling.polling_handler import should_use_polling_for_request
     
-    # Check if polling is enabled (can be "all" or a list of providers)
-    should_use_polling = False
-    if background_mode and polling_via_cache_enabled and redis_usage_cache:
-        if polling_via_cache_enabled == "all":
-            # Enable for all models/providers
-            should_use_polling = True
-        elif isinstance(polling_via_cache_enabled, list):
-            # Check if provider is in the list (e.g., ["openai", "bedrock"])
-            model = data.get("model", "")
-            
-            # First, try to get provider from model string format "provider/model"
-            if "/" in model:
-                provider = model.split("/")[0]
-                if provider in polling_via_cache_enabled:
-                    should_use_polling = True
-            # Otherwise, check ALL deployments for this model_name in router
-            elif llm_router is not None:
-                try:
-                    # Get all deployment indices for this model name
-                    indices = llm_router.model_name_to_deployment_indices.get(model, [])
-                    for idx in indices:
-                        deployment_dict = llm_router.model_list[idx]
-                        litellm_params = deployment_dict.get("litellm_params", {})
-                        
-                        # Check custom_llm_provider first
-                        dep_provider = litellm_params.get("custom_llm_provider")
-                        
-                        # Then try to extract from model (e.g., "openai/gpt-5")
-                        if not dep_provider:
-                            dep_model = litellm_params.get("model", "")
-                            if "/" in dep_model:
-                                dep_provider = dep_model.split("/")[0]
-                        
-                        # If ANY deployment's provider matches, enable polling
-                        if dep_provider and dep_provider in polling_via_cache_enabled:
-                            should_use_polling = True
-                            verbose_proxy_logger.debug(
-                                f"Polling enabled for model={model}, provider={dep_provider}"
-                            )
-                            break
-                except Exception as e:
-                    verbose_proxy_logger.debug(
-                        f"Could not resolve provider for model {model}: {e}"
-                    )
+    should_use_polling = should_use_polling_for_request(
+        background_mode=data.get("background", False),
+        polling_via_cache_enabled=polling_via_cache_enabled,
+        redis_cache=redis_usage_cache,
+        model=data.get("model", ""),
+        llm_router=llm_router,
+    )
     
-    # If all conditions are met, use polling mode
+    # If polling is enabled, use polling mode
     if should_use_polling:
         from litellm.proxy.response_polling.polling_handler import (
             ResponsePollingHandler,
