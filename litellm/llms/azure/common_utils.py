@@ -702,6 +702,7 @@ class BaseAzureLLM(BaseOpenAILLM):
         litellm_params: Optional[Union[GenericLiteLLMParams, Dict[str, Any]]],
         route: Union[Literal["/openai/responses", "/openai/vector_stores"], str],
         default_api_version: Optional[Union[str, Literal["latest", "preview"]]] = None,
+        request_query_params: Optional[dict] = None,
     ) -> str:
         """
         Get the base Azure URL for the given route and API version.
@@ -728,7 +729,7 @@ class BaseAzureLLM(BaseOpenAILLM):
         )
 
         # Create a new dictionary with existing params
-        query_params = dict(original_url.params)
+        query_params = dict(request_query_params or {}) | dict(original_url.params)
 
         # Add api_version if needed
         if "api-version" not in query_params and api_version:

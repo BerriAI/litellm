@@ -40,6 +40,7 @@ class AzurePassthroughConfig(BasePassthroughConfig):
             litellm_params=litellm_params,
             route=endpoint,
             default_api_version=litellm_params.get("api_version"),
+            request_query_params=request_query_params
         )
         return (
             httpx.URL(complete_url),
