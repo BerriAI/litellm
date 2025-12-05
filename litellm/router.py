@@ -1486,7 +1486,7 @@ class Router:
 
             input_kwargs = {
                 **data,
-                "messages": messages,
+                "messages": copy.deepcopy(messages),
                 "caching": self.cache_responses,
                 "client": model_client,
                 **kwargs,
