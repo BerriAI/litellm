@@ -95,6 +95,7 @@ from litellm.utils import (
     EmbeddingResponse,
     ImageResponse,
     ModelResponse,
+    ModelResponseStream,
     ProviderConfigManager,
     TextCompletionResponse,
     TranscriptionResponse,
@@ -654,7 +655,9 @@ def _infer_call_type(
     if completion_response is None:
         return None
 
-    if isinstance(completion_response, ModelResponse):
+    if isinstance(completion_response, ModelResponse) or isinstance(
+        completion_response, ModelResponseStream
+    ):
         return "completion"
     elif isinstance(completion_response, EmbeddingResponse):
         return "embedding"
@@ -934,6 +937,17 @@ def completion_cost(  # noqa: PLR0915
                         prompt_tokens = token_counter(model=model, text=prompt)
                     completion_tokens = token_counter(model=model, text=completion)
 
+                # Handle A2A calls before model check - A2A doesn't require a model
+                if call_type in (
+                    CallTypes.asend_message.value,
+                    CallTypes.send_message.value,
+                ):
+                    from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
+
+                    return A2ACostCalculator.calculate_a2a_cost(
+                        litellm_logging_obj=litellm_logging_obj
+                    )
+
                 if model is None:
                     raise ValueError(
                         f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
@@ -1031,6 +1045,61 @@ def completion_cost(  # noqa: PLR0915
                             billed_units.get("search_units") or 1
                         )  # cohere charges per request by default.
                         completion_tokens = search_units
+                elif (
+                    call_type == CallTypes.search.value
+                    or call_type == CallTypes.asearch.value
+                ):
+                    from litellm.search import search_provider_cost_per_query
+
+                    # Extract number_of_queries from optional_params or default to 1
+                    number_of_queries = 1
+                    if optional_params is not None:
+                        # Check if query is a list (multiple queries)
+                        query = optional_params.get("query")
+                        if isinstance(query, list):
+                            number_of_queries = len(query)
+                        elif query is not None:
+                            number_of_queries = 1
+
+                    search_model = model or ""
+                    if custom_llm_provider and "/" not in search_model:
+                        # If model is like "tavily-search", construct "tavily/search" for cost lookup
+                        search_model = f"{custom_llm_provider}/search"
+
+                    prompt_cost, completion_cost_result = (
+                        search_provider_cost_per_query(
+                            model=search_model,
+                            custom_llm_provider=custom_llm_provider,
+                            number_of_queries=number_of_queries,
+                            optional_params=optional_params,
+                        )
+                    )
+
+                    # Return the total cost (prompt_cost + completion_cost, but for search it's just prompt_cost)
+                    _final_cost = prompt_cost + completion_cost_result
+
+                    # Apply discount
+                    original_cost = _final_cost
+                    _final_cost, discount_percent, discount_amount = (
+                        _apply_cost_discount(
+                            base_cost=_final_cost,
+                            custom_llm_provider=custom_llm_provider,
+                        )
+                    )
+
+                    # Store cost breakdown in logging object if available
+                    _store_cost_breakdown_in_logging_obj(
+                        litellm_logging_obj=litellm_logging_obj,
+                        prompt_tokens_cost_usd_dollar=prompt_cost,
+                        completion_tokens_cost_usd_dollar=completion_cost_result,
+                        cost_for_built_in_tools_cost_usd_dollar=0.0,
+                        total_cost_usd_dollar=_final_cost,
+                        original_cost=original_cost,
+                        discount_percent=discount_percent,
+                        discount_amount=discount_amount,
+                    )
+
+                    return _final_cost
                 elif call_type == CallTypes.arealtime.value and isinstance(
                     completion_response, LiteLLMRealtimeStreamLoggingObject
                 ):

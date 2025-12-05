@@ -22,6 +22,18 @@ def _is_non_openai_azure_model(model: str) -> bool:
     return False
 
 
+def _is_azure_claude_model(model: str) -> bool:
+    """
+    Check if a model name contains 'claude' (case-insensitive).
+    Used to detect Claude models that need Anthropic-specific handling.
+    """
+    try:
+        model_lower = model.lower()
+        return "claude" in model_lower or model_lower.startswith("claude")
+    except Exception:
+        return False
+
+
 def handle_cohere_chat_model_custom_llm_provider(
     model: str, custom_llm_provider: Optional[str] = None
 ) -> Tuple[str, Optional[str]]:
@@ -240,6 +252,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "api.moonshot.ai/v1":
                         custom_llm_provider = "moonshot"
                         dynamic_api_key = get_secret_str("MOONSHOT_API_KEY")
+                    elif endpoint == "platform.publicai.co/v1":
+                        custom_llm_provider = "publicai"
+                        dynamic_api_key = get_secret_str("PUBLICAI_API_KEY")
                     elif endpoint == "https://api.v0.dev/v1":
                         custom_llm_provider = "v0"
                         dynamic_api_key = get_secret_str("V0_API_KEY")
@@ -453,6 +468,18 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
     custom_llm_provider = model.split("/", 1)[0]
     model = model.split("/", 1)[1]
 
+    # Check JSON providers FIRST (before hardcoded ones)
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+    from litellm.llms.openai_like.dynamic_config import create_config_class
+
+    if JSONProviderRegistry.exists(custom_llm_provider):
+        provider_config = JSONProviderRegistry.get(custom_llm_provider)
+        config_class = create_config_class(provider_config)
+        api_base, dynamic_api_key = config_class()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+        return model, custom_llm_provider, dynamic_api_key, api_base
+
     if custom_llm_provider == "perplexity":
         # perplexity is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.perplexity.ai
         (
@@ -647,6 +674,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.XAIChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
+    elif custom_llm_provider == "zai":
+        api_base = (
+            api_base
+            or get_secret_str("ZAI_API_BASE")
+            or "https://api.z.ai/api/paas/v4"
+        )
+        dynamic_api_key = api_key or get_secret_str("ZAI_API_KEY")
     elif custom_llm_provider == "together_ai":
         api_base = (
             api_base
@@ -741,6 +775,7 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.MoonshotChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
+    # publicai is now handled by JSON config (see litellm/llms/openai_like/providers.json)
     elif custom_llm_provider == "docker_model_runner":
         (
             api_base,
@@ -811,6 +846,16 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.ClarifaiConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
+    elif custom_llm_provider == "ragflow":
+        full_model = f"ragflow/{model}"
+        (
+            api_base,
+            dynamic_api_key,
+            _,
+        ) = litellm.RAGFlowConfig()._get_openai_compatible_provider_info(
+            full_model, api_base, api_key, "ragflow"
+        )
+        model = full_model
 
     if api_base is not None and not isinstance(api_base, str):
         raise Exception("api base needs to be a string. api_base={}".format(api_base))

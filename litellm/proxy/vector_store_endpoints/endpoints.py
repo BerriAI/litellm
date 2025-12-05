@@ -50,11 +50,11 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
 
 
 @router.post(
-    "/v1/vector_stores/{vector_store_id}/search",
+    "/v1/vector_stores/{vector_store_id:path}/search",
     dependencies=[Depends(user_api_key_auth)],
 )
 @router.post(
-    "/vector_stores/{vector_store_id}/search", dependencies=[Depends(user_api_key_auth)]
+    "/vector_stores/{vector_store_id:path}/search", dependencies=[Depends(user_api_key_auth)]
 )
 async def vector_store_search(
     request: Request,

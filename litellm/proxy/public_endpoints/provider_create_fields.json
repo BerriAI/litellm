@@ -127,6 +127,16 @@
         "default_value": null
       },
       {
+        "key": "api_key",
+        "label": "AWS Bedrock API Key",
+        "placeholder": null,
+        "tooltip": "You can provide the API Key for accessing the Bedrock API.",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
         "key": "aws_session_token",
         "label": "AWS Session Token",
         "placeholder": null,
@@ -2593,6 +2603,16 @@
         "placeholder": "us-east-1",
         "tooltip": null,
         "required": true,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base (Optional)",
+        "placeholder": null,
+        "tooltip": "Supports custom API base for Google Private API endpoints.",
+        "required": false,
         "field_type": "text",
         "options": null,
         "default_value": null

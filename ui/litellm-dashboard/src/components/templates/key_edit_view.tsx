@@ -10,6 +10,7 @@ import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata
 import { KeyResponse } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
+import AgentSelector from "../agent_management/AgentSelector";
 import NotificationsManager from "../molecules/notifications_manager";
 import { fetchMCPAccessGroups, getPromptsList, modelAvailableCall, tagListCall } from "../networking";
 import { fetchTeamModels } from "../organisms/create_key_button";
@@ -95,6 +96,7 @@ export function KeyEditView({
   );
   const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(keyData.auto_rotate || false);
   const [rotationInterval, setRotationInterval] = useState<string>(keyData.rotation_interval || "");
+  const [isKeySaving, setIsKeySaving] = useState(false);
 
   const fetchMcpAccessGroups = async () => {
     if (!accessToken) return;
@@ -174,6 +176,10 @@ export function KeyEditView({
       accessGroups: keyData.object_permission?.mcp_access_groups || [],
     },
     mcp_tool_permissions: keyData.object_permission?.mcp_tool_permissions || {},
+    agents_and_groups: {
+      agents: keyData.object_permission?.agents || [],
+      accessGroups: keyData.object_permission?.agent_access_groups || [],
+    },
     logging_settings: extractLoggingSettings(keyData.metadata),
     disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
       ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
@@ -236,8 +242,17 @@ export function KeyEditView({
 
   console.log("premiumUser:", premiumUser);
 
+  const handleSubmit = async (values: any) => {
+    try {
+      setIsKeySaving(true);
+      await onSubmit(values);
+    } finally {
+      setIsKeySaving(false);
+    }
+  };
+
   return (
-    <Form form={form} onFinish={onSubmit} initialValues={initialValues} layout="vertical">
+    <Form form={form} onFinish={handleSubmit} initialValues={initialValues} layout="vertical">
       <Form.Item label="Key Alias" name="key_alias">
         <TextInput />
       </Form.Item>
@@ -403,11 +418,7 @@ export function KeyEditView({
         name="disable_global_guardrails"
         valuePropName="checked"
       >
-        <Switch 
-          disabled={!premiumUser}
-          checkedChildren="Yes"
-          unCheckedChildren="No"
-        />
+        <Switch disabled={!premiumUser} checkedChildren="Yes" unCheckedChildren="No" />
       </Form.Item>
 
       <Form.Item label="Tags" name="tags">
@@ -505,6 +516,15 @@ export function KeyEditView({
         )}
       </Form.Item>
 
+      <Form.Item label="Agents / Access Groups" name="agents_and_groups">
+        <AgentSelector
+          onChange={(val) => form.setFieldValue("agents_and_groups", val)}
+          value={form.getFieldValue("agents_and_groups")}
+          accessToken={accessToken || ""}
+          placeholder="Select agents or access groups (optional)"
+        />
+      </Form.Item>
+
       <Form.Item label="Team ID" name="team_id">
         <Select placeholder="Select team" style={{ width: "100%" }}>
           {/* Only show All Team Models if team has models */}
@@ -573,10 +593,12 @@ export function KeyEditView({
 
       <div className="sticky z-10 bg-white p-4 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
         <div className="flex justify-end items-center gap-2">
-          <TremorButton variant="secondary" onClick={onCancel}>
+          <TremorButton variant="secondary" onClick={onCancel} disabled={isKeySaving}>
             Cancel
           </TremorButton>
-          <TremorButton type="submit">Save Changes</TremorButton>
+          <TremorButton type="submit" loading={isKeySaving}>
+            Save Changes
+          </TremorButton>
         </div>
       </div>
     </Form>

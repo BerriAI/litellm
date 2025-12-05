@@ -30,8 +30,7 @@ import {
   Text,
   TextInput,
 } from "@tremor/react";
-import { Button as Button2, Form, Input, Modal, Select as Select2, Tooltip, Typography } from "antd";
-import { AlertTriangleIcon, XIcon } from "lucide-react";
+import { Button as Button2, Form, Input, Modal, Select as Select2, Switch, Tooltip, Typography } from "antd";
 import React, { useEffect, useState } from "react";
 import { formatNumberWithCommas } from "../utils/dataUtils";
 import { fetchTeams } from "./common_components/fetch_teams";
@@ -45,6 +44,7 @@ import {
 import type { KeyResponse, Team } from "./key_team_helpers/key_list";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "./mcp_server_management/MCPToolPermissions";
+import AgentSelector from "./agent_management/AgentSelector";
 import NotificationsManager from "./molecules/notifications_manager";
 import { Organization, fetchMCPAccessGroups, getGuardrailsList, teamDeleteCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
@@ -77,6 +77,7 @@ interface EditTeamModalProps {
 }
 
 import { updateExistingKeys } from "@/utils/dataUtils";
+import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import { Member, teamCreateCall, v2TeamListCall } from "./networking";
 
 interface TeamInfo {
@@ -446,6 +447,21 @@ const Teams: React.FC<TeamProps> = ({
           }
           formValues.object_permission.mcp_access_groups = formValues.allowed_mcp_access_groups;
           delete formValues.allowed_mcp_access_groups;
+        }
+
+        // Handle agent permissions
+        if (formValues.allowed_agents_and_groups) {
+          const { agents, accessGroups } = formValues.allowed_agents_and_groups;
+          if (!formValues.object_permission) {
+            formValues.object_permission = {};
+          }
+          if (agents && agents.length > 0) {
+            formValues.object_permission.agents = agents;
+          }
+          if (accessGroups && accessGroups.length > 0) {
+            formValues.object_permission.agent_access_groups = accessGroups;
+          }
+          delete formValues.allowed_agents_and_groups;
         }
 
         // Add model_aliases if any are defined
@@ -1139,11 +1155,22 @@ const Teams: React.FC<TeamProps> = ({
                         </Tooltip>
                       </span>
                     }
+                    rules={[
+                      {
+                        required: true,
+                        message: "Please select at least one model",
+                      },
+                    ]}
                     name="models"
                   >
                     <Select2 mode="multiple" placeholder="Select models" style={{ width: "100%" }}>
-                      <Select2.Option key="all-proxy-models" value="all-proxy-models">
-                        All Proxy Models
+                      {(isProxyAdminRole(userRole || "") || userModels.includes("all-proxy-models")) && (
+                        <Select2.Option key="all-proxy-models" value="all-proxy-models">
+                          All Proxy Models
+                        </Select2.Option>
+                      )}
+                      <Select2.Option key="no-default-models" value="no-default-models">
+                        No Default Models
                       </Select2.Option>
                       {modelsToPick.map((model) => (
                         <Select2.Option key={model} value={model}>
@@ -1355,6 +1382,34 @@ const Teams: React.FC<TeamProps> = ({
                             />
                           </div>
                         )}
+                      </Form.Item>
+                    </AccordionBody>
+                  </Accordion>
+
+                  <Accordion className="mt-8 mb-8">
+                    <AccordionHeader>
+                      <b>Agent Settings</b>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <Form.Item
+                        label={
+                          <span>
+                            Allowed Agents{" "}
+                            <Tooltip title="Select which agents or access groups this team can access">
+                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                            </Tooltip>
+                          </span>
+                        }
+                        name="allowed_agents_and_groups"
+                        className="mt-4"
+                        help="Select agents or access groups this team can access"
+                      >
+                        <AgentSelector
+                          onChange={(val: any) => form.setFieldValue("allowed_agents_and_groups", val)}
+                          value={form.getFieldValue("allowed_agents_and_groups")}
+                          accessToken={accessToken || ""}
+                          placeholder="Select agents or access groups (optional)"
+                        />
                       </Form.Item>
                     </AccordionBody>
                   </Accordion>

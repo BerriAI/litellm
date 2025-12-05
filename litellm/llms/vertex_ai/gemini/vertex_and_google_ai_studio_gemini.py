@@ -904,13 +904,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if VertexGeminiConfig._is_gemini_3_or_newer(model):
             if "temperature" not in optional_params:
                 optional_params["temperature"] = 1.0
-            thinking_config = optional_params.get("thinkingConfig", {})
-            if (
-                "thinkingLevel" not in thinking_config
-                and "thinkingBudget" not in thinking_config
-            ):
-                thinking_config["thinkingLevel"] = "low"
-                optional_params["thinkingConfig"] = thinking_config
+            # Only add thinkingLevel if model supports it (exclude image models)
+            if "image" not in model.lower():
+                thinking_config = optional_params.get("thinkingConfig", {})
+                if (
+                    "thinkingLevel" not in thinking_config
+                    and "thinkingBudget" not in thinking_config
+                ):
+                    thinking_config["thinkingLevel"] = "low"
+                    optional_params["thinkingConfig"] = thinking_config
 
         return optional_params
 
@@ -1089,6 +1091,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             if "thoughtSignature" in part:
                 part_copy = part.copy()
                 part_copy.pop("thoughtSignature")
+
+                text_content = part_copy.get("text")
+                if isinstance(text_content, str) and text_content.strip() == "":
+                    continue
+
                 thinking_blocks.append(
                     ChatCompletionThinkingBlock(
                         type="thinking",
@@ -1203,14 +1210,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     }
                     # Embed thought signature in ID for OpenAI client compatibility
                     if thought_signature:
-                        _tool_response_chunk[
-                            "id"
-                        ] = _encode_tool_call_id_with_signature(
-                            _tool_response_chunk["id"] or "", thought_signature
-                        )
                         _tool_response_chunk["provider_specific_fields"] = {  # type: ignore
                             "thought_signature": thought_signature
                         }
+                        # Only embed in ID if preview features are enabled
+                        if litellm.enable_preview_features:
+                            _tool_response_chunk[
+                                "id"
+                            ] = _encode_tool_call_id_with_signature(
+                                _tool_response_chunk["id"] or "", thought_signature
+                            )
                     _tools.append(_tool_response_chunk)
                 cumulative_tool_call_idx += 1
         if len(_tools) == 0:
@@ -2114,6 +2123,9 @@ class VertexLLM(VertexBase):
             custom_llm_provider=custom_llm_provider,
         )
 
+        # Extract use_psc_endpoint_format from optional_params
+        use_psc_endpoint_format = optional_params.get("use_psc_endpoint_format", False)
+
         auth_header, api_base = self._get_token_and_url(
             model=model,
             gemini_api_key=gemini_api_key,
@@ -2125,6 +2137,7 @@ class VertexLLM(VertexBase):
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             should_use_v1beta1_features=should_use_v1beta1_features,
+            use_psc_endpoint_format=use_psc_endpoint_format,
         )
 
         headers = VertexGeminiConfig().validate_environment(
@@ -2208,6 +2221,9 @@ class VertexLLM(VertexBase):
             custom_llm_provider=custom_llm_provider,
         )
 
+        # Extract use_psc_endpoint_format from optional_params
+        use_psc_endpoint_format = optional_params.get("use_psc_endpoint_format", False)
+
         auth_header, api_base = self._get_token_and_url(
             model=model,
             gemini_api_key=gemini_api_key,
@@ -2219,6 +2235,7 @@ class VertexLLM(VertexBase):
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             should_use_v1beta1_features=should_use_v1beta1_features,
+            use_psc_endpoint_format=use_psc_endpoint_format,
         )
 
         headers = VertexGeminiConfig().validate_environment(
@@ -2392,6 +2409,9 @@ class VertexLLM(VertexBase):
             custom_llm_provider=custom_llm_provider,
         )
 
+        # Extract use_psc_endpoint_format from optional_params
+        use_psc_endpoint_format = optional_params.get("use_psc_endpoint_format", False)
+
         auth_header, url = self._get_token_and_url(
             model=model,
             gemini_api_key=gemini_api_key,
@@ -2403,6 +2423,7 @@ class VertexLLM(VertexBase):
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             should_use_v1beta1_features=should_use_v1beta1_features,
+            use_psc_endpoint_format=use_psc_endpoint_format,
         )
         headers = VertexGeminiConfig().validate_environment(
             api_key=auth_header,
@@ -2580,13 +2601,12 @@ class ModelResponseIterator:
         try:
             json_chunk = json.loads(chunk)
 
-        except json.JSONDecodeError as e:
-            if (
-                self.sent_first_chunk is False
-            ):  # only check for accumulated json, on first chunk, else raise error. Prevent real errors from being masked.
-                self.chunk_type = "accumulated_json"
-                return self.handle_accumulated_json_chunk(chunk=chunk)
-            raise e
+        except json.JSONDecodeError:
+            # Switch to accumulation mode for partial JSON chunks
+            # This can happen at any point due to network fragmentation, not just first chunk
+            # See: https://github.com/BerriAI/litellm/issues/16562
+            self.chunk_type = "accumulated_json"
+            return self.handle_accumulated_json_chunk(chunk=chunk)
 
         if self.sent_first_chunk is False:
             self.sent_first_chunk = True

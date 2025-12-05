@@ -148,7 +148,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             if role == "system":
                 # Extract system message as instructions
                 if isinstance(content, str):
-                    instructions = content
+                    if instructions:
+                        # Concatenate multiple system prompts with a space
+                        instructions = f"{instructions} {content}"
+                    else:
+                        instructions = content
                 else:
                     input_items.append(
                         {
@@ -234,6 +238,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         cast(List[Dict[str, Any]], value)
                     )
                 )
+            elif key == "response_format":
+                # Convert response_format to text.format
+                text_format = self._transform_response_format_to_text_format(value)
+                if text_format:
+                    responses_api_request["text"] = text_format  # type: ignore
             elif key in ResponsesAPIOptionalRequestParams.__annotations__.keys():
                 responses_api_request[key] = value  # type: ignore
             elif key == "metadata":
@@ -358,49 +367,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     reasoning_content = None  # flush reasoning content
                     index += 1
             elif isinstance(item, ResponseFunctionToolCall):
-
-                provider_specific_fields = getattr(
-                    item, "provider_specific_fields", None
+                from litellm.responses.litellm_completion_transformation.transformation import (
+                    LiteLLMCompletionResponsesConfig,
                 )
-                if provider_specific_fields and not isinstance(
-                    provider_specific_fields, dict
-                ):
-                    provider_specific_fields = (
-                        dict(provider_specific_fields)
-                        if hasattr(provider_specific_fields, "__dict__")
-                        else {}
-                    )
-                elif hasattr(item, "get") and callable(item.get):  # type: ignore
-                    provider_fields = item.get("provider_specific_fields")  # type: ignore
-                    if provider_fields:
-                        provider_specific_fields = (
-                            provider_fields
-                            if isinstance(provider_fields, dict)
-                            else (
-                                dict(provider_fields)  # type: ignore
-                                if hasattr(provider_fields, "__dict__")
-                                else {}
-                            )
-                        )
 
-                function_dict: Dict[str, Any] = {
-                    "name": item.name,
-                    "arguments": item.arguments,
-                }
-
-                if provider_specific_fields:
-                    function_dict["provider_specific_fields"] = provider_specific_fields
-
-                tool_call_dict: Dict[str, Any] = {
-                    "id": item.call_id,
-                    "function": function_dict,
-                    "type": "function",
-                }
-
-                if provider_specific_fields:
-                    tool_call_dict["provider_specific_fields"] = (
-                        provider_specific_fields
-                    )
+                tool_call_dict = LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
+                    tool_call_item=item,
+                    index=index,
+                )
 
                 msg = Message(
                     content=None,
@@ -664,6 +638,55 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             return Reasoning(effort="low")
         elif reasoning_effort == "minimal":
             return Reasoning(effort="minimal")
+        return None
+
+    def _transform_response_format_to_text_format(
+        self, response_format: Union[Dict[str, Any], Any]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Transform Chat Completion response_format parameter to Responses API text.format parameter.
+
+        Chat Completion response_format structure:
+        {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "schema_name",
+                "schema": {...},
+                "strict": True
+            }
+        }
+
+        Responses API text parameter structure:
+        {
+            "format": {
+                "type": "json_schema",
+                "name": "schema_name",
+                "schema": {...},
+                "strict": True
+            }
+        }
+        """
+        if not response_format:
+            return None
+
+        if isinstance(response_format, dict):
+            format_type = response_format.get("type")
+
+            if format_type == "json_schema":
+                json_schema = response_format.get("json_schema", {})
+                return {
+                    "format": {
+                        "type": "json_schema",
+                        "name": json_schema.get("name", "response_schema"),
+                        "schema": json_schema.get("schema", {}),
+                        "strict": json_schema.get("strict", False),
+                    }
+                }
+            elif format_type == "json_object":
+                return {"format": {"type": "json_object"}}
+            elif format_type == "text":
+                return {"format": {"type": "text"}}
+
         return None
 
     def _map_responses_status_to_finish_reason(self, status: Optional[str]) -> str:
