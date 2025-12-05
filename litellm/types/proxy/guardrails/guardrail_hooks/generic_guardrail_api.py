@@ -4,6 +4,10 @@ from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+from litellm.types.llms.openai import (
+    ChatCompletionToolCallChunk,
+    ChatCompletionToolParam,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
@@ -56,6 +60,7 @@ class GenericGuardrailAPIRequest(BaseModel):
     texts: Optional[List[str]]
     request_data: GenericGuardrailAPIMetadata
     additional_provider_specific_params: Optional[Dict[str, Any]]
+    tool_calls: Optional[List[ChatCompletionToolCallChunk]]
 
 
 class GenericGuardrailAPIResponse:
@@ -88,4 +93,5 @@ class GenericGuardrailAPIResponse:
             blocked_reason=data.get("blocked_reason"),
             texts=data.get("texts"),
             images=data.get("images"),
+            tools=data.get("tools"),
         )

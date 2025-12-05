@@ -16,6 +16,7 @@ import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     LiteLLMAnthropicMessagesAdapter,
 )
@@ -26,6 +27,11 @@ from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
 )
 from litellm.types.llms.openai import ChatCompletionToolParam
+from litellm.types.llms.anthropic import AllAnthropicToolsValues
+from litellm.types.llms.openai import (
+    ChatCompletionToolCallChunk,
+    ChatCompletionToolParam,
+)
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -218,7 +224,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         user_api_key_dict: Optional[Any] = None,
     ) -> Any:
         """
-        Process output response by applying guardrails to text content.
+        Process output response by applying guardrails to text content and tool calls.
 
         Args:
             response: Anthropic MessagesResponse object
@@ -230,17 +236,15 @@ class AnthropicMessagesHandler(BaseTranslation):
             Modified response with guardrail applied to content
 
         Response Format Support:
-            - List content: response.content = [{"type": "text", "text": "text here"}, ...]
+            - List content: response.content = [
+                {"type": "text", "text": "text here"},
+                {"type": "tool_use", "id": "...", "name": "...", "input": {...}},
+                ...
+            ]
         """
-        # Step 0: Check if response has any text content to process
-        if not self._has_text_content(response):
-            verbose_proxy_logger.warning(
-                "Anthropic Messages: No text content in response, skipping guardrail"
-            )
-            return response
-
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
+        tool_calls_to_check: List[ChatCompletionToolCallChunk] = []
         task_mappings: List[Tuple[int, Optional[int]]] = []
         # Track (content_index, None) for each text
 
@@ -248,10 +252,13 @@ class AnthropicMessagesHandler(BaseTranslation):
         if not response_content:
             return response
 
-        # Step 1: Extract all text content from response
+        # Step 1: Extract all text content and tool calls from response
         for content_idx, content_block in enumerate(response_content):
-            # Check if this is a text block by checking the 'type' field
-            if isinstance(content_block, dict) and content_block.get("type") == "text":
+            # Check if this is a text or tool_use block by checking the 'type' field
+            if isinstance(content_block, dict) and content_block.get("type") in [
+                "text",
+                "tool_use",
+            ]:
                 # Cast to dict to handle the union type properly
                 self._extract_output_text_and_images(
                     content_block=cast(Dict[str, Any], content_block),
@@ -259,10 +266,11 @@ class AnthropicMessagesHandler(BaseTranslation):
                     texts_to_check=texts_to_check,
                     images_to_check=images_to_check,
                     task_mappings=task_mappings,
+                    tool_calls_to_check=tool_calls_to_check,
                 )
 
         # Step 2: Apply guardrail to all texts in batch
-        if texts_to_check:
+        if texts_to_check or tool_calls_to_check:
             # Create a request_data dict with response info and user API key metadata
             request_data: dict = {"response": response}
 
@@ -276,6 +284,9 @@ class AnthropicMessagesHandler(BaseTranslation):
             inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
                 inputs["images"] = images_to_check
+            if tool_calls_to_check:
+                inputs["tool_calls"] = tool_calls_to_check
+
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=request_data,
@@ -428,17 +439,32 @@ class AnthropicMessagesHandler(BaseTranslation):
         texts_to_check: List[str],
         images_to_check: List[str],
         task_mappings: List[Tuple[int, Optional[int]]],
+        tool_calls_to_check: Optional[List[ChatCompletionToolCallChunk]] = None,
     ) -> None:
         """
-        Extract text content and images from a response content block.
+        Extract text content, images, and tool calls from a response content block.
 
-        Override this method to customize text/image extraction logic.
+        Override this method to customize text/image/tool extraction logic.
         """
-        content_text = content_block.get("text")
-        if content_text and isinstance(content_text, str):
-            # Simple string content
-            texts_to_check.append(content_text)
-            task_mappings.append((content_idx, None))
+        content_type = content_block.get("type")
+
+        # Extract text content
+        if content_type == "text":
+            content_text = content_block.get("text")
+            if content_text and isinstance(content_text, str):
+                # Simple string content
+                texts_to_check.append(content_text)
+                task_mappings.append((content_idx, None))
+
+        # Extract tool calls
+        elif content_type == "tool_use":
+            tool_call = AnthropicConfig.convert_tool_use_to_openai_format(
+                anthropic_tool_content=content_block,
+                index=content_idx,
+            )
+            if tool_calls_to_check is None:
+                tool_calls_to_check = []
+            tool_calls_to_check.append(tool_call)
 
     async def _apply_guardrail_responses_to_output(
         self,
