@@ -168,13 +168,17 @@ def is_non_content_values_set(message: AllMessageValues) -> bool:
 
 def _audio_or_image_in_message_content(message: AllMessageValues) -> bool:
     """
-    Checks if message content contains an image or audio
+    Checks if message content contains an image or audio.
+    Supports both OpenAI format (image_url) and Anthropic format (image).
     """
     message_content = message.get("content")
     if message_content:
         if message_content is not None and isinstance(message_content, list):
             for c in message_content:
-                if c.get("type") == "image_url" or c.get("type") == "input_audio":
+                content_type = c.get("type")
+                # OpenAI format: image_url, input_audio
+                # Anthropic format: image
+                if content_type in ("image_url", "input_audio", "image"):
                     return True
     return False
 
