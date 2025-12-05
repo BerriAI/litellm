@@ -100,8 +100,10 @@ RUNWAYML_POLLING_TIMEOUT = int(
 ########## Networking constants ##############################################################
 _DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client for 1 hour
 
-# Aiohttp connection pooling constants
-AIOHTTP_CONNECTOR_LIMIT = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 0))
+# Aiohttp connection pooling - prevents memory leaks from unbounded connection growth
+# Set to 0 for unlimited (not recommended for production)
+AIOHTTP_CONNECTOR_LIMIT = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 300))
+AIOHTTP_CONNECTOR_LIMIT_PER_HOST = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT_PER_HOST", 50))
 AIOHTTP_KEEPALIVE_TIMEOUT = int(os.getenv("AIOHTTP_KEEPALIVE_TIMEOUT", 120))
 AIOHTTP_TTL_DNS_CACHE = int(os.getenv("AIOHTTP_TTL_DNS_CACHE", 300))
 # enable_cleanup_closed is only needed for Python versions with the SSL leak bug
@@ -543,7 +545,7 @@ openai_compatible_endpoints: List = [
     "api.studio.nebius.ai/v1",
     "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "https://api.moonshot.ai/v1",
-    "https://platform.publicai.co/v1",
+    "https://api.publicai.co/v1",
     "https://api.v0.dev/v1",
     "https://api.morphllm.com/v1",
     "https://api.lambda.ai/v1",
@@ -585,6 +587,7 @@ openai_compatible_providers: List = [
     "github_copilot",  # GitHub Copilot Chat API
     "novita",
     "meta_llama",
+    "publicai",  # PublicAI - JSON-configured provider
     "featherless_ai",
     "nscale",
     "nebius",
@@ -874,6 +877,7 @@ BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "nova",
     "deepseek_r1",
     "qwen3",
+    "qwen2",
     "twelvelabs",
     "openai",
 ]
