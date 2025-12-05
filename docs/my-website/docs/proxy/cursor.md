@@ -1,6 +1,6 @@
 ---
 id: cursor
-title: Cursor Endpoint (/cursor/chat/completions)
+title: /cursor/chat/completions - Cursor Endpoint 
 description: Accept Responses API input from Cursor and return OpenAI Chat Completions output
 ---
 
