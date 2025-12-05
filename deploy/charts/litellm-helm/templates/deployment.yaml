@@ -6,7 +6,9 @@ metadata:
   name: {{ include "litellm.fullname" . }}
   labels:
     {{- include "litellm.labels" . | nindent 4 }}
+    {{- if .Values.deploymentLabels }}
     {{- toYaml .Values.deploymentLabels | nindent 4 }}
+    {{- end }}
 spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
