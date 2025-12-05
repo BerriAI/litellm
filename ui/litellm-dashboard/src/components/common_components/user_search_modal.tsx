@@ -34,6 +34,7 @@ interface UserSearchModalProps {
   title?: string;
   roles?: Role[];
   defaultRole?: string;
+  organizationId?: string | null;
 }
 
 const UserSearchModal: React.FC<UserSearchModalProps> = ({
@@ -51,13 +52,14 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
     { label: "user", value: "user", description: "User role. Can view team info, but not manage it." },
   ],
   defaultRole = "user",
+  organizationId,
 }) => {
   const [form] = Form.useForm<FormValues>();
   const [userOptions, setUserOptions] = useState<UserOption[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [selectedField, setSelectedField] = useState<"user_email" | "user_id">("user_email");
 
-  const fetchUsers = async (searchText: string, fieldName: "user_email" | "user_id"): Promise<void> => {
+  const fetchUsers = useCallback(async (searchText: string, fieldName: "user_email" | "user_id"): Promise<void> => {
     if (!searchText) {
       setUserOptions([]);
       return;
@@ -67,6 +69,9 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
     try {
       const params = new URLSearchParams();
       params.append(fieldName, searchText);
+      if (organizationId) {
+        params.append("organization_id", organizationId);
+      }
       if (accessToken == null) {
         return;
       }
@@ -84,11 +89,11 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
     } finally {
       setLoading(false);
     }
-  };
+  }, [organizationId, accessToken]);
 
   const debouncedSearch = useCallback(
     debounce((text: string, fieldName: "user_email" | "user_id") => fetchUsers(text, fieldName), 300),
-    [],
+    [fetchUsers],
   );
 
   const handleSearch = (value: string, fieldName: "user_email" | "user_id"): void => {
