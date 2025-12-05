@@ -1,0 +1,68 @@
+suite: test deployment command, args, and deploymentLabels
+templates:
+  - deployment.yaml
+  - configmap-litellm.yaml
+tests:
+  - it: should override args when custom args specified
+    template: deployment.yaml
+    set:
+      args:
+        - --custom-arg1
+        - value1
+        - --custom-arg2
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - --custom-arg1
+            - value1
+            - --custom-arg2
+  - it: should set custom command when specified
+    template: deployment.yaml
+    set:
+      command:
+        - /bin/sh
+        - -c
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value:
+            - /bin/sh
+            - -c
+  - it: should set custom command and args together
+    template: deployment.yaml
+    set:
+      command:
+        - python
+        - -u
+      args:
+        - my_script.py
+        - --verbose
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value:
+            - python
+            - -u
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - my_script.py
+            - --verbose
+  - it: should add deploymentLabels to deployment metadata
+    template: deployment.yaml
+    set:
+      deploymentLabels:
+        environment: production
+        team: platform
+        version: v1.2.3
+    asserts:
+      - equal:
+          path: metadata.labels.environment
+          value: production
+      - equal:
+          path: metadata.labels.team
+          value: platform
+      - equal:
+          path: metadata.labels.version
+          value: v1.2.3
