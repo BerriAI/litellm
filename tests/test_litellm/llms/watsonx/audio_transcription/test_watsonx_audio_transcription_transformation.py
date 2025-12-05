@@ -63,6 +63,9 @@ class TestWatsonXAudioTranscription:
         assert "Authorization" in captured_request["headers"]
         assert "Bearer test-bearer-token" in captured_request["headers"]["Authorization"]
         
+        # Validate Content-Type is NOT set (httpx sets multipart/form-data automatically)
+        assert "Content-Type" not in captured_request["headers"]
+        
         # Validate project_id is in form data, not URL
         assert captured_request["data"].get("project_id") == "test-project-123"
         

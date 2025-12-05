@@ -105,6 +105,7 @@ const sidebars = {
       items: [
         "tutorials/claude_responses_api",
         "tutorials/cost_tracking_coding",
+        "tutorials/cursor_integration",
         "tutorials/github_copilot_integration",
         "tutorials/litellm_gemini_cli",
         "tutorials/litellm_qwen_code_cli",
@@ -185,7 +186,6 @@ const sidebars = {
           label: "Architecture",
           items: [
             "proxy/architecture",
-            "proxy/multi_tenant_architecture",
             "proxy/control_plane_and_data_plane",
             "proxy/db_deadlocks",
             "proxy/db_info",
@@ -317,7 +317,6 @@ const sidebars = {
         slug: "/supported_endpoints",
       },
       items: [
-        "a2a",
         "assistants",
         {
           type: "category",
@@ -522,6 +521,7 @@ const sidebars = {
             "providers/vertex_ai/videos",
             "providers/vertex_partner",
             "providers/vertex_self_deployed",
+            "providers/vertex_embedding",
             "providers/vertex_image",
             "providers/vertex_speech",
             "providers/vertex_batch",

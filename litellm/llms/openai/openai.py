@@ -444,7 +444,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             else:
                 headers = {}
             response = raw_response.parse()
-            if not hasattr(response, "model_dump"):
+            if not data.get("stream") and not hasattr(response, "model_dump"):
                 raise OpenAIError(
                     status_code=500,
                     message=f"Empty or invalid response from LLM endpoint. Received: {response!r}. Check the reverse proxy or model server configuration.",
@@ -482,7 +482,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             else:
                 headers = {}
             response = raw_response.parse()
-            if not hasattr(response, "model_dump"):
+            if not data.get("stream") and not hasattr(response, "model_dump"):
                 raise OpenAIError(
                     status_code=500,
                     message=f"Empty or invalid response from LLM endpoint. Received: {response!r}. Check the reverse proxy or model server configuration.",

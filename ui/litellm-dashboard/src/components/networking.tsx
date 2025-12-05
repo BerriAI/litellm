@@ -5964,7 +5964,7 @@ export const listMCPTools = async (accessToken: string, serverId: string) => {
       throw new Error("Failed to fetch MCP tools");
     }
 
-    // Return the full response object which includes tools, error, and message
+    // Return the full response object which includes tools, error, message, and stack_trace
     return data;
   } catch (error) {
     console.error("Failed to fetch MCP tools:", error);
@@ -5973,6 +5973,7 @@ export const listMCPTools = async (accessToken: string, serverId: string) => {
       tools: [],
       error: "network_error",
       message: error instanceof Error ? error.message : "Failed to fetch MCP tools",
+      stack_trace: null,
     };
   }
 };

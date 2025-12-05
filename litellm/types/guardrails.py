@@ -5,7 +5,12 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Required, TypedDict
 
-from litellm.types.llms.openai import ChatCompletionToolParam
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionToolCallChunk,
+    ChatCompletionToolParam,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
     EnkryptAIGuardrailConfigs,
 )
@@ -742,6 +747,10 @@ class PatchGuardrailRequest(BaseModel):
 
 
 class GenericGuardrailAPIInputs(TypedDict, total=False):
-    texts: List[str]
-    images: List[str]
-    tools: List[ChatCompletionToolParam]
+    texts: List[str]  # extracted text from the LLM response - for basic text guardrails
+    images: List[str]  # extracted images from the LLM response - for image guardrails
+    tools: List[ChatCompletionToolParam]  # tools sent to the LLM
+    tool_calls: List[ChatCompletionToolCallChunk]  # tool calls sent from the LLM
+    structured_messages: List[
+        AllMessageValues
+    ]  # structured messages sent to the LLM - indicates if text is from system or user

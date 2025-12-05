@@ -177,6 +177,44 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # Return the responses endpoint
         return f"{api_base}/responses"
 
+    def _handle_reasoning_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Handle reasoning items for GitHub Copilot, preserving encrypted_content.
+
+        GitHub Copilot uses encrypted_content in reasoning items to maintain
+        conversation state across turns. The parent class strips this field
+        when converting to OpenAI's ResponseReasoningItem model, which causes
+        "encrypted content could not be verified" errors on multi-turn requests.
+
+        This override preserves encrypted_content while still filtering out
+        status=None which OpenAI's API rejects.
+        """
+        if item.get("type") == "reasoning":
+            # Preserve encrypted_content before parent processing
+            encrypted_content = item.get("encrypted_content")
+
+            # Filter out None values for known problematic fields,
+            # but preserve encrypted_content even if it exists
+            filtered_item: Dict[str, Any] = {}
+            for k, v in item.items():
+                # Always include encrypted_content if present (even if None)
+                if k == "encrypted_content":
+                    if encrypted_content is not None:
+                        filtered_item[k] = v
+                    continue
+                # Filter out status=None which OpenAI API rejects
+                if k == "status" and v is None:
+                    continue
+                # Include all other non-None values
+                if v is not None:
+                    filtered_item[k] = v
+
+            verbose_logger.debug(
+                f"GitHub Copilot reasoning item processed, encrypted_content preserved: {encrypted_content is not None}"
+            )
+            return filtered_item
+        return item
+
     # ==================== Helper Methods ====================
 
     def _get_input_from_params(

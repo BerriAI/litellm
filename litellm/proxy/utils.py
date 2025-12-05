@@ -1031,15 +1031,25 @@ class ProxyLogging:
                     )
                 else:
                     user_api_key_auth_dict = user_api_key_dict
-
                 # Add task to list for parallel execution
-                guardrail_tasks.append(
-                    callback.async_moderation_hook(
+                if (
+                    "apply_guardrail" in type(callback).__dict__
+                    and user_api_key_dict is not None
+                ):
+                    data["guardrail_to_apply"] = callback
+                    guardrail_task = unified_guardrail.async_moderation_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        data=data,
+                        call_type=call_type,
+                    )
+                else:
+
+                    guardrail_task = callback.async_moderation_hook(
                         data=data,
                         user_api_key_dict=user_api_key_auth_dict,  # type: ignore
                         call_type=call_type,  # type: ignore
                     )
-                )
+                guardrail_tasks.append(guardrail_task)
 
         # Step 2: Run all guardrail tasks in parallel
         if guardrail_tasks:
@@ -3084,8 +3094,16 @@ class PrismaClient:
             # Group by model_name and get the latest for each
             latest_checks = {}
             for check in all_checks:
-                if check.model_name not in latest_checks:
-                    latest_checks[check.model_name] = check
+                # Create a unique key: prefer model_id if available, otherwise use model_name
+                # This ensures we get the latest check for each unique model
+                if check.model_id:
+                    key = (check.model_id, check.model_name)
+                else:
+                    key = (None, check.model_name)
+                
+                # Only add if we haven't seen this key yet (since checks are ordered by checked_at desc)
+                if key not in latest_checks:
+                    latest_checks[key] = check
 
             return list(latest_checks.values())
         except Exception as e:

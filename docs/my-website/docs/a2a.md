@@ -2,7 +2,17 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 import Image from '@theme/IdealImage';
 
-# /a2a - Agent Gateway (A2A Protocol)
+# Agent Gateway (A2A Protocol) - Overview
+
+Add A2A Agents on LiteLLM AI Gateway, Invoke agents in A2A Protocol, track request/response logs in LiteLLM Logs. Manage which Teams, Keys can access which Agents onboarded.
+
+<Image 
+  img={require('../img/a2a_gateway.png')}
+  style={{width: '80%', display: 'block', margin: '0', borderRadius: '8px'}}
+/>
+
+<br />
+<br />
 
 | Feature | Supported | 
 |---------|-----------|
