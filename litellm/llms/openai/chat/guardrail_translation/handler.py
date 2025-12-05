@@ -89,7 +89,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             )
 
             guardrailed_texts = guardrailed_inputs.get("texts", [])
-            guardrailed_tool_calls = guardrailed_inputs.get("tools", [])
+            guardrailed_tool_calls = guardrailed_inputs.get("tool_calls", [])
 
             # Step 3: Map guardrail responses back to original message structure
             if guardrailed_texts and texts_to_check:
@@ -155,7 +155,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                                 images_to_check.append(url)
 
         # Extract tool calls (typically in assistant messages)
-        tool_calls = message.get("tools", None)
+        tool_calls = message.get("tool_calls", None)
         if tool_calls is not None and isinstance(tool_calls, list):
             for tool_call_idx, tool_call in enumerate(tool_calls):
                 if isinstance(tool_call, dict):

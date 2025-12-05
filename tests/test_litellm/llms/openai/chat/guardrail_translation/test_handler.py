@@ -79,6 +79,8 @@ class MockGuardrail(CustomGuardrail):
         result: GenericGuardrailAPIInputs = {"texts": modified_texts}
         if tool_calls:
             result["tool_calls"] = tool_calls  # type: ignore
+        if "images" in inputs:
+            result["images"] = inputs["images"]  # type: ignore
         return result
 
 
