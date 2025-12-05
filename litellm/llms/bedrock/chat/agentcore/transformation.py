@@ -116,7 +116,8 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         fake_stream: Optional[bool] = None,
     ) -> Tuple[dict, Optional[bytes]]:
         # Check if api_key (bearer token) is provided for Cognito authentication
-        jwt_token = optional_params.get("api_key")
+        # Priority: api_key parameter first, then optional_params
+        jwt_token = api_key or optional_params.get("api_key")
         if jwt_token:
             verbose_logger.debug(
                 f"AgentCore: Using Bearer token authentication (Cognito/JWT) - token: {jwt_token[:50]}..."
