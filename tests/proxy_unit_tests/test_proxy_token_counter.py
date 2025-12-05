@@ -840,3 +840,183 @@ def test_vertex_ai_partner_models_token_counting_endpoint(vertex_location):
         assert endpoint.startswith("https://aiplatform.googleapis.com")
     else:
         assert endpoint.startswith(f"https://{vertex_location}-aiplatform.googleapis.com")
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_with_anthropic_api_resolves_os_environ_prefix():
+    """
+    Test that count_tokens_with_anthropic_api correctly resolves os.environ/ prefix
+    in API key configuration.
+
+    This is a critical fix for deployments that use the os.environ/ syntax
+    (e.g., JuliaHub) where the API key is stored as "os.environ/ANTHROPIC_API_KEY"
+    in the config.
+    """
+    from unittest.mock import patch, MagicMock
+    from litellm.proxy.utils import count_tokens_with_anthropic_api
+
+    # Test deployment with os.environ/ prefix
+    deployment = {
+        "litellm_params": {
+            "model": "anthropic/claude-3-sonnet-20240229",
+            "api_key": "os.environ/TEST_ANTHROPIC_KEY",
+        }
+    }
+
+    messages = [{"role": "user", "content": "Hello"}]
+
+    # Mock the secret manager and anthropic client
+    with patch("litellm.secret_managers.main.get_secret_str") as mock_get_secret:
+        mock_get_secret.return_value = "sk-ant-test-key-123"
+
+        with patch("anthropic.Anthropic") as mock_anthropic_class:
+            mock_client = MagicMock()
+            mock_response = MagicMock()
+            mock_response.input_tokens = 10
+            mock_client.beta.messages.count_tokens.return_value = mock_response
+            mock_anthropic_class.return_value = mock_client
+
+            result = await count_tokens_with_anthropic_api(
+                model_to_use="claude-3-sonnet-20240229",
+                messages=messages,
+                deployment=deployment,
+            )
+
+            # Verify get_secret_str was called with the os.environ/ prefixed key
+            mock_get_secret.assert_called_once_with("os.environ/TEST_ANTHROPIC_KEY")
+
+            # Verify the Anthropic client was initialized with the resolved key
+            mock_anthropic_class.assert_called_once_with(api_key="sk-ant-test-key-123")
+
+            # Verify the result
+            assert result is not None
+            assert result["total_tokens"] == 10
+            assert result["tokenizer_used"] == "anthropic_api"
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_with_anthropic_api_passes_system_and_tools():
+    """
+    Test that count_tokens_with_anthropic_api correctly passes system prompt
+    and tools to the Anthropic API for accurate token counting.
+
+    This ensures that token counts include all context that will be sent
+    to the model, not just messages.
+    """
+    from unittest.mock import patch, MagicMock
+    from litellm.proxy.utils import count_tokens_with_anthropic_api
+
+    deployment = {
+        "litellm_params": {
+            "api_key": "sk-ant-test-key",
+        }
+    }
+
+    messages = [{"role": "user", "content": "Hello"}]
+    system_prompt = "You are a helpful assistant."
+    tools = [
+        {
+            "name": "get_weather",
+            "description": "Get the weather",
+            "input_schema": {
+                "type": "object",
+                "properties": {"location": {"type": "string"}},
+            },
+        }
+    ]
+
+    with patch("anthropic.Anthropic") as mock_anthropic_class:
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.input_tokens = 50
+        mock_client.beta.messages.count_tokens.return_value = mock_response
+        mock_anthropic_class.return_value = mock_client
+
+        result = await count_tokens_with_anthropic_api(
+            model_to_use="claude-3-sonnet-20240229",
+            messages=messages,
+            deployment=deployment,
+            system=system_prompt,
+            tools=tools,
+        )
+
+        # Verify the Anthropic API was called with system and tools
+        call_kwargs = mock_client.beta.messages.count_tokens.call_args
+        assert call_kwargs is not None
+
+        # Check that system and tools were passed
+        called_kwargs = call_kwargs[1] if call_kwargs[1] else {}
+        assert called_kwargs.get("system") == system_prompt
+        assert called_kwargs.get("tools") == tools
+
+        # Verify result
+        assert result is not None
+        assert result["total_tokens"] == 50
+
+
+@pytest.mark.asyncio
+async def test_anthropic_endpoint_extracts_system_and_tools():
+    """
+    Test that the /v1/messages/count_tokens endpoint correctly extracts
+    system and tools from the request and passes them through.
+    """
+    from litellm.proxy.anthropic_endpoints.endpoints import count_tokens
+    from fastapi import Request
+    from unittest.mock import MagicMock
+
+    mock_request = MagicMock(spec=Request)
+    mock_request_data = {
+        "model": "claude-3-sonnet-20240229",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "system": "You are a helpful assistant.",
+        "tools": [
+            {
+                "name": "calculator",
+                "description": "Perform calculations",
+                "input_schema": {"type": "object", "properties": {}},
+            }
+        ],
+    }
+
+    async def mock_read_request_body(request):
+        return mock_request_data
+
+    mock_user_api_key_dict = MagicMock()
+
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+
+    original_read_request_body = anthropic_endpoints._read_request_body
+    anthropic_endpoints._read_request_body = mock_read_request_body
+
+    # Track what TokenCountRequest receives
+    received_request = None
+
+    async def mock_token_counter(request, call_endpoint=False):
+        nonlocal received_request
+        received_request = request
+
+        from litellm.types.utils import TokenCountResponse
+
+        return TokenCountResponse(
+            total_tokens=100,
+            request_model="claude-3-sonnet-20240229",
+            model_used="claude-3-sonnet-20240229",
+            tokenizer_type="anthropic_api",
+        )
+
+    import litellm.proxy.proxy_server as proxy_server
+
+    original_token_counter = proxy_server.token_counter
+    proxy_server.token_counter = mock_token_counter
+
+    try:
+        await count_tokens(mock_request, mock_user_api_key_dict)
+
+        # Verify that system and tools were extracted and passed through
+        assert received_request is not None
+        assert received_request.system == "You are a helpful assistant."
+        assert received_request.tools == mock_request_data["tools"]
+
+    finally:
+        anthropic_endpoints._read_request_body = original_read_request_body
+        proxy_server.token_counter = original_token_counter
