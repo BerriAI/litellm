@@ -19,13 +19,18 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+from litellm.main import stream_chunk_builder
 from litellm.types.guardrails import GenericGuardrailAPIInputs
 from litellm.types.llms.openai import ChatCompletionToolParam
-from litellm.types.utils import Choices, StreamingChoices
+from litellm.types.utils import (
+    Choices,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+)
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
-    from litellm.types.utils import ModelResponse, ModelResponseStream
 
 
 class OpenAIChatCompletionsHandler(BaseTranslation):
@@ -347,6 +352,25 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             - String content: choice.message.content = "text here"
             - List content: choice.message.content = [{"type": "text", "text": "text here"}, ...]
         """
+        # check if the stream has ended
+        has_stream_ended = False
+        for chunk in responses_so_far:
+            if chunk.choices[0].finish_reason is not None:
+                has_stream_ended = True
+                break
+
+        if has_stream_ended:
+            # convert to model response
+            model_response = cast(
+                ModelResponse, stream_chunk_builder(chunks=responses_so_far)
+            )
+            # run process_output_response
+            return await self.process_output_response(
+                response=model_response,
+                guardrail_to_apply=guardrail_to_apply,
+                litellm_logging_obj=litellm_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+            )
 
         # Step 0: Check if any response has text content to process
         has_any_text_content = False

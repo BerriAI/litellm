@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Required, TypedDict
 
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionToolCallChunk,
@@ -13,9 +12,6 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
     EnkryptAIGuardrailConfigs,
-)
-from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
-    GenericGuardrailAPIOptionalParams,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.grayswan import (
     GraySwanGuardrailConfigModel,
