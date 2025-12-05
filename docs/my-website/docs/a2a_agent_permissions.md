@@ -27,7 +27,14 @@ This example shows how to create a key with agent permissions and test access.
 <Tabs>
 <TabItem value="ui" label="UI">
 
-[TODO: Add screenshot of agents list in UI]
+1. Go to **Agents** in the sidebar
+2. Click into the agent you want
+3. Copy the **Agent ID**
+
+<Image 
+  img={require('../img/agent_id.png')}
+  style={{width: '80%', display: 'block', margin: '0', borderRadius: '8px'}}
+/>
 
 </TabItem>
 <TabItem value="api" label="API">
@@ -55,7 +62,14 @@ Response:
 <Tabs>
 <TabItem value="ui" label="UI">
 
-[TODO: Add screenshot of key creation with agent permissions]
+1. Go to **Keys** → **Create Key**
+2. Expand **Agent Settings**
+3. Select the agents you want to allow
+
+<Image 
+  img={require('../img/agent_key.png')}
+  style={{width: '80%', display: 'block', margin: '0', borderRadius: '8px'}}
+/>
 
 </TabItem>
 <TabItem value="api" label="API">
@@ -111,7 +125,14 @@ Restrict all keys belonging to a team to only access specific agents.
 <Tabs>
 <TabItem value="ui" label="UI">
 
-[TODO: Add screenshot of team creation with agent permissions]
+1. Go to **Teams** → **Create Team**
+2. Expand **Agent Settings**
+3. Select the agents you want to allow for this team
+
+<Image 
+  img={require('../img/agent_key.png')}
+  style={{width: '80%', display: 'block', margin: '0', borderRadius: '8px'}}
+/>
 
 </TabItem>
 <TabItem value="api" label="API">
@@ -144,7 +165,13 @@ Response:
 <Tabs>
 <TabItem value="ui" label="UI">
 
-[TODO: Add screenshot of key creation for team]
+1. Go to **Keys** → **Create Key**
+2. Select the **Team** from the dropdown
+
+<Image 
+  img={require('../img/agent_team.png')}
+  style={{width: '80%', display: 'block', margin: '0', borderRadius: '8px'}}
+/>
 
 </TabItem>
 <TabItem value="api" label="API">
@@ -216,7 +243,9 @@ flowchart TD
 <Tabs>
 <TabItem value="ui" label="UI">
 
-[TODO: Add screenshot showing agent permissions in key/team info view]
+1. Go to **Keys** or **Teams**
+2. Click into the key/team you want to view
+3. Agent permissions are displayed in the info view
 
 </TabItem>
 <TabItem value="api" label="API">
