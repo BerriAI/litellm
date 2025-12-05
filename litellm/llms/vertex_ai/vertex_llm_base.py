@@ -90,9 +90,15 @@ class VertexBase:
                     else ""
                 )
                 if isinstance(environment_id, str) and "aws" in environment_id:
-                    creds = self._credentials_from_identity_pool_with_aws(json_obj)
+                    creds = self._credentials_from_identity_pool_with_aws(
+                        json_obj,
+                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                    )
                 else:
-                    creds = self._credentials_from_identity_pool(json_obj)
+                    creds = self._credentials_from_identity_pool(
+                        json_obj,
+                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                    )
             # Check if the JSON object contains Authorized User configuration (via gcloud auth application-default login)
             elif "type" in json_obj and json_obj["type"] == "authorized_user":
                 creds = self._credentials_from_authorized_user(
@@ -131,15 +137,21 @@ class VertexBase:
         return creds, project_id
 
     # Google Auth Helpers -- extracted for mocking purposes in tests
-    def _credentials_from_identity_pool(self, json_obj):
+    def _credentials_from_identity_pool(self, json_obj, scopes):
         from google.auth import identity_pool
 
-        return identity_pool.Credentials.from_info(json_obj)
+        creds = identity_pool.Credentials.from_info(json_obj)
+        if scopes and hasattr(creds, "requires_scopes") and creds.requires_scopes:
+            creds = creds.with_scopes(scopes)
+        return creds
 
-    def _credentials_from_identity_pool_with_aws(self, json_obj):
+    def _credentials_from_identity_pool_with_aws(self, json_obj, scopes):
         from google.auth import aws
 
-        return aws.Credentials.from_info(json_obj)
+        creds = aws.Credentials.from_info(json_obj)
+        if scopes and hasattr(creds, "requires_scopes") and creds.requires_scopes:
+            creds = creds.with_scopes(scopes)
+        return creds
 
     def _credentials_from_authorized_user(self, json_obj, scopes):
         import google.oauth2.credentials
@@ -675,13 +687,13 @@ class VertexBase:
     def safe_get_vertex_ai_project(litellm_params: dict) -> Optional[str]:
         """
         Safely get Vertex AI project without mutating the litellm_params dict.
-        
+
         Unlike get_vertex_ai_project(), this does NOT pop values from the dict,
         making it safe to call multiple times with the same litellm_params.
-        
+
         Args:
             litellm_params: Dictionary containing Vertex AI parameters
-            
+
         Returns:
             Vertex AI project ID or None
         """
@@ -696,13 +708,13 @@ class VertexBase:
     def safe_get_vertex_ai_credentials(litellm_params: dict) -> Optional[str]:
         """
         Safely get Vertex AI credentials without mutating the litellm_params dict.
-        
+
         Unlike get_vertex_ai_credentials(), this does NOT pop values from the dict,
         making it safe to call multiple times with the same litellm_params.
-        
+
         Args:
             litellm_params: Dictionary containing Vertex AI parameters
-            
+
         Returns:
             Vertex AI credentials or None
         """
@@ -716,13 +728,13 @@ class VertexBase:
     def safe_get_vertex_ai_location(litellm_params: dict) -> Optional[str]:
         """
         Safely get Vertex AI location without mutating the litellm_params dict.
-        
+
         Unlike get_vertex_ai_location(), this does NOT pop values from the dict,
         making it safe to call multiple times with the same litellm_params.
-        
+
         Args:
             litellm_params: Dictionary containing Vertex AI parameters
-            
+
         Returns:
             Vertex AI location/region or None
         """
