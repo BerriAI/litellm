@@ -31,6 +31,7 @@ Output: response.output is List[GenericResponseOutputItem] where each has:
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 from openai import BaseModel
+from openai.types.responses import ResponseFunctionToolCall
 
 from litellm._logging import verbose_proxy_logger
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -45,11 +46,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolParam,
 )
-from litellm.types.responses.main import (
-    GenericResponseOutputItem,
-    OutputFunctionToolCall,
-    OutputText,
-)
+from litellm.types.responses.main import GenericResponseOutputItem, OutputText
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -288,7 +285,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             - response.output is a list of output items
             - Each output item can be:
               * GenericResponseOutputItem with a content list of OutputText objects
-              * OutputFunctionToolCall with tool call data
+              * ResponseFunctionToolCall with tool call data
             - Each OutputText object has a text field
         """
 
@@ -361,6 +358,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         """
 
         final_chunk = responses_so_far[-1]
+
         if final_chunk.get("type") == "response.output_item.done":
             # convert openai response to model response
             model_response_stream = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
@@ -487,8 +485,8 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         Override this method to customize text/image/tool extraction logic.
         """
-        # Check if this is a tool call (OutputFunctionToolCall)
-        if isinstance(output_item, OutputFunctionToolCall):
+        # Check if this is a tool call (ResponseFunctionToolCall)
+        if isinstance(output_item, ResponseFunctionToolCall):
             if tool_calls_to_check is not None:
                 tool_call_dict = LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
                     tool_call_item=output_item,
@@ -517,9 +515,9 @@ class OpenAIResponsesHandler(BaseTranslation):
         ):
             # Handle dict representation of tool call
             if tool_calls_to_check is not None:
-                # Convert dict to OutputFunctionToolCall for processing
+                # Convert dict to ResponseFunctionToolCall for processing
                 try:
-                    tool_call_obj = OutputFunctionToolCall(**output_item)
+                    tool_call_obj = ResponseFunctionToolCall(**output_item)
                     tool_call_dict = LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
                         tool_call_item=tool_call_obj,
                         index=output_idx,

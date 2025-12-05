@@ -61,6 +61,7 @@ except (ImportError, AttributeError):
         ResponseTextConfigParam as ResponseText,
     )
 
+from openai.types.responses import ResponseFunctionToolCall
 from openai.types.responses.response_create_params import (
     Reasoning,
     ResponseIncludable,
@@ -73,10 +74,7 @@ from pydantic import BaseModel, ConfigDict, Discriminator, Field, PrivateAttr
 from typing_extensions import Annotated, Dict, Required, TypedDict, override
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
-from litellm.types.responses.main import (
-    GenericResponseOutputItem,
-    OutputFunctionToolCall,
-)
+from litellm.types.responses.main import GenericResponseOutputItem
 
 FileContent = Union[IO[bytes], bytes, PathLike]
 
@@ -1071,7 +1069,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     object: Optional[str] = None
     output: Union[
         List[Union[ResponseOutputItem, Dict]],
-        List[Union[GenericResponseOutputItem, OutputFunctionToolCall]],
+        List[Union[GenericResponseOutputItem, ResponseFunctionToolCall]],
     ]
     parallel_tool_calls: Optional[bool] = None
     temperature: Optional[float] = None

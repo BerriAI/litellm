@@ -17,6 +17,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from fastapi import HTTPException
+from openai.types.responses import ResponseFunctionToolCall
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms import get_guardrail_translation_mapping
@@ -24,11 +25,7 @@ from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.responses.main import (
-    GenericResponseOutputItem,
-    OutputFunctionToolCall,
-    OutputText,
-)
+from litellm.types.responses.main import GenericResponseOutputItem, OutputText
 from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
 
 
@@ -543,11 +540,11 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
     """Test tool call extraction functionality"""
 
     def test_extract_tool_call_from_function_call_output(self):
-        """Test extracting tool calls from OutputFunctionToolCall in response output"""
+        """Test extracting tool calls from ResponseFunctionToolCall in response output"""
         handler = OpenAIResponsesHandler()
 
         # Create output item matching the user's provided response structure
-        output_item = OutputFunctionToolCall(
+        output_item = ResponseFunctionToolCall(
             arguments='{"location":"Boston, MA","unit":"celsius"}',
             call_id="call_4SjsMeA6DUHwGKaE87ZojgOF",
             name="get_current_weather",
@@ -643,7 +640,7 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
             object="response",
             status="completed",
             output=[
-                OutputFunctionToolCall(
+                ResponseFunctionToolCall(
                     arguments='{"location":"Boston, MA","unit":"celsius"}',
                     call_id="call_4SjsMeA6DUHwGKaE87ZojgOF",
                     name="get_current_weather",
@@ -692,7 +689,7 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
         )
 
         # Then extract from a tool call output
-        tool_call_output = OutputFunctionToolCall(
+        tool_call_output = ResponseFunctionToolCall(
             arguments='{"location":"Boston, MA","unit":"celsius"}',
             call_id="call_4SjsMeA6DUHwGKaE87ZojgOF",
             name="get_current_weather",

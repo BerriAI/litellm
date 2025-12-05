@@ -4,6 +4,7 @@ Handles transforming from Responses API -> LiteLLM completion  (Chat Completion 
 
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
+from openai.types.responses import ResponseFunctionToolCall
 from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
 
@@ -38,7 +39,6 @@ from litellm.types.llms.openai import (
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
     GenericResponseOutputItemContentAnnotation,
-    OutputFunctionToolCall,
     OutputText,
 )
 from litellm.types.utils import (
@@ -611,7 +611,7 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def transform_chat_completion_tools_to_responses_tools(
         chat_completion_response: ModelResponse,
-    ) -> List[OutputFunctionToolCall]:
+    ) -> List[ResponseFunctionToolCall]:
         """
         Transform a Chat Completion tools into a Responses API tools
         """
@@ -626,7 +626,7 @@ class LiteLLMCompletionResponsesConfig:
                             value=tool_call,
                         )
 
-        responses_tools: List[OutputFunctionToolCall] = []
+        responses_tools: List[ResponseFunctionToolCall] = []
         for tool in all_chat_completion_tools:
             if tool.type == "function":
                 function_definition = tool.function
@@ -654,7 +654,7 @@ class LiteLLMCompletionResponsesConfig:
                             else {}
                         )
 
-                output_tool_call: OutputFunctionToolCall = OutputFunctionToolCall(
+                output_tool_call: ResponseFunctionToolCall = ResponseFunctionToolCall(
                     name=function_definition.name or "",
                     arguments=function_definition.get("arguments") or "",
                     call_id=tool.id or "",
@@ -818,9 +818,9 @@ class LiteLLMCompletionResponsesConfig:
     def _transform_chat_completion_choices_to_responses_output(
         chat_completion_response: ModelResponse,
         choices: List[Choices],
-    ) -> List[Union[GenericResponseOutputItem, OutputFunctionToolCall]]:
+    ) -> List[Union[GenericResponseOutputItem, ResponseFunctionToolCall]]:
         responses_output: List[
-            Union[GenericResponseOutputItem, OutputFunctionToolCall]
+            Union[GenericResponseOutputItem, ResponseFunctionToolCall]
         ] = []
 
         responses_output.extend(
