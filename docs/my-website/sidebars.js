@@ -130,6 +130,16 @@ const sidebars = {
       items: [
         "proxy/docker_quick_start",
         {
+          type: "link",
+          label: "A2A Agent Gateway",
+          href: "https://docs.litellm.ai/docs/a2a",
+        },
+        {
+          type: "link",
+          label: "MCP Gateway",
+          href: "https://docs.litellm.ai/docs/mcp",
+        },
+        {
           "type": "category",
           "label": "Config.yaml",
           "items": ["proxy/configs", "proxy/config_management", "proxy/config_settings"]
@@ -317,7 +327,14 @@ const sidebars = {
         slug: "/supported_endpoints",
       },
       items: [
-        "a2a",
+        {
+          type: "category",
+          label: "/a2a - A2A Agent Gateway",
+          items: [
+            "a2a",
+            "a2a_agent_permissions",
+          ],
+        },
         "assistants",
         {
           type: "category",
