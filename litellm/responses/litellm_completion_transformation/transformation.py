@@ -107,7 +107,10 @@ class LiteLLMCompletionResponsesConfig:
         """
         Transform a Responses API request into a Chat Completion request
         """
-        tools, web_search_options = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+        (
+            tools,
+            web_search_options,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
             responses_api_request.get("tools") or []  # type: ignore
         )
 
@@ -218,9 +221,9 @@ class LiteLLMCompletionResponsesConfig:
         _messages = litellm_completion_request.get("messages") or []
         session_messages = chat_completion_session.get("messages") or []
         litellm_completion_request["messages"] = session_messages + _messages
-        litellm_completion_request[
-            "litellm_trace_id"
-        ] = chat_completion_session.get("litellm_session_id")
+        litellm_completion_request["litellm_trace_id"] = chat_completion_session.get(
+            "litellm_session_id"
+        )
         return litellm_completion_request
 
     @staticmethod
@@ -482,19 +485,17 @@ class LiteLLMCompletionResponsesConfig:
         return new_item
 
     @staticmethod
-    def _transform_input_image_item_to_image_item(item: Dict[str, Any]) -> ChatCompletionImageObject:
+    def _transform_input_image_item_to_image_item(
+        item: Dict[str, Any],
+    ) -> ChatCompletionImageObject:
         """
         Transform a Responses API input_image item to a Chat Completion image item
         """
         image_url_obj = ChatCompletionImageUrlObject(
-            url=item.get("image_url") or "",
-            detail=item.get("detail") or "auto"
+            url=item.get("image_url") or "", detail=item.get("detail") or "auto"
         )
 
-        return ChatCompletionImageObject(
-            type="image_url",
-            image_url=image_url_obj
-        )
+        return ChatCompletionImageObject(type="image_url", image_url=image_url_obj)
 
     @staticmethod
     def _transform_responses_api_content_to_chat_completion_content(
@@ -561,7 +562,10 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def transform_responses_api_tools_to_chat_completion_tools(
         tools: Optional[List[Union[FunctionToolParam, OpenAIMcpServerTool]]],
-    ) -> Tuple[List[Union[ChatCompletionToolParam, OpenAIMcpServerTool]], Optional[OpenAIWebSearchOptions]]:
+    ) -> Tuple[
+        List[Union[ChatCompletionToolParam, OpenAIMcpServerTool]],
+        Optional[OpenAIWebSearchOptions],
+    ]:
         """
         Transform a Responses API tools into a Chat Completion tools
         """
@@ -574,9 +578,17 @@ class LiteLLMCompletionResponsesConfig:
         for tool in tools:
             if tool.get("type") == "mcp":
                 chat_completion_tools.append(cast(OpenAIMcpServerTool, tool))
-            elif tool.get("type") == "web_search_preview" or tool.get("type") == "web_search":
-                _search_context_size: Literal["low", "medium", "high"] = cast(Literal["low", "medium", "high"], tool.get("search_context_size"))
-                _user_location: Optional[OpenAIWebSearchUserLocation] = cast(Optional[OpenAIWebSearchUserLocation], tool.get("user_location") or None)
+            elif (
+                tool.get("type") == "web_search_preview"
+                or tool.get("type") == "web_search"
+            ):
+                _search_context_size: Literal["low", "medium", "high"] = cast(
+                    Literal["low", "medium", "high"], tool.get("search_context_size")
+                )
+                _user_location: Optional[OpenAIWebSearchUserLocation] = cast(
+                    Optional[OpenAIWebSearchUserLocation],
+                    tool.get("user_location") or None,
+                )
                 web_search_options = OpenAIWebSearchOptions(
                     search_context_size=_search_context_size,
                     user_location=_user_location,
@@ -618,16 +630,30 @@ class LiteLLMCompletionResponsesConfig:
         for tool in all_chat_completion_tools:
             if tool.type == "function":
                 function_definition = tool.function
-                provider_specific_fields: Optional[Dict[str, Any]] = None
-                if hasattr(tool, "provider_specific_fields") and getattr(tool, "provider_specific_fields", None):
+                provider_specific_fields: Optional[Dict] = None
+                if hasattr(tool, "provider_specific_fields") and getattr(
+                    tool, "provider_specific_fields", None
+                ):
                     provider_specific_fields = getattr(tool, "provider_specific_fields")
                     if not isinstance(provider_specific_fields, dict):
-                        provider_specific_fields = dict(provider_specific_fields) if hasattr(provider_specific_fields, "__dict__") else {}
-                elif hasattr(function_definition, "provider_specific_fields") and getattr(function_definition, "provider_specific_fields", None):
-                    provider_specific_fields = getattr(function_definition, "provider_specific_fields")
+                        provider_specific_fields = (
+                            dict(provider_specific_fields)  # type: ignore
+                            if hasattr(provider_specific_fields, "__dict__")
+                            else {}
+                        )
+                elif hasattr(
+                    function_definition, "provider_specific_fields"
+                ) and getattr(function_definition, "provider_specific_fields", None):
+                    provider_specific_fields = getattr(
+                        function_definition, "provider_specific_fields"
+                    )
                     if not isinstance(provider_specific_fields, dict):
-                        provider_specific_fields = dict(provider_specific_fields) if hasattr(provider_specific_fields, "__dict__") else {}
-                
+                        provider_specific_fields = (
+                            dict(provider_specific_fields)  # type: ignore
+                            if hasattr(provider_specific_fields, "__dict__")
+                            else {}
+                        )
+
                 output_tool_call: OutputFunctionToolCall = OutputFunctionToolCall(
                     name=function_definition.name or "",
                     arguments=function_definition.get("arguments") or "",
@@ -636,11 +662,11 @@ class LiteLLMCompletionResponsesConfig:
                     type="function_call",  # critical this is "function_call" to work with tools like openai codex
                     status=function_definition.get("status") or "completed",
                 )
-                
+
                 # Pass through provider_specific_fields as-is if present
                 if provider_specific_fields:
                     setattr(output_tool_call, "provider_specific_fields", provider_specific_fields)  # type: ignore
-                
+
                 responses_tools.append(output_tool_call)
         return responses_tools
 
@@ -671,6 +697,69 @@ class LiteLLMCompletionResponsesConfig:
         else:
             # Default to completed for unknown finish reasons
             return "completed"
+
+    @staticmethod
+    def convert_response_function_tool_call_to_chat_completion_tool_call(
+        tool_call_item: Any,
+        index: int = 0,
+    ) -> Dict[str, Any]:
+        """
+        Convert ResponseFunctionToolCall to ChatCompletionToolCallChunk format.
+
+        Args:
+            tool_call_item: ResponseFunctionToolCall object or similar with name, arguments, call_id
+            index: The index of this tool call
+
+        Returns:
+            Dictionary in ChatCompletionToolCallChunk format
+        """
+        from litellm.types.llms.openai import (
+            ChatCompletionToolCallChunk,
+            ChatCompletionToolCallFunctionChunk,
+        )
+
+        # Extract provider_specific_fields if present
+        provider_specific_fields = getattr(
+            tool_call_item, "provider_specific_fields", None
+        )
+        if provider_specific_fields and not isinstance(provider_specific_fields, dict):
+            provider_specific_fields = (
+                dict(provider_specific_fields)
+                if hasattr(provider_specific_fields, "__dict__")
+                else {}
+            )
+        elif hasattr(tool_call_item, "get") and callable(tool_call_item.get):  # type: ignore
+            provider_fields = tool_call_item.get("provider_specific_fields")  # type: ignore
+            if provider_fields:
+                provider_specific_fields = (
+                    provider_fields
+                    if isinstance(provider_fields, dict)
+                    else (
+                        dict(provider_fields)  # type: ignore
+                        if hasattr(provider_fields, "__dict__")
+                        else {}
+                    )
+                )
+
+        function_dict: Dict[str, Any] = {
+            "name": tool_call_item.name,
+            "arguments": tool_call_item.arguments,
+        }
+
+        if provider_specific_fields:
+            function_dict["provider_specific_fields"] = provider_specific_fields
+
+        tool_call_dict: Dict[str, Any] = {
+            "id": tool_call_item.call_id,
+            "function": function_dict,
+            "type": "function",
+            "index": 0,
+        }
+
+        if provider_specific_fields:
+            tool_call_dict["provider_specific_fields"] = provider_specific_fields
+
+        return tool_call_dict
 
     @staticmethod
     def transform_chat_completion_response_to_responses_api_response(
@@ -904,7 +993,6 @@ class LiteLLMCompletionResponsesConfig:
 
         return response_output_annotations
 
-
     @staticmethod
     def _transform_chat_completion_usage_to_responses_usage(
         chat_completion_response: Union[ModelResponse, Usage],
@@ -974,12 +1062,10 @@ class LiteLLMCompletionResponsesConfig:
                             "name": format_param.get("name", "response_schema"),
                             "schema": format_param.get("schema", {}),
                             "strict": format_param.get("strict", False),
-                        }
+                        },
                     }
                 elif format_type == "json_object":
-                    return {
-                        "type": "json_object"
-                    }
+                    return {"type": "json_object"}
                 elif format_type == "text":
                     return None
 
