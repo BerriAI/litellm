@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI, HTTPException, Request, status
@@ -301,3 +301,99 @@ def test_customer_endpoints_error_schema_consistency(mock_prisma_client, mock_us
     for key in ["message", "type", "code"]:
         assert isinstance(error1[key], str), f"error1[{key}] should be a string"
         assert isinstance(error2[key], str), f"error2[{key}] should be a string"
+
+
+@pytest.mark.asyncio
+async def test_get_customer_daily_activity_admin_param_passing(monkeypatch):
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import customer_endpoints
+    from litellm.proxy.management_endpoints.customer_endpoints import (
+        get_customer_daily_activity,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(
+        return_value=[]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mocked_response = MagicMock(name="SpendAnalyticsPaginatedResponse")
+    get_daily_activity_mock = AsyncMock(return_value=mocked_response)
+    monkeypatch.setattr(
+        customer_endpoints, "get_daily_activity", get_daily_activity_mock
+    )
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin1")
+    result = await get_customer_daily_activity(
+        end_user_ids="end-user-1,end-user-2",
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        model="gpt-4",
+        api_key="test-key",
+        page=2,
+        page_size=5,
+        exclude_end_user_ids="end-user-3",
+        user_api_key_dict=auth,
+    )
+
+    get_daily_activity_mock.assert_awaited_once()
+    kwargs = get_daily_activity_mock.call_args.kwargs
+    assert kwargs["table_name"] == "litellm_dailyenduserspend"
+    assert kwargs["entity_id_field"] == "end_user_id"
+    assert kwargs["entity_id"] == ["end-user-1", "end-user-2"]
+    assert kwargs["exclude_entity_ids"] == ["end-user-3"]
+    assert kwargs["start_date"] == "2024-01-01"
+    assert kwargs["end_date"] == "2024-01-31"
+    assert kwargs["model"] == "gpt-4"
+    assert kwargs["api_key"] == "test-key"
+    assert kwargs["page"] == 2
+    assert kwargs["page_size"] == 5
+
+    assert result is mocked_response
+
+
+@pytest.mark.asyncio
+async def test_get_customer_daily_activity_with_end_user_aliases(monkeypatch):
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import customer_endpoints
+    from litellm.proxy.management_endpoints.customer_endpoints import (
+        get_customer_daily_activity,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_end_user1 = MagicMock()
+    mock_end_user1.user_id = "end-user-1"
+    mock_end_user1.alias = "Customer One"
+    mock_end_user2 = MagicMock()
+    mock_end_user2.user_id = "end-user-2"
+    mock_end_user2.alias = "Customer Two"
+    
+    mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(
+        return_value=[mock_end_user1, mock_end_user2]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mocked_response = MagicMock(name="SpendAnalyticsPaginatedResponse")
+    get_daily_activity_mock = AsyncMock(return_value=mocked_response)
+    monkeypatch.setattr(
+        customer_endpoints, "get_daily_activity", get_daily_activity_mock
+    )
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin1")
+    await get_customer_daily_activity(
+        end_user_ids="end-user-1,end-user-2",
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        model=None,
+        api_key=None,
+        page=1,
+        page_size=10,
+        exclude_end_user_ids=None,
+        user_api_key_dict=auth,
+    )
+
+    kwargs = get_daily_activity_mock.call_args.kwargs
+    assert kwargs["entity_metadata_field"] == {
+        "end-user-1": {"alias": "Customer One"},
+        "end-user-2": {"alias": "Customer Two"},
+    }
