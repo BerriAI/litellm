@@ -268,9 +268,11 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                 if "inlineData" in part:
                     inline_data = part["inlineData"]
                     if "data" in inline_data:
+                        thought_sig = part.get("thoughtSignature")
                         model_response.data.append(ImageObject(
                             b64_json=inline_data["data"],
                             url=None,
+                            provider_specific_fields={"thought_signature": thought_sig} if thought_sig else None,
                         ))
         
         return model_response
