@@ -315,6 +315,9 @@ class VertexBase:
 
             if stream is True:
                 url = url + "?alt=sse"
+        if custom_llm_provider == "vertex_ai" and not auth_header and gemini_api_key:
+            split = '&' if '?' in url else '?'
+            url = f"{url}{split}key={gemini_api_key}"
         return auth_header, url
 
     def _get_token_and_url(
@@ -577,6 +580,8 @@ class VertexBase:
         if custom_llm_provider == "gemini":
             return "", ""
         else:
+            if credentials is None:
+                return "", project_id or ""
             try:
                 return await asyncify(self.get_access_token)(
                     credentials=credentials,

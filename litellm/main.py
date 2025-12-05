@@ -2872,6 +2872,11 @@ def completion(  # type: ignore # noqa: PLR0915
                 or optional_params.pop("vertex_ai_credentials", None)
                 or get_secret("VERTEXAI_CREDENTIALS")
             )
+            gemini_api_key = (
+                api_key
+                or get_api_key_from_env()
+                or litellm.api_key
+            )
 
             api_base = api_base or litellm.api_base or get_secret("VERTEXAI_API_BASE")
 
@@ -2912,7 +2917,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     vertex_location=vertex_ai_location,
                     vertex_project=vertex_ai_project,
                     vertex_credentials=vertex_credentials,
-                    gemini_api_key=None,
+                    gemini_api_key=gemini_api_key,
                     logging_obj=logging,
                     acompletion=acompletion,
                     timeout=timeout,
