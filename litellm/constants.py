@@ -545,7 +545,7 @@ openai_compatible_endpoints: List = [
     "api.studio.nebius.ai/v1",
     "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "https://api.moonshot.ai/v1",
-    "https://platform.publicai.co/v1",
+    "https://api.publicai.co/v1",
     "https://api.v0.dev/v1",
     "https://api.morphllm.com/v1",
     "https://api.lambda.ai/v1",
@@ -587,6 +587,7 @@ openai_compatible_providers: List = [
     "github_copilot",  # GitHub Copilot Chat API
     "novita",
     "meta_llama",
+    "publicai",  # PublicAI - JSON-configured provider
     "featherless_ai",
     "nscale",
     "nebius",

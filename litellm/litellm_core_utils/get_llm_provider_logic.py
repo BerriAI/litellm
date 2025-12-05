@@ -468,6 +468,18 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
     custom_llm_provider = model.split("/", 1)[0]
     model = model.split("/", 1)[1]
 
+    # Check JSON providers FIRST (before hardcoded ones)
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+    from litellm.llms.openai_like.dynamic_config import create_config_class
+
+    if JSONProviderRegistry.exists(custom_llm_provider):
+        provider_config = JSONProviderRegistry.get(custom_llm_provider)
+        config_class = create_config_class(provider_config)
+        api_base, dynamic_api_key = config_class()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+        return model, custom_llm_provider, dynamic_api_key, api_base
+
     if custom_llm_provider == "perplexity":
         # perplexity is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.perplexity.ai
         (
@@ -763,13 +775,7 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.MoonshotChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
-    elif custom_llm_provider == "publicai":
-        (
-            api_base,
-            dynamic_api_key,
-        ) = litellm.PublicAIChatConfig()._get_openai_compatible_provider_info(
-            api_base, api_key
-        )
+    # publicai is now handled by JSON config (see litellm/llms/openai_like/providers.json)
     elif custom_llm_provider == "docker_model_runner":
         (
             api_base,
