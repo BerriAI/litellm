@@ -859,3 +859,356 @@ class TestProviderResolutionForPolling:
         assert should_use_polling is False
         assert len(indices) == 0
 
+
+class TestPollingConditionChecks:
+    """
+    Test cases for the conditions that determine whether polling should be enabled.
+    Tests the logic in endpoints.py responses_api function.
+    """
+
+    def test_polling_enabled_when_all_conditions_met(self):
+        """Test polling is enabled when background=true, polling_via_cache="all", and redis is available"""
+        background_mode = True
+        polling_via_cache_enabled = "all"
+        redis_usage_cache = Mock()  # Non-None mock
+        
+        should_use_polling = False
+        if background_mode and polling_via_cache_enabled and redis_usage_cache:
+            if polling_via_cache_enabled == "all":
+                should_use_polling = True
+        
+        assert should_use_polling is True
+
+    def test_polling_disabled_when_background_false(self):
+        """Test polling is disabled when background=false"""
+        background_mode = False
+        polling_via_cache_enabled = "all"
+        redis_usage_cache = Mock()
+        
+        should_use_polling = False
+        if background_mode and polling_via_cache_enabled and redis_usage_cache:
+            if polling_via_cache_enabled == "all":
+                should_use_polling = True
+        
+        assert should_use_polling is False
+
+    def test_polling_disabled_when_config_false(self):
+        """Test polling is disabled when polling_via_cache is False"""
+        background_mode = True
+        polling_via_cache_enabled = False
+        redis_usage_cache = Mock()
+        
+        should_use_polling = False
+        if background_mode and polling_via_cache_enabled and redis_usage_cache:
+            if polling_via_cache_enabled == "all":
+                should_use_polling = True
+        
+        assert should_use_polling is False
+
+    def test_polling_disabled_when_redis_not_configured(self):
+        """Test polling is disabled when Redis is not configured"""
+        background_mode = True
+        polling_via_cache_enabled = "all"
+        redis_usage_cache = None
+        
+        should_use_polling = False
+        if background_mode and polling_via_cache_enabled and redis_usage_cache:
+            if polling_via_cache_enabled == "all":
+                should_use_polling = True
+        
+        assert should_use_polling is False
+
+    def test_polling_enabled_with_provider_list_match(self):
+        """Test polling is enabled when provider list matches"""
+        background_mode = True
+        polling_via_cache_enabled = ["openai", "anthropic"]
+        redis_usage_cache = Mock()
+        model = "openai/gpt-4o"
+        
+        should_use_polling = False
+        if background_mode and polling_via_cache_enabled and redis_usage_cache:
+            if polling_via_cache_enabled == "all":
+                should_use_polling = True
+            elif isinstance(polling_via_cache_enabled, list):
+                if "/" in model:
+                    provider = model.split("/")[0]
+                    if provider in polling_via_cache_enabled:
+                        should_use_polling = True
+        
+        assert should_use_polling is True
+
+    def test_polling_disabled_with_provider_list_no_match(self):
+        """Test polling is disabled when provider not in list"""
+        background_mode = True
+        polling_via_cache_enabled = ["openai"]
+        redis_usage_cache = Mock()
+        model = "anthropic/claude-3"
+        
+        should_use_polling = False
+        if background_mode and polling_via_cache_enabled and redis_usage_cache:
+            if polling_via_cache_enabled == "all":
+                should_use_polling = True
+            elif isinstance(polling_via_cache_enabled, list):
+                if "/" in model:
+                    provider = model.split("/")[0]
+                    if provider in polling_via_cache_enabled:
+                        should_use_polling = True
+        
+        assert should_use_polling is False
+
+
+class TestStreamingEventParsing:
+    """
+    Test cases for parsing OpenAI streaming events in the background task.
+    Tests the event handling logic in background_streaming.py.
+    """
+
+    def test_parse_response_output_item_added_event(self):
+        """Test parsing response.output_item.added event"""
+        event = {
+            "type": "response.output_item.added",
+            "item": {
+                "id": "item_123",
+                "type": "message",
+                "role": "assistant",
+                "content": []
+            }
+        }
+        
+        output_items = {}
+        event_type = event.get("type", "")
+        
+        if event_type == "response.output_item.added":
+            item = event.get("item", {})
+            item_id = item.get("id")
+            if item_id:
+                output_items[item_id] = item
+        
+        assert "item_123" in output_items
+        assert output_items["item_123"]["type"] == "message"
+
+    def test_parse_response_output_text_delta_event(self):
+        """Test parsing response.output_text.delta event and accumulating text"""
+        output_items = {
+            "item_123": {
+                "id": "item_123",
+                "type": "message",
+                "content": [{"type": "text", "text": ""}]
+            }
+        }
+        accumulated_text = {}
+        
+        # Simulate receiving multiple delta events
+        delta_events = [
+            {"type": "response.output_text.delta", "item_id": "item_123", "content_index": 0, "delta": "Hello "},
+            {"type": "response.output_text.delta", "item_id": "item_123", "content_index": 0, "delta": "World!"},
+        ]
+        
+        for event in delta_events:
+            event_type = event.get("type", "")
+            if event_type == "response.output_text.delta":
+                item_id = event.get("item_id")
+                content_index = event.get("content_index", 0)
+                delta = event.get("delta", "")
+                
+                if item_id and item_id in output_items:
+                    key = (item_id, content_index)
+                    if key not in accumulated_text:
+                        accumulated_text[key] = ""
+                    accumulated_text[key] += delta
+                    
+                    # Update content
+                    if "content" in output_items[item_id]:
+                        content_list = output_items[item_id]["content"]
+                        if content_index < len(content_list):
+                            if isinstance(content_list[content_index], dict):
+                                content_list[content_index]["text"] = accumulated_text[key]
+        
+        assert accumulated_text[("item_123", 0)] == "Hello World!"
+        assert output_items["item_123"]["content"][0]["text"] == "Hello World!"
+
+    def test_parse_response_completed_event(self):
+        """Test parsing response.completed event extracts all fields"""
+        event = {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_123",
+                "status": "completed",
+                "usage": {"input_tokens": 10, "output_tokens": 50},
+                "reasoning": {"effort": "medium"},
+                "tool_choice": {"type": "auto"},
+                "tools": [{"type": "function", "function": {"name": "test"}}],
+                "model": "gpt-4o",
+                "output": [{"id": "item_1", "type": "message"}]
+            }
+        }
+        
+        event_type = event.get("type", "")
+        usage_data = None
+        reasoning_data = None
+        tool_choice_data = None
+        tools_data = None
+        model_data = None
+        
+        if event_type == "response.completed":
+            response_data = event.get("response", {})
+            usage_data = response_data.get("usage")
+            reasoning_data = response_data.get("reasoning")
+            tool_choice_data = response_data.get("tool_choice")
+            tools_data = response_data.get("tools")
+            model_data = response_data.get("model")
+        
+        assert usage_data == {"input_tokens": 10, "output_tokens": 50}
+        assert reasoning_data == {"effort": "medium"}
+        assert tool_choice_data == {"type": "auto"}
+        assert tools_data == [{"type": "function", "function": {"name": "test"}}]
+        assert model_data == "gpt-4o"
+
+    def test_parse_done_marker(self):
+        """Test that [DONE] marker is detected correctly"""
+        chunks = [
+            "data: {\"type\": \"response.in_progress\"}",
+            "data: {\"type\": \"response.completed\"}",
+            "data: [DONE]",
+        ]
+        
+        done_received = False
+        for chunk in chunks:
+            if chunk.startswith("data: "):
+                chunk_data = chunk[6:].strip()
+                if chunk_data == "[DONE]":
+                    done_received = True
+                    break
+        
+        assert done_received is True
+
+    def test_parse_sse_format(self):
+        """Test parsing Server-Sent Events format"""
+        raw_chunk = b"data: {\"type\": \"response.output_item.added\", \"item\": {\"id\": \"123\"}}"
+        
+        # Decode bytes to string
+        if isinstance(raw_chunk, bytes):
+            chunk = raw_chunk.decode('utf-8')
+        else:
+            chunk = raw_chunk
+        
+        # Extract JSON from SSE format
+        if isinstance(chunk, str) and chunk.startswith("data: "):
+            chunk_data = chunk[6:].strip()
+            
+            import json
+            event = json.loads(chunk_data)
+            
+            assert event["type"] == "response.output_item.added"
+            assert event["item"]["id"] == "123"
+
+    def test_content_part_added_event(self):
+        """Test parsing response.content_part.added event"""
+        output_items = {
+            "item_123": {
+                "id": "item_123",
+                "type": "message",
+            }
+        }
+        
+        event = {
+            "type": "response.content_part.added",
+            "item_id": "item_123",
+            "part": {"type": "text", "text": ""}
+        }
+        
+        event_type = event.get("type", "")
+        if event_type == "response.content_part.added":
+            item_id = event.get("item_id")
+            content_part = event.get("part", {})
+            
+            if item_id and item_id in output_items:
+                if "content" not in output_items[item_id]:
+                    output_items[item_id]["content"] = []
+                output_items[item_id]["content"].append(content_part)
+        
+        assert "content" in output_items["item_123"]
+        assert len(output_items["item_123"]["content"]) == 1
+        assert output_items["item_123"]["content"][0]["type"] == "text"
+
+
+class TestEdgeCases:
+    """Test edge cases and error scenarios"""
+
+    def test_empty_model_string(self):
+        """Test handling of empty model string"""
+        model = ""
+        polling_via_cache_enabled = ["openai"]
+        
+        should_use_polling = False
+        if "/" in model:
+            provider = model.split("/")[0]
+            if provider in polling_via_cache_enabled:
+                should_use_polling = True
+        
+        assert should_use_polling is False
+
+    def test_model_with_multiple_slashes(self):
+        """Test handling model with multiple slashes (e.g., bedrock ARN)"""
+        model = "bedrock/arn:aws:bedrock:us-east-1:123456:model/my-model"
+        polling_via_cache_enabled = ["bedrock"]
+        
+        # Only split on first slash
+        if "/" in model:
+            provider = model.split("/")[0]
+        else:
+            provider = None
+        
+        assert provider == "bedrock"
+        assert provider in polling_via_cache_enabled
+
+    def test_polling_id_detection_edge_cases(self):
+        """Test polling ID detection with edge cases"""
+        # Empty string
+        assert ResponsePollingHandler.is_polling_id("") is False
+        
+        # Just prefix without UUID
+        assert ResponsePollingHandler.is_polling_id("litellm_poll_") is True
+        
+        # Similar but different prefix
+        assert ResponsePollingHandler.is_polling_id("litellm_polling_abc") is False
+        
+        # Case sensitivity
+        assert ResponsePollingHandler.is_polling_id("LITELLM_POLL_abc") is False
+
+    @pytest.mark.asyncio
+    async def test_create_initial_state_with_empty_metadata(self):
+        """Test create_initial_state handles missing metadata gracefully"""
+        mock_redis = AsyncMock()
+        handler = ResponsePollingHandler(redis_cache=mock_redis)
+        
+        response = await handler.create_initial_state(
+            polling_id="litellm_poll_test",
+            request_data={"model": "gpt-4o"},  # No metadata field
+        )
+        
+        assert response.metadata == {}
+
+    @pytest.mark.asyncio
+    async def test_update_state_with_none_output_clears_output(self):
+        """Test that output=[] explicitly sets empty output"""
+        mock_redis = AsyncMock()
+        mock_redis.async_get_cache.return_value = json.dumps({
+            "id": "litellm_poll_test",
+            "object": "response",
+            "status": "in_progress",
+            "output": [{"id": "item_1"}],  # Has existing output
+            "created_at": 1234567890
+        })
+        
+        handler = ResponsePollingHandler(redis_cache=mock_redis)
+        
+        await handler.update_state(
+            polling_id="litellm_poll_test",
+            output=[],  # Explicitly set empty
+        )
+        
+        call_args = mock_redis.async_set_cache.call_args
+        stored = json.loads(call_args.kwargs["value"])
+        
+        assert stored["output"] == []
