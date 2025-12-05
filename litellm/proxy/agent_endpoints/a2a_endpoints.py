@@ -89,7 +89,6 @@ async def get_agent_card(
     The URL in the agent card is rewritten to point to the LiteLLM proxy,
     so all subsequent A2A calls go through LiteLLM for logging and cost tracking.
     """
-    from litellm.proxy._types import LitellmUserRoles
     from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
         AgentRequestHandler,
     )
@@ -155,7 +154,6 @@ async def invoke_agent_a2a(
     - message/stream: Send a message and stream the response
     """
     from litellm.a2a_protocol import asend_message, create_a2a_client
-    from litellm.proxy._types import LitellmUserRoles
     from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
         AgentRequestHandler,
     )
