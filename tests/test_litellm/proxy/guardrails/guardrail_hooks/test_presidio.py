@@ -604,6 +604,7 @@ async def test_request_data_flows_to_apply_guardrail():
     presidio = _OPTIONAL_PresidioPIIMasking(
         guardrail_name="test_presidio",
         output_parse_pii=True,
+        mock_testing=True,
     )
 
     request_data = {
