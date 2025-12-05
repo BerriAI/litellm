@@ -360,6 +360,7 @@ router_settings:
 | AISPEND_ACCOUNT_ID | Account ID for AI Spend
 | AISPEND_API_KEY | API Key for AI Spend
 | AIOHTTP_CONNECTOR_LIMIT | Connection limit for aiohttp connector. When set to 0, no limit is applied. **Default is 0**
+| AIOHTTP_CONNECTOR_LIMIT_PER_HOST | Connection limit per host for aiohttp connector. When set to 0, no limit is applied. **Default is 0**
 | AIOHTTP_KEEPALIVE_TIMEOUT | Keep-alive timeout for aiohttp connections in seconds. **Default is 120**
 | AIOHTTP_TRUST_ENV | Flag to enable aiohttp trust environment. When this is set to True, aiohttp will respect HTTP(S)_PROXY env vars. **Default is False**
 | AIOHTTP_TTL_DNS_CACHE | DNS cache time-to-live for aiohttp in seconds. **Default is 300**
@@ -379,6 +380,7 @@ router_settings:
 | ATHINA_BASE_URL | Base URL for Athina service (defaults to `https://log.athina.ai`)
 | AUTH_STRATEGY | Strategy used for authentication (e.g., OAuth, API key)
 | AUTO_REDIRECT_UI_LOGIN_TO_SSO | Flag to enable automatic redirect of UI login page to SSO when SSO is configured. Default is **true**
+| AUDIO_SPEECH_CHUNK_SIZE | Chunk size for audio speech processing. Default is 1024
 | ANTHROPIC_API_KEY | API key for Anthropic service
 | ANTHROPIC_API_BASE | Base URL for Anthropic API. Default is https://api.anthropic.com
 | AWS_ACCESS_KEY_ID | Access Key ID for AWS services
@@ -441,6 +443,7 @@ router_settings:
 | CYBERARK_CLIENT_CERT | Path to client certificate for CyberArk authentication
 | CYBERARK_CLIENT_KEY | Path to client key for CyberArk authentication
 | CYBERARK_USERNAME | Username for CyberArk authentication
+| CYBERARK_SSL_VERIFY | Flag to enable or disable SSL certificate verification for CyberArk. Default is True
 | CONFIDENT_API_KEY | API key for DeepEval integration
 | CUSTOM_TIKTOKEN_CACHE_DIR | Custom directory for Tiktoken cache
 | CONFIDENT_API_KEY | API key for Confident AI (Deepeval) Logging service
@@ -655,6 +658,8 @@ router_settings:
 | LITERAL_API_URL | API URL for Literal service
 | LITERAL_BATCH_SIZE | Batch size for Literal operations
 | LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX | Disable automatic URL suffix appending for Anthropic API base URLs. When set to `true`, prevents LiteLLM from automatically adding `/v1/messages` or `/v1/complete` to custom Anthropic API endpoints
+| LITELLM_DD_AGENT_HOST | Hostname or IP of DataDog agent for LiteLLM-specific logging. When set, logs are sent to agent instead of direct API
+| LITELLM_DD_AGENT_PORT | Port of DataDog agent for LiteLLM-specific log intake. Default is 10518
 | LITELLM_DONT_SHOW_FEEDBACK_BOX | Flag to hide feedback box in LiteLLM UI
 | LITELLM_DROP_PARAMS | Parameters to drop in LiteLLM requests
 | LITELLM_MODIFY_PARAMS | Parameters to modify in LiteLLM requests
@@ -841,6 +846,9 @@ router_settings:
 | UPSTREAM_LANGFUSE_SECRET_KEY | Secret key for upstream Langfuse authentication
 | USE_AWS_KMS | Flag to enable AWS Key Management Service for encryption
 | USE_PRISMA_MIGRATE | Flag to use prisma migrate instead of prisma db push. Recommended for production environments.
+| WANDB_API_KEY | API key for Weights & Biases (W&B) logging integration
+| WANDB_HOST | Host URL for Weights & Biases (W&B) service
+| WANDB_PROJECT_ID | Project ID for Weights & Biases (W&B) logging integration
 | WEBHOOK_URL | URL for receiving webhooks from external services
 | SPEND_LOG_RUN_LOOPS | Constant for setting how many runs of 1000 batch deletes should spend_log_cleanup task run
 | SPEND_LOG_CLEANUP_BATCH_SIZE | Number of logs deleted per batch during cleanup. Default is 1000
