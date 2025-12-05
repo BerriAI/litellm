@@ -1502,7 +1502,7 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
 # Lazy loading system for heavy modules to reduce initial import time and memory usage
 
 if TYPE_CHECKING:
-    from litellm.types.utils import ModelInfo
+    from litellm.types.utils import ModelInfo as _ModelInfoType
     
     # Cost calculator functions
     cost_per_token: Callable[..., Tuple[float, float]]
@@ -1510,13 +1510,9 @@ if TYPE_CHECKING:
     response_cost_calculator: Any
     modify_integration: Any
     
-    # Utils functions - type stubs for lazy loaded functions
-    exception_type: Callable[..., Any]
-    get_optional_params: Callable[..., dict]
+    # Utils functions - type stubs for truly lazy loaded functions only
+    # (functions NOT imported via "from .main import *")
     get_response_string: Callable[..., str]
-    token_counter: Callable[..., int]
-    create_pretrained_tokenizer: Callable[..., Any]
-    create_tokenizer: Callable[..., Any]
     supports_function_calling: Callable[..., bool]
     supports_web_search: Callable[..., bool]
     supports_url_context: Callable[..., bool]
@@ -1527,10 +1523,9 @@ if TYPE_CHECKING:
     supports_audio_output: Callable[..., bool]
     supports_system_messages: Callable[..., bool]
     supports_reasoning: Callable[..., bool]
-    get_litellm_params: Callable[..., dict]
     acreate: Callable[..., Any]
     get_max_tokens: Callable[..., int]
-    get_model_info: Callable[..., ModelInfo]
+    get_model_info: Callable[..., _ModelInfoType]
     register_prompt_template: Callable[..., None]
     validate_environment: Callable[..., dict]
     check_valid_key: Callable[..., bool]
@@ -1538,22 +1533,15 @@ if TYPE_CHECKING:
     encode: Callable[..., list]
     decode: Callable[..., str]
     _calculate_retry_after: Callable[..., float]
-    _should_retry: Callable[[int], bool]
+    _should_retry: Callable[..., bool]
     get_supported_openai_params: Callable[..., Optional[list]]
     get_api_base: Callable[..., Optional[str]]
     get_first_chars_messages: Callable[..., str]
-    get_provider_fields: Callable[..., dict]
+    get_provider_fields: Callable[..., List]
     get_valid_models: Callable[..., list]
     
-    # Response types - lazy loaded
-    ModelResponse: Type[Any]
-    ModelResponseStream: Type[Any]
-    EmbeddingResponse: Type[Any]
-    ImageResponse: Type[Any]
-    TranscriptionResponse: Type[Any]
-    TextCompletionResponse: Type[Any]
+    # Response types - truly lazy loaded only (not in main.py or elsewhere)
     ModelResponseListIterator: Type[Any]
-    Logging: Type[Any]
 
 
 def __getattr__(name: str) -> Any:

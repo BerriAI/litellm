@@ -7,7 +7,6 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy._types import (
-    CommonProxyErrors,
     GenerateKeyRequest,
     GenerateKeyResponse,
     KeyRequest,
