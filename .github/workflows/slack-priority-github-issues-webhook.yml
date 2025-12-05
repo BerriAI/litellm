@@ -1,0 +1,33 @@
+name: P0 Issue -> Slack
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  notify-slack:
+    # Only fire when the label applied is exactly "P0"
+    if: ${{ github.event.label.name == 'P0' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Slack alert for P0 issue
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_PRIORITY_GITHUB_ISSUES_WEBHOOK }}
+        run: |
+          set -euo pipefail
+          TITLE=$(jq -r '.issue.title' "$GITHUB_EVENT_PATH")
+          NUMBER=$(jq -r '.issue.number' "$GITHUB_EVENT_PATH")
+          URL=$(jq -r '.issue.html_url' "$GITHUB_EVENT_PATH")
+          SENDER=$(jq -r '.sender.login' "$GITHUB_EVENT_PATH")
+          REPO="${GITHUB_REPOSITORY}"
+
+          PAYLOAD=$(jq -n \
+            --arg repo "$REPO" \
+            --arg num "$NUMBER" \
+            --arg title "$TITLE" \
+            --arg sender "$SENDER" \
+            --arg url "$URL" \
+            '{text: ":rotating_light: *P0 issue labeled* in \($repo)\n*#\($num):* \($title)\nLabeled by: @\($sender)\n<\($url)|View Issue>"}')
+
+          curl -sS -X POST -H 'Content-type: application/json' \
+            --data "$PAYLOAD" "$SLACK_WEBHOOK_URL"
