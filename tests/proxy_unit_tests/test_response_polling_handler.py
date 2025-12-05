@@ -516,7 +516,8 @@ class TestResponsePollingHandler:
         mock_redis = AsyncMock()
         mock_async_client = AsyncMock()
         mock_redis.redis_async_client = True  # hasattr check
-        mock_redis.init_async_client.return_value = mock_async_client
+        # init_async_client is a sync method that returns an async client
+        mock_redis.init_async_client = Mock(return_value=mock_async_client)
         
         handler = ResponsePollingHandler(redis_cache=mock_redis)
         
