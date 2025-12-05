@@ -3094,8 +3094,16 @@ class PrismaClient:
             # Group by model_name and get the latest for each
             latest_checks = {}
             for check in all_checks:
-                if check.model_name not in latest_checks:
-                    latest_checks[check.model_name] = check
+                # Create a unique key: prefer model_id if available, otherwise use model_name
+                # This ensures we get the latest check for each unique model
+                if check.model_id:
+                    key = (check.model_id, check.model_name)
+                else:
+                    key = (None, check.model_name)
+                
+                # Only add if we haven't seen this key yet (since checks are ordered by checked_at desc)
+                if key not in latest_checks:
+                    latest_checks[key] = check
 
             return list(latest_checks.values())
         except Exception as e:
