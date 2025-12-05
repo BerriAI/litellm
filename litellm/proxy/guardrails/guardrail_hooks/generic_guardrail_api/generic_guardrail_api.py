@@ -175,6 +175,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         texts = inputs.get("texts", [])
         images = inputs.get("images")
         tools = inputs.get("tools")
+        structured_messages = inputs.get("structured_messages")
         tool_calls = inputs.get("tool_calls")
 
         # Use provided request_data or create an empty dict
@@ -202,6 +203,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             request_data=user_metadata,
             images=images,
             tools=tools,
+            structured_messages=structured_messages,
             tool_calls=tool_calls,
             additional_provider_specific_params=additional_params,
             input_type=input_type,

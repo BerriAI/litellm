@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolParam,
@@ -53,11 +54,12 @@ class GenericGuardrailAPIRequest(BaseModel):
     litellm_trace_id: Optional[
         str
     ]  # the trace id of the LLM call - useful if there are multiple LLM calls for the same conversation
-    texts: List[str]
-    request_data: GenericGuardrailAPIMetadata
-    additional_provider_specific_params: Optional[Dict[str, Any]]
+    structured_messages: Optional[List[AllMessageValues]]
     images: Optional[List[str]]
     tools: Optional[List[ChatCompletionToolParam]]
+    texts: Optional[List[str]]
+    request_data: GenericGuardrailAPIMetadata
+    additional_provider_specific_params: Optional[Dict[str, Any]]
     tool_calls: Optional[List[ChatCompletionToolCallChunk]]
 
 
