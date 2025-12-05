@@ -175,7 +175,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         texts = inputs.get("texts", [])
         images = inputs.get("images")
         tools = inputs.get("tools")
-
+        structured_messages = inputs.get("structured_messages")
         # Use provided request_data or create an empty dict
         if request_data is None:
             request_data = {}
@@ -201,6 +201,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             request_data=user_metadata,
             images=images,
             tools=tools,
+            structured_messages=structured_messages,
             additional_provider_specific_params=additional_params,
             input_type=input_type,
         )
@@ -214,7 +215,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             # Make the API request
             response = await self.async_handler.post(
                 url=self.api_base,
-                json=guardrail_request.to_dict(),
+                json=guardrail_request.model_dump(),
                 headers=headers,
             )
 

@@ -432,6 +432,7 @@ class LitellmBasicGuardrailRequest(BaseModel):
     input_type: Literal["request", "response"]
     litellm_call_id: Optional[str] = None
     litellm_trace_id: Optional[str] = None
+    structured_messages: Optional[List[Dict[str, Any]]] = None
 
 
 class LitellmBasicGuardrailResponse(BaseModel):
