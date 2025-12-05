@@ -297,6 +297,11 @@ class RouteChecks:
             route=route, allowed_routes=LiteLLMRoutes.mcp_routes.value
         ):
             return True
+        
+        if RouteChecks.check_route_access(
+            route=route, allowed_routes=LiteLLMRoutes.agent_routes.value
+        ):
+            return True
 
         # fuzzy match routes like "/v1/threads/thread_49EIN5QF32s4mH20M7GFKdlZ"
         # Check for routes with placeholders
@@ -607,6 +612,12 @@ class RouteChecks:
             route=route, allowed_routes=LiteLLMRoutes.admin_viewer_routes.value
         ):
             # Allow access to admin viewer routes (read-only admin endpoints)
+            return
+        elif RouteChecks.check_route_access(
+            route=route, allowed_routes=LiteLLMRoutes.global_spend_tracking_routes.value
+        ):
+            # Allow access to global spend tracking routes (read-only spend endpoints)
+            # proxy_admin_viewer role description: "view all keys, view all spend"
             return
         else:
             # For other routes, block access

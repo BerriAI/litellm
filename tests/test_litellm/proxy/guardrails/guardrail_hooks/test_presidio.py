@@ -571,7 +571,7 @@ async def test_presidio_sets_guardrail_information_in_request_data():
 
     with patch.object(presidio, "check_pii", mock_check_pii):
         await presidio.apply_guardrail(
-            texts=["Test message"],
+            inputs={"texts": ["Test message"]},
             request_data=request_data,
             input_type="request",
         )
@@ -623,7 +623,7 @@ async def test_request_data_flows_to_apply_guardrail():
 
     with patch.object(presidio, "check_pii", mock_check_pii):
         result = await presidio.apply_guardrail(
-            texts=["Test message"],
+            inputs={"texts": ["Test message"]},
             request_data=request_data,
             input_type="request",
         )
@@ -632,6 +632,228 @@ async def test_request_data_flows_to_apply_guardrail():
         assert request_data["metadata"].get("test_flag") == "passed_correctly"
 
     print("✓ request_data correctly passed to apply_guardrail")
+
+
+@pytest.mark.asyncio
+async def test_empty_content_handling(presidio_guardrail, mock_user_api_key, mock_cache):
+    """
+    Test that Presidio handles empty content gracefully.
+    
+    This is common in tool/function calling where assistant messages have
+    empty content but include tool_calls.
+    
+    Bug fix: Previously crashed with:
+    TypeError: argument after ** must be a mapping, not str
+    """
+    test_data = {
+        "messages": [
+            {"role": "user", "content": "What is 2+2?"},
+            {
+                "role": "assistant",
+                "content": "",  # Empty content - common in tool calls
+                "tool_calls": [
+                    {
+                        "id": "call_123",
+                        "type": "function",
+                        "function": {"name": "calculator", "arguments": '{"a":2,"b":2}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_123", "content": "4"},
+        ],
+        "model": "gpt-4",
+    }
+
+    # Mock check_pii to simulate PII processing without needing Presidio API
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        # Empty text returns as-is (this is what our fix ensures)
+        return text
+
+    presidio_guardrail.check_pii = mock_check_pii
+
+    # This should not raise an exception
+    result = await presidio_guardrail.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key,
+        cache=mock_cache,
+        data=test_data,
+        call_type="completion",
+    )
+
+    assert result is not None
+    assert "messages" in result
+    # Verify messages are preserved
+    assert len(result["messages"]) == 3
+
+    print("✓ Empty content handling test passed")
+
+
+@pytest.mark.asyncio
+async def test_whitespace_only_content(presidio_guardrail, mock_user_api_key, mock_cache):
+    """
+    Test that Presidio handles whitespace-only content gracefully.
+    
+    Whitespace-only content should be treated the same as empty content.
+    """
+    test_data = {
+        "messages": [
+            {"role": "user", "content": "   "},  # Whitespace only
+            {"role": "assistant", "content": "\n\t  "},  # Tabs and newlines
+            {"role": "user", "content": "Real question here"},
+        ],
+        "model": "gpt-4",
+    }
+
+    # Mock check_pii to simulate PII processing
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text
+
+    presidio_guardrail.check_pii = mock_check_pii
+
+    result = await presidio_guardrail.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key,
+        cache=mock_cache,
+        data=test_data,
+        call_type="completion",
+    )
+
+    assert result is not None
+    assert len(result["messages"]) == 3
+
+    print("✓ Whitespace-only content test passed")
+
+
+@pytest.mark.asyncio
+async def test_analyze_text_with_empty_string():
+    """
+    Test analyze_text method directly with empty string.
+    
+    Should return empty list without making API call to Presidio.
+    """
+    presidio = _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://test:5002/",
+        presidio_anonymizer_api_base="http://test:5001/",
+        output_parse_pii=False,
+    )
+
+    # Test with empty string - should return immediately without API call
+    result = await presidio.analyze_text(
+        text="",
+        presidio_config=None,
+        request_data={},
+    )
+    assert result == [], "Empty text should return empty list"
+
+    # Test with whitespace only - should return immediately
+    result = await presidio.analyze_text(
+        text="   \n\t   ",
+        presidio_config=None,
+        request_data={},
+    )
+    assert result == [], "Whitespace-only text should return empty list"
+
+    print("✓ analyze_text empty string test passed")
+
+
+@pytest.mark.asyncio
+async def test_analyze_text_error_dict_handling():
+    """
+    Test that analyze_text handles error dict responses from Presidio API.
+    
+    When Presidio returns {'error': 'No text provided'}, should handle gracefully
+    instead of crashing with TypeError.
+    """
+    presidio = _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://mock-presidio:5002/",
+        presidio_anonymizer_api_base="http://mock-presidio:5001/",
+        output_parse_pii=False,
+    )
+
+    # Mock the HTTP response to return error dict
+    class MockResponse:
+        async def json(self):
+            return {"error": "No text provided"}
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            pass
+    
+    class MockSession:
+        def post(self, *args, **kwargs):
+            return MockResponse()
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            pass
+
+    with patch("aiohttp.ClientSession", return_value=MockSession()):
+        result = await presidio.analyze_text(
+            text="some text",
+            presidio_config=None,
+            request_data={},
+        )
+        # Should return empty list when error dict is received
+        assert result == [], "Error dict should be handled gracefully"
+
+    print("✓ analyze_text error dict handling test passed")
+
+
+@pytest.mark.asyncio
+async def test_tool_calling_complete_scenario(presidio_guardrail, mock_user_api_key, mock_cache):
+    """
+    Test complete tool calling scenario with PII in user message.
+    
+    This tests the real-world scenario where:
+    1. User provides a query with PII
+    2. Assistant responds with empty content + tool_calls
+    3. Tool provides response
+    4. Assistant provides final answer
+    """
+    test_data = {
+        "messages": [
+            {
+                "role": "user",
+                "content": "My email is john.doe@example.com. Can you look up my account?",
+            },
+            {
+                "role": "assistant",
+                "content": "",  # Empty - tool call
+                "tool_calls": [
+                    {
+                        "id": "call_abc",
+                        "type": "function",
+                        "function": {"name": "lookup_account", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_abc", "content": "Account found"},
+            {"role": "assistant", "content": "I found your account information."},
+        ],
+        "model": "gpt-4",
+    }
+
+    # Mock check_pii to simulate PII masking
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        if "john.doe@example.com" in text:
+            return text.replace("john.doe@example.com", "[EMAIL]")
+        return text
+
+    presidio_guardrail.check_pii = mock_check_pii
+
+    result = await presidio_guardrail.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key,
+        cache=mock_cache,
+        data=test_data,
+        call_type="completion",
+    )
+
+    assert result is not None
+    # Verify PII was masked in user message
+    assert "[EMAIL]" in result["messages"][0]["content"]
+    assert "john.doe@example.com" not in result["messages"][0]["content"]
+    # Verify other messages preserved
+    assert len(result["messages"]) == 4
+
+    print("✓ Tool calling complete scenario test passed")
 
 
 if __name__ == "__main__":

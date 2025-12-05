@@ -74,9 +74,20 @@ class VectorStorePreCallHook(CustomLogger):
             if litellm.vector_store_registry is None:
                 return model, messages, non_default_params
 
+            # Get prisma_client for database fallback
+            prisma_client = None
+            try:
+                from litellm.proxy.proxy_server import prisma_client as _prisma_client
+                prisma_client = _prisma_client
+            except ImportError:
+                pass
+
+            # Use database fallback to ensure synchronization across instances
             vector_stores_to_run: List[LiteLLM_ManagedVectorStore] = (
-                litellm.vector_store_registry.pop_vector_stores_to_run(
-                    non_default_params=non_default_params, tools=tools
+                await litellm.vector_store_registry.pop_vector_stores_to_run_with_db_fallback(
+                    non_default_params=non_default_params, 
+                    tools=tools,
+                    prisma_client=prisma_client
                 )
             )
 

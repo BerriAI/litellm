@@ -2124,17 +2124,67 @@
     "litellm_provider": "oci",
     "credential_fields": [
       {
-        "key": "api_key",
-        "label": "API Key",
-        "placeholder": null,
-        "tooltip": null,
+        "key": "oci_user",
+        "label": "OCI User OCID",
+        "placeholder": "ocid1.user.oc1..aaaaaaaaexample",
+        "tooltip": "The OCID of the user making the API call",
         "required": true,
-        "field_type": "password",
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "oci_fingerprint",
+        "label": "OCI Key Fingerprint",
+        "placeholder": "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99",
+        "tooltip": "The fingerprint of the API signing key",
+        "required": true,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "oci_tenancy",
+        "label": "OCI Tenancy OCID",
+        "placeholder": "ocid1.tenancy.oc1..aaaaaaaaexample",
+        "tooltip": "The OCID of your tenancy",
+        "required": true,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "oci_region",
+        "label": "OCI Region",
+        "placeholder": "us-ashburn-1",
+        "tooltip": "The OCI region identifier (e.g., us-ashburn-1, eu-frankfurt-1)",
+        "required": true,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "oci_compartment_id",
+        "label": "OCI Compartment OCID",
+        "placeholder": "ocid1.compartment.oc1..aaaaaaaaexample",
+        "tooltip": "The OCID of the compartment containing the GenAI resources",
+        "required": true,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "oci_key",
+        "label": "OCI Private Key (PEM)",
+        "placeholder": "-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----",
+        "tooltip": "The full PEM-encoded private key content for API signing. Paste the entire key including BEGIN/END markers.",
+        "required": true,
+        "field_type": "textarea",
         "options": null,
         "default_value": null
       }
     ],
-    "default_model_placeholder": "oci/xai.grok-4"
+    "default_model_placeholder": "oci/xai.grok-3"
   },
   {
     "provider": "OVHCLOUD",
@@ -2609,9 +2659,9 @@
       },
       {
         "key": "api_base",
-        "label": "Google Private API Endpoint",
+        "label": "API Base (Optional)",
         "placeholder": null,
-        "tooltip": null,
+        "tooltip": "Supports custom API base for Google Private API endpoints.",
         "required": false,
         "field_type": "text",
         "options": null,
