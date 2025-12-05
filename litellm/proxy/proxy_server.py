@@ -9477,7 +9477,19 @@ async def get_config():  # noqa: PLR0915
                 elif _callback == "traceloop":
                     env_vars = ["TRACELOOP_API_KEY"]
                 elif _callback == "custom_callback_api":
-                    env_vars = ["GENERIC_LOGGER_ENDPOINT"]
+                    custom_callback_url = environment_variables.get(
+                        "custom_callback_api_url"
+                    )
+                    custom_callback_headers = environment_variables.get(
+                        "custom_callback_api_headers"
+                    )
+                    if custom_callback_url is not None and custom_callback_headers is not None:
+                        env_vars = [
+                            "custom_callback_api_url",
+                            "custom_callback_api_headers",
+                        ]
+                    else:
+                        env_vars = ["GENERIC_LOGGER_ENDPOINT", "GENERIC_LOGGER_HEADER"]
                 elif _callback == "otel":
                     env_vars = ["OTEL_EXPORTER", "OTEL_ENDPOINT", "OTEL_HEADERS"]
                 elif _callback == "langsmith":
@@ -9495,11 +9507,7 @@ async def get_config():  # noqa: PLR0915
                     if env_variable is None:
                         env_vars_dict[_var] = None
                     else:
-                        # decode + decrypt the value
-                        decrypted_value = decrypt_value_helper(
-                            value=env_variable, key=_var
-                        )
-                        env_vars_dict[_var] = decrypted_value
+                        env_vars_dict[_var] = env_variable
 
                 _data_to_return.append({"name": _callback, "variables": env_vars_dict})
             elif _callback == "langfuse":
