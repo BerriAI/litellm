@@ -105,6 +105,7 @@ const sidebars = {
       items: [
         "tutorials/claude_responses_api",
         "tutorials/cost_tracking_coding",
+        "tutorials/cursor_integration",
         "tutorials/github_copilot_integration",
         "tutorials/litellm_gemini_cli",
         "tutorials/litellm_qwen_code_cli",
