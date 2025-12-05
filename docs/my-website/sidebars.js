@@ -587,6 +587,7 @@ const sidebars = {
         "providers/github",
         "providers/github_copilot",
         "providers/gradient_ai",
+        "providers/gigachat",
         "providers/groq",
         "providers/heroku",
         {
