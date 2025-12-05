@@ -539,6 +539,7 @@ openai_compatible_endpoints: List = [
     "https://api.friendli.ai/serverless/v1",
     "api.sambanova.ai/v1",
     "api.x.ai/v1",
+    "ollama.com",
     "api.galadriel.ai/v1",
     "api.llama.com/compat/v1/",
     "api.featherless.ai/v1",
