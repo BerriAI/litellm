@@ -40,7 +40,7 @@ test("view internal user page", async ({ page }) => {
   expect(rowCount).toBeGreaterThan(0);
 
   const userIdHeader = page.locator("th", { hasText: "User ID" });
-  page.screenshot({ path: "user_id_header.png" });
+  page.screenshot({ path: "test-results/user_id_header.png" });
   await expect(userIdHeader).toBeVisible();
 
   // test pagination
