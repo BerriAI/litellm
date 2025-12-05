@@ -26,8 +26,6 @@ from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthropicMessagesRequest,
 )
-from litellm.types.llms.openai import ChatCompletionToolParam
-from litellm.types.llms.anthropic import AllAnthropicToolsValues
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolParam,
@@ -66,7 +64,6 @@ class AnthropicMessagesHandler(BaseTranslation):
         Process input messages by applying guardrails to text content.
         """
         messages = data.get("messages")
-        tools = data.get("tools", None)
         if messages is None:
             return data
 
