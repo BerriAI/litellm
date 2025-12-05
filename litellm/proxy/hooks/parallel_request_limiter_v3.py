@@ -65,7 +65,6 @@ for i = 1, #KEYS, 2 do
         table.insert(results, increment_value) -- counter
     else
         local counter = redis.call('INCR', counter_key)
-        -- FIX: Set TTL if counter key was just created (has no TTL)
         -- This happens when window_key exists but counter_key doesn't (e.g., tokens key
         -- created after requests key when both share the same window_key)
         local current_ttl = redis.call('TTL', counter_key)
