@@ -2546,3 +2546,29 @@ def test_get_prompt_spec_for_db_prompt_with_versions():
     prompt_spec_v2 = proxy_config._get_prompt_spec_for_db_prompt(db_prompt=mock_prompt_v2)
     assert prompt_spec_v2.prompt_id == "chat_prompt.v2"
 
+async def test_max_budget_type_casting_on_config_load(monkeypatch):
+    """
+    Test that litellm.max_budget is cast to float when loaded, even from an environment variable.
+    """
+    import tempfile
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    mock_router = MagicMock()
+
+    test_config = {
+        "litellm_settings": {
+            "max_budget": "os.environ/MAX_BUDGET",
+            "budget_duration": "1d"
+        }
+    }
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml") as f:
+        yaml.dump(test_config, f)
+        config_file_path = f.name
+
+        monkeypatch.setenv('MAX_BUDGET', '5.0')
+        await proxy_config.load_config(router=mock_router, config_file_path=config_file_path)
+        assert isinstance(litellm.max_budget, float)
+        assert litellm.max_budget == 5.0
+

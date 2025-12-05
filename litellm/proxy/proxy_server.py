@@ -2284,6 +2284,8 @@ class ProxyConfig:
                         litellm.max_internal_user_budget = (
                             litellm.default_max_internal_user_budget
                         )
+                elif key == "max_budget":
+                    litellm.max_budget = float(value)
                 elif key == "custom_provider_map":
                     from litellm.utils import custom_llm_setup
 
