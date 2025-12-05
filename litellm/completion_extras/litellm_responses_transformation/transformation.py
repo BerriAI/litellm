@@ -165,11 +165,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     )
             elif role == "tool":
                 # Convert tool message to function call output format
+                # Transform content if it's a list with multimodal content
+                output = content
+                if isinstance(content, list):
+                    output = self._convert_tool_output_to_responses_format(content)
                 input_items.append(
                     {
                         "type": "function_call_output",
                         "call_id": tool_call_id,
-                        "output": content,
+                        "output": output,
                     }
                 )
             elif role == "assistant" and tool_calls and isinstance(tool_calls, list):
@@ -442,6 +446,34 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             return {"type": "input_text", "text": content}
         else:
             return {"type": "output_text", "text": content}
+
+    def _convert_tool_output_to_responses_format(
+        self, content: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Convert tool output content types from Chat Completions to Responses API format.
+
+        Maps:
+        - {"type": "text", "text": "..."} -> {"type": "output_text", "text": "..."}
+        - {"type": "image_url", "image_url": {"url": "..."}} -> {"type": "input_image", "image_url": "..."}
+        """
+        result = []
+        for item in content:
+            if not isinstance(item, dict):
+                result.append(item)
+                continue
+
+            item_type = item.get("type")
+            if item_type == "text":
+                result.append({"type": "output_text", "text": item.get("text", "")})
+            elif item_type == "image_url":
+                image_url = item.get("image_url")
+                url = image_url.get("url") if isinstance(image_url, dict) else image_url
+                result.append({"type": "input_image", "image_url": url})
+            else:
+                # Pass through other types as-is (e.g., already in responses format)
+                result.append(item)
+        return result
 
     def _convert_content_to_responses_format_image(
         self, content: "ChatCompletionImageObject", role: str
