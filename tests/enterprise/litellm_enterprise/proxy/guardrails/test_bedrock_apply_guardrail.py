@@ -34,7 +34,7 @@ async def test_bedrock_apply_guardrail_success():
         # Mock a successful response from Bedrock
         mock_response = {
             "action": "ALLOWED",
-            "content": [{"text": {"text": "This is a test message with some content"}}],
+            "output": [{"text": "This is a test message with some content"}],
         }
         mock_api_request.return_value = mock_response
 
@@ -219,7 +219,7 @@ async def test_bedrock_apply_guardrail_filters_request_messages_when_flag_enable
     with patch.object(
         guardrail, "make_bedrock_api_request", new_callable=AsyncMock
     ) as mock_api:
-        mock_api.return_value = {"action": "ALLOWED"}
+        mock_api.return_value = {"action": "ALLOWED", "output": [{"text": "latest question"}]}
 
         guardrailed_inputs = await guardrail.apply_guardrail(
             inputs={"texts": ["latest question"]},
