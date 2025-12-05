@@ -207,6 +207,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Send text to the Presidio analyzer endpoint and get analysis results
         """
         try:
+            # Skip empty or whitespace-only text to avoid Presidio errors
+            # Common in tool/function calling where assistant content is empty
+            if not text or len(text.strip()) == 0:
+                verbose_proxy_logger.debug(
+                    "Skipping Presidio analysis for empty/whitespace-only text"
+                )
+                return []
+
             async with aiohttp.ClientSession() as session:
                 if self.mock_redacted_text is not None:
                     return self.mock_redacted_text
@@ -231,9 +239,42 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 async with session.post(analyze_url, json=analyze_payload) as response:
                     analyze_results = await response.json()
                     verbose_proxy_logger.debug("analyze_results: %s", analyze_results)
+                    
+                    # Handle error responses from Presidio (e.g., {'error': 'No text provided'})
+                    # Presidio may return a dict instead of a list when errors occur
+                    if isinstance(analyze_results, dict):
+                        if "error" in analyze_results:
+                            verbose_proxy_logger.warning(
+                                "Presidio analyzer returned error: %s, returning empty list",
+                                analyze_results.get("error")
+                            )
+                            return []
+                        # If it's a dict but not an error, try to process it as a single item
+                        verbose_proxy_logger.debug(
+                            "Presidio returned dict (not list), attempting to process as single item"
+                        )
+                        try:
+                            return [PresidioAnalyzeResponseItem(**analyze_results)]
+                        except Exception as e:
+                            verbose_proxy_logger.warning(
+                                "Failed to parse Presidio dict response: %s, returning empty list",
+                                e
+                            )
+                            return []
+                    
+                    # Normal case: list of results
                     final_results = []
                     for item in analyze_results:
-                        final_results.append(PresidioAnalyzeResponseItem(**item))
+                        try:
+                            final_results.append(PresidioAnalyzeResponseItem(**item))
+                        except TypeError as te:
+                            # Handle case where item is not a dict (shouldn't happen, but be defensive)
+                            verbose_proxy_logger.warning(
+                                "Skipping invalid Presidio result item: %s (error: %s)",
+                                item,
+                                te
+                            )
+                            continue
                     return final_results
         except Exception as e:
             raise e
