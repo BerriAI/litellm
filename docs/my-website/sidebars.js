@@ -492,6 +492,11 @@ const sidebars = {
         },
         {
           type: "doc",
+          id: "contributing/adding_openai_compatible_providers",
+          label: "Add OpenAI-Compatible Provider (JSON)",
+        },
+        {
+          type: "doc",
           id: "provider_registration/add_model_pricing",
           label: "Add Model Pricing & Context Window",
         },
@@ -814,6 +819,7 @@ const sidebars = {
           type: "category",
           label: "Adding Providers",
           items: [
+            "contributing/adding_openai_compatible_providers",
             "adding_provider/directory_structure",
             "adding_provider/new_rerank_provider",
           ]
