@@ -421,6 +421,32 @@ if __name__ == "__main__":
 
 </TabItem>
 
+#### Use MCP tools with `/chat/completions`
+
+LiteLLM Proxy also supports MCP-aware tooling on the classic `/v1/chat/completions` endpoint. Provide the MCP tool definition directly in the `tools` array and LiteLLM will fetch and transform the MCP server's tools into OpenAI-compatible function calls. When `require_approval` is set to `"never"`, the proxy automatically executes the returned tool calls and feeds the results back into the model before returning the assistant response.
+
+```bash title="Chat Completions with MCP Tools" showLineNumbers
+curl --location '<your-litellm-proxy-base-url>/v1/chat/completions' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $LITELLM_API_KEY" \
+--data '{
+  "model": "gpt-4o-mini",
+  "messages": [
+    {"role": "user", "content": "Summarize the latest open PR."}
+  ],
+  "tools": [
+    {
+      "type": "mcp",
+      "server_url": "litellm_proxy/mcp/github",
+      "server_label": "github_mcp",
+      "require_approval": "never"
+    }
+  ]
+}'
+```
+
+If you omit `require_approval` or set it to any value other than `"never"`, the MCP tool calls are returned to the client so that you can review and execute them manually, matching the upstream OpenAI behavior.
+
 <TabItem value="cursor" label="Cursor IDE">
 
 ```json title="Cursor MCP Configuration for OpenAPI Server" showLineNumbers
