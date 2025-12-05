@@ -1043,6 +1043,11 @@ def test_convert_model_response_object():
             "I am thinking here",
             "The sky is a canvas of blue",
         ),
+        (
+            "<budget:thinking>\nLet me work through this step by step.\n</budget:thinking>\n\nYou have **8 fruits** remaining.",
+            "\nLet me work through this step by step.\n",
+            "\n\nYou have **8 fruits** remaining.",
+        ),
         ("I am a regular response", None, "I am a regular response"),
     ],
 )
