@@ -242,8 +242,8 @@ async def test_mcp_cost_tracking_per_tool():
             assert response1 is not None
             assert response2 is not None
             
-            response_list_1 = list(response1)
-            response_list_2 = list(response2)
+            response_list_1 = list(response1.content)
+            response_list_2 = list(response2.content)
             
             assert len(response_list_1) == 1
             assert len(response_list_2) == 1
