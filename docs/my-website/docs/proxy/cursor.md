@@ -28,7 +28,7 @@ When setting up Cursor with BYOK against a custom `base_url`, Cursor sends reque
 ### Non-streaming
 
 ```bash
-curl -X POST http://localhost:4000/cursor/chat/completions \
+curl -X POST https://litellm-internal/cursor/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
@@ -66,7 +66,7 @@ Example response (shape):
 ### Streaming
 
 ```bash
-curl -N -X POST http://localhost:4000/cursor/chat/completions \
+curl -N -X POST https://litellm-internal/cursor/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
@@ -81,10 +81,26 @@ curl -N -X POST http://localhost:4000/cursor/chat/completions \
 
 ## Configuration
 
+### Base URL Setup
+
+**Important**: When configuring Cursor IDE to use this endpoint, you must include `/cursor` in the base URL.
+
+Cursor automatically appends `/chat/completions` to the base URL you provide. To ensure requests go to `/cursor/chat/completions`, configure your base URL in Cursor as:
+
+```
+Base URL: https://litellm-internal/cursor
+```
+
+This way, when Cursor appends `/chat/completions`, the full path becomes `/cursor/chat/completions`, which is the correct endpoint.
+
+**Example**: If your LiteLLM Proxy is running at `https://litellm-internal`, set the base URL in Cursor to `https://litellm-internal/cursor` (not just `https://litellm-internal`).
+
+### General Setup
+
 No special configuration is required beyond your normal LiteLLM Proxy setup. Ensure that:
 
 - Your `config.yaml` includes the models you want to call via this endpoint
-- Your Cursor project uses your LiteLLM Proxy `base_url` and a valid API key
+- Your Cursor project uses your LiteLLM Proxy `base_url` (with `/cursor` included) and a valid API key
 
 ## Notes
 
