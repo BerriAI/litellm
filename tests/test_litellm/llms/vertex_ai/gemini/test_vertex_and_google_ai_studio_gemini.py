@@ -2062,3 +2062,62 @@ def test_gemini_image_models_excluded_from_thinking():
         # None of these should have thinkingConfig
         assert "thinkingConfig" not in result, f"Model {model} should not have thinkingConfig"
 
+
+def test_partial_json_chunk_after_first_chunk():
+    """
+    Test that partial JSON chunks are handled correctly even AFTER the first chunk.
+
+    This tests the fix for:
+    - https://github.com/BerriAI/litellm/issues/16562
+    - https://github.com/BerriAI/litellm/issues/16037
+    - https://github.com/BerriAI/litellm/issues/14747
+    - https://github.com/BerriAI/litellm/issues/10410
+    - https://github.com/BerriAI/litellm/issues/5650
+
+    The bug was that accumulation mode only activated on the first chunk.
+    If chunk 1 was valid and chunk 5 arrived partial, it would crash.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(),
+        sync_stream=True,
+        logging_obj=MagicMock(),
+    )
+
+    # First chunk arrives COMPLETE - this sets sent_first_chunk = True
+    first_chunk = '{"candidates": [{"content": {"parts": [{"text": "Hello"}]}}]}'
+    result1 = iterator.handle_valid_json_chunk(first_chunk)
+    assert result1 is not None, "First complete chunk should parse OK"
+    assert iterator.sent_first_chunk is True, "sent_first_chunk should be True after first chunk"
+
+    # Later chunk arrives PARTIAL (simulating network fragmentation)
+    partial_chunk = '{"candidates": [{"content":'
+    result2 = iterator.handle_valid_json_chunk(partial_chunk)
+
+    # Should switch to accumulation mode instead of crashing
+    assert result2 is None, "Partial chunk should return None while accumulating"
+    assert iterator.chunk_type == "accumulated_json", "Should switch to accumulated_json mode"
+
+
+def test_partial_json_chunk_on_first_chunk():
+    """Test that first chunk being partial still works (existing behavior)."""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(),
+        sync_stream=True,
+        logging_obj=MagicMock(),
+    )
+
+    # First chunk is partial
+    partial = '{"candidates": [{"content":'
+    result = iterator.handle_valid_json_chunk(partial)
+
+    assert result is None, "Partial first chunk should return None"
+    assert iterator.chunk_type == "accumulated_json", "Should switch to accumulated_json mode"
+
