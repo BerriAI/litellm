@@ -940,3 +940,95 @@ def test_callback_failure_metric_different_callbacks(prometheus_logger):
 # ==============================================================================
 # END CALLBACK FAILURE METRICS TESTS
 # ==============================================================================
+
+
+# ==============================================================================
+# TIME TO FIRST TOKEN METRIC TESTS
+# ==============================================================================
+
+
+@pytest.mark.asyncio
+async def test_time_to_first_token_metric_uses_dynamic_labels():
+    """
+    Test that the time-to-first-token metric uses dynamic labels via prometheus_label_factory.
+
+    This test ensures that the time-to-first-token metric respects the configured labels
+    instead of using hardcoded parameters. We configure the metric to exclude certain labels
+    (team and team_alias) to verify dynamic filtering works correctly.
+    """
+    # Clear registry before test
+    clear_prometheus_registry()
+
+    # Configure metric with limited labels (excluding team and team_alias)
+    test_config = [
+        {
+            "group": "ttft_metrics",
+            "metrics": ["litellm_llm_api_time_to_first_token_metric"],
+            "include_labels": ["model", "hashed_api_key", "api_key_alias"],
+        }
+    ]
+
+    litellm.prometheus_metrics_config = test_config
+
+    # Create PrometheusLogger with the config
+    logger = PrometheusLogger()
+    litellm.callbacks = [logger]
+
+    # Make a streaming completion to trigger the time-to-first-token metric
+    response = await litellm.acompletion(
+        model="claude-3-haiku-20240307",
+        messages=[{"role": "user", "content": "test streaming"}],
+        max_tokens=10,
+        mock_response="streaming response",
+        stream=True,
+        metadata={
+            "user_api_key": "test-key",
+            "user_api_key_hash": "test-hash",
+            "user_api_key_alias": "test-key-alias",
+            "user_api_key_team_id": "team-1",
+            "user_api_key_team_alias": "test-team-alias",
+        },
+    )
+
+    # Consume the stream to trigger metrics
+    async for chunk in response:
+        pass
+
+    import asyncio
+    await asyncio.sleep(1)
+
+    # Verify the metric was created with the correct filtered labels
+    metric_found = False
+    for metric in REGISTRY.collect():
+        if metric.name == "litellm_llm_api_time_to_first_token_metric":
+            metric_found = True
+
+            # Get samples (should be histogram buckets + count + sum)
+            samples = list(metric.samples)
+            assert len(samples) > 0, "Expected metric samples to be recorded"
+
+            # Check labels on the samples
+            for sample in samples:
+                labels = sample.labels
+
+                # Should have the configured labels
+                assert "model" in labels, "Expected 'model' label to be present"
+                assert "hashed_api_key" in labels, "Expected 'hashed_api_key' label to be present"
+                assert "api_key_alias" in labels, "Expected 'api_key_alias' label to be present"
+
+                # Should NOT have team or team_alias since we excluded them from config
+                assert "team" not in labels, "Expected 'team' label to be excluded based on config"
+                assert "team_alias" not in labels, "Expected 'team_alias' label to be excluded based on config"
+
+            break
+
+    assert metric_found, "Expected litellm_llm_api_time_to_first_token_metric to be registered"
+
+    # Clean up
+    litellm.prometheus_metrics_config = None
+    litellm.callbacks = []
+
+
+# ==============================================================================
+# END TIME TO FIRST TOKEN METRIC TESTS
+# ==============================================================================
