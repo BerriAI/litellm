@@ -312,7 +312,7 @@ class VertexBase:
     ) -> Tuple[Optional[str], str]:
         """
         for cloudflare ai gateway - https://github.com/BerriAI/litellm/issues/4317
-        
+
         Handles custom api_base for:
         1. Gemini (Google AI Studio) - constructs /models/{model}:{endpoint}
         2. Vertex AI with standard proxies - constructs {api_base}:{endpoint}
@@ -340,7 +340,7 @@ class VertexBase:
                         "Missing gemini_api_key, please set `GEMINI_API_KEY`"
                     )
                 if gemini_api_key is not None:
-                    auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment] 
+                    auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
             else:
                 # For Vertex AI
                 if use_psc_endpoint_format:
@@ -408,9 +408,7 @@ class VertexBase:
             )
 
             ### SET RUNTIME ENDPOINT ###
-            version = (
-                "v1beta1" if should_use_v1beta1_features is True else "v1"
-            )
+            version = "v1beta1" if should_use_v1beta1_features is True else "v1"
             url, endpoint = _get_vertex_url(
                 mode=mode,
                 model=model,
