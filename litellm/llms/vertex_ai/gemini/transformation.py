@@ -129,7 +129,15 @@ def _process_gemini_image(
             image = convert_to_anthropic_image_obj(image_url, format=format)
             _blob: BlobType = {"data": image["data"], "mime_type": image["media_type"]}
             
-            return PartType(inline_data=cast(BlobType, _blob_dict))
+            part: PartType = {"inline_data": cast(BlobType, _blob)}
+            
+            if media_resolution_enum is not None and model is not None:
+                from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+                if VertexGeminiConfig._is_gemini_3_or_newer(model):
+                    part_dict = dict(part)
+                    part_dict["media_resolution"] = media_resolution_enum
+                    return cast(PartType, part_dict)
+            return part
         raise Exception("Invalid image received - {}".format(image_url))
     except Exception as e:
         raise e
