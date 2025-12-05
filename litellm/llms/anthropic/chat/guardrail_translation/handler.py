@@ -345,6 +345,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 guardrail_inputs["texts"] = [string_so_far]
             if tool_calls_list:
                 guardrail_inputs["tool_calls"] = tool_calls_list
+
             _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(  # allow rejecting the response, if invalid
                 inputs=guardrail_inputs,
                 request_data={},
