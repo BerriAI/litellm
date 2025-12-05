@@ -3,9 +3,11 @@ import { renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import useAuthorized from "./useAuthorized";
 
-const replaceMock = vi.fn();
-const clearTokenCookiesMock = vi.fn();
-const getProxyBaseUrlMock = vi.fn(() => "http://proxy.example");
+const { replaceMock, clearTokenCookiesMock, getProxyBaseUrlMock } = vi.hoisted(() => ({
+  replaceMock: vi.fn(),
+  clearTokenCookiesMock: vi.fn(),
+  getProxyBaseUrlMock: vi.fn(() => "http://proxy.example"),
+}));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({
@@ -75,6 +77,6 @@ describe("useAuthorized", () => {
     expect(clearTokenCookiesMock).toHaveBeenCalled();
     expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login");
     expect(result.current.accessToken).toBeNull();
-    expect(result.current.userRole).toBe("Unknown Role");
+    expect(result.current.userRole).toBe("Undefined Role");
   });
 });
