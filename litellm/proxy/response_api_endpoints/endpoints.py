@@ -89,12 +89,43 @@ async def responses_api(
             # Enable for all models/providers
             should_use_polling = True
         elif isinstance(polling_via_cache_enabled, list):
-            # Check if provider is in the list (e.g., ["openai", "anthropic"])
+            # Check if provider is in the list (e.g., ["openai", "bedrock"])
             model = data.get("model", "")
-            # Extract provider from model (e.g., "openai/gpt-4" -> "openai")
-            provider = model.split("/")[0] if "/" in model else model
-            if provider in polling_via_cache_enabled:
-                should_use_polling = True
+            
+            # First, try to get provider from model string format "provider/model"
+            if "/" in model:
+                provider = model.split("/")[0]
+                if provider in polling_via_cache_enabled:
+                    should_use_polling = True
+            # Otherwise, check ALL deployments for this model_name in router
+            elif llm_router is not None:
+                try:
+                    # Get all deployment indices for this model name
+                    indices = llm_router.model_name_to_deployment_indices.get(model, [])
+                    for idx in indices:
+                        deployment_dict = llm_router.model_list[idx]
+                        litellm_params = deployment_dict.get("litellm_params", {})
+                        
+                        # Check custom_llm_provider first
+                        dep_provider = litellm_params.get("custom_llm_provider")
+                        
+                        # Then try to extract from model (e.g., "openai/gpt-5")
+                        if not dep_provider:
+                            dep_model = litellm_params.get("model", "")
+                            if "/" in dep_model:
+                                dep_provider = dep_model.split("/")[0]
+                        
+                        # If ANY deployment's provider matches, enable polling
+                        if dep_provider and dep_provider in polling_via_cache_enabled:
+                            should_use_polling = True
+                            verbose_proxy_logger.debug(
+                                f"Polling enabled for model={model}, provider={dep_provider}"
+                            )
+                            break
+                except Exception as e:
+                    verbose_proxy_logger.debug(
+                        f"Could not resolve provider for model {model}: {e}"
+                    )
     
     # If all conditions are met, use polling mode
     if should_use_polling:

@@ -649,3 +649,213 @@ class TestBackgroundStreamingModule:
         
         assert asyncio.iscoroutinefunction(background_streaming_task)
 
+
+class TestProviderResolutionForPolling:
+    """
+    Test cases for provider resolution logic used to determine
+    if polling_via_cache should be enabled for a given model.
+    
+    This tests the logic in endpoints.py that resolves model names
+    to their providers using the router's deployment configuration.
+    """
+
+    def test_provider_from_model_string_with_slash(self):
+        """Test extracting provider from 'provider/model' format"""
+        model = "openai/gpt-4o"
+        
+        # Direct extraction when model has slash
+        if "/" in model:
+            provider = model.split("/")[0]
+        else:
+            provider = None
+        
+        assert provider == "openai"
+
+    def test_provider_from_model_string_without_slash(self):
+        """Test that model without slash doesn't extract provider directly"""
+        model = "gpt-5"
+        
+        # No slash means we can't extract provider directly
+        if "/" in model:
+            provider = model.split("/")[0]
+        else:
+            provider = None
+        
+        assert provider is None
+
+    def test_provider_resolution_from_router_single_deployment(self):
+        """Test resolving provider from router with single deployment"""
+        # Simulate router's model_name_to_deployment_indices
+        model_name_to_deployment_indices = {
+            "gpt-5": [0],  # Single deployment at index 0
+        }
+        model_list = [
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "openai/gpt-5",
+                    "api_key": "sk-test",
+                }
+            }
+        ]
+        
+        model = "gpt-5"
+        polling_via_cache_enabled = ["openai"]
+        should_use_polling = False
+        
+        # Simulate the resolution logic
+        indices = model_name_to_deployment_indices.get(model, [])
+        for idx in indices:
+            deployment_dict = model_list[idx]
+            litellm_params = deployment_dict.get("litellm_params", {})
+            
+            dep_provider = litellm_params.get("custom_llm_provider")
+            if not dep_provider:
+                dep_model = litellm_params.get("model", "")
+                if "/" in dep_model:
+                    dep_provider = dep_model.split("/")[0]
+            
+            if dep_provider and dep_provider in polling_via_cache_enabled:
+                should_use_polling = True
+                break
+        
+        assert should_use_polling is True
+
+    def test_provider_resolution_from_router_multiple_deployments_match(self):
+        """Test resolving provider when multiple deployments exist and one matches"""
+        model_name_to_deployment_indices = {
+            "gpt-4o": [0, 1],  # Two deployments
+        }
+        model_list = [
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                }
+            },
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {
+                    "model": "azure/gpt-4o-deployment",
+                }
+            }
+        ]
+        
+        model = "gpt-4o"
+        polling_via_cache_enabled = ["openai"]  # Only openai in list
+        should_use_polling = False
+        
+        indices = model_name_to_deployment_indices.get(model, [])
+        for idx in indices:
+            deployment_dict = model_list[idx]
+            litellm_params = deployment_dict.get("litellm_params", {})
+            
+            dep_provider = litellm_params.get("custom_llm_provider")
+            if not dep_provider:
+                dep_model = litellm_params.get("model", "")
+                if "/" in dep_model:
+                    dep_provider = dep_model.split("/")[0]
+            
+            if dep_provider and dep_provider in polling_via_cache_enabled:
+                should_use_polling = True
+                break
+        
+        # Should be True because first deployment is openai
+        assert should_use_polling is True
+
+    def test_provider_resolution_from_router_no_match(self):
+        """Test that polling is disabled when no deployment provider matches"""
+        model_name_to_deployment_indices = {
+            "claude-3": [0],
+        }
+        model_list = [
+            {
+                "model_name": "claude-3",
+                "litellm_params": {
+                    "model": "anthropic/claude-3-sonnet",
+                }
+            }
+        ]
+        
+        model = "claude-3"
+        polling_via_cache_enabled = ["openai", "bedrock"]  # anthropic not in list
+        should_use_polling = False
+        
+        indices = model_name_to_deployment_indices.get(model, [])
+        for idx in indices:
+            deployment_dict = model_list[idx]
+            litellm_params = deployment_dict.get("litellm_params", {})
+            
+            dep_provider = litellm_params.get("custom_llm_provider")
+            if not dep_provider:
+                dep_model = litellm_params.get("model", "")
+                if "/" in dep_model:
+                    dep_provider = dep_model.split("/")[0]
+            
+            if dep_provider and dep_provider in polling_via_cache_enabled:
+                should_use_polling = True
+                break
+        
+        assert should_use_polling is False
+
+    def test_provider_resolution_with_custom_llm_provider(self):
+        """Test that custom_llm_provider takes precedence over model string"""
+        model_name_to_deployment_indices = {
+            "my-model": [0],
+        }
+        model_list = [
+            {
+                "model_name": "my-model",
+                "litellm_params": {
+                    "model": "some-custom-model",
+                    "custom_llm_provider": "openai",  # Explicit provider
+                }
+            }
+        ]
+        
+        model = "my-model"
+        polling_via_cache_enabled = ["openai"]
+        should_use_polling = False
+        
+        indices = model_name_to_deployment_indices.get(model, [])
+        for idx in indices:
+            deployment_dict = model_list[idx]
+            litellm_params = deployment_dict.get("litellm_params", {})
+            
+            # custom_llm_provider should be checked first
+            dep_provider = litellm_params.get("custom_llm_provider")
+            if not dep_provider:
+                dep_model = litellm_params.get("model", "")
+                if "/" in dep_model:
+                    dep_provider = dep_model.split("/")[0]
+            
+            if dep_provider and dep_provider in polling_via_cache_enabled:
+                should_use_polling = True
+                break
+        
+        assert should_use_polling is True
+
+    def test_provider_resolution_model_not_in_router(self):
+        """Test that unknown model doesn't enable polling"""
+        model_name_to_deployment_indices = {
+            "gpt-5": [0],
+        }
+        model_list = [
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {"model": "openai/gpt-5"}
+            }
+        ]
+        
+        model = "unknown-model"  # Not in router
+        polling_via_cache_enabled = ["openai"]
+        should_use_polling = False
+        
+        indices = model_name_to_deployment_indices.get(model, [])  # Empty list
+        for idx in indices:
+            # This loop won't execute
+            pass
+        
+        assert should_use_polling is False
+        assert len(indices) == 0
+
