@@ -103,8 +103,6 @@ No special configuration is required beyond your normal LiteLLM Proxy setup. Ens
 - Your Cursor project uses your LiteLLM Proxy `base_url` (with `/cursor` included) and a valid API key
 
 ## Notes
-
-- Only this page documents the Cursor endpoint. The native `/responses` docs remain unchanged.
 - This endpoint is intended specifically for Cursor’s request/response expectations. Other clients should continue to use `/v1/chat/completions` or `/v1/responses` as appropriate.
 
 
