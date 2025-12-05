@@ -69,6 +69,10 @@ Implement `POST /beta/litellm_basic_guardrail_api`
       }
     }
   ],
+  "structured_messages": [  // optional, full messages in OpenAI format (for chat endpoints)
+    {"role": "system", "content": "You are a helpful assistant"},
+    {"role": "user", "content": "Hello"}
+  ],
   "request_data": {
     "user_api_key_hash": "hash of the litellm virtual key used",
     "user_api_key_alias": "alias of the litellm virtual key used",
@@ -147,6 +151,29 @@ The `tools` parameter provides information about available function/tool definit
 - Log tool usage for audit purposes
 - Block sensitive tools based on user context
 
+### `structured_messages` Parameter
+
+The `structured_messages` parameter provides the full input in OpenAI chat completion spec format, useful for distinguishing between system and user messages.
+
+**Format:** Array of OpenAI chat completion messages (see [OpenAI API reference](https://platform.openai.com/docs/api-reference/chat/create#chat-create-messages))
+
+**Example:**
+```json
+[
+  {"role": "system", "content": "You are a helpful assistant"},
+  {"role": "user", "content": "Hello"}
+]
+```
+
+**Availability:**
+- **Supported endpoints:** `/v1/chat/completions`, `/v1/messages`, `/v1/responses`
+- **Input only:** Only passed for `input_type="request"` (pre-call guardrails)
+
+**Use cases:**
+- Apply different policies for system vs user messages
+- Enforce role-based content restrictions
+- Log structured conversation context
+
 ## LiteLLM Configuration
 
 Add to `config.yaml`:
@@ -211,6 +238,7 @@ class GuardrailRequest(BaseModel):
     texts: List[str]
     images: Optional[List[str]] = None
     tools: Optional[List[Dict[str, Any]]] = None  # OpenAI ChatCompletionToolParam format
+    structured_messages: Optional[List[Dict[str, Any]]] = None  # OpenAI messages format (for chat endpoints)
     request_data: Dict[str, Any]
     input_type: str  # "request" or "response"
     litellm_call_id: Optional[str] = None
@@ -245,6 +273,17 @@ async def apply_guardrail(request: GuardrailRequest):
                     return GuardrailResponse(
                         action="BLOCKED",
                         blocked_reason=f"Tool '{function_name}' is not allowed"
+                    )
+    
+    # Example: Check structured messages (if present in request)
+    if request.structured_messages:
+        for message in request.structured_messages:
+            if message.get("role") == "system":
+                # Apply stricter policies to system messages
+                if "admin" in message.get("content", "").lower():
+                    return GuardrailResponse(
+                        action="BLOCKED",
+                        blocked_reason="System message contains restricted terms"
                     )
     
     return GuardrailResponse(action="NONE")

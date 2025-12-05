@@ -81,6 +81,13 @@ class OpenAIResponsesHandler(BaseTranslation):
         if input_data is None:
             return data
 
+        structured_messages = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                input=input_data,
+                responses_api_request=data,
+            )
+        )
+
         # Handle simple string input
         if isinstance(input_data, str):
             inputs = GenericGuardrailAPIInputs(texts=[input_data])
@@ -91,6 +98,8 @@ class OpenAIResponsesHandler(BaseTranslation):
                 self._extract_and_transform_tools(data["tools"], tools_to_check)
                 if tools_to_check:
                     inputs["tools"] = tools_to_check
+            if structured_messages:
+                inputs["structured_messages"] = structured_messages  # type: ignore
 
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
@@ -134,6 +143,8 @@ class OpenAIResponsesHandler(BaseTranslation):
                 inputs["images"] = images_to_check
             if tools_to_check:
                 inputs["tools"] = tools_to_check
+            if structured_messages:
+                inputs["structured_messages"] = structured_messages  # type: ignore
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=data,

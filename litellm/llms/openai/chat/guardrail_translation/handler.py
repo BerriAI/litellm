@@ -80,6 +80,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 inputs["images"] = images_to_check
             if tool_calls_to_check:
                 inputs["tool_calls"] = tool_calls_to_check  # type: ignore
+            if messages:
+                inputs["structured_messages"] = (
+                    messages  # pass the openai /chat/completions messages to the guardrail, as-is
+                )
 
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
