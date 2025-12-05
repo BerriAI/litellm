@@ -534,6 +534,7 @@ friendliai_models: Set = set()
 featherless_ai_models: Set = set()
 palm_models: Set = set()
 groq_models: Set = set()
+claude_code_models: Set = set()
 azure_models: Set = set()
 azure_anthropic_models: Set = set()
 azure_text_models: Set = set()
@@ -974,6 +975,7 @@ models_by_provider: dict = {
     "friendliai": friendliai_models,
     "palm": palm_models,
     "groq": groq_models,
+    "claude_code": claude_code_models,
     "azure": azure_models | azure_text_models,
     "azure_anthropic": azure_anthropic_models,
     "azure_text": azure_text_models,
