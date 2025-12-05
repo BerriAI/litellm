@@ -9486,6 +9486,8 @@ async def get_config():  # noqa: PLR0915
                         "LANGSMITH_PROJECT",
                         "LANGSMITH_DEFAULT_RUN_NAME",
                     ]
+                elif _callback == "rubrik": 
+                    env_vars = ["RUBRIK_API_KEY", "RUBRIK_WEBHOOK_URL"]
                 else:
                     env_vars = []
 

@@ -792,6 +792,10 @@ router_settings:
 | ROUTER_MAX_FALLBACKS | Maximum number of fallbacks for router. Default is 5
 | RUNWAYML_DEFAULT_API_VERSION | Default API version for RunwayML service. Default is "2024-11-06"
 | RUNWAYML_POLLING_TIMEOUT | Timeout in seconds for RunwayML image generation polling. Default is 600 (10 minutes)
+| RUBRIK_API_KEY | API key for Rubrik logging integration
+| RUBRIK_SAMPLING_RATE | Sampling rate for Rubrik logging. Default is 1.0 (100%)
+| RUBRIK_BATCH_SIZE | Batch size for Rubrik logging. Default is 512
+| RUBRIK_WEBHOOK_URL | Webhook URL for Rubrik logging integration
 | SECRET_MANAGER_REFRESH_INTERVAL | Refresh interval in seconds for secret manager. Default is 86400 (24 hours)
 | SEPARATE_HEALTH_APP | If set to '1', runs health endpoints on a separate ASGI app and port. Default: '0'.
 | SEPARATE_HEALTH_PORT | Port for the separate health endpoints app. Only used if SEPARATE_HEALTH_APP=1. Default: 4001.

@@ -129,6 +129,7 @@ from ..integrations.athina import AthinaLogger
 from ..integrations.azure_storage.azure_storage import AzureBlobStorageLogger
 from ..integrations.custom_prompt_management import CustomPromptManagement
 from ..integrations.datadog.datadog import DataDogLogger
+from ..integrations.rubrik import RubrikLogger
 from ..integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
 from ..integrations.dotprompt import DotpromptManager
 from ..integrations.dynamodb import DyanmoDBLogger
@@ -213,6 +214,7 @@ langFuseLogger = None
 openMeterLogger = None
 lagoLogger = None
 dataDogLogger = None
+rubrikLogger = None
 prometheusLogger = None
 dynamoLogger = None
 s3Logger = None
@@ -2021,6 +2023,29 @@ class Logging(LiteLLMLoggingBaseClass):
                             print_verbose=print_verbose,
                             kwargs=kwargs,
                         )
+                    if callback == "rubrik" and rubrikLogger is not None:
+                        print_verbose("reaches rubrik for logging!")
+                        model = self.model
+                        messages = self.model_call_details["input"]
+                        kwargs = self.model_call_details
+
+                        # this only logs streaming once, complete_streaming_response exists i.e when stream ends
+                        if self.stream:
+                            if "complete_streaming_response" not in kwargs:
+                                continue
+                            else:
+                                print_verbose("reaches helicone for streaming logging!")
+                                result = kwargs["complete_streaming_response"]
+
+                        rubrikLogger.log_success(
+                            model=model,
+                            messages=messages,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            print_verbose=print_verbose,
+                            kwargs=kwargs,
+                        )
                     if callback == "langfuse":
                         global langFuseLogger
                         print_verbose("reaches langfuse for success logging!")
@@ -3306,7 +3331,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
     """
     Globally sets the callback client
     """
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, supabaseClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger, deepevalLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, supabaseClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, rubrikLogger, prometheusLogger, greenscaleLogger, openMeterLogger, deepevalLogger
 
     try:
         for callback in callback_list:
@@ -3380,6 +3405,8 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
                 openMeterLogger = OpenMeterLogger()
             elif callback == "datadog":
                 dataDogLogger = DataDogLogger()
+            elif callback == "rubrik":
+                rubrikLogger = RubrikLogger()
             elif callback == "dynamodb":
                 dynamoLogger = DyanmoDBLogger()
             elif callback == "s3":
@@ -3666,6 +3693,15 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             deepeval_logger = DeepEvalLogger()
             _in_memory_loggers.append(deepeval_logger)
             return deepeval_logger  # type: ignore
+        elif logging_integration == "rubrik":
+            from litellm.integrations.rubrik import RubrikLogger
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, RubrikLogger):
+                    return callback  # type: ignore
+            rubrik_logger = RubrikLogger()
+            _in_memory_loggers.append(rubrik_logger)
+            return rubrik_logger  # type: ignore
 
         elif logging_integration == "logfire":
             if "LOGFIRE_TOKEN" not in os.environ:
