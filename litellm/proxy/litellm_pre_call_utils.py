@@ -1075,6 +1075,13 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         user_api_key_dict=user_api_key_dict,
     )
 
+    # Vision Model Fallback - route image requests to vision-capable model
+    data = _apply_vision_fallback_if_needed(
+        data=data,
+        general_settings=general_settings,
+        llm_router=llm_router,
+    )
+
     verbose_proxy_logger.debug(
         "[PROXY] returned data from litellm_pre_call_utils: %s", data
     )
@@ -1155,6 +1162,129 @@ def _update_model_if_key_alias_exists(
     ):
         data["model"] = user_api_key_dict.aliases[_model]
     return
+
+
+def _check_model_vision_support(
+    model: str,
+    llm_router: Optional[Router] = None,
+) -> bool:
+    """
+    Check if a model supports vision, handling both direct models and router model groups.
+
+    Args:
+        model: The model name to check
+        llm_router: Optional router instance for model group info lookup
+
+    Returns:
+        bool: True if model supports vision, False otherwise
+    """
+    from litellm.utils import supports_vision
+
+    # If using router, try to get the model group info first
+    if llm_router is not None:
+        try:
+            model_group_info = llm_router.get_model_group_info(model)
+            if model_group_info is not None:
+                # Check if model_group_info has vision support info
+                if hasattr(model_group_info, "supports_vision"):
+                    if model_group_info.supports_vision is not None:
+                        return model_group_info.supports_vision
+        except Exception:
+            pass
+
+    # Fall back to litellm's supports_vision check
+    try:
+        return supports_vision(model)
+    except Exception:
+        # If we can't determine, assume it doesn't support vision
+        # to be safe and apply fallback
+        return False
+
+
+def _apply_vision_fallback_if_needed(
+    data: dict,
+    general_settings: Optional[Dict[str, Any]] = None,
+    llm_router: Optional[Router] = None,
+) -> dict:
+    """
+    Apply vision model fallback if:
+    1. vision_fallback_model is configured in general_settings
+    2. Request contains image content
+    3. Requested model doesn't support vision
+
+    Args:
+        data: The request data dictionary
+        general_settings: Proxy general settings containing vision_fallback_model
+        llm_router: Optional router instance for model capability checks
+
+    Returns:
+        dict: Modified data with model updated to fallback if needed
+    """
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _audio_or_image_in_message_content,
+    )
+
+    if general_settings is None:
+        return data
+
+    # Check if vision fallback is configured
+    vision_fallback_model = general_settings.get("vision_fallback_model")
+    if not vision_fallback_model:
+        return data
+
+    # Get the requested model
+    requested_model = data.get("model")
+    if not requested_model:
+        return data
+
+    # Don't apply fallback if already using the fallback model (prevent circular)
+    if requested_model == vision_fallback_model:
+        return data
+
+    # Check if request contains images
+    messages = data.get("messages", [])
+    if not messages:
+        return data
+
+    has_images = False
+    for msg in messages:
+        if _audio_or_image_in_message_content(msg):
+            has_images = True
+            break
+
+    if not has_images:
+        return data
+
+    # Check if requested model supports vision
+    try:
+        model_supports_vision = _check_model_vision_support(
+            model=requested_model,
+            llm_router=llm_router,
+        )
+
+        if model_supports_vision:
+            return data
+
+        # Apply fallback
+        verbose_proxy_logger.info(
+            f"Vision fallback applied: '{requested_model}' -> '{vision_fallback_model}'"
+        )
+
+        # Store original model in metadata for tracking
+        _metadata_name = "metadata"
+        if _metadata_name not in data:
+            data[_metadata_name] = {}
+        data[_metadata_name]["original_model"] = requested_model
+        data[_metadata_name]["vision_fallback_applied"] = True
+
+        data["model"] = vision_fallback_model
+
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            f"Vision fallback check failed for '{requested_model}': {e}"
+        )
+
+    return data
 
 
 def _get_enforced_params(

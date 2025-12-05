@@ -1879,6 +1879,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map'. If not set, all objects are loaded (default behavior).",
     )
+    vision_fallback_model: Optional[str] = Field(
+        None,
+        description="Fallback model to use when a request contains images but the requested model doesn't support vision. The fallback model must support vision and be available in model_list.",
+    )
 
 
 class ConfigYAML(LiteLLMPydanticObjectBase):
