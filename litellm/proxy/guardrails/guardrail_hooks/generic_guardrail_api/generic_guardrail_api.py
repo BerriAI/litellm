@@ -216,7 +216,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             # Make the API request
             response = await self.async_handler.post(
                 url=self.api_base,
-                json=guardrail_request.to_dict(),
+                json=guardrail_request.model_dump(),
                 headers=headers,
             )
 
