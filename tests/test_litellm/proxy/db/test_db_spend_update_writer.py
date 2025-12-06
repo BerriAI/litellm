@@ -573,3 +573,76 @@ async def test_add_spend_log_transaction_to_daily_org_transaction_skips_when_org
     )
 
     writer.daily_org_spend_update_queue.add_update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_add_spend_log_transaction_to_daily_end_user_transaction_injects_end_user_id_and_queues_update():
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+
+    end_user_id = "end-user-xyz"
+    payload = {
+        "request_id": "req-1",
+        "user": "test-user",
+        "end_user": end_user_id,
+        "startTime": "2024-01-01T12:00:00",
+        "api_key": "test-key",
+        "model": "gpt-4",
+        "custom_llm_provider": "openai",
+        "model_group": "gpt-4-group",
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "spend": 0.2,
+        "metadata": '{"usage_object": {}}',
+    }
+
+    writer.daily_end_user_spend_update_queue.add_update = AsyncMock()
+
+    await writer.add_spend_log_transaction_to_daily_end_user_transaction(
+        payload=payload,
+        prisma_client=mock_prisma,
+    )
+
+    writer.daily_end_user_spend_update_queue.add_update.assert_called_once()
+
+    call_args = writer.daily_end_user_spend_update_queue.add_update.call_args[1]
+    update_dict = call_args["update"]
+    assert len(update_dict) == 1
+    for key, transaction in update_dict.items():
+        assert key == f"{end_user_id}_2024-01-01_test-key_gpt-4_openai"
+        assert transaction["end_user_id"] == end_user_id
+        assert transaction["date"] == "2024-01-01"
+        assert transaction["api_key"] == "test-key"
+        assert transaction["model"] == "gpt-4"
+        assert transaction["custom_llm_provider"] == "openai"
+
+
+@pytest.mark.asyncio
+async def test_add_spend_log_transaction_to_daily_end_user_transaction_skips_when_end_user_id_missing():
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+
+    payload = {
+        "request_id": "req-2",
+        "user": "test-user",
+        "startTime": "2024-01-01T12:00:00",
+        "api_key": "test-key",
+        "model": "gpt-4",
+        "custom_llm_provider": "openai",
+        "model_group": "gpt-4-group",
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "spend": 0.2,
+        "metadata": '{"usage_object": {}}',
+    }
+
+    writer.daily_end_user_spend_update_queue.add_update = AsyncMock()
+
+    await writer.add_spend_log_transaction_to_daily_end_user_transaction(
+        payload=payload,
+        prisma_client=mock_prisma,
+    )
+
+    writer.daily_end_user_spend_update_queue.add_update.assert_not_called()

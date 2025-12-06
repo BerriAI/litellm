@@ -24,6 +24,7 @@ class httpxSpecialProvider(str, Enum):
     Search = "search"
     MCP = "mcp"
     RAG = "rag"
+    A2A = "a2a"
 
 
 VerifyTypes = Union[str, bool, ssl.SSLContext]

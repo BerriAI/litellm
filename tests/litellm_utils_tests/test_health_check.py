@@ -83,20 +83,51 @@ async def test_openai_img_gen_health_check():
 # asyncio.run(test_openai_img_gen_health_check())
 
 
+@pytest.mark.asyncio
 async def test_azure_img_gen_health_check():
+    """
+    Test Azure image generation health check with retry logic for transient errors.
+    Azure sometimes returns internal server errors which are transient and not something we can control.
+    """
     litellm._turn_on_debug()
-    response = await litellm.ahealth_check(
-        model_params={
-            "model": "azure/dall-e-3",
-            "api_base": os.getenv("AZURE_API_BASE"),
-            "api_key": os.getenv("AZURE_API_KEY"),
-        },
-        mode="image_generation",
-        prompt="cute baby sea otter",
-    )
-
-    assert isinstance(response, dict) and "error" not in response
-    return response
+    max_retries = 3
+    retry_delay = 1  # Start with 1 second delay
+    
+    for attempt in range(max_retries):
+        response = await litellm.ahealth_check(
+            model_params={
+                "model": "azure/dall-e-3",
+                "api_base": os.getenv("AZURE_API_BASE"),
+                "api_key": os.getenv("AZURE_API_KEY"),
+            },
+            mode="image_generation",
+            prompt="cute baby sea otter",
+        )
+        
+        # Check if response is successful (no error)
+        if isinstance(response, dict) and "error" not in response:
+            return response
+        
+        # Check if error is a transient Azure internal server error
+        error_str = str(response.get("error", "")).lower()
+        is_transient_error = (
+            "internalservererror" in error_str
+            or "internal server error" in error_str
+            or "internalfailure" in error_str
+            or "internal failure" in error_str
+        )
+        
+        # If it's the last attempt or not a transient error, fail the test
+        if attempt == max_retries - 1 or not is_transient_error:
+            assert isinstance(response, dict) and "error" not in response, f"Health check failed: {response.get('error', 'Unknown error')}"
+            return response
+        
+        # Wait before retrying with exponential backoff
+        await asyncio.sleep(retry_delay)
+        retry_delay *= 2  # Exponential backoff
+    
+    # Should not reach here, but just in case
+    assert False, "Health check failed after all retries"
 
 
 @pytest.mark.skip(reason="AWS Suspended Account")

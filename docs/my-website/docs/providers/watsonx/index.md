@@ -175,3 +175,56 @@ For all available models, see [watsonx.ai documentation](https://dataplatform.cl
 
 For all available embedding models, see [watsonx.ai embedding documentation](https://dataplatform.cloud.ibm.com/docs/content/wsj/analyze-data/fm-models-embed.html?context=wx).
 
+
+## Advanced
+
+### Using Zen API Key
+
+You can use a Zen API key for long-term authentication instead of generating IAM tokens. Pass it either as an environment variable or as a parameter:
+
+```python
+import os
+from litellm import completion
+
+# Option 1: Set as environment variable
+os.environ["WATSONX_ZENAPIKEY"] = "your-zen-api-key"
+
+response = completion(
+    model="watsonx/ibm/granite-13b-chat-v2",
+    messages=[{"content": "What is your favorite color?", "role": "user"}],
+    project_id="your-project-id"
+)
+
+# Option 2: Pass as parameter
+response = completion(
+    model="watsonx/ibm/granite-13b-chat-v2",
+    messages=[{"content": "What is your favorite color?", "role": "user"}],
+    zen_api_key="your-zen-api-key",
+    project_id="your-project-id"
+)
+```
+
+**Using with LiteLLM Proxy via OpenAI client:**
+
+```python
+import openai
+
+client = openai.OpenAI(
+    api_key="sk-1234",  # LiteLLM proxy key
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(
+    model="watsonx/ibm/granite-3-3-8b-instruct",
+    messages=[{"role": "user", "content": "What is your favorite color?"}],
+    max_tokens=2048,
+    extra_body={
+        "project_id": "your-project-id",
+        "zen_api_key": "your-zen-api-key"
+    }
+)
+```
+
+See [IBM documentation](https://www.ibm.com/docs/en/watsonx/w-and-w/2.2.0?topic=keys-generating-zenapikey-authorization-tokens) for more information on generating Zen API keys.
+
+

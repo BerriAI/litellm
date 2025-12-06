@@ -444,6 +444,11 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             else:
                 headers = {}
             response = raw_response.parse()
+            if not data.get("stream") and not hasattr(response, "model_dump"):
+                raise OpenAIError(
+                    status_code=500,
+                    message=f"Empty or invalid response from LLM endpoint. Received: {response!r}. Check the reverse proxy or model server configuration.",
+                )
             return headers, response
         except openai.APITimeoutError as e:
             end_time = time.time()
@@ -477,7 +482,14 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             else:
                 headers = {}
             response = raw_response.parse()
+            if not data.get("stream") and not hasattr(response, "model_dump"):
+                raise OpenAIError(
+                    status_code=500,
+                    message=f"Empty or invalid response from LLM endpoint. Received: {response!r}. Check the reverse proxy or model server configuration.",
+                )
             return headers, response
+        except OpenAIError:
+            raise
         except Exception as e:
             if raw_response is not None:
                 raise Exception(
@@ -1414,6 +1426,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         timeout: Union[float, httpx.Timeout],
         aspeech: Optional[bool] = None,
         client=None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> HttpxBinaryResponseContent:
         if aspeech is not None and aspeech is True:
             return self.async_audio_speech(
@@ -1428,6 +1441,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 max_retries=max_retries,
                 timeout=timeout,
                 client=client,
+                shared_session=shared_session,
             )  # type: ignore
 
         openai_client = self._get_openai_client(
@@ -1437,6 +1451,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             timeout=timeout,
             max_retries=max_retries,
             client=client,
+            shared_session=shared_session,
         )
 
         response = cast(OpenAI, openai_client).audio.speech.create(
@@ -1460,6 +1475,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         max_retries: int,
         timeout: Union[float, httpx.Timeout],
         client=None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> HttpxBinaryResponseContent:
         openai_client = cast(
             AsyncOpenAI,
@@ -1470,6 +1486,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 timeout=timeout,
                 max_retries=max_retries,
                 client=client,
+                shared_session=shared_session,
             ),
         )
 

@@ -1065,14 +1065,7 @@ class OpenTelemetry(CustomLogger):
         self, span: Span, kwargs, response_obj: Optional[Any]
     ):
         try:
-            if self.callback_name == "arize_phoenix":
-                from litellm.integrations.arize.arize_phoenix import ArizePhoenixLogger
-
-                ArizePhoenixLogger.set_arize_phoenix_attributes(
-                    span, kwargs, response_obj
-                )
-                return
-            elif self.callback_name == "langtrace":
+            if self.callback_name == "langtrace":
                 from litellm.integrations.langtrace import LangtraceAttributes
 
                 LangtraceAttributes().set_langtrace_attributes(
@@ -1087,6 +1080,11 @@ class OpenTelemetry(CustomLogger):
                 LangfuseOtelLogger.set_langfuse_otel_attributes(
                     span, kwargs, response_obj
                 )
+                return
+            elif self.callback_name == "weave_otel":
+                from litellm.integrations.weave.weave_otel import set_weave_otel_attributes
+
+                set_weave_otel_attributes(span, kwargs, response_obj)
                 return
             from litellm.proxy._types import SpanAttributes
 

@@ -737,7 +737,6 @@ async def pass_through_request(  # noqa: PLR0915
 
         # Store custom_llm_provider in kwargs and logging object if provided
         if custom_llm_provider:
-            kwargs["custom_llm_provider"] = custom_llm_provider
             logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
             logging_obj.model_call_details["litellm_params"] = kwargs.get("litellm_params", {})
 
@@ -972,18 +971,23 @@ def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> di
     Used for google and vertex JS SDKs, and Azure passthrough
     Checks both 'tags' and 'x-litellm-tags' headers
     """
-    # Initialize tags list if it doesn't exist
-    if "tags" not in metadata:
-        metadata["tags"] = []
-    
+    tags_to_add = []
+
     # Check for 'tags' header first
     _tags = request.headers.get("tags")
     if _tags:
-            metadata["tags"].extend([tag.strip() for tag in _tags.split(",")])
+        tags_to_add.extend([tag.strip() for tag in _tags.split(",")])
 
     _tags = request.headers.get("x-litellm-tags")
     if _tags:
-            metadata["tags"].extend([tag.strip() for tag in _tags.split(",")])
+        tags_to_add.extend([tag.strip() for tag in _tags.split(",")])
+
+    # Only add tags key if there are tags to add
+    if tags_to_add:
+        if "tags" not in metadata:
+            metadata["tags"] = []
+        metadata["tags"].extend(tags_to_add)
+
     return metadata
 
 

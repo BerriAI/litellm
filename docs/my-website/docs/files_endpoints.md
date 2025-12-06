@@ -301,6 +301,17 @@ content = await litellm.afile_content(
 print("file content=", content)
 ```
 
+**Get File Content (Bedrock)**
+```python
+# For Bedrock batch output files stored in S3
+content = await litellm.afile_content(
+    file_id="s3://bucket-name/path/to/file.jsonl",  # S3 URI or unified file ID
+    custom_llm_provider="bedrock",
+    aws_region_name="us-west-2"
+)
+print("file content=", content.text)
+```
+
 </TabItem>
 </Tabs>
 
@@ -312,6 +323,8 @@ print("file content=", content)
 ### [Azure OpenAI](./providers/azure#azure-batches-api)
 
 ### [Vertex AI](./providers/vertex#batch-apis)
+
+### [Bedrock](./providers/bedrock_batches#4-retrieve-batch-results)
 
 ### [Anthropic](./providers/anthropic#beta-files-api)
 
