@@ -23,12 +23,18 @@ import {
 } from "@tremor/react";
 import { ActivityMetrics, processActivityData } from "./activity_metrics";
 import { DailyData, BreakdownMetrics, KeyMetricWithMetadata, EntityMetricWithMetadata, TagUsage } from "./usage/types";
-import { organizationDailyActivityCall, tagDailyActivityCall, teamDailyActivityCall } from "./networking";
+import {
+  organizationDailyActivityCall,
+  tagDailyActivityCall,
+  teamDailyActivityCall,
+  customerDailyActivityCall,
+} from "./networking";
 import TopKeyView from "./top_key_view";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { valueFormatterSpend } from "./usage/utils/value_formatters";
 import { getProviderLogoAndName } from "./provider_info_helpers";
 import { UsageExportHeader } from "./EntityUsageExport";
+import type { EntityType } from "./EntityUsageExport/types";
 import TopModelView from "./top_model_view";
 
 interface EntityMetrics {
@@ -68,7 +74,7 @@ export interface EntityList {
 
 interface EntityUsageProps {
   accessToken: string | null;
-  entityType: "tag" | "team" | "organization";
+  entityType: EntityType;
   entityId?: string | null;
   userID: string | null;
   userRole: string | null;
@@ -128,6 +134,15 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       setSpendData(data);
     } else if (entityType === "organization") {
       const data = await organizationDailyActivityCall(
+        accessToken,
+        startTime,
+        endTime,
+        1,
+        selectedTags.length > 0 ? selectedTags : null,
+      );
+      setSpendData(data);
+    } else if (entityType === "customer") {
+      const data = await customerDailyActivityCall(
         accessToken,
         startTime,
         endTime,
