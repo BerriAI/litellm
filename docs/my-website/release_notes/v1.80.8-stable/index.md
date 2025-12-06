@@ -60,11 +60,11 @@ pip install litellm==1.80.8
 
 | Provider | Supported LiteLLM Endpoints | Description |
 | -------- | ------------------- | ----------- |
-| **[Z.AI (Zhipu AI)](../../docs/providers/zai)** | `/v1/chat/completions` | Built-in support for Zhipu AI GLM models |
-| **[RAGFlow](../../docs/providers/ragflow)** | `/v1/chat/completions`, `/v1/vector_stores` | RAG-based chat completions with vector store support |
-| **[Cursor BYOK](../../docs/tutorials/cursor_integration)** | `/v1/chat/completions` | Cursor bring-your-own-key configuration support |
-| **[PublicAI](../../docs/providers/publicai)** | `/v1/chat/completions` | OpenAI-compatible provider via JSON config |
-| **[Google Cloud Chirp3 HD](../../docs/text_to_speech)** | `/v1/audio/speech` | Text-to-speech with Google Cloud Chirp3 HD voices |
+| **[Z.AI (Zhipu AI)](../../docs/providers/zai)** | `/v1/chat/completions`, `/v1/responses`, `/v1/messages` | Built-in support for Zhipu AI GLM models |
+| **[RAGFlow](../../docs/providers/ragflow)** | `/v1/chat/completions`, `/v1/responses`, `/v1/messages`, `/v1/vector_stores` | RAG-based chat completions with vector store support |
+| **[Cursor BYOK](../../docs/tutorials/cursor_integration)** | `/v1/chat/completions`, `/v1/responses`, `/v1/messages` | Cursor bring-your-own-key configuration support |
+| **[PublicAI](../../docs/providers/publicai)** | `/v1/chat/completions`, `/v1/responses`, `/v1/messages` | OpenAI-compatible provider via JSON config |
+| **[Google Cloud Chirp3 HD](../../docs/text_to_speech)** | `/v1/audio/speech`, `/v1/audio/speech/stream` | Text-to-speech with Google Cloud Chirp3 HD voices |
 
 ### New LLM API Endpoints (1 new endpoint)
 
