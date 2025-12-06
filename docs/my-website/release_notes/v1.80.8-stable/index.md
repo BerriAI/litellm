@@ -94,7 +94,7 @@ Get started with Agent Gateway here: [Agent Gateway Documentation](../../docs/a2
 ### Customer (End User) Usage UI
 
 <Image
-img={require('../../img/release_notes/customer_usage.png')}
+img={require('../../img/customer_usage.png')}
 style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 
