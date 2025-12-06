@@ -860,9 +860,9 @@ def completion_cost(  # noqa: PLR0915
                     or isinstance(completion_response, dict)
                 ):  # tts returns a custom class
                     if isinstance(completion_response, dict):
-                        usage_obj: Optional[Union[dict, Usage]] = (
-                            completion_response.get("usage", {})
-                        )
+                        usage_obj: Optional[
+                            Union[dict, Usage]
+                        ] = completion_response.get("usage", {})
                     else:
                         usage_obj = getattr(completion_response, "usage", {})
                     if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
@@ -1066,13 +1066,14 @@ def completion_cost(  # noqa: PLR0915
                         # If model is like "tavily-search", construct "tavily/search" for cost lookup
                         search_model = f"{custom_llm_provider}/search"
 
-                    prompt_cost, completion_cost_result = (
-                        search_provider_cost_per_query(
-                            model=search_model,
-                            custom_llm_provider=custom_llm_provider,
-                            number_of_queries=number_of_queries,
-                            optional_params=optional_params,
-                        )
+                    (
+                        prompt_cost,
+                        completion_cost_result,
+                    ) = search_provider_cost_per_query(
+                        model=search_model,
+                        custom_llm_provider=custom_llm_provider,
+                        number_of_queries=number_of_queries,
+                        optional_params=optional_params,
                     )
 
                     # Return the total cost (prompt_cost + completion_cost, but for search it's just prompt_cost)
@@ -1080,11 +1081,13 @@ def completion_cost(  # noqa: PLR0915
 
                     # Apply discount
                     original_cost = _final_cost
-                    _final_cost, discount_percent, discount_amount = (
-                        _apply_cost_discount(
-                            base_cost=_final_cost,
-                            custom_llm_provider=custom_llm_provider,
-                        )
+                    (
+                        _final_cost,
+                        discount_percent,
+                        discount_amount,
+                    ) = _apply_cost_discount(
+                        base_cost=_final_cost,
+                        custom_llm_provider=custom_llm_provider,
                     )
 
                     # Store cost breakdown in logging object if available
@@ -1329,9 +1332,8 @@ def response_cost_calculator(
             response_cost = 0.0
         else:
             if isinstance(response_object, BaseModel):
-                response_object._hidden_params["optional_params"] = optional_params
-
                 if hasattr(response_object, "_hidden_params"):
+                    response_object._hidden_params["optional_params"] = optional_params
                     provider_response_cost = get_response_cost_from_hidden_params(
                         response_object._hidden_params
                     )
