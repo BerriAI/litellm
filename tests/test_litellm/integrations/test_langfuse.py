@@ -40,6 +40,11 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         self.mock_langfuse_trace = MagicMock()
         self.mock_langfuse_generation = MagicMock()
         self.mock_langfuse_generation.trace_id = "test-trace-id"
+        
+        # Mock span method for trace (used by log_provider_specific_information_as_span and _log_guardrail_information_as_span)
+        self.mock_langfuse_span = MagicMock()
+        self.mock_langfuse_span.end = MagicMock()
+        self.mock_langfuse_trace.span.return_value = self.mock_langfuse_span
 
         # Setup the trace and generation chain
         self.mock_langfuse_trace.generation.return_value = self.mock_langfuse_generation
@@ -248,6 +253,10 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         Test that _log_langfuse_v2 correctly handles None values in the usage object
         by converting them to 0, preventing validation errors.
         """
+        # Reset mock call counts to ensure clean state
+        self.mock_langfuse_trace.reset_mock()
+        self.mock_langfuse_client.reset_mock()
+        
         with patch(
             "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
             side_effect=lambda generation_params, **kwargs: generation_params,
@@ -281,21 +290,36 @@ class TestLangfuseUsageDetails(unittest.TestCase):
 
             # Use fixed timestamps to avoid timing-related flakiness
             fixed_time = datetime.datetime(2024, 1, 1, 12, 0, 0)
+            
+            # Ensure the mock trace is properly set up before the call
+            # Re-setup the trace chain to ensure it's fresh
+            self.mock_langfuse_trace.generation.return_value = self.mock_langfuse_generation
+            self.mock_langfuse_trace.span.return_value = self.mock_langfuse_span
+            self.mock_langfuse_client.trace.return_value = self.mock_langfuse_trace
+            self.logger.Langfuse = self.mock_langfuse_client
+            
             # Call the method under test
-            self.logger._log_langfuse_v2(
-                user_id="test-user",
-                metadata={},
-                litellm_params=kwargs["litellm_params"],
-                output={"role": "assistant", "content": "Response"},
-                start_time=fixed_time,
-                end_time=fixed_time + datetime.timedelta(seconds=1),
-                kwargs=kwargs,
-                optional_params=kwargs["optional_params"],
-                input={"messages": kwargs["messages"]},
-                response_obj=response_obj,
-                level="DEFAULT",
-                litellm_call_id=kwargs["litellm_call_id"],
-            )
+            try:
+                self.logger._log_langfuse_v2(
+                    user_id="test-user",
+                    metadata={},
+                    litellm_params=kwargs["litellm_params"],
+                    output={"role": "assistant", "content": "Response"},
+                    start_time=fixed_time,
+                    end_time=fixed_time + datetime.timedelta(seconds=1),
+                    kwargs=kwargs,
+                    optional_params=kwargs["optional_params"],
+                    input={"messages": kwargs["messages"]},
+                    response_obj=response_obj,
+                    level="DEFAULT",
+                    litellm_call_id=kwargs["litellm_call_id"],
+                )
+            except Exception as e:
+                self.fail(f"_log_langfuse_v2 raised an exception: {e}")
+            
+            # Verify that trace was called first
+            self.mock_langfuse_client.trace.assert_called()
+            
             #  Check the arguments passed to the mocked langfuse generation call
             self.mock_langfuse_trace.generation.assert_called_once()
             call_args, call_kwargs = self.mock_langfuse_trace.generation.call_args
