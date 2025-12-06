@@ -45,12 +45,49 @@ pip install litellm==1.80.8
 
 ## Key Highlights
 
-- **Agent Gateway** - [Invoke agents through the AI Gateway with request/response logging and access controls](../../docs/a2a)
-- **Guardrails API v2** - [Generic Guardrail API with streaming support, structured messages, and tool call checks](../../docs/proxy/guardrails)
+- **Agent Gateway (A2A)** - [Invoke agents through the AI Gateway with request/response logging and access controls](../../docs/a2a)
+- **Guardrails API v2** - [Generic Guardrail API with streaming support, structured messages, and tool call checks](../../docs/adding_provider/generic_guardrail_api)
 - **Customer (End User) Usage UI** - [Track and visualize end-user spend directly in the dashboard](../../docs/proxy/customer_usage)
 - **vLLM Batch + Files API** - [Support for batch and files API with vLLM deployments](../../docs/batches)
 - **Dynamic Rate Limiting on Teams** - [Enable dynamic rate limits and priority reservation on team-level](../../docs/proxy/team_budgets)
 - **Google Cloud Chirp3 HD** - [New text-to-speech provider with Chirp3 HD voices](../../docs/text_to_speech)
+
+---
+
+### Agent Gateway (A2A)
+
+<Image 
+  img={require('../../img/a2a_gateway.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+<br/>
+
+This release introduces **A2A Agent Gateway** for LiteLLM, allowing you to invoke and manage A2A agents with the same controls you have for LLM APIs.
+
+As a **LiteLLM Gateway Admin**, you can now do the following:
+    - **Request/Response Logging** - Every agent invocation is logged to the Logs page with full request and response tracking.
+    - **Access Control** - Control which Team/Key can access which agents.
+
+As a developer, you can continue using the A2A SDK, all you need to do is point you `A2AClient` to the LiteLLM proxy URL and your API key.
+
+**Works with the A2A SDK:**
+
+```python
+from a2a.client import A2AClient
+
+client = A2AClient(
+    base_url="http://localhost:4000",  # Your LiteLLM proxy
+    api_key="sk-1234"                   # LiteLLM API key
+)
+
+response = client.send_message(
+    agent_id="my-agent",
+    message="What's the status of my order?"
+)
+```
+
+Get started with Agent Gateway here: [Agent Gateway Documentation](../../docs/a2a)
 
 ---
 
@@ -69,23 +106,25 @@ Users can now filter usage statistics by customers, providing the same granular 
 - View customer-level breakdowns alongside existing team and user-level filters
 - Consistent filtering experience across all usage and analytics views
 
+---
+
 ## New Providers and Endpoints
 
 ### New Providers (5 new providers)
 
 | Provider | Supported LiteLLM Endpoints | Description |
 | -------- | ------------------- | ----------- |
-| **[Z.AI (Zhipu AI)](../../docs/providers/zai)** | `/v1/chat/completions` | Built-in support for Zhipu AI GLM models |
-| **[RAGFlow](../../docs/providers/ragflow)** | `/v1/chat/completions`, `/v1/vector_stores` | RAG-based chat completions with vector store support |
-| **[Cursor BYOK](../../docs/tutorials/cursor_integration)** | `/v1/chat/completions` | Cursor bring-your-own-key configuration support |
-| **[PublicAI](../../docs/providers/publicai)** | `/v1/chat/completions` | OpenAI-compatible provider via JSON config |
-| **[Google Cloud Chirp3 HD](../../docs/text_to_speech)** | `/v1/audio/speech` | Text-to-speech with Google Cloud Chirp3 HD voices |
+| **[Z.AI (Zhipu AI)](../../docs/providers/zai)** | `/v1/chat/completions`, `/v1/responses`, `/v1/messages` | Built-in support for Zhipu AI GLM models |
+| **[RAGFlow](../../docs/providers/ragflow)** | `/v1/chat/completions`, `/v1/responses`, `/v1/messages`, `/v1/vector_stores` | RAG-based chat completions with vector store support |
+| **[PublicAI](../../docs/providers/publicai)** | `/v1/chat/completions`, `/v1/responses`, `/v1/messages` | OpenAI-compatible provider via JSON config |
+| **[Google Cloud Chirp3 HD](../../docs/text_to_speech)** | `/v1/audio/speech`, `/v1/audio/speech/stream` | Text-to-speech with Google Cloud Chirp3 HD voices |
 
-### New LLM API Endpoints (1 new endpoint)
+### New LLM API Endpoints (2 new endpoints)
 
 | Endpoint | Method | Description | Documentation |
 | -------- | ------ | ----------- | ------------- |
 | `/v1/agents/invoke` | POST | Invoke A2A agents through the AI Gateway | [Agent Gateway](../../docs/a2a) |
+| `/cursor/chat/completions` | POST | Cursor BYOK endpoint - accepts Responses API input, returns Chat Completions output | [Cursor Integration](../../docs/tutorials/cursor_integration) |
 
 ---
 
@@ -136,7 +175,7 @@ Users can now filter usage statistics by customers, providing the same granular 
     - Add xhigh reasoning effort for gpt-5.1-codex-max - [PR #17585](https://github.com/BerriAI/litellm/pull/17585)
     - Add clear error message for empty LLM endpoint responses - [PR #17445](https://github.com/BerriAI/litellm/pull/17445)
 
-- **[Azure OpenAI](../../docs/providers/azure)**
+- **[Azure OpenAI](../../docs/providers/azure/azure)**
     - Allow reasoning_effort='none' for Azure gpt-5.1 models - [PR #17311](https://github.com/BerriAI/litellm/pull/17311)
 
 - **[Anthropic](../../docs/providers/anthropic)**
@@ -192,7 +231,7 @@ Users can now filter usage statistics by customers, providing the same granular 
 - **[Together AI](../../docs/providers/togetherai)**
     - Add context window exception mapping for Together AI - [PR #17284](https://github.com/BerriAI/litellm/pull/17284)
 
-- **[WatsonX](../../docs/providers/watsonx)**
+- **[WatsonX](../../docs/providers/watsonx/index)**
     - Allow passing zen_api_key dynamically - [PR #16655](https://github.com/BerriAI/litellm/pull/16655)
     - Fix Watsonx Audio Transcription API - [PR #17326](https://github.com/BerriAI/litellm/pull/17326)
     - Fix audio transcriptions, don't force content type in request headers - [PR #17546](https://github.com/BerriAI/litellm/pull/17546)
@@ -220,15 +259,14 @@ Users can now filter usage statistics by customers, providing the same granular 
     - Migrate Anthropic provider to Azure AI - [PR #17202](https://github.com/BerriAI/litellm/pull/17202)
     - Fix GA path for Azure OpenAI realtime models - [PR #17260](https://github.com/BerriAI/litellm/pull/17260)
 
-- **[TwelveLabs](../../docs/providers/twelvelabs)**
-    - Add support for TwelveLabs Pegasus - [PR #17193](https://github.com/BerriAI/litellm/pull/17193)
+- **[Bedrock TwelveLabs](../../docs/providers/bedrock#twelvelabs-pegasus---video-understanding)**
+    - Add support for TwelveLabs Pegasus video understanding - [PR #17193](https://github.com/BerriAI/litellm/pull/17193)
 
 ### Bug Fixes
 
 - **[Bedrock](../../docs/providers/bedrock)**
     - Fix extra_headers in messages API bedrock invoke - [PR #17271](https://github.com/BerriAI/litellm/pull/17271)
     - Fix Bedrock models in model map - [PR #17419](https://github.com/BerriAI/litellm/pull/17419)
-    - Fix Bedrock Guardrail Indent and Import fix - [PR #17378](https://github.com/BerriAI/litellm/pull/17378)
     - Make Bedrock converse messages respect modify_params as expected - [PR #17427](https://github.com/BerriAI/litellm/pull/17427)
     - Fix Anthropic beta headers for Bedrock imported Qwen models - [PR #17467](https://github.com/BerriAI/litellm/pull/17467)
     - Preserve usage from JSON response for OpenAI provider in Bedrock - [PR #17589](https://github.com/BerriAI/litellm/pull/17589)
@@ -258,7 +296,7 @@ Users can now filter usage statistics by customers, providing the same granular 
     - Fix optional parameter default value - [PR #17434](https://github.com/BerriAI/litellm/pull/17434)
     - Add status parameter as optional for FileObject - [PR #17431](https://github.com/BerriAI/litellm/pull/17431)
 
-- **[Video Generation API](../../docs/video_generation)**
+- **[Video Generation API](../../docs/videos)**
     - Add passthrough cost tracking for Veo - [PR #17296](https://github.com/BerriAI/litellm/pull/17296)
 
 - **[OCR API](../../docs/ocr)**
@@ -345,18 +383,22 @@ Users can now filter usage statistics by customers, providing the same granular 
 
 ---
 
-## AI Integrations
+## AI Integrations (2 new integrations)
 
-### Logging
+### Logging (1 new integration)
+
+#### New Integration
+
+- **[Weave](../../docs/proxy/logging)**
+    - Basic Weave OTEL integration - [PR #17439](https://github.com/BerriAI/litellm/pull/17439)
+
+#### Improvements & Fixes
 
 - **[DataDog](../../docs/proxy/logging#datadog)**
     - Fix Datadog callback regression when ddtrace is installed - [PR #17393](https://github.com/BerriAI/litellm/pull/17393)
 
-- **[Arize Phoenix](../../docs/observability/arize_phoenix)**
+- **[Arize Phoenix](../../docs/observability/arize_integration)**
     - Fix clean arize-phoenix traces - [PR #16611](https://github.com/BerriAI/litellm/pull/16611)
-
-- **[Weave](../../docs/proxy/logging)**
-    - Basic Weave OTEL integration - [PR #17439](https://github.com/BerriAI/litellm/pull/17439)
 
 - **[MLflow](../../docs/proxy/logging#mlflow)**
     - Fix MLflow streaming spans for Anthropic passthrough - [PR #17288](https://github.com/BerriAI/litellm/pull/17288)
@@ -367,9 +409,11 @@ Users can now filter usage statistics by customers, providing the same granular 
 - **General**
     - Improve PII anonymization handling in logging callbacks - [PR #17207](https://github.com/BerriAI/litellm/pull/17207)
 
-### Guardrails
+### Guardrails (1 new integration)
 
-- **[Generic Guardrail API](../../docs/proxy/guardrails)**
+#### New Integration
+
+- **[Generic Guardrail API](../../docs/adding_provider/generic_guardrail_api)**
     - Generic Guardrail API - allows guardrail providers to add INSTANT support for LiteLLM w/out PR to repo - [PR #17175](https://github.com/BerriAI/litellm/pull/17175)
     - Guardrails API V2 - user api key metadata, session id, specify input type (request/response), image support - [PR #17338](https://github.com/BerriAI/litellm/pull/17338)
     - Guardrails API - add streaming support - [PR #17400](https://github.com/BerriAI/litellm/pull/17400)
@@ -378,19 +422,24 @@ Users can now filter usage statistics by customers, providing the same granular 
     - Correctly map a v1/messages call to the anthropic unified guardrail - [PR #17424](https://github.com/BerriAI/litellm/pull/17424)
     - Support during_call event type for unified guardrails - [PR #17514](https://github.com/BerriAI/litellm/pull/17514)
 
-- **[Noma Guardrail](../../docs/proxy/guardrails)**
+#### Improvements & Fixes
+
+- **[Noma Guardrail](../../docs/proxy/guardrails/noma_security)**
     - Refactor Noma guardrail to use shared Responses transformation and include system instructions - [PR #17315](https://github.com/BerriAI/litellm/pull/17315)
 
-- **[Presidio](../../docs/proxy/guardrails)**
+- **[Presidio](../../docs/proxy/guardrails/pii_masking_v2)**
     - Handle empty content and error dict responses in guardrails - [PR #17489](https://github.com/BerriAI/litellm/pull/17489)
     - Fix Presidio guardrail test TypeError and license base64 decoding error - [PR #17538](https://github.com/BerriAI/litellm/pull/17538)
 
-- **[Tool Permissions](../../docs/proxy/guardrails)**
+- **[Tool Permissions](../../docs/proxy/guardrails/tool_permission)**
     - Add regex-based tool_name/tool_type matching for tool-permission - [PR #17164](https://github.com/BerriAI/litellm/pull/17164)
     - Add images for tool permission guardrail documentation - [PR #17322](https://github.com/BerriAI/litellm/pull/17322)
 
-- **[AIM Guardrails](../../docs/proxy/guardrails)**
+- **[AIM Guardrails](../../docs/proxy/guardrails/aim_security)**
     - Fix AIM guardrail tests - [PR #17499](https://github.com/BerriAI/litellm/pull/17499)
+
+- **[Bedrock Guardrails](../../docs/proxy/guardrails/bedrock)**
+    - Fix Bedrock Guardrail indent and import - [PR #17378](https://github.com/BerriAI/litellm/pull/17378)
 
 - **General Guardrails**
     - Mask all matching keywords in content filter - [PR #17521](https://github.com/BerriAI/litellm/pull/17521)
@@ -399,7 +448,7 @@ Users can now filter usage statistics by customers, providing the same granular 
 
 ### Secret Managers
 
-- **[CyberArk](../../docs/secret_managers)**
+- **[CyberArk](../../docs/secret_managers/cyberark)**
     - Allow setting SSL verify to false - [PR #17433](https://github.com/BerriAI/litellm/pull/17433)
 
 - **General**
