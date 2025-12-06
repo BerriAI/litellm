@@ -1015,7 +1015,6 @@ class ProxyLogging:
                     # Add any guardrails from metadata that aren't already in applied_guardrails
                     for guardrail_name in guardrails_in_metadata:
                         if isinstance(guardrail_name, str) and guardrail_name not in applied_guardrails:
-                            print(f"DEBUG pre_call_hook: Adding guardrail from metadata to applied_guardrails: {guardrail_name}")
                             add_guardrail_to_applied_guardrails_header(
                                 request_data=data, guardrail_name=guardrail_name
                             )
