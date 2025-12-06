@@ -1,5 +1,5 @@
 ---
-title: "v1.80.8-stable - Introducing A2A Agent Gateway"
+title: "[Preview] v1.80.8.rc.1 - Introducing A2A Agent Gateway"
 slug: "v1-80-8"
 date: 2025-12-06T10:00:00
 authors:
