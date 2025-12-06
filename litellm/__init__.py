@@ -1305,6 +1305,7 @@ from .llms.friendliai.chat.transformation import FriendliaiChatConfig
 from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
 from .llms.xai.chat.transformation import XAIChatConfig
 from .llms.xai.common_utils import XAIModelInfo
+from .llms.zai.chat.transformation import ZAIChatConfig
 from .llms.aiml.chat.transformation import AIMLChatConfig
 from .llms.volcengine.chat.transformation import (
     VolcEngineChatConfig as VolcEngineConfig,
