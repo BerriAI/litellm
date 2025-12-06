@@ -520,6 +520,7 @@ perplexity_models: Set = set()
 watsonx_models: Set = set()
 gemini_models: Set = set()
 xai_models: Set = set()
+zai_models: Set = set()
 deepseek_models: Set = set()
 runwayml_models: Set = set()
 azure_ai_models: Set = set()
@@ -711,6 +712,8 @@ def add_known_models():
             text_completion_codestral_models.add(key)
         elif value.get("litellm_provider") == "xai":
             xai_models.add(key)
+        elif value.get("litellm_provider") == "zai":
+            zai_models.add(key)
         elif value.get("litellm_provider") == "fal_ai":
             fal_ai_models.add(key)
         elif value.get("litellm_provider") == "deepseek":
@@ -872,6 +875,7 @@ model_list = list(
     | gemini_models
     | text_completion_codestral_models
     | xai_models
+    | zai_models
     | fal_ai_models
     | deepseek_models
     | azure_ai_models
@@ -960,6 +964,7 @@ models_by_provider: dict = {
     "aleph_alpha": aleph_alpha_models,
     "text-completion-codestral": text_completion_codestral_models,
     "xai": xai_models,
+    "zai": zai_models,
     "fal_ai": fal_ai_models,
     "deepseek": deepseek_models,
     "runwayml": runwayml_models,
@@ -1300,6 +1305,7 @@ from .llms.friendliai.chat.transformation import FriendliaiChatConfig
 from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
 from .llms.xai.chat.transformation import XAIChatConfig
 from .llms.xai.common_utils import XAIModelInfo
+from .llms.zai.chat.transformation import ZAIChatConfig
 from .llms.aiml.chat.transformation import AIMLChatConfig
 from .llms.volcengine.chat.transformation import (
     VolcEngineChatConfig as VolcEngineConfig,
@@ -1497,10 +1503,46 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
 # Lazy loading system for heavy modules to reduce initial import time and memory usage
 
 if TYPE_CHECKING:
+    from litellm.types.utils import ModelInfo as _ModelInfoType
+    
+    # Cost calculator functions
     cost_per_token: Callable[..., Tuple[float, float]]
     completion_cost: Callable[..., float]
     response_cost_calculator: Any
     modify_integration: Any
+    
+    # Utils functions - type stubs for truly lazy loaded functions only
+    # (functions NOT imported via "from .main import *")
+    get_response_string: Callable[..., str]
+    supports_function_calling: Callable[..., bool]
+    supports_web_search: Callable[..., bool]
+    supports_url_context: Callable[..., bool]
+    supports_response_schema: Callable[..., bool]
+    supports_parallel_function_calling: Callable[..., bool]
+    supports_vision: Callable[..., bool]
+    supports_audio_input: Callable[..., bool]
+    supports_audio_output: Callable[..., bool]
+    supports_system_messages: Callable[..., bool]
+    supports_reasoning: Callable[..., bool]
+    acreate: Callable[..., Any]
+    get_max_tokens: Callable[..., int]
+    get_model_info: Callable[..., _ModelInfoType]
+    register_prompt_template: Callable[..., None]
+    validate_environment: Callable[..., dict]
+    check_valid_key: Callable[..., bool]
+    register_model: Callable[..., None]
+    encode: Callable[..., list]
+    decode: Callable[..., str]
+    _calculate_retry_after: Callable[..., float]
+    _should_retry: Callable[..., bool]
+    get_supported_openai_params: Callable[..., Optional[list]]
+    get_api_base: Callable[..., Optional[str]]
+    get_first_chars_messages: Callable[..., str]
+    get_provider_fields: Callable[..., List]
+    get_valid_models: Callable[..., list]
+    
+    # Response types - truly lazy loaded only (not in main.py or elsewhere)
+    ModelResponseListIterator: Type[Any]
 
 
 def __getattr__(name: str) -> Any:

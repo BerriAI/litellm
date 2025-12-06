@@ -27,9 +27,10 @@ import {
   Text,
   Title,
 } from "@tremor/react";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert } from "antd";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 
+import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { Button } from "@tremor/react";
 import { all_admin_roles } from "../utils/roles";
@@ -86,6 +87,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
   });
 
   const [allTags, setAllTags] = useState<EntityList[]>([]);
+  const { data: customers = [] } = useCustomers(accessToken, userRole);
   const [modelViewType, setModelViewType] = useState<"groups" | "individual">("groups");
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
@@ -430,6 +432,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                   <Tab>Your Organization Usage</Tab>
                 )}
                 <Tab>Team Usage</Tab>
+                {all_admin_roles.includes(userRole || "") ? <Tab>Customer Usage</Tab> : <></>}
                 {all_admin_roles.includes(userRole || "") ? <Tab>Tag Usage</Tab> : <></>}
                 {all_admin_roles.includes(userRole || "") ? <Tab>User Agent Activity</Tab> : <></>}
               </TabList>
@@ -798,6 +801,23 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                 />
               </TabPanel>
 
+              {/* Customer Usage Panel */}
+              <TabPanel>
+                <EntityUsage
+                  accessToken={accessToken}
+                  entityType="customer"
+                  userID={userID}
+                  userRole={userRole}
+                  entityList={
+                    customers?.map((customer) => ({
+                      label: customer.alias || customer.user_id,
+                      value: customer.user_id,
+                    })) || null
+                  }
+                  premiumUser={premiumUser}
+                  dateValue={dateValue}
+                />
+              </TabPanel>
               {/* Tag Usage Panel */}
               <TabPanel>
                 <EntityUsage

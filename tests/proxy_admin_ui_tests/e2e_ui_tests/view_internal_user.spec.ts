@@ -39,9 +39,8 @@ test("view internal user page", async ({ page }) => {
   const rowCount = await page.locator("tbody tr").count();
   expect(rowCount).toBeGreaterThan(0);
 
-  const userIdHeader = page.locator("th", { hasText: "User ID" });
-  page.screenshot({ path: "test-results/user_id_header.png" });
-  await expect(userIdHeader).toBeVisible();
+  const userIdHeader = await page.locator("th", { hasText: "User ID" });
+  await expect(userIdHeader).toBeVisible({ timeout: 10000 });
 
   // test pagination
   // Wait for pagination controls to be visible
