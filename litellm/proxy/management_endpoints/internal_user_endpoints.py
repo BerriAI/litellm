@@ -60,9 +60,9 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
     auto_create_key = data_json.pop("auto_create_key", True)
 
     if auto_create_key is False:
-        data_json["table_name"] = (
-            "user"  # only create a user, don't create key if 'auto_create_key' set to False
-        )
+        data_json[
+            "table_name"
+        ] = "user"  # only create a user, don't create key if 'auto_create_key' set to False
 
     if litellm.default_internal_user_params and (
         data.user_role != LitellmUserRoles.PROXY_ADMIN.value
@@ -566,7 +566,7 @@ async def user_info(
         user_info = None
         if user_id is not None:
             user_info = await prisma_client.get_data(user_id=user_id)
-        
+
         if user_info is None:
             raise HTTPException(
                 status_code=404,
@@ -730,11 +730,11 @@ def _process_keys_for_user_info(
             except Exception:
                 # if using pydantic v1
                 _key = key.dict()
-            
+
             # Filter out UI session tokens (team_id="litellm-dashboard")
             if _key.get("team_id") == UI_SESSION_TOKEN_TEAM_ID:
                 continue
-            
+
             if (
                 "team_id" in _key
                 and _key["team_id"] is not None
@@ -791,9 +791,9 @@ def _update_internal_user_params(
         "budget_duration" not in non_default_values
     ):  # applies internal user limits, if user role updated
         if is_internal_user and litellm.internal_user_budget_duration is not None:
-            non_default_values["budget_duration"] = (
-                litellm.internal_user_budget_duration
-            )
+            non_default_values[
+                "budget_duration"
+            ] = litellm.internal_user_budget_duration
             from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
             non_default_values["budget_reset_at"] = get_budget_reset_time(
@@ -1742,6 +1742,64 @@ async def add_internal_user_to_organization(
         raise Exception(f"Failed to add user to organization: {str(e)}")
 
 
+async def _filter_users_by_organization(
+    prisma_client,
+    organization_id: str,
+    user_id: Optional[str],
+    user_email: Optional[str],
+    skip: int,
+    page_size: int,
+) -> List[LiteLLM_UserTableFiltered]:
+    """
+    Filter users by organization membership.
+
+    Queries the organization membership table to get user IDs in the organization,
+    then filters and returns user details from the user table.
+    """
+    # Get organization memberships
+    org_memberships = await prisma_client.db.litellm_organizationmembership.find_many(
+        where={"organization_id": organization_id}
+    )
+
+    if not org_memberships:
+        return []
+
+    # Extract user IDs from memberships
+    org_user_ids = [m.user_id for m in org_memberships]
+
+    # Build where conditions for user filtering
+    where_conditions: dict = {"user_id": {"in": org_user_ids}}
+
+    if user_id:
+        # Filter by user_id within org members
+        where_conditions["user_id"] = {
+            "in": org_user_ids,
+            "contains": user_id,
+            "mode": "insensitive",
+        }
+
+    if user_email:
+        where_conditions["user_email"] = {
+            "contains": user_email,
+            "mode": "insensitive",
+        }
+
+    # Query users with pagination and filters
+    users: Optional[
+        List[BaseModel]
+    ] = await prisma_client.db.litellm_usertable.find_many(
+        where=where_conditions,
+        skip=skip,
+        take=page_size,
+        order={"created_at": "desc"},
+    )
+
+    if not users:
+        return []
+
+    return [LiteLLM_UserTableFiltered(**user.model_dump()) for user in users]
+
+
 @router.get(
     "/user/filter/ui",
     tags=["Internal User management"],
@@ -1758,6 +1816,10 @@ async def ui_view_users(
     user_email: Optional[str] = fastapi.Query(
         default=None, description="User email in the request parameters"
     ),
+    organization_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Organization ID to filter users by membership. When provided, only returns users who are members of this organization.",
+    ),
     page: int = fastapi.Query(
         default=1, description="Page number for pagination", ge=1
     ),
@@ -1772,6 +1834,7 @@ async def ui_view_users(
     Args:
         user_id (Optional[str]): Partial user ID to search for
         user_email (Optional[str]): Partial email to search for
+        organization_id (Optional[str]): Filter by organization membership
         page (int): Page number for pagination (starts at 1)
         page_size (int): Number of items per page (max 100)
         user_api_key_dict (UserAPIKeyAuth): User authentication information
@@ -1787,6 +1850,17 @@ async def ui_view_users(
     try:
         # Calculate offset for pagination
         skip = (page - 1) * page_size
+
+        # If organization_id is provided, filter users by organization membership
+        if organization_id:
+            return await _filter_users_by_organization(
+                prisma_client=prisma_client,
+                organization_id=organization_id,
+                user_id=user_id,
+                user_email=user_email,
+                skip=skip,
+                page_size=page_size,
+            )
 
         # Build where conditions based on provided parameters
         where_conditions = {}
@@ -1804,13 +1878,13 @@ async def ui_view_users(
             }
 
         # Query users with pagination and filters
-        users: Optional[List[BaseModel]] = (
-            await prisma_client.db.litellm_usertable.find_many(
-                where=where_conditions,
-                skip=skip,
-                take=page_size,
-                order={"created_at": "desc"},
-            )
+        users: Optional[
+            List[BaseModel]
+        ] = await prisma_client.db.litellm_usertable.find_many(
+            where=where_conditions,
+            skip=skip,
+            take=page_size,
+            order={"created_at": "desc"},
         )
 
         if not users:

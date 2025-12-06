@@ -1252,7 +1252,9 @@ async def update_team(
             )
 
         if data.team_id is None:
-            raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
+            raise HTTPException(
+                status_code=400, detail={"error": "No team id passed in"}
+            )
         verbose_proxy_logger.debug("/team/update - %s", data)
 
         existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
@@ -1361,12 +1363,12 @@ async def update_team(
                 updated_kv["model_id"] = _model_id
 
         updated_kv = prisma_client.jsonify_team_object(db_data=updated_kv)
-        team_row: Optional[LiteLLM_TeamTable] = (
-            await prisma_client.db.litellm_teamtable.update(
-                where={"team_id": data.team_id},
-                data=updated_kv,
-                include={"litellm_model_table": True},  # type: ignore
-            )
+        team_row: Optional[
+            LiteLLM_TeamTable
+        ] = await prisma_client.db.litellm_teamtable.update(
+            where={"team_id": data.team_id},
+            data=updated_kv,
+            include={"litellm_model_table": True},  # type: ignore
         )
 
         if team_row is None or team_row.team_id is None:
@@ -1375,7 +1377,9 @@ async def update_team(
                 detail={"error": "Team doesn't exist. Got={}".format(team_row)},
             )
 
-        verbose_proxy_logger.info("Successfully updated team - %s, info", team_row.team_id)
+        verbose_proxy_logger.info(
+            "Successfully updated team - %s, info", team_row.team_id
+        )
         await _cache_team_object(
             team_id=team_row.team_id,
             team_table=LiteLLM_TeamTableCachedObj(**team_row.model_dump()),
@@ -1556,6 +1560,90 @@ async def _validate_team_member_add_permissions(
                 )
             },
         )
+
+
+async def _validate_organization_membership(
+    data: TeamMemberAddRequest,
+    complete_team_data: LiteLLM_TeamTable,
+    prisma_client: PrismaClient,
+    user_api_key_cache,
+    proxy_logging_obj,
+) -> None:
+    """
+    Validate that users being added to an organization-scoped team are members of that organization.
+
+    For teams with organization_id set, only users who are members of that organization can be added.
+    For standalone teams (organization_id = None), any proxy user can be added.
+    """
+    # Skip validation for standalone teams
+    if complete_team_data.organization_id is None:
+        return
+
+    # Extract members being added (handle both single Member and List[Member])
+    members_to_check = [data.member] if isinstance(data.member, Member) else data.member
+
+    # Separate IDs and Emails to check
+    user_ids_to_check = set()
+    emails_to_check = set()
+
+    for member in members_to_check:
+        # Skip the default_user_id (global proxy admin)
+        if member.user_id == SpecialProxyStrings.default_user_id.value:
+            continue
+
+        if member.user_id:
+            user_ids_to_check.add(member.user_id)
+        elif member.user_email:
+            emails_to_check.add(member.user_email)
+
+    if not user_ids_to_check and not emails_to_check:
+        return
+
+    valid_ids = set()
+    if user_ids_to_check:
+        memberships = await prisma_client.db.litellm_organizationmembership.find_many(
+            where={
+                "organization_id": complete_team_data.organization_id,
+                "user_id": {"in": list(user_ids_to_check)},
+            }
+        )
+        valid_ids = {m.user_id for m in memberships}
+
+    valid_emails = set()
+    if emails_to_check:
+        # We need to find users who have these emails AND are in the org
+        users = await prisma_client.db.litellm_usertable.find_many(
+            where={
+                "user_email": {"in": list(emails_to_check)},
+                "organization_memberships": {
+                    "some": {"organization_id": complete_team_data.organization_id}
+                },
+            }
+        )
+        valid_emails = {u.user_email for u in users if u.user_email}
+
+    # Validate each member
+    for member in members_to_check:
+        # Skip the default_user_id (global proxy admin)
+        if member.user_id == SpecialProxyStrings.default_user_id.value:
+            continue
+
+        if member.user_id:
+            if member.user_id not in valid_ids:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": f"User ID {member.user_id} is not a member of organization {complete_team_data.organization_id}. Only users who are members of the organization can be added to organization-scoped teams."
+                    },
+                )
+        elif member.user_email:
+            if member.user_email not in valid_emails:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": f"User Email {member.user_email} is not a member of organization {complete_team_data.organization_id}. Only users who are members of the organization can be added to organization-scoped teams."
+                    },
+                )
 
 
 async def _process_team_members(
@@ -1792,14 +1880,25 @@ async def team_member_add(
         complete_team_data=complete_team_data,
     )
 
-    updated_team, updated_users, updated_team_memberships = (
-        await _add_team_members_to_team(
-            data=data,
-            complete_team_data=complete_team_data,
-            prisma_client=prisma_client,
-            user_api_key_dict=user_api_key_dict,
-            litellm_proxy_admin_name=litellm_proxy_admin_name,
-        )
+    # Validate organization membership for org-scoped teams
+    await _validate_organization_membership(
+        data=data,
+        complete_team_data=complete_team_data,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    (
+        updated_team,
+        updated_users,
+        updated_team_memberships,
+    ) = await _add_team_members_to_team(
+        data=data,
+        complete_team_data=complete_team_data,
+        prisma_client=prisma_client,
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name=litellm_proxy_admin_name,
     )
 
     # Check if updated_team is None
@@ -2343,10 +2442,10 @@ async def delete_team(
     team_rows: List[LiteLLM_TeamTable] = []
     for team_id in data.team_ids:
         try:
-            team_row_base: Optional[BaseModel] = (
-                await prisma_client.db.litellm_teamtable.find_unique(
-                    where={"team_id": team_id}
-                )
+            team_row_base: Optional[
+                BaseModel
+            ] = await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": team_id}
             )
             if team_row_base is None:
                 raise Exception
@@ -2523,11 +2622,11 @@ async def team_info(
             )
 
         try:
-            team_info: Optional[BaseModel] = (
-                await prisma_client.db.litellm_teamtable.find_unique(
-                    where={"team_id": team_id},
-                    include={"object_permission": True},
-                )
+            team_info: Optional[
+                BaseModel
+            ] = await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": team_id},
+                include={"object_permission": True},
             )
             if team_info is None:
                 raise Exception
