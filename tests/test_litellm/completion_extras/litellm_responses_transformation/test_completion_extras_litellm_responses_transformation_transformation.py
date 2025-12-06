@@ -444,3 +444,114 @@ def test_transform_request_single_char_keys_not_matched():
     assert result_correct.get("previous_response_id") == "resp_abc"
 
     print("✓ Single-character keys are not incorrectly matched to metadata/previous_response_id")
+
+
+def test_convert_tool_output_to_responses_format():
+    """
+    Test that tool message content is correctly transformed from Chat Completions format
+    to Responses API format.
+
+    Related issue: https://github.com/BerriAI/litellm/issues/17507
+
+    The bug was that tool output content with multimodal data (text + images) was passed
+    directly without transforming the type fields:
+    - {"type": "text", ...} should become {"type": "output_text", ...}
+    - {"type": "image_url", ...} should become {"type": "input_image", ...}
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {"role": "user", "content": "Take a screenshot"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call_abc123",
+                    "type": "function",
+                    "function": {"name": "screenshot", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_abc123",
+            "content": [
+                {"type": "text", "text": "Screenshot captured"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,ABC123"}},
+            ],
+        },
+    ]
+
+    input_items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    # Find the function_call_output item
+    tool_output_item = None
+    for item in input_items:
+        if item.get("type") == "function_call_output":
+            tool_output_item = item
+            break
+
+    assert tool_output_item is not None, "function_call_output item not found"
+    assert tool_output_item["call_id"] == "call_abc123"
+
+    output = tool_output_item["output"]
+    assert isinstance(output, list), "output should be a list"
+    assert len(output) == 2
+
+    # Check text was transformed to output_text
+    assert output[0]["type"] == "output_text", f"Expected 'output_text', got '{output[0]['type']}'"
+    assert output[0]["text"] == "Screenshot captured"
+
+    # Check image_url was transformed to input_image and URL was flattened
+    assert output[1]["type"] == "input_image", f"Expected 'input_image', got '{output[1]['type']}'"
+    assert output[1]["image_url"] == "data:image/png;base64,ABC123"
+
+    print("✓ Tool output content correctly transformed to Responses API format")
+
+
+def test_convert_tool_output_string_content_unchanged():
+    """
+    Test that tool message with simple string content is passed through unchanged.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {"role": "user", "content": "Get the weather"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call_xyz789",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"location": "Tokyo"}'},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_xyz789",
+            "content": "The weather in Tokyo is sunny, 25°C",
+        },
+    ]
+
+    input_items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    # Find the function_call_output item
+    tool_output_item = None
+    for item in input_items:
+        if item.get("type") == "function_call_output":
+            tool_output_item = item
+            break
+
+    assert tool_output_item is not None
+    assert tool_output_item["output"] == "The weather in Tokyo is sunny, 25°C"
+
+    print("✓ Tool output string content passed through unchanged")
