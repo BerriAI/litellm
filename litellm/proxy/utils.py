@@ -983,6 +983,42 @@ class ProxyLogging:
                         start_time=start_time,
                         end_time=end_time,
                     )
+            
+            # After processing all callbacks, check if there are guardrails in metadata
+            # that weren't processed (e.g., guardrails from API key metadata that don't have callbacks)
+            # and add them to applied_guardrails
+            if data is not None:
+                from litellm.proxy.common_utils.callback_utils import (
+                    add_guardrail_to_applied_guardrails_header,
+                )
+                metadata_standard = data.get("metadata") or {}
+                metadata_litellm = data.get("litellm_metadata") or {}
+                
+                # Check both metadata locations for guardrails
+                guardrails_in_metadata = []
+                if isinstance(metadata_standard, dict) and "guardrails" in metadata_standard:
+                    guardrails_in_metadata = metadata_standard.get("guardrails", [])
+                elif isinstance(metadata_litellm, dict) and "guardrails" in metadata_litellm:
+                    guardrails_in_metadata = metadata_litellm.get("guardrails", [])
+                
+                if guardrails_in_metadata and isinstance(guardrails_in_metadata, list):
+                    # Get guardrails that are already in applied_guardrails (check both locations)
+                    applied_guardrails = []
+                    if isinstance(metadata_standard, dict) and "applied_guardrails" in metadata_standard:
+                        applied_guardrails = metadata_standard.get("applied_guardrails", [])
+                    elif isinstance(metadata_litellm, dict) and "applied_guardrails" in metadata_litellm:
+                        applied_guardrails = metadata_litellm.get("applied_guardrails", [])
+                    
+                    if not isinstance(applied_guardrails, list):
+                        applied_guardrails = []
+                    
+                    # Add any guardrails from metadata that aren't already in applied_guardrails
+                    for guardrail_name in guardrails_in_metadata:
+                        if isinstance(guardrail_name, str) and guardrail_name not in applied_guardrails:
+                            add_guardrail_to_applied_guardrails_header(
+                                request_data=data, guardrail_name=guardrail_name
+                            )
+            
             return data
         except Exception as e:
             raise e
