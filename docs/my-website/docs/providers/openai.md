@@ -191,6 +191,7 @@ os.environ["OPENAI_BASE_URL"] = "https://your_host/v1"     # OPTIONAL
 | gpt-5.1 | `response = completion(model="gpt-5.1", messages=messages)` |
 | gpt-5.1-codex | `response = completion(model="gpt-5.1-codex", messages=messages)` |
 | gpt-5.1-codex-mini | `response = completion(model="gpt-5.1-codex-mini", messages=messages)` |
+| gpt-5.1-codex-max | `response = completion(model="gpt-5.1-codex-max", messages=messages)` |
 | gpt-4.1 | `response = completion(model="gpt-4.1", messages=messages)` |
 | gpt-4.1-mini | `response = completion(model="gpt-4.1-mini", messages=messages)` |
 | gpt-4.1-nano | `response = completion(model="gpt-4.1-nano", messages=messages)` |
@@ -494,6 +495,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 | `gpt-5-codex` | `adaptive` | `low`, `medium`, `high` (no `minimal`) |
 | `gpt-5.1-codex` | `adaptive` | `low`, `medium`, `high` (no `minimal`) |
 | `gpt-5.1-codex-mini` | `adaptive` | `low`, `medium`, `high` (no `minimal`) |
+| `gpt-5.1-codex-max` | `adaptive` | `low`, `medium`, `high` (no `minimal`) |
 | `gpt-5-pro` | `high` | `high` only |
 
 **Note:**
@@ -509,7 +511,7 @@ The `verbosity` parameter controls the length and detail of responses from GPT-5
 
 **Supported models:** `gpt-5`, `gpt-5.1`, `gpt-5-mini`, `gpt-5-nano`, `gpt-5-pro`
 
-**Note:** GPT-5-Codex models (`gpt-5-codex`, `gpt-5.1-codex`, `gpt-5.1-codex-mini`) do **not** support the `verbosity` parameter.
+**Note:** GPT-5-Codex models (`gpt-5-codex`, `gpt-5.1-codex`, `gpt-5.1-codex-mini`, `gpt-5.1-codex-max`) do **not** support the `verbosity` parameter.
 
 **Use cases:**
 - **`"low"`**: Best for concise answers or simple code generation (e.g., SQL queries)
