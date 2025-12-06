@@ -117,7 +117,7 @@ const sidebars = {
   ],
   // But you can create a sidebar manually
   tutorialSidebar: [
-    { type: "doc", id: "index", label: "LiteLLM - Getting Started" },
+    { type: "doc", id: "index", label: "Getting Started" },
 
     {
       type: "category",
