@@ -1890,7 +1890,7 @@ os.environ["ANTHROPIC_API_KEY"] = "sk-ant-..."
 # 1. Upload a file once
 file = litellm.create_file(
     file=open("document.pdf", "rb"),
-    purpose="assistants",
+    purpose="messages",
     custom_llm_provider="anthropic",
 )
 
@@ -1938,7 +1938,7 @@ Download only works for files created by the [code execution tool](https://docs.
 # Upload image
 image = litellm.create_file(
     file=open("photo.jpg", "rb"),
-    purpose="assistants",
+    purpose="messages",
     custom_llm_provider="anthropic",
 )
 
