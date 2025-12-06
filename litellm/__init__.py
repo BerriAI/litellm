@@ -573,6 +573,7 @@ ovhcloud_models: Set = set()
 ovhcloud_embedding_models: Set = set()
 lemonade_models: Set = set()
 docker_model_runner_models: Set = set()
+amazon_nova_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -815,6 +816,8 @@ def add_known_models():
             lemonade_models.add(key)
         elif value.get("litellm_provider") == "docker_model_runner":
             docker_model_runner_models.add(key)
+        elif value.get("litellm_provider") == "amazon-nova":
+            amazon_nova_models.add(key)
 
 
 add_known_models()
@@ -1016,6 +1019,7 @@ models_by_provider: dict = {
     "ovhcloud": ovhcloud_models | ovhcloud_embedding_models,
     "lemonade": lemonade_models,
     "clarifai": clarifai_models,
+    "amazon-nova": amazon_nova_models,
 }
 
 # mapping for those models which have larger equivalents
