@@ -3,7 +3,7 @@ import TeamInfoView from "@/components/team/team_info";
 import TeamSSOSettings from "@/components/TeamSSOSettings";
 import { isProxyAdminRole } from "@/utils/roles";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { ChevronDownIcon, ChevronRightIcon, PencilAltIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
+import { ChevronDownIcon, ChevronRightIcon, RefreshIcon } from "@heroicons/react/outline";
 import {
   Accordion,
   AccordionBody,
@@ -33,6 +33,7 @@ import {
 import { Button as Button2, Form, Input, Modal, Select as Select2, Switch, Tooltip, Typography } from "antd";
 import React, { useEffect, useState } from "react";
 import { formatNumberWithCommas } from "../utils/dataUtils";
+import AgentSelector from "./agent_management/AgentSelector";
 import { fetchTeams } from "./common_components/fetch_teams";
 import ModelAliasManager from "./common_components/ModelAliasManager";
 import PremiumLoggingSettings from "./common_components/PremiumLoggingSettings";
@@ -44,7 +45,6 @@ import {
 import type { KeyResponse, Team } from "./key_team_helpers/key_list";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "./mcp_server_management/MCPToolPermissions";
-import AgentSelector from "./agent_management/AgentSelector";
 import NotificationsManager from "./molecules/notifications_manager";
 import { Organization, fetchMCPAccessGroups, getGuardrailsList, teamDeleteCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
@@ -78,6 +78,7 @@ interface EditTeamModalProps {
 
 import { updateExistingKeys } from "@/utils/dataUtils";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
+import TableIconActionButton from "./common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import { Member, teamCreateCall, v2TeamListCall } from "./networking";
 
 interface TeamInfo {
@@ -947,28 +948,21 @@ const Teams: React.FC<TeamProps> = ({
                                     <TableCell>
                                       {userRole == "Admin" ? (
                                         <>
-                                          <Tooltip title="Edit team">
-                                            {" "}
-                                            <Icon
-                                              icon={PencilAltIcon}
-                                              size="sm"
-                                              className="cursor-pointer hover:text-blue-600"
-                                              onClick={() => {
-                                                setSelectedTeamId(team.team_id);
-                                                setEditTeam(true);
-                                              }}
-                                            />
-                                          </Tooltip>
-                                          <Tooltip title="Delete team">
-                                            {" "}
-                                            <Icon
-                                              onClick={() => handleDelete(team)}
-                                              icon={TrashIcon}
-                                              size="sm"
-                                              className="cursor-pointer hover:text-red-600"
-                                              data-testid="delete-team-button"
-                                            />
-                                          </Tooltip>
+                                          <TableIconActionButton
+                                            variant="Edit"
+                                            onClick={() => {
+                                              setSelectedTeamId(team.team_id);
+                                              setEditTeam(true);
+                                            }}
+                                            dataTestId="edit-team-button"
+                                            tooltipText="Edit team"
+                                          />
+                                          <TableIconActionButton
+                                            variant="Delete"
+                                            onClick={() => handleDelete(team)}
+                                            dataTestId="delete-team-button"
+                                            tooltipText="Delete team"
+                                          />
                                         </>
                                       ) : null}
                                     </TableCell>
