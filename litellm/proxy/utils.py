@@ -1031,15 +1031,25 @@ class ProxyLogging:
                     )
                 else:
                     user_api_key_auth_dict = user_api_key_dict
-
                 # Add task to list for parallel execution
-                guardrail_tasks.append(
-                    callback.async_moderation_hook(
+                if (
+                    "apply_guardrail" in type(callback).__dict__
+                    and user_api_key_dict is not None
+                ):
+                    data["guardrail_to_apply"] = callback
+                    guardrail_task = unified_guardrail.async_moderation_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        data=data,
+                        call_type=call_type,
+                    )
+                else:
+
+                    guardrail_task = callback.async_moderation_hook(
                         data=data,
                         user_api_key_dict=user_api_key_auth_dict,  # type: ignore
                         call_type=call_type,  # type: ignore
                     )
-                )
+                guardrail_tasks.append(guardrail_task)
 
         # Step 2: Run all guardrail tasks in parallel
         if guardrail_tasks:
@@ -1072,6 +1082,7 @@ class ProxyLogging:
             "user_budget",
             "soft_budget",
             "team_budget",
+            "organization_budget",
             "proxy_budget",
             "projected_limit_exceeded",
         ],
@@ -1416,6 +1427,7 @@ class ProxyLogging:
         3. /image/generation
         4. /files
         """
+
         from litellm.types.guardrails import GuardrailEventHooks
 
         guardrail_callbacks: List[CustomGuardrail] = []
@@ -1450,6 +1462,7 @@ class ProxyLogging:
                     continue
 
                 guardrail_response: Optional[Any] = None
+
                 if "apply_guardrail" in type(callback).__dict__:
                     data["guardrail_to_apply"] = callback
                     guardrail_response = (
@@ -1559,7 +1572,9 @@ class ProxyLogging:
         Covers:
         1. /chat/completions
         """
+
         for callback in litellm.callbacks:
+
             _callback: Optional[CustomLogger] = None
             if isinstance(callback, str):
                 _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
@@ -1573,11 +1588,22 @@ class ProxyLogging:
                 ) or _callback.should_run_guardrail(
                     data=request_data, event_type=GuardrailEventHooks.post_call
                 ):
-                    response = _callback.async_post_call_streaming_iterator_hook(
-                        user_api_key_dict=user_api_key_dict,
-                        response=response,
-                        request_data=request_data,
-                    )
+
+                    if "apply_guardrail" in type(callback).__dict__:
+                        request_data["guardrail_to_apply"] = callback
+                        response = (
+                            unified_guardrail.async_post_call_streaming_iterator_hook(
+                                user_api_key_dict=user_api_key_dict,
+                                request_data=request_data,
+                                response=response,
+                            )
+                        )
+                    else:
+                        response = _callback.async_post_call_streaming_iterator_hook(
+                            user_api_key_dict=user_api_key_dict,
+                            response=response,
+                            request_data=request_data,
+                        )
         return response
 
     def _init_response_taking_too_long_task(self, data: Optional[dict] = None):
@@ -3068,8 +3094,16 @@ class PrismaClient:
             # Group by model_name and get the latest for each
             latest_checks = {}
             for check in all_checks:
-                if check.model_name not in latest_checks:
-                    latest_checks[check.model_name] = check
+                # Create a unique key: prefer model_id if available, otherwise use model_name
+                # This ensures we get the latest check for each unique model
+                if check.model_id:
+                    key = (check.model_id, check.model_name)
+                else:
+                    key = (None, check.model_name)
+                
+                # Only add if we haven't seen this key yet (since checks are ordered by checked_at desc)
+                if key not in latest_checks:
+                    latest_checks[key] = check
 
             return list(latest_checks.values())
         except Exception as e:

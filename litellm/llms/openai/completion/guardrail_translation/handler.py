@@ -53,12 +53,13 @@ class OpenAITextCompletionHandler(BaseTranslation):
 
         if isinstance(prompt, str):
             # Single string prompt
-            guardrailed_texts, _ = await guardrail_to_apply.apply_guardrail(
-                texts=[prompt],
+            guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+                inputs={"texts": [prompt]},
                 request_data=data,
                 input_type="request",
                 logging_obj=litellm_logging_obj,
             )
+            guardrailed_texts = guardrailed_inputs.get("texts", [])
             data["prompt"] = guardrailed_texts[0] if guardrailed_texts else prompt
 
             verbose_proxy_logger.debug(
@@ -79,12 +80,13 @@ class OpenAITextCompletionHandler(BaseTranslation):
                     text_indices.append(idx)
 
             if texts_to_check:
-                guardrailed_texts, _ = await guardrail_to_apply.apply_guardrail(
-                    texts=texts_to_check,
+                guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+                    inputs={"texts": texts_to_check},
                     request_data=data,
                     input_type="request",
                     logging_obj=litellm_logging_obj,
                 )
+                guardrailed_texts = guardrailed_inputs.get("texts", [])
 
                 # Replace guardrailed texts back
                 for guardrail_idx, prompt_idx in enumerate(text_indices):
@@ -152,12 +154,13 @@ class OpenAITextCompletionHandler(BaseTranslation):
             if user_metadata:
                 request_data["litellm_metadata"] = user_metadata
 
-            guardrailed_texts, _ = await guardrail_to_apply.apply_guardrail(
-                texts=texts_to_check,
+            guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+                inputs={"texts": texts_to_check},
                 request_data=request_data,
                 input_type="response",
                 logging_obj=litellm_logging_obj,
             )
+            guardrailed_texts = guardrailed_inputs.get("texts", [])
 
             # Apply guardrailed texts back to choices
             for guardrail_idx, choice_idx in enumerate(choice_indices):

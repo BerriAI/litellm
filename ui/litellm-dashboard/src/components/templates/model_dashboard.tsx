@@ -1351,12 +1351,7 @@ const OldModelDashboard: React.FC<ModelDashboardProps> = ({
                   />
                 </TabPanel>
                 <TabPanel>
-                  <CredentialsPanel
-                    accessToken={accessToken}
-                    uploadProps={uploadProps}
-                    credentialList={credentialsList}
-                    fetchCredentials={fetchCredentials}
-                  />
+                  <CredentialsPanel uploadProps={uploadProps} />
                 </TabPanel>
                 <TabPanel>
                   <PassThroughSettings

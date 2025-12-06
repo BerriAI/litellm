@@ -17,16 +17,15 @@ from urllib.parse import urlparse
 from fastapi import HTTPException
 from httpx import HTTPStatusError
 from mcp import ReadResourceResult, Resource
+from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import (
-    CallToolRequestParams as MCPCallToolRequestParams,
+    CallToolResult,
     GetPromptRequestParams,
     GetPromptResult,
     Prompt,
     ResourceTemplate,
 )
-from mcp.types import CallToolResult
 from mcp.types import Tool as MCPTool
-
 from pydantic import AnyUrl
 
 import litellm
@@ -1277,15 +1276,14 @@ class MCPServerManager:
 
             name_to_use = prefixed_name if add_prefix else tool.name
 
-            tool_obj = MCPTool(
-                name=name_to_use,
-                description=tool.description,
-                inputSchema=tool.inputSchema,
-            )
-            prefixed_tools.append(tool_obj)
+            # Preserve all tool fields including metadata/_meta by mutating the original tool
+            # Similar to how _create_prefixed_prompts works
+            original_name = tool.name
+            tool.name = name_to_use
+            prefixed_tools.append(tool)
 
             # Update tool to server mapping for resolution (support both forms)
-            self.tool_name_to_mcp_server_name_mapping[tool.name] = prefix
+            self.tool_name_to_mcp_server_name_mapping[original_name] = prefix
             self.tool_name_to_mcp_server_name_mapping[prefixed_name] = prefix
 
         verbose_logger.info(
@@ -1949,7 +1947,12 @@ class MCPServerManager:
             ) = split_server_prefix_from_name(tool_name)
             if original_tool_name in self.tool_name_to_mcp_server_name_mapping:
                 for server in self.get_registry().values():
-                    if normalize_server_name(server.name) == normalize_server_name(
+                    if server.server_name is None:
+                        if normalize_server_name(server.name) == normalize_server_name(
+                            server_name_from_prefix
+                        ):
+                            return server
+                    elif normalize_server_name(server.server_name) == normalize_server_name(
                         server_name_from_prefix
                     ):
                         return server

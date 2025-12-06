@@ -1461,3 +1461,43 @@ async def test_async_mock_completion_stream_with_model_response():
             accumulated_content += chunk.choices[0].delta.content
 
     assert "This is an async test response" in accumulated_content or len(chunks) > 0
+
+
+class TestCallTypesOCR:
+    """Test that OCR call types are properly defined in CallTypes enum.
+
+    Fixes https://github.com/BerriAI/litellm/issues/17381
+    """
+
+    def test_ocr_call_type_exists(self):
+        """Test that CallTypes.ocr exists and has correct value."""
+        from litellm.types.utils import CallTypes
+
+        assert hasattr(CallTypes, "ocr")
+        assert CallTypes.ocr.value == "ocr"
+
+    def test_aocr_call_type_exists(self):
+        """Test that CallTypes.aocr exists and has correct value."""
+        from litellm.types.utils import CallTypes
+
+        assert hasattr(CallTypes, "aocr")
+        assert CallTypes.aocr.value == "aocr"
+
+    def test_ocr_call_type_from_string(self):
+        """Test that CallTypes can be constructed from 'ocr' string."""
+        from litellm.types.utils import CallTypes
+
+        call_type = CallTypes("ocr")
+        assert call_type == CallTypes.ocr
+
+    def test_aocr_call_type_from_string(self):
+        """Test that CallTypes can be constructed from 'aocr' string.
+
+        This is the actual use case that was failing - the OCR endpoint
+        uses route_type='aocr' and guardrails try to instantiate
+        CallTypes('aocr').
+        """
+        from litellm.types.utils import CallTypes
+
+        call_type = CallTypes("aocr")
+        assert call_type == CallTypes.aocr

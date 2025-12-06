@@ -315,7 +315,32 @@ async def test_user_info_url_encoding_plus_character(mocker):
 
     # Mock the prisma client
     mock_prisma_client = mocker.MagicMock()
-    mock_prisma_client.get_data = mocker.AsyncMock()
+    
+    # Create a real LiteLLM_UserTable instance (BaseModel) so isinstance check passes
+    mock_user = LiteLLM_UserTable(
+        user_id="machine-user+alp-air-admin-b58-b@tempus.com",
+        user_email="machine-user+alp-air-admin-b58-b@tempus.com",
+        teams=[],
+    )
+    
+    # Mock get_data to return user when called with user_id, empty list for keys
+    async def mock_get_data(*args, **kwargs):
+        if kwargs.get("table_name") == "key":
+            return []
+        elif kwargs.get("table_name") == "team":
+            return []
+        elif kwargs.get("user_id") is not None:
+            return mock_user
+        return None
+    
+    mock_prisma_client.get_data = mocker.AsyncMock(side_effect=mock_get_data)
+
+    # Mock list_team to return None (patch it from where it's imported)
+    mock_list_team = mocker.AsyncMock(return_value=None)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.team_endpoints.list_team",
+        mock_list_team,
+    )
 
     # Patch the prisma client import in the endpoint
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -335,20 +360,73 @@ async def test_user_info_url_encoding_plus_character(mocker):
         "machine-user alp-air-admin-b58-b@tempus.com"  # What FastAPI gives us
     )
     expected_user_id = "machine-user+alp-air-admin-b58-b@tempus.com"
-    try:
-        response = await user_info(
-            user_id=decoded_user_id,
+    
+    response = await user_info(
+        user_id=decoded_user_id,
+        user_api_key_dict=mock_user_api_key_dict,
+        request=mock_request,
+    )
+
+    # Verify that the response contains the correct user data
+    # Check that get_data was called with the correct user_id (first call should be for user)
+    user_call = None
+    for call in mock_prisma_client.get_data.call_args_list:
+        if call.kwargs.get("user_id") and not call.kwargs.get("table_name"):
+            user_call = call
+            break
+    
+    assert user_call is not None, "get_data should be called with user_id"
+    assert user_call.kwargs["user_id"] == expected_user_id
+
+
+@pytest.mark.asyncio
+async def test_user_info_nonexistent_user(mocker):
+    """
+    Test that /user/info endpoint returns 404 when a non-existent user_id is provided.
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info
+
+    # Mock the prisma client
+    mock_prisma_client = mocker.MagicMock()
+    
+    # Mock get_data to return None (user doesn't exist)
+    async def mock_get_data(*args, **kwargs):
+        if kwargs.get("table_name") == "key":
+            return []
+        elif kwargs.get("user_id") is not None:
+            return None  # User not found
+        return None
+    
+    mock_prisma_client.get_data = mocker.AsyncMock(side_effect=mock_get_data)
+
+    # Patch the prisma client import in the endpoint
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Create a mock request
+    mock_request = mocker.MagicMock(spec=Request)
+
+    # Mock user_api_key_dict
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="test_admin", user_role="proxy_admin"
+    )
+
+    # Call user_info function with a non-existent user_id
+    nonexistent_user_id = "nonexistent-user@example.com"
+    
+    # Should raise ProxyException with 404 status code (HTTPException is converted by decorator)
+    with pytest.raises(ProxyException) as exc_info:
+        await user_info(
+            user_id=nonexistent_user_id,
             user_api_key_dict=mock_user_api_key_dict,
             request=mock_request,
         )
-    except Exception as e:
-        print(f"Error in user_info: {e}")
 
-    # Verify that the response contains the correct user data
-    print(
-        f"mock_prisma_client.get_data.call_args: {mock_prisma_client.get_data.call_args.kwargs}"
-    )
-    assert mock_prisma_client.get_data.call_args.kwargs["user_id"] == expected_user_id
+    # Verify the exception details
+    assert exc_info.value.code == "404"  # ProxyException.code is a string
+    assert f"User {nonexistent_user_id} not found" in str(exc_info.value.message)
 
 
 @pytest.mark.asyncio

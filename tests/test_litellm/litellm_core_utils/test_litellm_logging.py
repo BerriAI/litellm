@@ -196,31 +196,38 @@ async def test_logging_non_streaming_request():
 
     import litellm
 
-    mock_logging_obj = MockPrometheusLogger()
+    # Save original callbacks to restore after test
+    original_callbacks = getattr(litellm, "callbacks", [])
 
-    litellm.callbacks = [mock_logging_obj]
+    try:
+        mock_logging_obj = MockPrometheusLogger()
 
-    with patch.object(
-        mock_logging_obj,
-        "async_log_success_event",
-    ) as mock_async_log_success_event:
-        await litellm.acompletion(
-            max_tokens=100,
-            messages=[{"role": "user", "content": "Hey"}],
-            model="openai/codex-mini-latest",
-            mock_response="Hello, world!",
-        )
-        await asyncio.sleep(1)
-        mock_async_log_success_event.assert_called_once()
-        assert mock_async_log_success_event.call_count == 1
-        print(
-            "mock_async_log_success_event.call_args.kwargs",
-            mock_async_log_success_event.call_args.kwargs,
-        )
-        standard_logging_object = mock_async_log_success_event.call_args.kwargs[
-            "kwargs"
-        ]["standard_logging_object"]
-        assert standard_logging_object["stream"] is not True
+        litellm.callbacks = [mock_logging_obj]
+
+        with patch.object(
+            mock_logging_obj,
+            "async_log_success_event",
+        ) as mock_async_log_success_event:
+            await litellm.acompletion(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "Hey"}],
+                model="openai/codex-mini-latest",
+                mock_response="Hello, world!",
+            )
+            await asyncio.sleep(1)
+            mock_async_log_success_event.assert_called_once()
+            assert mock_async_log_success_event.call_count == 1
+            print(
+                "mock_async_log_success_event.call_args.kwargs",
+                mock_async_log_success_event.call_args.kwargs,
+            )
+            standard_logging_object = mock_async_log_success_event.call_args.kwargs[
+                "kwargs"
+            ]["standard_logging_object"]
+            assert standard_logging_object["stream"] is not True
+    finally:
+        # Restore original callbacks to ensure test isolation
+        litellm.callbacks = original_callbacks
 
 
 def test_get_user_agent_tags():

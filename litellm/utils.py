@@ -7022,6 +7022,16 @@ class ProviderConfigManager:
         Returns the provider config for a given provider.
         """
 
+        # Check JSON providers FIRST
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        if JSONProviderRegistry.exists(provider.value):
+            provider_config = JSONProviderRegistry.get(provider.value)
+            if provider_config is None:
+                raise ValueError(f"Provider {provider.value} not found")
+            return create_config_class(provider_config)()
+
         if (
             provider == LlmProviders.OPENAI
             and litellm.openaiOSeriesConfig.is_model_o_series_model(model=model)
@@ -7110,6 +7120,8 @@ class ProviderConfigManager:
             return litellm.CompactifAIChatConfig()
         elif litellm.LlmProviders.GITHUB_COPILOT == provider:
             return litellm.GithubCopilotConfig()
+        elif litellm.LlmProviders.RAGFLOW == provider:
+            return litellm.RAGFlowConfig()
         elif (
             litellm.LlmProviders.CUSTOM == provider
             or litellm.LlmProviders.CUSTOM_OPENAI == provider
@@ -7633,6 +7645,12 @@ class ProviderConfigManager:
             )
 
             return GeminiVectorStoreConfig()
+        elif litellm.LlmProviders.RAGFLOW == provider:
+            from litellm.llms.ragflow.vector_stores.transformation import (
+                RAGFlowVectorStoreConfig,
+            )
+
+            return RAGFlowVectorStoreConfig()
         return None
 
     @staticmethod
@@ -7912,6 +7930,12 @@ class ProviderConfigManager:
             )
 
             return RunwayMLTextToSpeechConfig()
+        elif litellm.LlmProviders.VERTEX_AI == provider:
+            from litellm.llms.vertex_ai.text_to_speech.transformation import (
+                VertexAITextToSpeechConfig,
+            )
+
+            return VertexAITextToSpeechConfig()
         return None
 
     @staticmethod

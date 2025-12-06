@@ -1085,19 +1085,26 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def _extract_thinking_blocks_from_parts(
         self, parts: List[HttpxPartType]
     ) -> List[ChatCompletionThinkingBlock]:
-        """Extract thinking blocks from parts if present"""
+        """Extract thinking blocks from parts if present.
+
+        Per Google's docs (https://ai.google.dev/gemini-api/docs/thinking):
+        - Parts with `thought: true` contain thinking/reasoning content
+        - `thoughtSignature` is a separate token for multi-turn context preservation,
+          it does NOT indicate that the content is thinking (a part can have
+          thoughtSignature without thought: true, e.g., function calls)
+        """
         thinking_blocks: List[ChatCompletionThinkingBlock] = []
         for part in parts:
-            if "thoughtSignature" in part:
-                part_copy = part.copy()
-                part_copy.pop("thoughtSignature")
-                thinking_blocks.append(
-                    ChatCompletionThinkingBlock(
-                        type="thinking",
-                        thinking=json.dumps(part_copy),
-                        signature=part["thoughtSignature"],
-                    )
-                )
+            if part.get("thought") is True:
+                thinking_text = part.get("text", "")
+                block: ChatCompletionThinkingBlock = {
+                    "type": "thinking",
+                    "thinking": thinking_text,
+                }                
+                signature = part.get("thoughtSignature")
+                if signature is not None:
+                    block["signature"] = signature
+                thinking_blocks.append(block)
         return thinking_blocks
 
     def _extract_image_response_from_parts(
@@ -1205,14 +1212,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     }
                     # Embed thought signature in ID for OpenAI client compatibility
                     if thought_signature:
-                        _tool_response_chunk[
-                            "id"
-                        ] = _encode_tool_call_id_with_signature(
-                            _tool_response_chunk["id"] or "", thought_signature
-                        )
                         _tool_response_chunk["provider_specific_fields"] = {  # type: ignore
                             "thought_signature": thought_signature
                         }
+                        # Only embed in ID if preview features are enabled
+                        if litellm.enable_preview_features:
+                            _tool_response_chunk[
+                                "id"
+                            ] = _encode_tool_call_id_with_signature(
+                                _tool_response_chunk["id"] or "", thought_signature
+                            )
                     _tools.append(_tool_response_chunk)
                 cumulative_tool_call_idx += 1
         if len(_tools) == 0:
@@ -2116,6 +2125,9 @@ class VertexLLM(VertexBase):
             custom_llm_provider=custom_llm_provider,
         )
 
+        # Extract use_psc_endpoint_format from optional_params
+        use_psc_endpoint_format = optional_params.get("use_psc_endpoint_format", False)
+
         auth_header, api_base = self._get_token_and_url(
             model=model,
             gemini_api_key=gemini_api_key,
@@ -2127,6 +2139,7 @@ class VertexLLM(VertexBase):
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             should_use_v1beta1_features=should_use_v1beta1_features,
+            use_psc_endpoint_format=use_psc_endpoint_format,
         )
 
         headers = VertexGeminiConfig().validate_environment(
@@ -2210,6 +2223,9 @@ class VertexLLM(VertexBase):
             custom_llm_provider=custom_llm_provider,
         )
 
+        # Extract use_psc_endpoint_format from optional_params
+        use_psc_endpoint_format = optional_params.get("use_psc_endpoint_format", False)
+
         auth_header, api_base = self._get_token_and_url(
             model=model,
             gemini_api_key=gemini_api_key,
@@ -2221,6 +2237,7 @@ class VertexLLM(VertexBase):
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             should_use_v1beta1_features=should_use_v1beta1_features,
+            use_psc_endpoint_format=use_psc_endpoint_format,
         )
 
         headers = VertexGeminiConfig().validate_environment(
@@ -2394,6 +2411,9 @@ class VertexLLM(VertexBase):
             custom_llm_provider=custom_llm_provider,
         )
 
+        # Extract use_psc_endpoint_format from optional_params
+        use_psc_endpoint_format = optional_params.get("use_psc_endpoint_format", False)
+
         auth_header, url = self._get_token_and_url(
             model=model,
             gemini_api_key=gemini_api_key,
@@ -2405,6 +2425,7 @@ class VertexLLM(VertexBase):
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             should_use_v1beta1_features=should_use_v1beta1_features,
+            use_psc_endpoint_format=use_psc_endpoint_format,
         )
         headers = VertexGeminiConfig().validate_environment(
             api_key=auth_header,
@@ -2582,13 +2603,12 @@ class ModelResponseIterator:
         try:
             json_chunk = json.loads(chunk)
 
-        except json.JSONDecodeError as e:
-            if (
-                self.sent_first_chunk is False
-            ):  # only check for accumulated json, on first chunk, else raise error. Prevent real errors from being masked.
-                self.chunk_type = "accumulated_json"
-                return self.handle_accumulated_json_chunk(chunk=chunk)
-            raise e
+        except json.JSONDecodeError:
+            # Switch to accumulation mode for partial JSON chunks
+            # This can happen at any point due to network fragmentation, not just first chunk
+            # See: https://github.com/BerriAI/litellm/issues/16562
+            self.chunk_type = "accumulated_json"
+            return self.handle_accumulated_json_chunk(chunk=chunk)
 
         if self.sent_first_chunk is False:
             self.sent_first_chunk = True

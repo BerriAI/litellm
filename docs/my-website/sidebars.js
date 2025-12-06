@@ -105,6 +105,7 @@ const sidebars = {
       items: [
         "tutorials/claude_responses_api",
         "tutorials/cost_tracking_coding",
+        "tutorials/cursor_integration",
         "tutorials/github_copilot_integration",
         "tutorials/litellm_gemini_cli",
         "tutorials/litellm_qwen_code_cli",
@@ -141,6 +142,7 @@ const sidebars = {
             "proxy/quick_start",
             "proxy/cli",
             "proxy/debugging",
+            "proxy/error_diagnosis",
             "proxy/deploy",
             "proxy/health",
             "proxy/master_key_rotations",
@@ -519,7 +521,9 @@ const sidebars = {
             "providers/vertex_ai/videos",
             "providers/vertex_partner",
             "providers/vertex_self_deployed",
+            "providers/vertex_embedding",
             "providers/vertex_image",
+            "providers/vertex_speech",
             "providers/vertex_batch",
             "providers/vertex_ocr",
           ]
@@ -625,6 +629,7 @@ const sidebars = {
         "providers/petals",
         "providers/publicai",
         "providers/predibase",
+        "providers/ragflow",
         "providers/recraft",
         "providers/replicate",
         {
@@ -818,10 +823,13 @@ const sidebars = {
               "Learn how to deploy + call models from different providers on LiteLLM",
             slug: "/project",
           },
-          items: [        
+          items: [
             "projects/smolagents",
             "projects/mini-swe-agent",
             "projects/openai-agents",
+            "projects/Google ADK",
+            "projects/Agent Lightning",
+            "projects/Harbor",
             "projects/Docq.AI",
             "projects/PDL",
             "projects/OpenInterpreter",
