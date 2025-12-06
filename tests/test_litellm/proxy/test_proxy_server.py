@@ -247,6 +247,53 @@ def test_update_config_fields_deep_merge_db_wins():
     assert rs["routing_mode"] == "cost_optimized"
 
 
+def test_get_config_custom_callback_api_env_vars(monkeypatch):
+    """
+    Ensure /get/config/callbacks returns custom callback env vars when both custom values are provided.
+    """
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    # Mock config with custom_callback_api enabled and generic logger env vars present
+    config_data = {
+        "litellm_settings": {"success_callback": ["custom_callback_api"]},
+        "general_settings": {},
+        "environment_variables": {
+            "GENERIC_LOGGER_ENDPOINT": "https://callback.example.com",
+            "GENERIC_LOGGER_HEADERS": "Auth: token",
+        },
+    }
+
+    # Mock proxy_config.get_config and router settings
+    mock_router = MagicMock()
+    mock_router.get_settings.return_value = {}
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr(
+        proxy_config, "get_config", AsyncMock(return_value=config_data)
+    )
+
+    # Bypass auth dependency
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+
+    client = TestClient(app)
+    try:
+        response = client.get("/get/config/callbacks")
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200
+    callbacks = response.json()["callbacks"]
+    custom_cb = next(
+        (cb for cb in callbacks if cb["name"] == "custom_callback_api"), None
+    )
+
+    assert custom_cb is not None
+    assert custom_cb["variables"] == {
+        "GENERIC_LOGGER_ENDPOINT": "https://callback.example.com",
+        "GENERIC_LOGGER_HEADERS": "Auth: token",
+    }
+
+
 # Mock Prisma
 class MockPrisma:
     def __init__(self, database_url=None, proxy_logging_obj=None, http_client=None):

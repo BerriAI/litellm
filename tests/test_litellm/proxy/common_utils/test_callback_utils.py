@@ -37,13 +37,9 @@ def test_get_remaining_tokens_and_requests_from_request_data():
     "litellm.proxy.common_utils.callback_utils.CustomLogger.get_callback_env_vars",
     return_value=["API_KEY", "MISSING_VAR"],
 )
-@patch(
-    "litellm.proxy.common_utils.callback_utils.decrypt_value_helper",
-    side_effect=lambda value, key: f"decrypted-{key}",
-)
-def test_process_callback_with_env_vars(mock_decrypt, mock_get_env_vars):
+def test_process_callback_with_env_vars(mock_get_env_vars):
     environment_variables = {
-        "API_KEY": "ENC_VALUE",
+        "API_KEY": "PLAIN_VALUE",
         "UNUSED": "SHOULD_BE_IGNORED",
     }
 
@@ -56,7 +52,7 @@ def test_process_callback_with_env_vars(mock_decrypt, mock_get_env_vars):
     assert result["name"] == "my_callback"
     assert result["type"] == "input"
     assert result["variables"] == {
-        "API_KEY": "decrypted-API_KEY",
+        "API_KEY": "PLAIN_VALUE",
         "MISSING_VAR": None,
     }
 
