@@ -1276,15 +1276,14 @@ class MCPServerManager:
 
             name_to_use = prefixed_name if add_prefix else tool.name
 
-            tool_obj = MCPTool(
-                name=name_to_use,
-                description=tool.description,
-                inputSchema=tool.inputSchema,
-            )
-            prefixed_tools.append(tool_obj)
+            # Preserve all tool fields including metadata/_meta by mutating the original tool
+            # Similar to how _create_prefixed_prompts works
+            original_name = tool.name
+            tool.name = name_to_use
+            prefixed_tools.append(tool)
 
             # Update tool to server mapping for resolution (support both forms)
-            self.tool_name_to_mcp_server_name_mapping[tool.name] = prefix
+            self.tool_name_to_mcp_server_name_mapping[original_name] = prefix
             self.tool_name_to_mcp_server_name_mapping[prefixed_name] = prefix
 
         verbose_logger.info(
