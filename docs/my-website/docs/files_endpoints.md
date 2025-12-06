@@ -313,8 +313,4 @@ print("file content=", content)
 
 ### [Vertex AI](./providers/vertex#batch-apis)
 
-### [Anthropic](#quick-start)
-
-Use the same API calls shown in [Quick Start](#quick-start) with `custom_llm_provider="anthropic"`.
-
 ## [Swagger API Reference](https://litellm-api.up.railway.app/#/files)
