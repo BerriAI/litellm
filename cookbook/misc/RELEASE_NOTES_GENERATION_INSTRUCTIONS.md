@@ -405,6 +405,40 @@ This release has a known issue...
   - **New LLM API Endpoints** (optional) - Endpoint, method, description, documentation link
 - Only include major new provider integrations, not minor provider updates
 
+### 12. Section Header Counts
+
+**Always include counts in section headers for:**
+- **New Providers** - Add count in parentheses: `### New Providers (X new providers)`
+- **New LLM API Endpoints** - Add count in parentheses: `### New LLM API Endpoints (X new endpoints)`
+- **New Model Support** - Add count in parentheses: `#### New Model Support (X new models)`
+
+**Format:**
+```markdown
+### New Providers (4 new providers)
+
+| Provider | Supported LiteLLM Endpoints | Description |
+| -------- | --------------------------- | ----------- |
+...
+
+### New LLM API Endpoints (2 new endpoints)
+
+| Endpoint | Method | Description | Documentation |
+| -------- | ------ | ----------- | ------------- |
+...
+
+#### New Model Support (32 new models)
+
+| Provider | Model | Context Window | Input ($/1M tokens) | Output ($/1M tokens) | Features |
+| -------- | ----- | -------------- | ------------------- | -------------------- | -------- |
+...
+```
+
+**Counting Rules:**
+- Count each row in the table (excluding the header row)
+- For models, count each model entry in the pricing table
+- For providers, count each new provider added
+- For endpoints, count each new API endpoint added
+
 ## Example Command Workflow
 
 ```bash

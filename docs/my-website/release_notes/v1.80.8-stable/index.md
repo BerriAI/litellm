@@ -27,7 +27,7 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.80.8-stable
+ghcr.io/berriai/litellm:v1.80.8.rc.1
 ```
 
 </TabItem>
@@ -56,7 +56,7 @@ pip install litellm==1.80.8
 
 ## New Providers and Endpoints
 
-### New Providers
+### New Providers (4 new providers)
 
 | Provider | Supported LiteLLM Endpoints | Description |
 | -------- | ------------------- | ----------- |
@@ -65,7 +65,7 @@ pip install litellm==1.80.8
 | **[Cursor BYOK](../../docs/providers/cursor)** | `/v1/chat/completions` | Cursor bring-your-own-key configuration support |
 | **[PublicAI](../../docs/providers/publicai)** | `/v1/chat/completions` | OpenAI-compatible provider via JSON config |
 
-### New LLM API Endpoints
+### New LLM API Endpoints (1 new endpoint)
 
 | Endpoint | Method | Description | Documentation |
 | -------- | ------ | ----------- | ------------- |
@@ -75,7 +75,7 @@ pip install litellm==1.80.8
 
 ## New Models / Updated Models
 
-#### New Model Support
+#### New Model Support (32 new models)
 
 | Provider | Model | Context Window | Input ($/1M tokens) | Output ($/1M tokens) | Features |
 | -------- | ----- | -------------- | ------------------- | -------------------- | -------- |
@@ -242,10 +242,6 @@ pip install litellm==1.80.8
 - **[Video Generation API](../../docs/video_generation)**
     - Add passthrough cost tracking for Veo - [PR #17296](https://github.com/BerriAI/litellm/pull/17296)
 
-- **[Agent Gateway](../../docs/proxy/agent_gateway)**
-    - Allow invoking agents through AI Gateway - [PR #17440](https://github.com/BerriAI/litellm/pull/17440)
-    - Allow tracking request/response in "Logs" Page - [PR #17449](https://github.com/BerriAI/litellm/pull/17449)
-
 - **[OCR API](../../docs/ocr)**
     - Add missing OCR and aOCR to CallTypes enum - [PR #17435](https://github.com/BerriAI/litellm/pull/17435)
 
@@ -275,10 +271,6 @@ pip install litellm==1.80.8
     - Customer Usage UI - [PR #17506](https://github.com/BerriAI/litellm/pull/17506)
     - Add Info Banner for Customer Usage - [PR #17598](https://github.com/BerriAI/litellm/pull/17598)
 
-- **Agent Gateway UI**
-    - Allow testing agents on UI - [PR #17455](https://github.com/BerriAI/litellm/pull/17455)
-    - Set allowed agents by key, team - [PR #17511](https://github.com/BerriAI/litellm/pull/17511)
-
 - **Virtual Keys**
     - Standardize API Key vs Virtual Key in UI - [PR #17325](https://github.com/BerriAI/litellm/pull/17325)
     - Add User Alias Column to Internal User Table - [PR #17321](https://github.com/BerriAI/litellm/pull/17321)
@@ -292,9 +284,6 @@ pip install litellm==1.80.8
 - **Callbacks**
     - Show all callbacks on UI - [PR #16335](https://github.com/BerriAI/litellm/pull/16335)
     - Credentials to use React Query - [PR #17465](https://github.com/BerriAI/litellm/pull/17465)
-
-- **Agent Access Control**
-    - Enforce Allowed agents by key, team + add agent access groups on backend - [PR #17502](https://github.com/BerriAI/litellm/pull/17502)
 
 - **Management Routes**
     - Allow admin viewer to access global tag usage - [PR #17501](https://github.com/BerriAI/litellm/pull/17501)
@@ -422,6 +411,21 @@ pip install litellm==1.80.8
 
 - **MCP Tool Results**
     - Preserve tool metadata in CallToolResult - [PR #17561](https://github.com/BerriAI/litellm/pull/17561)
+
+---
+
+## Agent Gateway (A2A)
+
+- **Agent Invocation**
+    - Allow invoking agents through AI Gateway - [PR #17440](https://github.com/BerriAI/litellm/pull/17440)
+    - Allow tracking request/response in "Logs" Page - [PR #17449](https://github.com/BerriAI/litellm/pull/17449)
+
+- **Agent Access Control**
+    - Enforce Allowed agents by key, team + add agent access groups on backend - [PR #17502](https://github.com/BerriAI/litellm/pull/17502)
+
+- **Agent Gateway UI**
+    - Allow testing agents on UI - [PR #17455](https://github.com/BerriAI/litellm/pull/17455)
+    - Set allowed agents by key, team - [PR #17511](https://github.com/BerriAI/litellm/pull/17511)
 
 ---
 
