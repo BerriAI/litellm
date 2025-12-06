@@ -62,15 +62,16 @@ pip install litellm==1.80.8
 | -------- | ------------------- | ----------- |
 | **[Z.AI (Zhipu AI)](../../docs/providers/zai)** | `/v1/chat/completions`, `/v1/responses`, `/v1/messages` | Built-in support for Zhipu AI GLM models |
 | **[RAGFlow](../../docs/providers/ragflow)** | `/v1/chat/completions`, `/v1/responses`, `/v1/messages`, `/v1/vector_stores` | RAG-based chat completions with vector store support |
-| **[Cursor BYOK](../../docs/tutorials/cursor_integration)** | `/v1/chat/completions`, `/v1/responses`, `/v1/messages` | Cursor bring-your-own-key configuration support |
+| **[Cursor BYOK](../../docs/tutorials/cursor_integration)** | `/cursor/chat/completions` | Cursor bring-your-own-key endpoint - transforms Responses API input to Chat Completions output |
 | **[PublicAI](../../docs/providers/publicai)** | `/v1/chat/completions`, `/v1/responses`, `/v1/messages` | OpenAI-compatible provider via JSON config |
 | **[Google Cloud Chirp3 HD](../../docs/text_to_speech)** | `/v1/audio/speech`, `/v1/audio/speech/stream` | Text-to-speech with Google Cloud Chirp3 HD voices |
 
-### New LLM API Endpoints (1 new endpoint)
+### New LLM API Endpoints (2 new endpoints)
 
 | Endpoint | Method | Description | Documentation |
 | -------- | ------ | ----------- | ------------- |
 | `/v1/agents/invoke` | POST | Invoke A2A agents through the AI Gateway | [Agent Gateway](../../docs/a2a) |
+| `/cursor/chat/completions` | POST | Cursor BYOK endpoint - accepts Responses API input, returns Chat Completions output | [Cursor Integration](../../docs/tutorials/cursor_integration) |
 
 ---
 
@@ -213,7 +214,6 @@ pip install litellm==1.80.8
 - **[Bedrock](../../docs/providers/bedrock)**
     - Fix extra_headers in messages API bedrock invoke - [PR #17271](https://github.com/BerriAI/litellm/pull/17271)
     - Fix Bedrock models in model map - [PR #17419](https://github.com/BerriAI/litellm/pull/17419)
-    - Fix Bedrock Guardrail Indent and Import fix - [PR #17378](https://github.com/BerriAI/litellm/pull/17378)
     - Make Bedrock converse messages respect modify_params as expected - [PR #17427](https://github.com/BerriAI/litellm/pull/17427)
     - Fix Anthropic beta headers for Bedrock imported Qwen models - [PR #17467](https://github.com/BerriAI/litellm/pull/17467)
     - Preserve usage from JSON response for OpenAI provider in Bedrock - [PR #17589](https://github.com/BerriAI/litellm/pull/17589)
@@ -376,6 +376,9 @@ pip install litellm==1.80.8
 
 - **[AIM Guardrails](../../docs/proxy/guardrails/aim_security)**
     - Fix AIM guardrail tests - [PR #17499](https://github.com/BerriAI/litellm/pull/17499)
+
+- **[Bedrock Guardrails](../../docs/proxy/guardrails/bedrock)**
+    - Fix Bedrock Guardrail indent and import - [PR #17378](https://github.com/BerriAI/litellm/pull/17378)
 
 - **General Guardrails**
     - Mask all matching keywords in content filter - [PR #17521](https://github.com/BerriAI/litellm/pull/17521)
