@@ -175,25 +175,26 @@ async def use_callback_in_llm_call(
         expected_class = CustomLoggerRegistry.CALLBACK_CLASS_STR_TO_CLASS_TYPE[callback]
 
         if used_in == "callbacks":
+            assert (
+                len(litellm._async_success_callback) == 1
+            ), f"Got={litellm._async_success_callback}"
+            assert len(litellm._async_failure_callback) == 1, f"Got={litellm._async_failure_callback}"
+            assert len(litellm.success_callback) == 1, f"Got={litellm.success_callback}"
+            assert len(litellm.failure_callback) == 1, f"Got={litellm.failure_callback}"
+            assert len(litellm.callbacks) == 1, f"Got={litellm.callbacks}"
+            
             assert isinstance(litellm._async_success_callback[0], expected_class)
             assert isinstance(litellm._async_failure_callback[0], expected_class)
             assert isinstance(litellm.success_callback[0], expected_class)
             assert isinstance(litellm.failure_callback[0], expected_class)
-
-            assert (
-                len(litellm._async_success_callback) == 1
-            ), f"Got={litellm._async_success_callback}"
-            assert len(litellm._async_failure_callback) == 1
-            assert len(litellm.success_callback) == 1
-            assert len(litellm.failure_callback) == 1
-            assert len(litellm.callbacks) == 1
         elif used_in == "success_callback":
             print(f"litellm.success_callback: {litellm.success_callback}")
             print(f"litellm._async_success_callback: {litellm._async_success_callback}")
+            assert len(litellm.success_callback) == 1, f"Got={litellm.success_callback}"  # ["lago", LagoLogger]
+            assert len(litellm._async_success_callback) == 1, f"Got={litellm._async_success_callback}"
+            
             assert isinstance(litellm.success_callback[0], expected_class)
-            assert len(litellm.success_callback) == 1  # ["lago", LagoLogger]
             assert isinstance(litellm._async_success_callback[0], expected_class)
-            assert len(litellm._async_success_callback) == 1
 
             # TODO also assert that it's not set for failure_callback
             # As of Oct 21 2024, it's currently set
