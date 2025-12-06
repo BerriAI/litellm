@@ -255,8 +255,41 @@ async def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
         "model_id": "openai/gpt-oss-120b",
     }
 
+    # Mock HuggingFace template fetch to make test deterministic and avoid network flakiness.
+    # The test verifies that prompt transformation occurs (not simple concatenation), not the exact
+    # HuggingFace template format. Using a mock template that produces the correct format is sufficient.
+    from unittest.mock import patch
+
+    # Mock template that produces gpt-oss-120b-like format.
+    # Note: This is a simplified version of the actual template. The real template is more complex
+    # (adds metadata, handles tools, thinking messages, etc.), but this captures the key aspects:
+    # - Converts system role to developer (matching real template behavior)
+    # - Uses the same tag structure (<|start|>, <|message|>, <|end|>)
+    # - Preserves message content
+    mock_tokenizer_config = {
+        "status": "success",
+        "tokenizer": {
+            "chat_template": "{% for message in messages %}{% if message['role'] == 'system' %}<|start|>developer<|message|>{% else %}<|start|>{{ message['role'] }}<|message|>{% endif %}{{ message['content'] }}<|end|>{% endfor %}",
+            "bos_token": None,
+            "eos_token": None,
+        },
+    }
+
+    async def mock_aget_tokenizer_config(hf_model_name: str):
+        return mock_tokenizer_config
+
+    async def mock_aget_chat_template_file(hf_model_name: str):
+        # Return failure to use tokenizer_config instead
+        return {"status": "failure"}
+
     with patch.object(client, "post") as mock_post, patch.object(
         litellm.module_level_client, "post", return_value=mock_token_response
+    ), patch(
+        "litellm.litellm_core_utils.prompt_templates.huggingface_template_handler._aget_tokenizer_config",
+        side_effect=mock_aget_tokenizer_config,
+    ), patch(
+        "litellm.litellm_core_utils.prompt_templates.huggingface_template_handler._aget_chat_template_file",
+        side_effect=mock_aget_chat_template_file,
     ):
         # Set the mock to return the completion response
         mock_post.return_value = mock_completion_response
@@ -297,6 +330,12 @@ async def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
     # Verify the transformed input is in the request
     assert "input" in json_data, "Request should have 'input' field"
     transformed_prompt = json_data["input"]
+
+    # Verify transformation occurred
+    assert transformed_prompt is not None, (
+        "Prompt transformation failed - the template should have been applied to transform "
+        "messages into the correct format for gpt-oss-120b."
+    )
 
     print(f"Transformed prompt: {repr(transformed_prompt)}")
     print(f"Prompt length: {len(transformed_prompt)}")
