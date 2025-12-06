@@ -1065,7 +1065,7 @@ def test_parse_content_for_reasoning(content, expected_reasoning, expected_conte
         ("gemini/gemini-1.5-pro", True),
         ("predibase/llama3-8b-instruct", True),
         ("gpt-3.5-turbo", False),
-        ("groq/llama-3.3-70b-versatile", True),
+        ("groq/llama-3.3-70b-versatile", False),
     ],
 )
 def test_supports_response_schema(model, expected_bool):

@@ -10,18 +10,20 @@ WORKDIR /app
 
 # Install build dependencies including Node.js for UI build
 USER root
-RUN apk add --no-cache \
-    python3 \
-    py3-pip \
-    clang \
-    llvm \
-    lld \
-    gcc \
-    linux-headers \
-    build-base \
-    bash \
-    nodejs \
-    npm \
+RUN for i in 1 2 3; do \
+  apk add --no-cache \
+  python3 \
+  py3-pip \
+  clang \
+  llvm \
+  lld \
+  gcc \
+  linux-headers \
+  build-base \
+  bash \
+  nodejs \
+  npm && break || sleep 5; \
+  done \
   && pip install --no-cache-dir --upgrade pip build
 
 # Copy project files
@@ -37,7 +39,7 @@ RUN npm install -g npm@latest && npm cache clean --force
 
 RUN cd /app/ui/litellm-dashboard && \
   if [ -f "/app/enterprise/enterprise_ui/enterprise_colors.json" ]; then \
-    cp /app/enterprise/enterprise_ui/enterprise_colors.json ./ui_colors.json; \
+  cp /app/enterprise/enterprise_ui/enterprise_colors.json ./ui_colors.json; \
   fi
 
 RUN cd /app/ui/litellm-dashboard && rm -f package-lock.json
@@ -50,11 +52,11 @@ RUN cp -r /app/ui/litellm-dashboard/out/* /tmp/litellm_ui/
 
 RUN cd /tmp/litellm_ui && \
   for html_file in *.html; do \
-    if [ "$html_file" != "index.html" ] && [ -f "$html_file" ]; then \
-      folder_name="${html_file%.html}" && \
-      mkdir -p "$folder_name" && \
-      mv "$html_file" "$folder_name/index.html"; \
-    fi; \
+  if [ "$html_file" != "index.html" ] && [ -f "$html_file" ]; then \
+  folder_name="${html_file%.html}" && \
+  mkdir -p "$folder_name" && \
+  mv "$html_file" "$folder_name/index.html"; \
+  fi; \
   done
 
 RUN cd /app/ui/litellm-dashboard && rm -rf ./out
@@ -72,8 +74,12 @@ WORKDIR /app
 
 # Install runtime dependencies
 USER root
-RUN apk upgrade --no-cache && \
-  apk add --no-cache python3 py3-pip bash openssl tzdata nodejs npm supervisor
+RUN for i in 1 2 3; do \
+  apk upgrade --no-cache && break || sleep 5; \
+  done \
+  && for i in 1 2 3; do \
+  apk add --no-cache python3 py3-pip bash openssl tzdata nodejs npm supervisor && break || sleep 5; \
+  done
 
 # Copy only necessary artifacts from builder stage for runtime
 COPY . .
@@ -91,7 +97,7 @@ RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ \
 
 # Remove test files and keys from dependencies
 RUN find /usr/lib -type f -path "*/tornado/test/*" -delete && \
-    find /usr/lib -type d -path "*/tornado/test" -delete
+  find /usr/lib -type d -path "*/tornado/test" -delete
 
 # Install semantic_router and aurelio-sdk using script
 RUN chmod +x docker/install_auto_router.sh && ./docker/install_auto_router.sh

@@ -10,7 +10,13 @@ sys.path.insert(0, "../../../../../")
 
 import httpx
 from mcp import ReadResourceResult, Resource
-from mcp.types import GetPromptResult, Prompt, ResourceTemplate, TextResourceContents
+from mcp.types import (
+    GetPromptResult,
+    Prompt,
+    ResourceTemplate,
+    TextResourceContents,
+    Tool as MCPTool,
+)
 
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
@@ -995,10 +1001,11 @@ class TestMCPServerManager:
         manager._create_mcp_client = MagicMock(return_value=object())
 
         # Tools returned upstream (unprefixed from provider)
-        upstream_tool = MagicMock()
-        upstream_tool.name = "send_email"
-        upstream_tool.description = "Send an email"
-        upstream_tool.inputSchema = {}
+        upstream_tool = MCPTool(
+            name="send_email",
+            description="Send an email",
+            inputSchema={},
+        )
 
         manager._fetch_tools_with_timeout = AsyncMock(return_value=[upstream_tool])
 
@@ -1025,14 +1032,16 @@ class TestMCPServerManager:
         )
 
         # Input tools as would come from upstream
-        t1 = MagicMock()
-        t1.name = "create_issue"
-        t1.description = ""
-        t1.inputSchema = {}
-        t2 = MagicMock()
-        t2.name = "close_issue"
-        t2.description = ""
-        t2.inputSchema = {}
+        t1 = MCPTool(
+            name="create_issue",
+            description="",
+            inputSchema={},
+        )
+        t2 = MCPTool(
+            name="close_issue",
+            description="",
+            inputSchema={},
+        )
 
         # Do not add prefix in returned objects
         out_tools = manager._create_prefixed_tools([t1, t2], server, add_prefix=False)
@@ -1066,10 +1075,11 @@ class TestMCPServerManager:
         manager.registry = {server.server_id: server}
 
         # Populate mapping (add_prefix value doesn't matter for mapping population)
-        base_tool = MagicMock()
-        base_tool.name = "create_zap"
-        base_tool.description = ""
-        base_tool.inputSchema = {}
+        base_tool = MCPTool(
+            name="create_zap",
+            description="",
+            inputSchema={},
+        )
         _ = manager._create_prefixed_tools([base_tool], server, add_prefix=False)
 
         # Unprefixed resolution

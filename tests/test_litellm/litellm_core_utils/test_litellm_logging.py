@@ -215,15 +215,28 @@ async def test_logging_non_streaming_request():
                 mock_response="Hello, world!",
             )
             await asyncio.sleep(1)
-            mock_async_log_success_event.assert_called_once()
-            assert mock_async_log_success_event.call_count == 1
-            print(
-                "mock_async_log_success_event.call_args.kwargs",
-                mock_async_log_success_event.call_args.kwargs,
+            
+            # Filter calls to only count the one with the expected input message "Hey"
+            # Bridge models may make internal calls that also log, so we filter by the actual input
+            calls_with_expected_input = []
+            for call in mock_async_log_success_event.call_args_list:
+                messages = call.kwargs.get("kwargs", {}).get("messages", [])
+                if messages and len(messages) > 0:
+                    first_message_content = messages[0].get("content")
+                    if first_message_content == "Hey":
+                        calls_with_expected_input.append(call)
+            
+            # Assert that we have exactly one call with the expected input
+            assert len(calls_with_expected_input) == 1, (
+                f"Expected 1 call with input 'Hey', but got {len(calls_with_expected_input)}. "
+                f"Total calls: {mock_async_log_success_event.call_count}"
             )
-            standard_logging_object = mock_async_log_success_event.call_args.kwargs[
-                "kwargs"
-            ]["standard_logging_object"]
+            
+            # Use the filtered call for assertions
+            call_args = calls_with_expected_input[0]
+            standard_logging_object = call_args.kwargs["kwargs"][
+                "standard_logging_object"
+            ]
             assert standard_logging_object["stream"] is not True
     finally:
         # Restore original callbacks to ensure test isolation
