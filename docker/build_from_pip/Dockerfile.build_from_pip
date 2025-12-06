@@ -12,7 +12,7 @@ ENV PATH="${HOME}/venv/bin:$PATH"
 # to install python-3.14-dev specifically (if available in the repo)
 # rust and cargo are required for building ddtrace from source
 RUN apk update && \
-    apk add --no-cache gcc openssl openssl-dev rust cargo
+    apk add --no-cache gcc openssl openssl-dev rust
 
 RUN python -m venv ${HOME}/venv
 RUN ${HOME}/venv/bin/pip install --no-cache-dir --upgrade pip

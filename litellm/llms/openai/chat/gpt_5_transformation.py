@@ -79,7 +79,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         if reasoning_effort is not None and reasoning_effort == "xhigh":
             if not self.is_model_gpt_5_1_codex_max_model(model):
                 if litellm.drop_params or drop_params:
-                    pass
+                    non_default_params.pop("reasoning_effort", None)
                 else:
                     raise litellm.utils.UnsupportedParamsError(
                         message=(
