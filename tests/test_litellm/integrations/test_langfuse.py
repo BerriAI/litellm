@@ -35,11 +35,8 @@ class TestLangfuseUsageDetails(unittest.TestCase):
 
         # Create mock objects
         self.mock_langfuse_client = MagicMock()
-        # Mock the client attribute to prevent errors during logger initialization
-        self.mock_langfuse_client.client = MagicMock()
         self.mock_langfuse_trace = MagicMock()
         self.mock_langfuse_generation = MagicMock()
-        self.mock_langfuse_generation.trace_id = "test-trace-id"
 
         # Setup the trace and generation chain
         self.mock_langfuse_trace.generation.return_value = self.mock_langfuse_generation
@@ -66,13 +63,22 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         sys.modules["langfuse"] = self.mock_langfuse
         sys.modules["langfuse"].Langfuse = self.mock_langfuse_class
 
+        # Mock the Langfuse client
+        self.mock_langfuse_client = MagicMock()
+        self.mock_langfuse_trace = MagicMock()
+        self.mock_langfuse_generation = MagicMock()
+
+        # Setup the trace and generation chain
+        self.mock_langfuse_trace.generation.return_value = self.mock_langfuse_generation
+        self.mock_langfuse_client.trace.return_value = self.mock_langfuse_trace
+
+        # Mock the Langfuse class
+        self.mock_langfuse_class = MagicMock()
+        self.mock_langfuse_class.return_value = self.mock_langfuse_client
+        self.mock_langfuse.Langfuse = self.mock_langfuse_class
+
         # Create the logger
         self.logger = LangFuseLogger()
-        
-        # Explicitly set the Langfuse client to our mock
-        self.logger.Langfuse = self.mock_langfuse_client
-        # Ensure langfuse_sdk_version is set correctly for _supports_* methods
-        self.logger.langfuse_sdk_version = "3.0.0"
 
         # Add the log_event_on_langfuse method to the instance
         def log_event_on_langfuse(
