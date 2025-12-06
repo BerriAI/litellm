@@ -824,14 +824,14 @@ const sidebars = {
               "Learn how to deploy + call models from different providers on LiteLLM",
             slug: "/project",
           },
-          items: [
-            "projects/GraphRAG",
+          items: [            
             "projects/smolagents",
             "projects/mini-swe-agent",
             "projects/openai-agents",
             "projects/Google ADK",
             "projects/Agent Lightning",
             "projects/Harbor",
+            "projects/GraphRAG",
             "projects/Docq.AI",
             "projects/PDL",
             "projects/OpenInterpreter",
