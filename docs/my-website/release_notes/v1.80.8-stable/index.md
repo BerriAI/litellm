@@ -45,12 +45,49 @@ pip install litellm==1.80.8
 
 ## Key Highlights
 
-- **Agent Gateway** - [Invoke agents through the AI Gateway with request/response logging and access controls](../../docs/a2a)
+- **Agent Gateway (A2A)** - [Invoke agents through the AI Gateway with request/response logging and access controls](../../docs/a2a)
 - **Guardrails API v2** - [Generic Guardrail API with streaming support, structured messages, and tool call checks](../../docs/adding_provider/generic_guardrail_api)
 - **Customer (End User) Usage UI** - [Track and visualize end-user spend directly in the dashboard](../../docs/proxy/users)
 - **vLLM Batch + Files API** - [Support for batch and files API with vLLM deployments](../../docs/batches)
 - **Dynamic Rate Limiting on Teams** - [Enable dynamic rate limits and priority reservation on team-level](../../docs/proxy/team_budgets)
 - **Google Cloud Chirp3 HD** - [New text-to-speech provider with Chirp3 HD voices](../../docs/text_to_speech)
+
+---
+
+### Agent Gateway (A2A)
+
+<Image 
+  img={require('../../img/a2a_gateway.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+<br/>
+
+This release introduces **A2A Agent Gateway** for LiteLLM, allowing you to invoke and manage A2A agents with the same controls you have for LLM APIs.
+
+As a **LiteLLM Gateway Admin**, you can now do the following:
+    - **Request/Response Logging** - Every agent invocation is logged to the Logs page with full request and response tracking.
+    - **Access Control** - Control which Team/Key can access which agents.
+
+As a developer, you can continue using the A2A SDK, all you need to do is point you `A2AClient` to the LiteLLM proxy URL and your API key.
+
+**Works with the A2A SDK:**
+
+```python
+from a2a.client import A2AClient
+
+client = A2AClient(
+    base_url="http://localhost:4000",  # Your LiteLLM proxy
+    api_key="sk-1234"                   # LiteLLM API key
+)
+
+response = client.send_message(
+    agent_id="my-agent",
+    message="What's the status of my order?"
+)
+```
+
+Get started with Agent Gateway here: [Agent Gateway Documentation](../../docs/a2a)
 
 ---
 
