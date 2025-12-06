@@ -279,14 +279,16 @@ class TestLangfuseUsageDetails(unittest.TestCase):
                 "response_cost": 0.0,
             }
 
+            # Use fixed timestamps to avoid timing-related flakiness
+            fixed_time = datetime.datetime(2024, 1, 1, 12, 0, 0)
             # Call the method under test
             self.logger._log_langfuse_v2(
                 user_id="test-user",
                 metadata={},
                 litellm_params=kwargs["litellm_params"],
                 output={"role": "assistant", "content": "Response"},
-                start_time=datetime.datetime.now(),
-                end_time=datetime.datetime.now(),
+                start_time=fixed_time,
+                end_time=fixed_time + datetime.timedelta(seconds=1),
                 kwargs=kwargs,
                 optional_params=kwargs["optional_params"],
                 input={"messages": kwargs["messages"]},

@@ -279,7 +279,11 @@ async def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
     ), f"POST should have been called at least once, got {mock_post.call_count}"
 
     # Get the request body from the first call
-    call_args = mock_post.call_args
+    # Use call_args_list to be more robust - get the first call's arguments
+    assert len(mock_post.call_args_list) > 0, "mock_post should have at least one call"
+    call_args = mock_post.call_args_list[0]
+    assert call_args is not None, "call_args should not be None"
+    assert "data" in call_args.kwargs, "call_args.kwargs should contain 'data'"
     json_data = json.loads(call_args.kwargs["data"])
 
     print(f"\n{'='*80}")

@@ -83,9 +83,10 @@ async def test_no_duplicate_spend_logs():
             mock_response="Hello! I'm doing well."  # Use mock to avoid real API call
         )
 
-        # Give async logging time to complete
-        import asyncio
-        await asyncio.sleep(1)
+        # Wait for async logging to complete using the logging worker's flush method
+        # This is more reliable than sleep() which can cause race conditions
+        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+        await GLOBAL_LOGGING_WORKER.flush()
 
         # Verify that log_success_event was called exactly once
         assert spend_logger.log_count == 1, (
