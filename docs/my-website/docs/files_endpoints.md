@@ -313,4 +313,10 @@ print("file content=", content)
 
 ### [Vertex AI](./providers/vertex#batch-apis)
 
+### [Anthropic](./providers/anthropic#beta-files-api)
+
+:::note
+Anthropic Files API has a different purpose than OpenAI's. It's **not** for Batches or Fine-tuning—it's for uploading files once and referencing them by `file_id` in multiple messages, avoiding re-uploads. Token costs remain the same whether you use `file_id` or send content inline.
+:::
+
 ## [Swagger API Reference](https://litellm-api.up.railway.app/#/files)

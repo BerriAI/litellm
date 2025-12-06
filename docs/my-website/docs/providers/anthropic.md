@@ -1865,308 +1865,93 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 
 ## [BETA] Files API
 
+Upload files once and reference them by `file_id` in multiple requests—no need to re-upload content each time.
+
 :::info
-The Anthropic Files API is currently in beta. It allows you to upload and manage files to use with Claude without re-uploading content with each request.
+The `file_id` obtained from Anthropic only works with Anthropic Claude models. You cannot use it with other providers (OpenAI, Bedrock, etc.).
 :::
 
-The Files API provides operations to:
-- **Upload files** to secure storage and receive a unique `file_id`
-- **List files** in your workspace
-- **Retrieve metadata** about specific files
-- **Delete files** from your workspace
-- **Download file content** (only for files created by skills or code execution tool)
+- **Max file size:** 500 MB | **Total storage:** 100 GB per org
+- **Pricing:** File operations are free. Only content used in messages costs tokens.
 
-### Storage Limits
-- **Maximum file size:** 500 MB per file
-- **Total storage:** 100 GB per organization
-- **Supported file types:** PDF, plain text, images, datasets (for code execution)
+**Supported models by file type:**
+- **Images:** All Claude 3+ models
+- **PDFs:** All Claude 3.5+ models
+- **Other file types** (for code execution): Claude 3.5 Haiku + all Claude 3.7+ models
+
+### Quick Start
+
+```python
+import litellm
+import os
+
+os.environ["ANTHROPIC_API_KEY"] = "sk-ant-..."
+
+# 1. Upload a file once
+file = litellm.create_file(
+    file=open("document.pdf", "rb"),
+    purpose="assistants",
+    custom_llm_provider="anthropic",
+)
+
+# 2. Use file_id in messages (no re-upload needed)
+response = litellm.completion(
+    model="anthropic/claude-sonnet-4-5-20250929",
+    messages=[{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Summarize this document"},
+            {"type": "file", "file": {"file_id": file.id, "format": "application/pdf"}}
+        ]
+    }]
+)
+```
+
+### All File Operations
+
+| Operation | Function |
+|-----------|----------|
+| Upload | `litellm.create_file(file, purpose="assistants", custom_llm_provider="anthropic")` |
+| List | `litellm.file_list(custom_llm_provider="anthropic")` |
+| Retrieve | `litellm.file_retrieve(file_id, custom_llm_provider="anthropic")` |
+| Delete | `litellm.file_delete(file_id, custom_llm_provider="anthropic")` |
+| Download | `litellm.file_content(file_id, custom_llm_provider="anthropic")` |
 
 :::note
-File operations (upload, download, list, retrieve metadata, delete) are **free**. Only file content used in Messages requests is priced as input tokens.
+Download only works for files created by the [code execution tool](https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/code-execution-tool), not uploaded files.
 :::
 
-### Upload a File
+### Supported Formats
 
-<Tabs>
-<TabItem value="sdk" label="SDK">
+| File Type | Format Value |
+|-----------|-------------|
+| PDF | `application/pdf` |
+| Plain text | `text/plain` |
+| JPEG | `image/jpeg` |
+| PNG | `image/png` |
+| GIF | `image/gif` |
+| WebP | `image/webp` |
 
-```python
-import litellm
-import os
-
-os.environ["ANTHROPIC_API_KEY"] = "sk-ant-..."
-
-# Upload a file
-async def upload_file():
-    file_object = await litellm.acreate_file(
-        file=open("/path/to/document.pdf", "rb"),
-        purpose="assistants",
-        custom_llm_provider="anthropic",
-    )
-
-    print(f"File ID: {file_object.id}")
-    print(f"Filename: {file_object.filename}")
-    print(f"Size: {file_object.bytes} bytes")
-    return file_object.id
-
-# Synchronous version
-file_object = litellm.create_file(
-    file=open("/path/to/document.pdf", "rb"),
-    purpose="assistants",
-    custom_llm_provider="anthropic",
-)
-```
-
-</TabItem>
-<TabItem value="proxy" label="PROXY">
-
-The LiteLLM Proxy does not currently support file operations through the proxy server. Use the SDK directly for file management.
-
-</TabItem>
-</Tabs>
-
-### List Files
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
+### Using Images
 
 ```python
-import litellm
-import os
-
-os.environ["ANTHROPIC_API_KEY"] = "sk-ant-..."
-
-# List all files (async)
-async def list_files():
-    files = await litellm.afile_list(
-        custom_llm_provider="anthropic",
-    )
-
-    for file in files:
-        print(f"ID: {file.id}, Filename: {file.filename}")
-
-# Synchronous version
-files = litellm.file_list(
-    custom_llm_provider="anthropic",
-)
-```
-
-</TabItem>
-<TabItem value="proxy" label="PROXY">
-
-The LiteLLM Proxy does not currently support file operations through the proxy server. Use the SDK directly for file management.
-
-</TabItem>
-</Tabs>
-
-### Retrieve File Metadata
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-import litellm
-import os
-
-os.environ["ANTHROPIC_API_KEY"] = "sk-ant-..."
-
-file_id = "file_011CNha8iCJcU1wXNR6q4V8w"
-
-# Retrieve file metadata (async)
-async def get_file_info():
-    file_object = await litellm.afile_retrieve(
-        file_id=file_id,
-        custom_llm_provider="anthropic",
-    )
-
-    print(f"Filename: {file_object.filename}")
-    print(f"Created: {file_object.created_at}")
-    print(f"Size: {file_object.bytes} bytes")
-
-# Synchronous version
-file_object = litellm.file_retrieve(
-    file_id=file_id,
-    custom_llm_provider="anthropic",
-)
-```
-
-</TabItem>
-<TabItem value="proxy" label="PROXY">
-
-The LiteLLM Proxy does not currently support file operations through the proxy server. Use the SDK directly for file management.
-
-</TabItem>
-</Tabs>
-
-### Delete a File
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-import litellm
-import os
-
-os.environ["ANTHROPIC_API_KEY"] = "sk-ant-..."
-
-file_id = "file_011CNha8iCJcU1wXNR6q4V8w"
-
-# Delete file (async)
-async def delete_file():
-    result = await litellm.afile_delete(
-        file_id=file_id,
-        custom_llm_provider="anthropic",
-    )
-
-    print(f"Deleted: {result.deleted}")
-
-# Synchronous version
-result = litellm.file_delete(
-    file_id=file_id,
-    custom_llm_provider="anthropic",
-)
-```
-
-</TabItem>
-<TabItem value="proxy" label="PROXY">
-
-The LiteLLM Proxy does not currently support file operations through the proxy server. Use the SDK directly for file management.
-
-</TabItem>
-</Tabs>
-
-### Download File Content
-
-:::note
-You can only download files that were created by [skills](https://docs.anthropic.com/en/docs/build-with-claude/skills-guide) or the [code execution tool](https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/code-execution-tool). Files that you uploaded cannot be downloaded.
-:::
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-import litellm
-import os
-
-os.environ["ANTHROPIC_API_KEY"] = "sk-ant-..."
-
-file_id = "file_011CNha8iCJcU1wXNR6q4V8w"
-
-# Download file content (async)
-async def download_file():
-    content = await litellm.afile_content(
-        file_id=file_id,
-        custom_llm_provider="anthropic",
-    )
-
-    # Save to file
-    with open("downloaded_file.txt", "wb") as f:
-        f.write(content.content)
-
-# Synchronous version
-content = litellm.file_content(
-    file_id=file_id,
-    custom_llm_provider="anthropic",
-)
-
-with open("downloaded_file.txt", "wb") as f:
-    f.write(content.content)
-```
-
-</TabItem>
-<TabItem value="proxy" label="PROXY">
-
-The LiteLLM Proxy does not currently support file operations through the proxy server. Use the SDK directly for file management.
-
-</TabItem>
-</Tabs>
-
-### Using Files in Messages
-
-Once you've uploaded a file, you can reference it in your messages using the `file_id`. The Files API supports different content block types:
-
-| File Type | Content Block Type | Use Case |
-|-----------|-------------------|----------|
-| PDF | `document` | Text analysis, document processing |
-| Plain text | `document` | Text analysis, processing |
-| Images | `image` | Image analysis, visual tasks |
-| Datasets | `container_upload` | Analyze data, create visualizations |
-
-**Example with Document:**
-
-```python
-import litellm
-import os
-
-os.environ["ANTHROPIC_API_KEY"] = "sk-ant-..."
-
-# First, upload the file
-file_object = await litellm.acreate_file(
-    file=open("/path/to/document.pdf", "rb"),
+# Upload image
+image = litellm.create_file(
+    file=open("photo.jpg", "rb"),
     purpose="assistants",
     custom_llm_provider="anthropic",
 )
 
-# Then use it in a message
-response = await litellm.acompletion(
+# Use in message
+response = litellm.completion(
     model="anthropic/claude-sonnet-4-5-20250929",
-    messages=[
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Please summarize this document for me."
-                },
-                {
-                    "type": "document",
-                    "source": {
-                        "type": "file",
-                        "file_id": file_object.id
-                    },
-                    "title": "My Document",  # Optional
-                    "context": "This is an important document.",  # Optional
-                    "citations": {"enabled": True}  # Optional - enables citations
-                }
-            ]
-        }
-    ]
-)
-
-print(response.choices[0].message.content)
-```
-
-**Example with Image:**
-
-```python
-# Upload an image file
-image_file = await litellm.acreate_file(
-    file=open("/path/to/image.jpg", "rb"),
-    purpose="assistants",
-    custom_llm_provider="anthropic",
-)
-
-# Use it in a message
-response = await litellm.acompletion(
-    model="anthropic/claude-sonnet-4-5-20250929",
-    messages=[
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "What's in this image?"
-                },
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "file",
-                        "file_id": image_file.id
-                    }
-                }
-            ]
-        }
-    ]
+    messages=[{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "What's in this image?"},
+            {"type": "file", "file": {"file_id": image.id, "format": "image/jpeg"}}
+        ]
+    }]
 )
 ```
 
