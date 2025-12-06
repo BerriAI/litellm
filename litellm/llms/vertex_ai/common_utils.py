@@ -733,6 +733,16 @@ def get_vertex_location_from_url(url: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
+def get_vertex_model_id_from_url(url: str) -> Optional[str]:
+    """
+    Get the vertex model id from the url
+
+    `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${LOCATION}/publishers/google/models/${MODEL_ID}:streamGenerateContent`
+    """
+    match = re.search(r"/models/([^/:]+)", url)
+    return match.group(1) if match else None
+
+
 def replace_project_and_location_in_route(
     requested_route: str, vertex_project: str, vertex_location: str
 ) -> str:
@@ -781,6 +791,15 @@ def construct_target_url(
     vertex_version: Literal["v1", "v1beta1"] = "v1"
     if "cachedContent" in requested_route:
         vertex_version = "v1beta1"
+
+    # Check if the requested route starts with a version
+    # e.g. /v1beta1/publishers/google/models/gemini-3-pro-preview:streamGenerateContent
+    if requested_route.startswith("/v1/"):
+        vertex_version = "v1"
+        requested_route = requested_route.replace("/v1/", "/", 1)
+    elif requested_route.startswith("/v1beta1/"):
+        vertex_version = "v1beta1"
+        requested_route = requested_route.replace("/v1beta1/", "/", 1)
 
     base_requested_route = "{}/projects/{}/locations/{}".format(
         vertex_version, vertex_project, vertex_location
