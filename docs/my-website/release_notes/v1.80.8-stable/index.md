@@ -46,7 +46,7 @@ pip install litellm==1.80.8
 ## Key Highlights
 
 - **Agent Gateway** - [Invoke agents through the AI Gateway with request/response logging and access controls](../../docs/a2a)
-- **Guardrails API v2** - [Generic Guardrail API with streaming support, structured messages, and tool call checks](../../docs/proxy/guardrails)
+- **Guardrails API v2** - [Generic Guardrail API with streaming support, structured messages, and tool call checks](../../docs/adding_provider/generic_guardrail_api)
 - **Customer (End User) Usage UI** - [Track and visualize end-user spend directly in the dashboard](../../docs/proxy/users)
 - **vLLM Batch + Files API** - [Support for batch and files API with vLLM deployments](../../docs/batches)
 - **Dynamic Rate Limiting on Teams** - [Enable dynamic rate limits and priority reservation on team-level](../../docs/proxy/team_budgets)
@@ -121,7 +121,7 @@ pip install litellm==1.80.8
     - Add xhigh reasoning effort for gpt-5.1-codex-max - [PR #17585](https://github.com/BerriAI/litellm/pull/17585)
     - Add clear error message for empty LLM endpoint responses - [PR #17445](https://github.com/BerriAI/litellm/pull/17445)
 
-- **[Azure OpenAI](../../docs/providers/azure)**
+- **[Azure OpenAI](../../docs/providers/azure/azure)**
     - Allow reasoning_effort='none' for Azure gpt-5.1 models - [PR #17311](https://github.com/BerriAI/litellm/pull/17311)
 
 - **[Anthropic](../../docs/providers/anthropic)**
@@ -177,7 +177,7 @@ pip install litellm==1.80.8
 - **[Together AI](../../docs/providers/togetherai)**
     - Add context window exception mapping for Together AI - [PR #17284](https://github.com/BerriAI/litellm/pull/17284)
 
-- **[WatsonX](../../docs/providers/watsonx)**
+- **[WatsonX](../../docs/providers/watsonx/index)**
     - Allow passing zen_api_key dynamically - [PR #16655](https://github.com/BerriAI/litellm/pull/16655)
     - Fix Watsonx Audio Transcription API - [PR #17326](https://github.com/BerriAI/litellm/pull/17326)
     - Fix audio transcriptions, don't force content type in request headers - [PR #17546](https://github.com/BerriAI/litellm/pull/17546)
@@ -205,8 +205,8 @@ pip install litellm==1.80.8
     - Migrate Anthropic provider to Azure AI - [PR #17202](https://github.com/BerriAI/litellm/pull/17202)
     - Fix GA path for Azure OpenAI realtime models - [PR #17260](https://github.com/BerriAI/litellm/pull/17260)
 
-- **[TwelveLabs](../../docs/providers/twelvelabs)**
-    - Add support for TwelveLabs Pegasus - [PR #17193](https://github.com/BerriAI/litellm/pull/17193)
+- **[Bedrock TwelveLabs](../../docs/providers/bedrock#twelvelabs-pegasus---video-understanding)**
+    - Add support for TwelveLabs Pegasus video understanding - [PR #17193](https://github.com/BerriAI/litellm/pull/17193)
 
 ### Bug Fixes
 
@@ -243,7 +243,7 @@ pip install litellm==1.80.8
     - Fix optional parameter default value - [PR #17434](https://github.com/BerriAI/litellm/pull/17434)
     - Add status parameter as optional for FileObject - [PR #17431](https://github.com/BerriAI/litellm/pull/17431)
 
-- **[Video Generation API](../../docs/video_generation)**
+- **[Video Generation API](../../docs/videos)**
     - Add passthrough cost tracking for Veo - [PR #17296](https://github.com/BerriAI/litellm/pull/17296)
 
 - **[OCR API](../../docs/ocr)**
@@ -337,7 +337,7 @@ pip install litellm==1.80.8
 - **[DataDog](../../docs/proxy/logging#datadog)**
     - Fix Datadog callback regression when ddtrace is installed - [PR #17393](https://github.com/BerriAI/litellm/pull/17393)
 
-- **[Arize Phoenix](../../docs/observability/arize_phoenix)**
+- **[Arize Phoenix](../../docs/observability/arize_integration)**
     - Fix clean arize-phoenix traces - [PR #16611](https://github.com/BerriAI/litellm/pull/16611)
 
 - **[Weave](../../docs/proxy/logging)**
@@ -354,7 +354,7 @@ pip install litellm==1.80.8
 
 ### Guardrails
 
-- **[Generic Guardrail API](../../docs/proxy/guardrails)**
+- **[Generic Guardrail API](../../docs/adding_provider/generic_guardrail_api)**
     - Generic Guardrail API - allows guardrail providers to add INSTANT support for LiteLLM w/out PR to repo - [PR #17175](https://github.com/BerriAI/litellm/pull/17175)
     - Guardrails API V2 - user api key metadata, session id, specify input type (request/response), image support - [PR #17338](https://github.com/BerriAI/litellm/pull/17338)
     - Guardrails API - add streaming support - [PR #17400](https://github.com/BerriAI/litellm/pull/17400)
@@ -363,18 +363,18 @@ pip install litellm==1.80.8
     - Correctly map a v1/messages call to the anthropic unified guardrail - [PR #17424](https://github.com/BerriAI/litellm/pull/17424)
     - Support during_call event type for unified guardrails - [PR #17514](https://github.com/BerriAI/litellm/pull/17514)
 
-- **[Noma Guardrail](../../docs/proxy/guardrails)**
+- **[Noma Guardrail](../../docs/proxy/guardrails/noma_security)**
     - Refactor Noma guardrail to use shared Responses transformation and include system instructions - [PR #17315](https://github.com/BerriAI/litellm/pull/17315)
 
-- **[Presidio](../../docs/proxy/guardrails)**
+- **[Presidio](../../docs/proxy/guardrails/pii_masking_v2)**
     - Handle empty content and error dict responses in guardrails - [PR #17489](https://github.com/BerriAI/litellm/pull/17489)
     - Fix Presidio guardrail test TypeError and license base64 decoding error - [PR #17538](https://github.com/BerriAI/litellm/pull/17538)
 
-- **[Tool Permissions](../../docs/proxy/guardrails)**
+- **[Tool Permissions](../../docs/proxy/guardrails/tool_permission)**
     - Add regex-based tool_name/tool_type matching for tool-permission - [PR #17164](https://github.com/BerriAI/litellm/pull/17164)
     - Add images for tool permission guardrail documentation - [PR #17322](https://github.com/BerriAI/litellm/pull/17322)
 
-- **[AIM Guardrails](../../docs/proxy/guardrails)**
+- **[AIM Guardrails](../../docs/proxy/guardrails/aim_security)**
     - Fix AIM guardrail tests - [PR #17499](https://github.com/BerriAI/litellm/pull/17499)
 
 - **General Guardrails**
@@ -384,7 +384,7 @@ pip install litellm==1.80.8
 
 ### Secret Managers
 
-- **[CyberArk](../../docs/secret_managers)**
+- **[CyberArk](../../docs/secret_managers/cyberark)**
     - Allow setting SSL verify to false - [PR #17433](https://github.com/BerriAI/litellm/pull/17433)
 
 - **General**
