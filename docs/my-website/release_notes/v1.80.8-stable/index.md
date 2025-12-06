@@ -62,7 +62,6 @@ pip install litellm==1.80.8
 | -------- | ------------------- | ----------- |
 | **[Z.AI (Zhipu AI)](../../docs/providers/zai)** | `/v1/chat/completions`, `/v1/responses`, `/v1/messages` | Built-in support for Zhipu AI GLM models |
 | **[RAGFlow](../../docs/providers/ragflow)** | `/v1/chat/completions`, `/v1/responses`, `/v1/messages`, `/v1/vector_stores` | RAG-based chat completions with vector store support |
-| **[Cursor BYOK](../../docs/tutorials/cursor_integration)** | `/cursor/chat/completions` | Cursor bring-your-own-key endpoint - transforms Responses API input to Chat Completions output |
 | **[PublicAI](../../docs/providers/publicai)** | `/v1/chat/completions`, `/v1/responses`, `/v1/messages` | OpenAI-compatible provider via JSON config |
 | **[Google Cloud Chirp3 HD](../../docs/text_to_speech)** | `/v1/audio/speech`, `/v1/audio/speech/stream` | Text-to-speech with Google Cloud Chirp3 HD voices |
 
@@ -330,18 +329,22 @@ pip install litellm==1.80.8
 
 ---
 
-## AI Integrations
+## AI Integrations (2 new integrations)
 
-### Logging
+### Logging (1 new integration)
+
+#### New Integration
+
+- **[Weave](../../docs/proxy/logging)**
+    - Basic Weave OTEL integration - [PR #17439](https://github.com/BerriAI/litellm/pull/17439)
+
+#### Improvements & Fixes
 
 - **[DataDog](../../docs/proxy/logging#datadog)**
     - Fix Datadog callback regression when ddtrace is installed - [PR #17393](https://github.com/BerriAI/litellm/pull/17393)
 
 - **[Arize Phoenix](../../docs/observability/arize_integration)**
     - Fix clean arize-phoenix traces - [PR #16611](https://github.com/BerriAI/litellm/pull/16611)
-
-- **[Weave](../../docs/proxy/logging)**
-    - Basic Weave OTEL integration - [PR #17439](https://github.com/BerriAI/litellm/pull/17439)
 
 - **[MLflow](../../docs/proxy/logging#mlflow)**
     - Fix MLflow streaming spans for Anthropic passthrough - [PR #17288](https://github.com/BerriAI/litellm/pull/17288)
@@ -352,7 +355,9 @@ pip install litellm==1.80.8
 - **General**
     - Improve PII anonymization handling in logging callbacks - [PR #17207](https://github.com/BerriAI/litellm/pull/17207)
 
-### Guardrails
+### Guardrails (1 new integration)
+
+#### New Integration
 
 - **[Generic Guardrail API](../../docs/adding_provider/generic_guardrail_api)**
     - Generic Guardrail API - allows guardrail providers to add INSTANT support for LiteLLM w/out PR to repo - [PR #17175](https://github.com/BerriAI/litellm/pull/17175)
@@ -362,6 +367,8 @@ pip install litellm==1.80.8
     - Guardrails API - new `structured_messages` param - [PR #17518](https://github.com/BerriAI/litellm/pull/17518)
     - Correctly map a v1/messages call to the anthropic unified guardrail - [PR #17424](https://github.com/BerriAI/litellm/pull/17424)
     - Support during_call event type for unified guardrails - [PR #17514](https://github.com/BerriAI/litellm/pull/17514)
+
+#### Improvements & Fixes
 
 - **[Noma Guardrail](../../docs/proxy/guardrails/noma_security)**
     - Refactor Noma guardrail to use shared Responses transformation and include system instructions - [PR #17315](https://github.com/BerriAI/litellm/pull/17315)
