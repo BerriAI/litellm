@@ -235,6 +235,7 @@ const sidebars = {
             "proxy/team_budgets",
             "proxy/tag_budgets",
             "proxy/customers",
+            "proxy/customer_usage",
             "proxy/dynamic_rate_limit",
             "proxy/rate_limit_tiers",
             "proxy/temporary_budget_increase",
