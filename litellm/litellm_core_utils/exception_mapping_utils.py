@@ -2052,7 +2052,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         AzureOpenAIExceptionMapping,
                     )
                     raise AzureOpenAIExceptionMapping.create_content_policy_violation_error(
-                        message=message,
+                        message=error_str,
                         model=model,
                         extra_information=extra_information,
                         original_exception=original_exception,
