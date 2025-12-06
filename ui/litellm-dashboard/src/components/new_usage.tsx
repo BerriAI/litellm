@@ -92,6 +92,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
   const [showOrganizationBanner, setShowOrganizationBanner] = useState(true);
+  const [showCustomerBanner, setShowCustomerBanner] = useState(true);
 
   const getAllTags = async () => {
     if (!accessToken) {
@@ -803,6 +804,17 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
 
               {/* Customer Usage Panel */}
               <TabPanel>
+                {showCustomerBanner && (
+                  <Alert
+                    banner
+                    type="info"
+                    message="Customer usage is a new feature."
+                    description="Spend is tracked from feature launch and previous data isn't backfilled, so only future usage appears here."
+                    closable
+                    onClose={() => setShowCustomerBanner(false)}
+                    className="mb-5"
+                  />
+                )}
                 <EntityUsage
                   accessToken={accessToken}
                   entityType="customer"
