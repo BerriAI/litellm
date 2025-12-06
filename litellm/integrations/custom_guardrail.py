@@ -165,8 +165,28 @@ class CustomGuardrail(CustomLogger):
         """
         if "guardrails" in data:
             return data["guardrails"]
-        metadata = data.get("litellm_metadata") or data.get("metadata", {})
-        return metadata.get("guardrails") or []
+        # Check both litellm_metadata and metadata for guardrails
+        # This handles cases where guardrails might be in either location
+        # We need to check both because guardrails can be stored in either field
+        # depending on the endpoint (new endpoints use litellm_metadata, old use metadata)
+        litellm_metadata = data.get("litellm_metadata")
+        metadata = data.get("metadata")
+        
+        # Get guardrails from both locations, checking if they exist and are not None
+        litellm_guardrails = None
+        if isinstance(litellm_metadata, dict) and "guardrails" in litellm_metadata:
+            litellm_guardrails = litellm_metadata.get("guardrails")
+        
+        metadata_guardrails = None
+        if isinstance(metadata, dict) and "guardrails" in metadata:
+            metadata_guardrails = metadata.get("guardrails")
+        
+        # Return guardrails from litellm_metadata if present and not None/empty, otherwise from metadata
+        if litellm_guardrails is not None:
+            return litellm_guardrails
+        if metadata_guardrails is not None:
+            return metadata_guardrails
+        return []
 
     def _guardrail_is_in_requested_guardrails(
         self,
