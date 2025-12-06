@@ -45,37 +45,38 @@ pip install litellm==1.80.8
 
 ## Key Highlights
 
-- **Agent Gateway** - [Invoke agents through the AI Gateway with request/response logging and access controls](../../docs/proxy/agent_gateway)
+- **Agent Gateway** - [Invoke agents through the AI Gateway with request/response logging and access controls](../../docs/a2a)
 - **Guardrails API v2** - [Generic Guardrail API with streaming support, structured messages, and tool call checks](../../docs/proxy/guardrails)
 - **Customer (End User) Usage UI** - [Track and visualize end-user spend directly in the dashboard](../../docs/proxy/users)
 - **vLLM Batch + Files API** - [Support for batch and files API with vLLM deployments](../../docs/batches)
-- **JWT Auth with User Info Endpoints** - [Allow using regular OIDC flow with user info endpoints for JWT authentication](../../docs/proxy/token_auth)
 - **Dynamic Rate Limiting on Teams** - [Enable dynamic rate limits and priority reservation on team-level](../../docs/proxy/team_budgets)
+- **Google Cloud Chirp3 HD** - [New text-to-speech provider with Chirp3 HD voices](../../docs/text_to_speech)
 
 ---
 
 ## New Providers and Endpoints
 
-### New Providers (4 new providers)
+### New Providers (5 new providers)
 
 | Provider | Supported LiteLLM Endpoints | Description |
 | -------- | ------------------- | ----------- |
 | **[Z.AI (Zhipu AI)](../../docs/providers/zai)** | `/v1/chat/completions` | Built-in support for Zhipu AI GLM models |
 | **[RAGFlow](../../docs/providers/ragflow)** | `/v1/chat/completions`, `/v1/vector_stores` | RAG-based chat completions with vector store support |
-| **[Cursor BYOK](../../docs/providers/cursor)** | `/v1/chat/completions` | Cursor bring-your-own-key configuration support |
+| **[Cursor BYOK](../../docs/tutorials/cursor_integration)** | `/v1/chat/completions` | Cursor bring-your-own-key configuration support |
 | **[PublicAI](../../docs/providers/publicai)** | `/v1/chat/completions` | OpenAI-compatible provider via JSON config |
+| **[Google Cloud Chirp3 HD](../../docs/text_to_speech)** | `/v1/audio/speech` | Text-to-speech with Google Cloud Chirp3 HD voices |
 
 ### New LLM API Endpoints (1 new endpoint)
 
 | Endpoint | Method | Description | Documentation |
 | -------- | ------ | ----------- | ------------- |
-| `/v1/agents/invoke` | POST | Invoke A2A agents through the AI Gateway | [Agent Gateway](../../docs/proxy/agent_gateway) |
+| `/v1/agents/invoke` | POST | Invoke A2A agents through the AI Gateway | [Agent Gateway](../../docs/a2a) |
 
 ---
 
 ## New Models / Updated Models
 
-#### New Model Support (32 new models)
+#### New Model Support (33 new models)
 
 | Provider | Model | Context Window | Input ($/1M tokens) | Output ($/1M tokens) | Features |
 | -------- | ----- | -------------- | ------------------- | -------------------- | -------- |
@@ -111,6 +112,7 @@ pip install litellm==1.80.8
 | Z.AI | `zai/glm-4.5` | 128K | $0.60 | $2.20 | Function calling |
 | Z.AI | `zai/glm-4.5v` | 128K | $0.60 | $1.80 | Function calling, vision |
 | Z.AI | `zai/glm-4.5-flash` | 128K | Free | Free | Function calling |
+| Vertex AI | `vertex_ai/bge-large-en-v1.5` | - | - | - | BGE Embeddings |
 
 #### Features
 
@@ -118,6 +120,8 @@ pip install litellm==1.80.8
     - Add `gpt-5.1-codex-max` model pricing and configuration - [PR #17541](https://github.com/BerriAI/litellm/pull/17541)
     - Add xhigh reasoning effort for gpt-5.1-codex-max - [PR #17585](https://github.com/BerriAI/litellm/pull/17585)
     - Add clear error message for empty LLM endpoint responses - [PR #17445](https://github.com/BerriAI/litellm/pull/17445)
+
+- **[Azure OpenAI](../../docs/providers/azure)**
     - Allow reasoning_effort='none' for Azure gpt-5.1 models - [PR #17311](https://github.com/BerriAI/litellm/pull/17311)
 
 - **[Anthropic](../../docs/providers/anthropic)**
@@ -211,7 +215,7 @@ pip install litellm==1.80.8
     - Fix Bedrock models in model map - [PR #17419](https://github.com/BerriAI/litellm/pull/17419)
     - Fix Bedrock Guardrail Indent and Import fix - [PR #17378](https://github.com/BerriAI/litellm/pull/17378)
     - Make Bedrock converse messages respect modify_params as expected - [PR #17427](https://github.com/BerriAI/litellm/pull/17427)
-    - Fix Anthropic beta headers for Qwen - [PR #17467](https://github.com/BerriAI/litellm/pull/17467)
+    - Fix Anthropic beta headers for Bedrock imported Qwen models - [PR #17467](https://github.com/BerriAI/litellm/pull/17467)
     - Preserve usage from JSON response for OpenAI provider in Bedrock - [PR #17589](https://github.com/BerriAI/litellm/pull/17589)
 
 - **[SambaNova](../../docs/providers/sambanova)**
@@ -312,12 +316,13 @@ pip install litellm==1.80.8
     - Clear SSO integration for all users - [PR #17287](https://github.com/BerriAI/litellm/pull/17287)
     - Fix SSO users not added to Entra synced team - [PR #17331](https://github.com/BerriAI/litellm/pull/17331)
 
-- **Auth**
+- **Auth / JWT**
+    - JWT Auth - Allow using regular OIDC flow with user info endpoints - [PR #17324](https://github.com/BerriAI/litellm/pull/17324)
     - Fix litellm user auth not passing issue - [PR #17342](https://github.com/BerriAI/litellm/pull/17342)
     - Add other routes in JWT auth - [PR #17345](https://github.com/BerriAI/litellm/pull/17345)
     - Fix new org team validate against org - [PR #17333](https://github.com/BerriAI/litellm/pull/17333)
     - Fix litellm_enterprise ensure imported routes exist - [PR #17337](https://github.com/BerriAI/litellm/pull/17337)
-    - Use organization.members instead of deprecated organizatio - [PR #17557](https://github.com/BerriAI/litellm/pull/17557)
+    - Use organization.members instead of deprecated organization field - [PR #17557](https://github.com/BerriAI/litellm/pull/17557)
 
 - **Organizations/Teams**
     - Fix organization max budget not enforced - [PR #17334](https://github.com/BerriAI/litellm/pull/17334)
@@ -345,7 +350,7 @@ pip install litellm==1.80.8
     - Fix Langfuse logger test mock setup - [PR #17591](https://github.com/BerriAI/litellm/pull/17591)
 
 - **General**
-    - Better handle anonymization - [PR #17207](https://github.com/BerriAI/litellm/pull/17207)
+    - Improve PII anonymization handling in logging callbacks - [PR #17207](https://github.com/BerriAI/litellm/pull/17207)
 
 ### Guardrails
 
@@ -455,13 +460,6 @@ pip install litellm==1.80.8
 
 ---
 
-## Authentication / JWT
-
-- **JWT Auth**
-    - JWT Auth - AI Gateway, allow using regular OIDC flow with user info endpoints - [PR #17324](https://github.com/BerriAI/litellm/pull/17324)
-
----
-
 ## Documentation Updates
 
 - **Provider Documentation**
@@ -497,11 +495,6 @@ pip install litellm==1.80.8
 
 - **OpenAPI Schema**
     - Refactor add_schema_to_components to move definitions to components/schemas - [PR #17389](https://github.com/BerriAI/litellm/pull/17389)
-
-- **Testing**
-    - Resolve ruff lint errors - [PR #17490](https://github.com/BerriAI/litellm/pull/17490)
-    - Fix code quality issues from ruff linter - [PR #17536](https://github.com/BerriAI/litellm/pull/17536)
-    - Enable detailed debugging for reference - [PR #17508](https://github.com/BerriAI/litellm/pull/17508)
 
 - **Security**
     - Fix security vulnerability: update mdast-util-to-hast to 13.2.1 - [PR #17601](https://github.com/BerriAI/litellm/pull/17601)
