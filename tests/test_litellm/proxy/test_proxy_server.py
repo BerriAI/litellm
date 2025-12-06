@@ -258,7 +258,7 @@ def test_get_config_custom_callback_api_env_vars(monkeypatch):
         "general_settings": {},
         "environment_variables": {
             "GENERIC_LOGGER_ENDPOINT": "https://callback.example.com",
-            "GENERIC_LOGGER_HEADER": "Auth: token",
+            "GENERIC_LOGGER_HEADERS": "Auth: token",
         },
     }
 
@@ -289,7 +289,7 @@ def test_get_config_custom_callback_api_env_vars(monkeypatch):
     assert custom_cb is not None
     assert custom_cb["variables"] == {
         "GENERIC_LOGGER_ENDPOINT": "https://callback.example.com",
-        "GENERIC_LOGGER_HEADER": "Auth: token",
+        "GENERIC_LOGGER_HEADERS": "Auth: token",
     }
 
 
