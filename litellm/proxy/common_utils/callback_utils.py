@@ -385,6 +385,8 @@ def add_guardrail_to_applied_guardrails_header(
         _metadata["applied_guardrails"].append(guardrail_name)
     else:
         _metadata["applied_guardrails"] = [guardrail_name]
+    # Ensure metadata is set back to request_data (important when metadata didn't exist)
+    request_data["metadata"] = _metadata
 
 
 def add_guardrail_response_to_standard_logging_object(
