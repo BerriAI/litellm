@@ -5,3 +5,4 @@ GraphRAG is a data pipeline and transformation suite that extracts meaningful, s
 
 - [Github](https://github.com/microsoft/graphrag)
 - [Docs](https://microsoft.github.io/graphrag/)
+- [Paper](https://arxiv.org/pdf/2404.16130)
