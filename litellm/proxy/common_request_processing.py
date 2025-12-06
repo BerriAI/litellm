@@ -264,14 +264,19 @@ class ProxyBaseLLMRequestProcessing:
             **{k: str(v) for k, v in kwargs.items()},
         }
         if request_data:
+            print(f"[DEBUG] get_custom_headers: request_data provided, metadata = {request_data.get('metadata', {})}")
             remaining_tokens_header = (
                 get_remaining_tokens_and_requests_from_request_data(request_data)
             )
             headers.update(remaining_tokens_header)
 
             logging_caching_headers = get_logging_caching_headers(request_data)
+            print(f"[DEBUG] get_custom_headers: logging_caching_headers = {logging_caching_headers}")
             if logging_caching_headers:
                 headers.update(logging_caching_headers)
+                print(f"[DEBUG] get_custom_headers: Updated headers with logging_caching_headers, now = {headers}")
+        else:
+            print(f"[DEBUG] get_custom_headers: No request_data provided")
 
         try:
             return {
@@ -410,9 +415,11 @@ class ProxyBaseLLMRequestProcessing:
 
         self.data["litellm_logging_obj"] = logging_obj
 
+        print(f"[DEBUG] common_processing_pre_call_logic: Before pre_call_hook, self.data['metadata'] = {self.data.get('metadata', {})}")
         self.data = await proxy_logging_obj.pre_call_hook(  # type: ignore
             user_api_key_dict=user_api_key_dict, data=self.data, call_type=route_type  # type: ignore
         )
+        print(f"[DEBUG] common_processing_pre_call_logic: After pre_call_hook, self.data['metadata'] = {self.data.get('metadata', {})}")
 
         if "messages" in self.data and self.data["messages"]:
             logging_obj.update_messages(self.data["messages"])
@@ -570,6 +577,7 @@ class ProxyBaseLLMRequestProcessing:
         ) or self._is_streaming_response(
             response
         ):  # use generate_responses to stream responses
+            print(f"[DEBUG] base_process_llm_request: Streaming path, self.data['metadata'] = {self.data.get('metadata', {})}")
             custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 call_id=logging_obj.litellm_call_id,
@@ -585,6 +593,7 @@ class ProxyBaseLLMRequestProcessing:
                 litellm_logging_obj=logging_obj,
                 **additional_headers,
             )
+            print(f"[DEBUG] base_process_llm_request: Streaming path, custom_headers = {custom_headers}")
             if route_type == "allm_passthrough_route":
                 # Check if response is an async generator
                 if self._is_streaming_response(response):
@@ -643,23 +652,25 @@ class ProxyBaseLLMRequestProcessing:
         )  # get any updated response headers
         additional_headers = hidden_params.get("additional_headers", {}) or {}
 
-        fastapi_response.headers.update(
-            ProxyBaseLLMRequestProcessing.get_custom_headers(
-                user_api_key_dict=user_api_key_dict,
-                call_id=logging_obj.litellm_call_id,
-                model_id=model_id,
-                cache_key=cache_key,
-                api_base=api_base,
-                version=version,
-                response_cost=response_cost,
-                model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
-                fastest_response_batch_completion=fastest_response_batch_completion,
-                request_data=self.data,
-                hidden_params=hidden_params,
-                litellm_logging_obj=logging_obj,
-                **additional_headers,
-            )
+        print(f"[DEBUG] base_process_llm_request: Before get_custom_headers, self.data['metadata'] = {self.data.get('metadata', {})}")
+        custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=user_api_key_dict,
+            call_id=logging_obj.litellm_call_id,
+            model_id=model_id,
+            cache_key=cache_key,
+            api_base=api_base,
+            version=version,
+            response_cost=response_cost,
+            model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+            fastest_response_batch_completion=fastest_response_batch_completion,
+            request_data=self.data,
+            hidden_params=hidden_params,
+            litellm_logging_obj=logging_obj,
+            **additional_headers,
         )
+        print(f"[DEBUG] base_process_llm_request: custom_headers from get_custom_headers = {custom_headers}")
+        fastapi_response.headers.update(custom_headers)
+        print(f"[DEBUG] base_process_llm_request: fastapi_response.headers after update = {dict(fastapi_response.headers)}")
         await check_response_size_is_safe(response=response)
 
         return response

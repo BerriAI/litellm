@@ -694,6 +694,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         data: dict,
         call_type: CallTypesLiteral,
     ) -> Union[Exception, str, dict, None]:
+        print(f"[DEBUG] BedrockGuardrail.async_pre_call_hook: Called for guardrail_name = {self.guardrail_name}")
+        print(f"[DEBUG] BedrockGuardrail.async_pre_call_hook: data['metadata'] = {data.get('metadata', {})}")
         verbose_proxy_logger.debug(
             "Inside Bedrock Pre-Call Hook for call_type: %s", call_type
         )
@@ -703,7 +705,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
 
         event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call
-        if self.should_run_guardrail(data=data, event_type=event_type) is not True:
+        should_run = self.should_run_guardrail(data=data, event_type=event_type)
+        print(f"[DEBUG] BedrockGuardrail.async_pre_call_hook: should_run_guardrail = {should_run}")
+        if should_run is not True:
+            print(f"[DEBUG] BedrockGuardrail.async_pre_call_hook: Guardrail not running, returning data")
             return data
 
         new_messages = self.get_guardrails_messages_for_call_type(
@@ -761,9 +766,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 3. Add the guardrail to the applied guardrails header ##########
         #########################################################
+        print(f"[DEBUG] BedrockGuardrail.async_pre_call_hook: About to call add_guardrail_to_applied_guardrails_header")
+        print(f"[DEBUG] BedrockGuardrail.async_pre_call_hook: data['metadata'] before = {data.get('metadata', {})}")
         add_guardrail_to_applied_guardrails_header(
             request_data=data, guardrail_name=self.guardrail_name
         )
+        print(f"[DEBUG] BedrockGuardrail.async_pre_call_hook: After add_guardrail_to_applied_guardrails_header, data['metadata'] = {data.get('metadata', {})}")
         return data
 
     async def async_moderation_hook(

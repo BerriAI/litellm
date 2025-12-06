@@ -1270,25 +1270,38 @@ def _add_guardrails_from_key_or_team_metadata(
 
     # Add key-level guardrails first
     if key_metadata and "guardrails" in key_metadata:
+        print(f"[DEBUG] _add_guardrails_from_key_or_team_metadata: Found guardrails in key_metadata = {key_metadata['guardrails']}")
         if (
             isinstance(key_metadata["guardrails"], list)
             and len(key_metadata["guardrails"]) > 0
         ):
             _premium_user_check()
             combined_guardrails.update(key_metadata["guardrails"])
+            print(f"[DEBUG] _add_guardrails_from_key_or_team_metadata: Added key guardrails, combined = {combined_guardrails}")
+        else:
+            print(f"[DEBUG] _add_guardrails_from_key_or_team_metadata: Key guardrails is not a non-empty list")
+    else:
+        print(f"[DEBUG] _add_guardrails_from_key_or_team_metadata: No guardrails in key_metadata")
 
     # Add team-level guardrails (set automatically handles duplicates)
     if team_metadata and "guardrails" in team_metadata:
+        print(f"[DEBUG] _add_guardrails_from_key_or_team_metadata: Found guardrails in team_metadata = {team_metadata['guardrails']}")
         if (
             isinstance(team_metadata["guardrails"], list)
             and len(team_metadata["guardrails"]) > 0
         ):
             _premium_user_check()
             combined_guardrails.update(team_metadata["guardrails"])
+            print(f"[DEBUG] _add_guardrails_from_key_or_team_metadata: Added team guardrails, combined = {combined_guardrails}")
+    else:
+        print(f"[DEBUG] _add_guardrails_from_key_or_team_metadata: No guardrails in team_metadata")
 
     # Set combined guardrails in metadata as list
     if combined_guardrails:
         data[metadata_variable_name]["guardrails"] = list(combined_guardrails)
+        print(f"[DEBUG] _add_guardrails_from_key_or_team_metadata: Set data[{metadata_variable_name}]['guardrails'] = {list(combined_guardrails)}")
+    else:
+        print(f"[DEBUG] _add_guardrails_from_key_or_team_metadata: No combined guardrails to set")
 
 
 def move_guardrails_to_metadata(
@@ -1302,6 +1315,9 @@ def move_guardrails_to_metadata(
     - If guardrails set on API Key metadata then sets guardrails on request metadata
     - If guardrails not set on API key, then checks request metadata
     """
+    print(f"[DEBUG] move_guardrails_to_metadata: user_api_key_dict.metadata = {user_api_key_dict.metadata}")
+    print(f"[DEBUG] move_guardrails_to_metadata: user_api_key_dict.team_metadata = {user_api_key_dict.team_metadata}")
+    print(f"[DEBUG] move_guardrails_to_metadata: data[{_metadata_variable_name}] before = {data.get(_metadata_variable_name, {})}")
     # Check key-level guardrails
     _add_guardrails_from_key_or_team_metadata(
         key_metadata=user_api_key_dict.metadata,
@@ -1309,6 +1325,7 @@ def move_guardrails_to_metadata(
         data=data,
         metadata_variable_name=_metadata_variable_name,
     )
+    print(f"[DEBUG] move_guardrails_to_metadata: data[{_metadata_variable_name}] after _add_guardrails = {data.get(_metadata_variable_name, {})}")
 
     #########################################################################################
     # User's might send "guardrails" in the request body, we need to add them to the request metadata.

@@ -363,30 +363,42 @@ def get_remaining_tokens_and_requests_from_request_data(data: Dict) -> Dict[str,
 
 def get_logging_caching_headers(request_data: Dict) -> Optional[Dict]:
     _metadata = request_data.get("metadata", None) or {}
+    print(f"[DEBUG] get_logging_caching_headers: _metadata = {_metadata}")
     headers = {}
     if "applied_guardrails" in _metadata:
         headers["x-litellm-applied-guardrails"] = ",".join(
             _metadata["applied_guardrails"]
         )
+        print(f"[DEBUG] get_logging_caching_headers: Found applied_guardrails = {_metadata['applied_guardrails']}")
+        print(f"[DEBUG] get_logging_caching_headers: Setting header = {headers.get('x-litellm-applied-guardrails')}")
+    else:
+        print(f"[DEBUG] get_logging_caching_headers: No 'applied_guardrails' in metadata")
 
     if "semantic-similarity" in _metadata:
         headers["x-litellm-semantic-similarity"] = str(_metadata["semantic-similarity"])
 
+    print(f"[DEBUG] get_logging_caching_headers: Returning headers = {headers}")
     return headers
 
 
 def add_guardrail_to_applied_guardrails_header(
     request_data: Dict, guardrail_name: Optional[str]
 ):
+    print(f"[DEBUG] add_guardrail_to_applied_guardrails_header: guardrail_name = {guardrail_name}")
+    print(f"[DEBUG] add_guardrail_to_applied_guardrails_header: request_data.get('metadata') = {request_data.get('metadata')}")
     if guardrail_name is None:
+        print(f"[DEBUG] add_guardrail_to_applied_guardrails_header: guardrail_name is None, returning")
         return
     _metadata = request_data.get("metadata", None) or {}
     if "applied_guardrails" in _metadata:
         _metadata["applied_guardrails"].append(guardrail_name)
+        print(f"[DEBUG] add_guardrail_to_applied_guardrails_header: Appended to existing list: {_metadata['applied_guardrails']}")
     else:
         _metadata["applied_guardrails"] = [guardrail_name]
+        print(f"[DEBUG] add_guardrail_to_applied_guardrails_header: Created new list: {_metadata['applied_guardrails']}")
     # Ensure metadata is set back to request_data (important when metadata didn't exist)
     request_data["metadata"] = _metadata
+    print(f"[DEBUG] add_guardrail_to_applied_guardrails_header: Final request_data['metadata'] = {request_data['metadata']}")
 
 
 def add_guardrail_response_to_standard_logging_object(
