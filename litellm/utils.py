@@ -7254,6 +7254,8 @@ class ProviderConfigManager:
             return litellm.HyperbolicChatConfig()
         elif litellm.LlmProviders.OVHCLOUD == provider:
             return litellm.OVHCloudChatConfig()
+        elif litellm.LlmProviders.AMAZON_NOVA == provider:
+            return litellm.AmazonNovaChatConfig()
         return None
 
     @staticmethod
