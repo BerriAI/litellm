@@ -1,6 +1,8 @@
 # Create server parameters for stdio connection
 import os
 import sys
+from typing import List
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from contextlib import asynccontextmanager
@@ -9,10 +11,19 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
+from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+    MCPRequestHandler,
+)
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     MCPServer,
     MCPTransport,
+)
+from litellm.proxy._types import (
+    LiteLLM_ObjectPermissionTable,
+    LiteLLM_UserTable,
+    UserAPIKeyAuth,
 )
 from mcp.types import Tool as MCPTool, CallToolResult, ListToolsResult
 from mcp.types import TextContent
@@ -2605,3 +2616,111 @@ async def test_call_mcp_tool_resolves_unprefixed_tool_name_and_checks_permission
     assert mock_get_server.call_args_list[0][0][0] == "gmail_send_email"
     # Permissions check should be invoked with the resolved server name
     mock_is_allowed.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_mcp_ui_session_effective_team_ids_fetch_each_time(monkeypatch):
+    """UI session tokens should re-fetch team ids on every call (no cache)."""
+
+    user_auth = UserAPIKeyAuth(
+        token="ui-session-token",
+        team_id=UI_SESSION_TOKEN_TEAM_ID,
+        user_id="user-123",
+    )
+
+    resolved_user = LiteLLM_UserTable(user_id="user-123", teams=["team-a", "team-b"])
+    load_count = 0
+
+    async def fake_get_user_object(
+        user_id,
+        prisma_client,
+        user_api_key_cache,
+        user_id_upsert,
+        parent_otel_span=None,
+        proxy_logging_obj=None,
+        sso_user_id=None,
+        user_email=None,
+        check_db_only=None,
+    ):
+        nonlocal load_count
+        load_count += 1
+        assert user_id == "user-123"
+        return resolved_user
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        object(),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks.get_user_object",
+        fake_get_user_object,
+    )
+
+    first = await MCPRequestHandler._get_effective_team_ids(user_auth)
+    assert first == ["team-a", "team-b"]
+
+    second = await MCPRequestHandler._get_effective_team_ids(user_auth)
+    assert second == ["team-a", "team-b"]
+    assert load_count == 2
+
+
+@pytest.mark.asyncio
+async def test_mcp_ui_session_allowed_servers_union(monkeypatch):
+    """UI sessions should merge MCP permissions from all memberships."""
+
+    user_auth = UserAPIKeyAuth(
+        token="ui-session-token",
+        team_id=UI_SESSION_TOKEN_TEAM_ID,
+        user_id="user-456",
+    )
+
+    perm_one = LiteLLM_ObjectPermissionTable(
+        object_permission_id="perm-one",
+        mcp_servers=["server-alpha"],
+        mcp_access_groups=["shared-group"],
+    )
+    perm_two = LiteLLM_ObjectPermissionTable(
+        object_permission_id="perm-two",
+        mcp_servers=["server-beta"],
+    )
+
+    async def fake_get_effective_team_ids(_):
+        return ["team-x", "team-y"]
+
+    async def fake_get_team_permissions(_):
+        return [perm_one, perm_two]
+
+    async def fake_get_allowed_for_key(_):
+        return []
+
+    captured_groups: List[List[str]] = []
+
+    async def fake_get_servers_from_groups(groups):
+        captured_groups.append(sorted(groups))
+        return ["group-derived"]
+
+    monkeypatch.setattr(
+        MCPRequestHandler,
+        "_get_effective_team_ids",
+        fake_get_effective_team_ids,
+    )
+    monkeypatch.setattr(
+        MCPRequestHandler,
+        "_get_team_object_permissions",
+        fake_get_team_permissions,
+    )
+    monkeypatch.setattr(
+        MCPRequestHandler,
+        "_get_allowed_mcp_servers_for_key",
+        fake_get_allowed_for_key,
+    )
+    monkeypatch.setattr(
+        MCPRequestHandler,
+        "_get_mcp_servers_from_access_groups",
+        fake_get_servers_from_groups,
+    )
+
+    allowed = await MCPRequestHandler.get_allowed_mcp_servers(user_auth)
+
+    assert set(allowed) == {"server-alpha", "server-beta", "group-derived"}
+    assert captured_groups == [["shared-group"]]

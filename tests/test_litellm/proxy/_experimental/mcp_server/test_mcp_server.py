@@ -1281,8 +1281,8 @@ async def test_list_tools_with_team_tool_permissions_inheritance():
     ):
         # Mock the team object permission retrieval
         with patch(
-            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_team_object_permission",
-            AsyncMock(return_value=team_object_permission),
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_team_object_permissions",
+            AsyncMock(return_value=[team_object_permission]),
         ):
             tools = await _get_tools_from_mcp_servers(
                 user_api_key_auth=user_api_key_auth,
