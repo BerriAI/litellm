@@ -4,7 +4,7 @@ Type definitions for RAG (Retrieval Augmented Generation) Ingest API.
 
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing_extensions import TypedDict
 
 
@@ -185,6 +185,5 @@ class RAGIngestRequest(BaseModel):
     file_id: Optional[str] = None  # Existing file ID
     ingest_options: Dict[str, Any]  # RAGIngestOptions as dict for flexibility
 
-    class Config:
-        extra = "allow"  # Allow additional fields
+    model_config = ConfigDict(extra="allow")  # Allow additional fields
 
