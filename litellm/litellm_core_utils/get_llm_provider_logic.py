@@ -565,7 +565,7 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         api_base = (
             api_base
             or get_secret("OLLAMA_API_BASE")
-            or "http://127.0.0.1:11434"
+            or "http://localhost:11434"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("OLLAMA_API_KEY")
     elif (custom_llm_provider == "ai21_chat") or (
