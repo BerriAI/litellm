@@ -1,7 +1,9 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import NewUsagePage from "./new_usage";
+import type { Organization } from "./networking";
 import * as networking from "./networking";
+import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 
 // Polyfill ResizeObserver for test environment
 beforeAll(() => {
@@ -52,9 +54,14 @@ vi.mock("./EntityUsageExport", () => ({
   default: () => <div>Entity Usage Export Modal</div>,
 }));
 
+vi.mock("@/app/(dashboard)/hooks/customers/useCustomers", () => ({
+  useCustomers: vi.fn(),
+}));
+
 describe("NewUsage", () => {
   const mockUserDailyActivityAggregatedCall = vi.mocked(networking.userDailyActivityAggregatedCall);
   const mockTagListCall = vi.mocked(networking.tagListCall);
+  const mockUseCustomers = vi.mocked(useCustomers);
 
   const mockSpendData = {
     results: [
@@ -153,6 +160,39 @@ describe("NewUsage", () => {
     },
   };
 
+  const mockOrganizations: Organization[] = [
+    {
+      organization_id: "org-123",
+      organization_alias: "Acme Org",
+      budget_id: "budget-1",
+      metadata: {},
+      models: [],
+      spend: 0,
+      model_spend: {},
+      created_at: "2025-01-01T00:00:00Z",
+      created_by: "user-123",
+      updated_at: "2025-01-02T00:00:00Z",
+      updated_by: "user-123",
+      litellm_budget_table: null,
+      teams: null,
+      users: null,
+      members: null,
+    },
+  ];
+
+  const mockCustomers = [
+    {
+      user_id: "customer-123",
+      alias: "Test Customer",
+      spend: 0,
+      blocked: false,
+      allowed_model_region: null,
+      default_model: null,
+      budget_id: null,
+      litellm_budget_table: null,
+    },
+  ];
+
   const defaultProps = {
     accessToken: "test-token",
     userRole: "Admin",
@@ -175,6 +215,7 @@ describe("NewUsage", () => {
         members_with_roles: [],
       },
     ],
+    organizations: [],
     premiumUser: true,
   };
 
@@ -183,6 +224,11 @@ describe("NewUsage", () => {
     mockTagListCall.mockClear();
     mockUserDailyActivityAggregatedCall.mockResolvedValue(mockSpendData);
     mockTagListCall.mockResolvedValue({});
+    mockUseCustomers.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+    } as any);
   });
 
   it("should render and fetch usage data on mount", async () => {
@@ -217,7 +263,7 @@ describe("NewUsage", () => {
 
     // Check for chart titles
     expect(screen.getByText("Daily Spend")).toBeInTheDocument();
-    expect(screen.getByText("Top API Keys")).toBeInTheDocument();
+    expect(screen.getByText("Top Virtual Keys")).toBeInTheDocument();
   });
 
   it("should switch between tabs correctly", async () => {
@@ -247,6 +293,45 @@ describe("NewUsage", () => {
     // Should still render EntityUsage component for tags
     await waitFor(() => {
       const entityUsageElements = screen.getAllByText("Entity Usage");
+      expect(entityUsageElements.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("should show organization usage banner and tab for admins", async () => {
+    const { getByText, getAllByText } = render(<NewUsagePage {...defaultProps} organizations={mockOrganizations} />);
+
+    await waitFor(() => {
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+
+    const organizationTab = getByText("Organization Usage");
+    fireEvent.click(organizationTab);
+
+    await waitFor(() => {
+      expect(getByText("Organization usage is a new feature.")).toBeInTheDocument();
+      const entityUsageElements = getAllByText("Entity Usage");
+      expect(entityUsageElements.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("should show customer usage tab for admins", async () => {
+    mockUseCustomers.mockReturnValue({
+      data: mockCustomers,
+      isLoading: false,
+      error: null,
+    } as any);
+
+    const { getByText, getAllByText } = render(<NewUsagePage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+
+    const customerTab = getByText("Customer Usage");
+    fireEvent.click(customerTab);
+
+    await waitFor(() => {
+      const entityUsageElements = getAllByText("Entity Usage");
       expect(entityUsageElements.length).toBeGreaterThan(0);
     });
   });

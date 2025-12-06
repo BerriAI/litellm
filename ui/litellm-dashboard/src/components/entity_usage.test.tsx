@@ -1,9 +1,8 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import EntityUsage from "./entity_usage";
 import * as networking from "./networking";
 
-// Polyfill ResizeObserver for test environment
 beforeAll(() => {
   if (typeof window !== "undefined" && !window.ResizeObserver) {
     window.ResizeObserver = class ResizeObserver {
@@ -18,6 +17,8 @@ beforeAll(() => {
 vi.mock("./networking", () => ({
   tagDailyActivityCall: vi.fn(),
   teamDailyActivityCall: vi.fn(),
+  organizationDailyActivityCall: vi.fn(),
+  customerDailyActivityCall: vi.fn(),
 }));
 
 // Mock the child components to simplify testing
@@ -41,6 +42,8 @@ vi.mock("./EntityUsageExport", () => ({
 describe("EntityUsage", () => {
   const mockTagDailyActivityCall = vi.mocked(networking.tagDailyActivityCall);
   const mockTeamDailyActivityCall = vi.mocked(networking.teamDailyActivityCall);
+  const mockOrganizationDailyActivityCall = vi.mocked(networking.organizationDailyActivityCall);
+  const mockCustomerDailyActivityCall = vi.mocked(networking.customerDailyActivityCall);
 
   const mockSpendData = {
     results: [
@@ -126,8 +129,12 @@ describe("EntityUsage", () => {
   beforeEach(() => {
     mockTagDailyActivityCall.mockClear();
     mockTeamDailyActivityCall.mockClear();
+    mockOrganizationDailyActivityCall.mockClear();
+    mockCustomerDailyActivityCall.mockClear();
     mockTagDailyActivityCall.mockResolvedValue(mockSpendData);
     mockTeamDailyActivityCall.mockResolvedValue(mockSpendData);
+    mockOrganizationDailyActivityCall.mockResolvedValue(mockSpendData);
+    mockCustomerDailyActivityCall.mockResolvedValue(mockSpendData);
   });
 
   it("should render with tag entity type and display spend metrics", async () => {
@@ -137,13 +144,13 @@ describe("EntityUsage", () => {
       expect(mockTagDailyActivityCall).toHaveBeenCalled();
     });
 
-    // Check that spend metrics are displayed
     expect(screen.getByText("Tag Spend Overview")).toBeInTheDocument();
     expect(screen.getByText("Total Spend")).toBeInTheDocument();
 
-    // Use getAllByText since $100.50 appears in multiple places
-    const spendElements = screen.getAllByText("$100.50");
-    expect(spendElements.length).toBeGreaterThan(0);
+    await waitFor(() => {
+      const spendElements = screen.getAllByText("$100.50");
+      expect(spendElements.length).toBeGreaterThan(0);
+    });
 
     expect(screen.getByText("1,000")).toBeInTheDocument(); // Total Requests
   });
@@ -158,9 +165,40 @@ describe("EntityUsage", () => {
     // Check that it shows team-specific label
     expect(screen.getByText("Team Spend Overview")).toBeInTheDocument();
 
-    // Use getAllByText since $100.50 appears in multiple places
-    const spendElements = screen.getAllByText("$100.50");
-    expect(spendElements.length).toBeGreaterThan(0);
+    await waitFor(() => {
+      const spendElements = screen.getAllByText("$100.50");
+      expect(spendElements.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("should render with organization entity type and call organization API", async () => {
+    render(<EntityUsage {...defaultProps} entityType="organization" />);
+
+    await waitFor(() => {
+      expect(mockOrganizationDailyActivityCall).toHaveBeenCalled();
+    });
+
+    expect(screen.getByText("Organization Spend Overview")).toBeInTheDocument();
+
+    await waitFor(() => {
+      const spendElements = screen.getAllByText("$100.50");
+      expect(spendElements.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("should render with customer entity type and call customer API", async () => {
+    render(<EntityUsage {...defaultProps} entityType="customer" />);
+
+    await waitFor(() => {
+      expect(mockCustomerDailyActivityCall).toHaveBeenCalled();
+    });
+
+    expect(screen.getByText("Customer Spend Overview")).toBeInTheDocument();
+
+    await waitFor(() => {
+      const spendElements = screen.getAllByText("$100.50");
+      expect(spendElements.length).toBeGreaterThan(0);
+    });
   });
 
   it("should switch between tabs", async () => {
@@ -170,21 +208,20 @@ describe("EntityUsage", () => {
       expect(mockTagDailyActivityCall).toHaveBeenCalled();
     });
 
-    // Check default tab (Cost) is shown
     expect(screen.getByText("Tag Spend Overview")).toBeInTheDocument();
 
-    // Click Model Activity tab
     const modelActivityTab = screen.getByText("Model Activity");
-    fireEvent.click(modelActivityTab);
+    act(() => {
+      fireEvent.click(modelActivityTab);
+    });
 
-    // Should show activity metrics
     expect(screen.getAllByText("Activity Metrics")[0]).toBeInTheDocument();
 
-    // Click Key Activity tab
     const keyActivityTab = screen.getByText("Key Activity");
-    fireEvent.click(keyActivityTab);
+    act(() => {
+      fireEvent.click(keyActivityTab);
+    });
 
-    // Should show activity metrics again
     expect(screen.getAllByText("Activity Metrics")[1]).toBeInTheDocument();
   });
 
@@ -208,8 +245,9 @@ describe("EntityUsage", () => {
       expect(mockTagDailyActivityCall).toHaveBeenCalled();
     });
 
-    // Check that zero values are displayed (component formats it as $0.00)
-    expect(screen.getByText("$0.00")).toBeInTheDocument();
-    expect(screen.getByText("Total Spend")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("$0.00")).toBeInTheDocument();
+      expect(screen.getByText("Total Spend")).toBeInTheDocument();
+    });
   });
 });

@@ -157,6 +157,9 @@ def test_embedding_auth_exception_azure(mock_aembedding, client):
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
             secret_fields=mock.ANY,
+            request_timeout=mock.ANY,
+            litellm_call_id=mock.ANY,
+            litellm_logging_obj=mock.ANY,
         )
         print("Response from proxy=", response)
 

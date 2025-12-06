@@ -1,6 +1,6 @@
 /**
  * Tests for EntityUsageExportModal component
- * 
+ *
  * Validates core export functionality:
  * - Renders modal with correct default state (CSV format, daily scope)
  * - User can select export type (daily vs daily_with_models)
@@ -10,13 +10,15 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import EntityUsageExportModal from "./EntityUsageExportModal";
 
 // Mock utilities that format/export data so tests stay fast and deterministic
 vi.mock("./utils", () => {
   return {
+    handleExportCSV: vi.fn(),
+    handleExportJSON: vi.fn(),
     generateExportData: vi.fn(() => [{ Date: "2025-10-01" }]),
     generateMetadata: vi.fn(() => ({ meta: true })),
   };
@@ -66,24 +68,22 @@ describe("EntityUsageExportModal", () => {
   it("renders default state and exports CSV (daily) successfully", async () => {
     /**
      * Tests the happy path: user opens modal and exports with defaults.
-     * Verifies that generateExportData is called with 'daily' scope
+     * Verifies that handleExportCSV is called with correct parameters
      * and modal closes after export completes.
      */
     const user = userEvent.setup();
-    const { generateExportData } = await import("./utils");
+    const { handleExportCSV } = await import("./utils");
 
-    render(<EntityUsageExportModal {...baseProps} />);
+    const { getByRole } = render(<EntityUsageExportModal {...baseProps} />);
 
     // Default primary action reflects CSV export
-    expect(screen.getByRole("button", { name: /Export CSV/i })).toBeInTheDocument();
+    expect(getByRole("button", { name: /Export CSV/i })).toBeInTheDocument();
 
     // Click export
-    await user.click(screen.getByRole("button", { name: /Export CSV/i }));
+    await user.click(getByRole("button", { name: /Export CSV/i }));
 
-    // Verifies export pipeline was invoked with default scope 'daily'
-    expect(generateExportData).toHaveBeenCalled();
-    const callArgs = (generateExportData as any).mock.calls[0];
-    expect(callArgs[1]).toBe("daily");
+    // Verifies export function was invoked with correct parameters
+    expect(handleExportCSV).toHaveBeenCalledWith(baseProps.spendData, "daily", "Tag", "tag");
 
     // Modal closes after export
     expect(baseProps.onClose).toHaveBeenCalled();
@@ -92,30 +92,26 @@ describe("EntityUsageExportModal", () => {
   it("exports with 'day-by-day by tag and model' scope when selected", async () => {
     /**
      * Tests that user can change export type (scope).
-     * Verifies generateExportData receives 'daily_with_models' scope
+     * Verifies handleExportCSV receives 'daily_with_models' scope
      * when the second radio option is selected.
      */
     const user = userEvent.setup();
-    const { generateExportData } = await import("./utils");
+    const { handleExportCSV } = await import("./utils");
 
-    render(<EntityUsageExportModal {...baseProps} />);
+    const { getByText, getByRole } = render(<EntityUsageExportModal {...baseProps} />);
 
     // Choose the alternate export type - click the label to trigger radio
-    const dailyModelLabel = screen.getByText(/Day-by-day by tag and model/i);
+    const dailyModelLabel = getByText(/Day-by-day by tag and model/i);
     await user.click(dailyModelLabel);
 
     // Export with default CSV format
-    const exportBtn = screen.getByRole("button", { name: /Export CSV/i });
+    const exportBtn = getByRole("button", { name: /Export CSV/i });
     await user.click(exportBtn);
 
     // Ensure the selected scope flowed through
-    expect(generateExportData).toHaveBeenCalled();
-    const callArgs = (generateExportData as any).mock.calls.at(-1);
-    expect(callArgs[1]).toBe("daily_with_models");
+    expect(handleExportCSV).toHaveBeenCalledWith(baseProps.spendData, "daily_with_models", "Tag", "tag");
 
     // Modal closes after export
     expect(baseProps.onClose).toHaveBeenCalled();
   });
 });
-
-

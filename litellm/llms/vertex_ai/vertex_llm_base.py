@@ -19,6 +19,7 @@ from .common_utils import (
     _get_gemini_url,
     _get_vertex_url,
     all_gemini_url_modes,
+    get_vertex_base_model_name,
     is_global_only_vertex_model,
 )
 
@@ -241,6 +242,9 @@ class VertexBase:
             auth_header=None,
             url=default_api_base,
             model=model,
+            vertex_project=vertex_project or project_id,
+            vertex_location=vertex_location or "us-central1",
+            vertex_api_version="v1",  # Partner models typically use v1
         )
         return api_base
 
@@ -289,9 +293,24 @@ class VertexBase:
         auth_header: Optional[str],
         url: str,
         model: Optional[str] = None,
+        vertex_project: Optional[str] = None,
+        vertex_location: Optional[str] = None,
+        vertex_api_version: Optional[Literal["v1", "v1beta1"]] = None,
+        use_psc_endpoint_format: bool = False,
     ) -> Tuple[Optional[str], str]:
         """
         for cloudflare ai gateway - https://github.com/BerriAI/litellm/issues/4317
+        
+        Handles custom api_base for:
+        1. Gemini (Google AI Studio) - constructs /models/{model}:{endpoint}
+        2. Vertex AI with standard proxies - constructs {api_base}:{endpoint}
+        3. Vertex AI with PSC endpoints - constructs full path structure
+           {api_base}/v1/projects/{project}/locations/{location}/endpoints/{model}:{endpoint}
+           (only when use_psc_endpoint_format=True)
+
+        Args:
+            use_psc_endpoint_format: If True, constructs PSC endpoint URL format.
+                                     If False (default), uses api_base as-is and appends :{endpoint}
 
         ## Returns
         - (auth_header, url) - Tuple[Optional[str], str]
@@ -311,8 +330,29 @@ class VertexBase:
                 if gemini_api_key is not None:
                     auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment] 
             else:
-                url = "{}:{}".format(api_base, endpoint)
-
+                # For Vertex AI
+                if use_psc_endpoint_format:
+                    # User explicitly specified PSC endpoint format
+                    # Construct full PSC/custom endpoint URL
+                    if not (vertex_project and vertex_location and model):
+                        raise ValueError(
+                            "vertex_project, vertex_location, and model are required when use_psc_endpoint_format=True"
+                        )
+                    # Strip routing prefixes (bge/, gemma/, etc.) for endpoint URL construction
+                    model_for_url = get_vertex_base_model_name(model=model)
+                    # Format: {api_base}/v1/projects/{project}/locations/{location}/endpoints/{model}:{endpoint}
+                    version = vertex_api_version or "v1"
+                    url = "{}/{}/projects/{}/locations/{}/endpoints/{}:{}".format(
+                        api_base.rstrip("/"),
+                        version,
+                        vertex_project,
+                        vertex_location,
+                        model_for_url,
+                        endpoint,
+                    )
+                else:
+                    # Fallback to simple format if we don't have all parameters
+                    url = "{}:{}".format(api_base, endpoint)
             if stream is True:
                 url = url + "?alt=sse"
         return auth_header, url
@@ -330,6 +370,7 @@ class VertexBase:
         api_base: Optional[str],
         should_use_v1beta1_features: Optional[bool] = False,
         mode: all_gemini_url_modes = "chat",
+        use_psc_endpoint_format: bool = False,
     ) -> Tuple[Optional[str], str]:
         """
         Internal function. Returns the token and url for the call.
@@ -339,6 +380,7 @@ class VertexBase:
         Returns
             token, url
         """
+        version: Optional[Literal["v1beta1", "v1"]] = None
         if custom_llm_provider == "gemini":
             url, endpoint = _get_gemini_url(
                 mode=mode,
@@ -354,7 +396,7 @@ class VertexBase:
             )
 
             ### SET RUNTIME ENDPOINT ###
-            version: Literal["v1beta1", "v1"] = (
+            version = (
                 "v1beta1" if should_use_v1beta1_features is True else "v1"
             )
             url, endpoint = _get_vertex_url(
@@ -375,6 +417,10 @@ class VertexBase:
             stream=stream,
             url=url,
             model=model,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_api_version=version,
+            use_psc_endpoint_format=use_psc_endpoint_format,
         )
 
     def _handle_reauthentication(

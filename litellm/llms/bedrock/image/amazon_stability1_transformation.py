@@ -1,8 +1,11 @@
+import copy
+import os
 import types
 from typing import List, Optional
 
 from openai.types.image import Image
 
+from litellm.llms.bedrock.common_utils import get_cached_model_info
 from litellm.types.utils import ImageResponse
 
 
@@ -91,6 +94,31 @@ class AmazonStabilityConfig:
         return optional_params
 
     @classmethod
+    def transform_request_body(
+        cls,
+        text: str,
+        optional_params: dict,
+    ) -> dict:
+        inference_params = copy.deepcopy(optional_params)
+        inference_params.pop(
+            "user", None
+        )  # make sure user is not passed in for bedrock call
+
+        prompt = text.replace(os.linesep, " ")
+        ## LOAD CONFIG
+        config = cls.get_config()
+        for k, v in config.items():
+            if (
+                k not in inference_params
+            ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
+                inference_params[k] = v
+
+        return {
+            "text_prompts": [{"text": prompt, "weight": 1}],
+             **inference_params,
+        }
+
+    @classmethod
     def transform_response_dict_to_openai_response(
         cls, model_response: ImageResponse, response_dict: dict
     ) -> ImageResponse:
@@ -102,3 +130,35 @@ class AmazonStabilityConfig:
         model_response.data = image_list
 
         return model_response
+
+    @classmethod
+    def cost_calculator(
+        cls,
+        model: str,
+        image_response: ImageResponse,
+        size: Optional[str] = None,
+        optional_params: Optional[dict] = None,
+    ) -> float:
+        optional_params = optional_params or {}
+
+        # see model_prices_and_context_window.json for details on how steps is used
+        # Reference pricing by steps for stability 1: https://aws.amazon.com/bedrock/pricing/
+        _steps = optional_params.get("steps", 50)
+        steps = "max-steps" if _steps > 50 else "50-steps"
+
+        # size is stored in model_prices_and_context_window.json as 1024-x-1024
+        # current size has 1024x1024
+        size = size or "1024-x-1024"
+        model = f"{size}/{steps}/{model}"
+
+        get_model_info = get_cached_model_info()
+        model_info = get_model_info(
+            model=model,
+            custom_llm_provider="bedrock",
+        )
+
+        output_cost_per_image: float = model_info.get("output_cost_per_image") or 0.0
+        num_images: int = 0
+        if image_response.data:
+            num_images = len(image_response.data)
+        return output_cost_per_image * num_images

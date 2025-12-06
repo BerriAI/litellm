@@ -1,18 +1,17 @@
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
-from annotated_types import Ge
 from pydantic import BaseModel
 from typing_extensions import TypedDict
-
-from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
 
 
 class SupportedVectorStoreIntegrations(str, Enum):
     """Supported vector store integrations."""
 
     BEDROCK = "bedrock"
+    RAGFLOW = "ragflow"
 
 
 class LiteLLM_VectorStoreConfig(TypedDict, total=False):
@@ -246,3 +245,24 @@ VECTOR_STORE_OPENAI_PARAMS = Literal[
     "ranking_options",
     "rewrite_query",
 ]
+
+
+
+@dataclass
+class VectorStoreToolParams:
+    """Parameters extracted from a file_search tool definition"""
+    filters: Optional[Dict] = None
+    max_num_results: Optional[int] = None
+    ranking_options: Optional[Dict] = None
+    
+    def to_dict(self) -> Dict:
+        """Convert to dict, excluding None values"""
+        return {
+            k: v
+            for k, v in {
+                "filters": self.filters,
+                "max_num_results": self.max_num_results,
+                "ranking_options": self.ranking_options,
+            }.items()
+            if v is not None
+        }

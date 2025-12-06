@@ -71,6 +71,59 @@ def client_no_auth():
     return TestClient(app)
 
 
+def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
+    mock_login_result = {"user_id": "test-user"}
+    mock_prisma_client = MagicMock()
+    mock_authenticate_user = AsyncMock(return_value=mock_login_result)
+    mock_create_ui_token_object = MagicMock(return_value={"user_id": "test-user"})
+    mock_jwt_encode = MagicMock(return_value="signed-token")
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.authenticate_user",
+        mock_authenticate_user,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.create_ui_token_object",
+        mock_create_ui_token_object,
+    )
+    monkeypatch.setattr("jwt.encode", mock_jwt_encode)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.utils.get_server_root_path", lambda: "")
+
+    client = TestClient(app)
+    response = client.post(
+        "/v2/login",
+        json={"username": "alice", "password": "secret"},
+    )
+
+    assert response.status_code == 200
+    assert (
+        response.json()
+        == {"redirect_url": "http://testserver/ui/?login=success"}
+    )
+    assert response.cookies.get("token") == "signed-token"
+
+    mock_authenticate_user.assert_awaited_once_with(
+        username="alice",
+        password="secret",
+        master_key="test-master-key",
+        prisma_client=mock_prisma_client,
+    )
+    mock_create_ui_token_object.assert_called_once_with(
+        login_result=mock_login_result,
+        general_settings={},
+        premium_user=False,
+    )
+    mock_jwt_encode.assert_called_once_with(
+        {"user_id": "test-user"},
+        "test-master-key",
+        algorithm="HS256",
+    )
+
+
 @pytest.mark.asyncio
 async def test_initialize_scheduled_jobs_credentials(monkeypatch):
     """
@@ -325,13 +378,20 @@ def test_embedding_input_array_of_tokens(mock_aembedding, client_no_auth):
 
         response = client_no_auth.post("/v1/embeddings", json=test_data)
 
-        mock_aembedding.assert_called_once_with(
-            model="vllm_embed_model",
-            input=[[2046, 13269, 158208]],
-            metadata=mock.ANY,
-            proxy_server_request=mock.ANY,
-            secret_fields=mock.ANY,
-        )
+        # DEPRECATED - mock_aembedding.assert_called_once_with is too strict, and will fail when new kwargs are added to embeddings
+        # mock_aembedding.assert_called_once_with(
+        #     model="vllm_embed_model",
+        #     input=[[2046, 13269, 158208]],
+        #     metadata=mock.ANY,
+        #     proxy_server_request=mock.ANY,
+        #     secret_fields=mock.ANY,
+        # )
+        # Assert that aembedding was called, and that input was not modified
+        mock_aembedding.assert_called_once()
+        call_args, call_kwargs = mock_aembedding.call_args
+        assert call_kwargs["model"] == "vllm_embed_model"
+        assert call_kwargs["input"] == [[2046, 13269, 158208]]
+
         assert response.status_code == 200
         result = response.json()
         print(len(result["data"][0]["embedding"]))
@@ -2442,4 +2502,48 @@ async def test_init_sso_settings_in_db_empty_settings():
 
         # Verify empty dictionary
         assert uppercased_settings == {}
+
+
+def test_get_prompt_spec_for_db_prompt_with_versions():
+    """
+    Test that _get_prompt_spec_for_db_prompt correctly converts database prompts
+    to PromptSpec with versioned naming convention.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    # Mock database prompt version 1
+    mock_prompt_v1 = MagicMock()
+    mock_prompt_v1.model_dump.return_value = {
+        "id": "uuid-1",
+        "prompt_id": "chat_prompt",
+        "version": 1,
+        "litellm_params": '{"prompt_id": "chat_prompt", "prompt_integration": "dotprompt", "model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "v1 content"}]}',
+        "prompt_info": '{"prompt_type": "db"}',
+        "created_at": "2024-01-01T00:00:00",
+        "updated_at": "2024-01-01T00:00:00",
+    }
+
+    # Mock database prompt version 2
+    mock_prompt_v2 = MagicMock()
+    mock_prompt_v2.model_dump.return_value = {
+        "id": "uuid-2",
+        "prompt_id": "chat_prompt",
+        "version": 2,
+        "litellm_params": '{"prompt_id": "chat_prompt", "prompt_integration": "dotprompt", "model": "gpt-4", "messages": [{"role": "user", "content": "v2 content"}]}',
+        "prompt_info": '{"prompt_type": "db"}',
+        "created_at": "2024-01-02T00:00:00",
+        "updated_at": "2024-01-02T00:00:00",
+    }
+
+    # Test version 1
+    prompt_spec_v1 = proxy_config._get_prompt_spec_for_db_prompt(db_prompt=mock_prompt_v1)
+    assert prompt_spec_v1.prompt_id == "chat_prompt.v1"
+
+    # Test version 2
+    prompt_spec_v2 = proxy_config._get_prompt_spec_for_db_prompt(db_prompt=mock_prompt_v2)
+    assert prompt_spec_v2.prompt_id == "chat_prompt.v2"
 
