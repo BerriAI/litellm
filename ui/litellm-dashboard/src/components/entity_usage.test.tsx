@@ -18,6 +18,7 @@ vi.mock("./networking", () => ({
   tagDailyActivityCall: vi.fn(),
   teamDailyActivityCall: vi.fn(),
   organizationDailyActivityCall: vi.fn(),
+  customerDailyActivityCall: vi.fn(),
 }));
 
 // Mock the child components to simplify testing
@@ -42,6 +43,7 @@ describe("EntityUsage", () => {
   const mockTagDailyActivityCall = vi.mocked(networking.tagDailyActivityCall);
   const mockTeamDailyActivityCall = vi.mocked(networking.teamDailyActivityCall);
   const mockOrganizationDailyActivityCall = vi.mocked(networking.organizationDailyActivityCall);
+  const mockCustomerDailyActivityCall = vi.mocked(networking.customerDailyActivityCall);
 
   const mockSpendData = {
     results: [
@@ -128,9 +130,11 @@ describe("EntityUsage", () => {
     mockTagDailyActivityCall.mockClear();
     mockTeamDailyActivityCall.mockClear();
     mockOrganizationDailyActivityCall.mockClear();
+    mockCustomerDailyActivityCall.mockClear();
     mockTagDailyActivityCall.mockResolvedValue(mockSpendData);
     mockTeamDailyActivityCall.mockResolvedValue(mockSpendData);
     mockOrganizationDailyActivityCall.mockResolvedValue(mockSpendData);
+    mockCustomerDailyActivityCall.mockResolvedValue(mockSpendData);
   });
 
   it("should render with tag entity type and display spend metrics", async () => {
@@ -175,6 +179,21 @@ describe("EntityUsage", () => {
     });
 
     expect(screen.getByText("Organization Spend Overview")).toBeInTheDocument();
+
+    await waitFor(() => {
+      const spendElements = screen.getAllByText("$100.50");
+      expect(spendElements.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("should render with customer entity type and call customer API", async () => {
+    render(<EntityUsage {...defaultProps} entityType="customer" />);
+
+    await waitFor(() => {
+      expect(mockCustomerDailyActivityCall).toHaveBeenCalled();
+    });
+
+    expect(screen.getByText("Customer Spend Overview")).toBeInTheDocument();
 
     await waitFor(() => {
       const spendElements = screen.getAllByText("$100.50");

@@ -5,8 +5,10 @@ This test verifies the fix for issue #15740 where kwargs.pop() was removing
 the logging object before passing kwargs to internal acompletion() calls,
 causing duplicate spend log entries for non-OpenAI providers.
 """
-import sys
+import asyncio
 import os
+import sys
+
 import pytest
 
 sys.path.insert(
@@ -26,6 +28,7 @@ def test_logging_object_not_popped():
     spend logs for non-OpenAI providers.
     """
     import inspect
+
     from litellm.responses import main as responses_module
 
     # Get the source code of the responses function
@@ -83,9 +86,12 @@ async def test_no_duplicate_spend_logs():
             mock_response="Hello! I'm doing well."  # Use mock to avoid real API call
         )
 
-        # Give async logging time to complete
-        import asyncio
-        await asyncio.sleep(1)
+        # Wait for async logging to complete using the logging worker's flush method
+        # Then add a small delay to ensure callbacks finish executing
+        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+        await GLOBAL_LOGGING_WORKER.flush()
+        # flush() empties the queue but callbacks may still be running
+        await asyncio.sleep(0.5)
 
         # Verify that log_success_event was called exactly once
         assert spend_logger.log_count == 1, (
