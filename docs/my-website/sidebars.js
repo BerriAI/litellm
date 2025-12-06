@@ -130,7 +130,7 @@ const sidebars = {
         },
         {
           type: "category",
-          label: "Functions",
+          label: "SDK Functions",
           items: [
             {
               type: "doc",
