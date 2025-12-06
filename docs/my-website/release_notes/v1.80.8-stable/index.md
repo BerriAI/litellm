@@ -47,12 +47,27 @@ pip install litellm==1.80.8
 
 - **Agent Gateway** - [Invoke agents through the AI Gateway with request/response logging and access controls](../../docs/a2a)
 - **Guardrails API v2** - [Generic Guardrail API with streaming support, structured messages, and tool call checks](../../docs/proxy/guardrails)
-- **Customer (End User) Usage UI** - [Track and visualize end-user spend directly in the dashboard](../../docs/proxy/users)
+- **Customer (End User) Usage UI** - [Track and visualize end-user spend directly in the dashboard](../../docs/proxy/customer_usage)
 - **vLLM Batch + Files API** - [Support for batch and files API with vLLM deployments](../../docs/batches)
 - **Dynamic Rate Limiting on Teams** - [Enable dynamic rate limits and priority reservation on team-level](../../docs/proxy/team_budgets)
 - **Google Cloud Chirp3 HD** - [New text-to-speech provider with Chirp3 HD voices](../../docs/text_to_speech)
 
 ---
+
+### Customer (End User) Usage UI
+
+<Image
+img={require('../../img/release_notes/customer_usage.png')}
+style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+Users can now filter usage statistics by customers, providing the same granular filtering capabilities available for teams and organizations.
+
+**Details:**
+
+- Filter usage analytics, spend logs, and activity metrics by customer ID
+- View customer-level breakdowns alongside existing team and user-level filters
+- Consistent filtering experience across all usage and analytics views
 
 ## New Providers and Endpoints
 
