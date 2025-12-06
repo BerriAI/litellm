@@ -825,6 +825,7 @@ const sidebars = {
             slug: "/project",
           },
           items: [
+            "projects/GraphRAG",
             "projects/smolagents",
             "projects/mini-swe-agent",
             "projects/openai-agents",
