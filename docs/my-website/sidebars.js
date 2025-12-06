@@ -130,7 +130,7 @@ const sidebars = {
         },
         {
           type: "category",
-          label: "Core Functions",
+          label: "Functions",
           items: [
             {
               type: "doc",
@@ -146,6 +146,31 @@ const sidebars = {
               type: "doc",
               id: "response_api",
               label: "responses()",
+            },
+            {
+              type: "doc",
+              id: "text_completion",
+              label: "text_completion()",
+            },
+            {
+              type: "doc",
+              id: "image_generation",
+              label: "image_generation()",
+            },
+            {
+              type: "doc",
+              id: "audio_transcription",
+              label: "transcription()",
+            },
+            {
+              type: "doc",
+              id: "text_to_speech",
+              label: "speech()",
+            },
+            {
+              type: "link",
+              label: "All Supported Endpoints →",
+              href: "/docs/supported_endpoints",
             },
           ],
         },
