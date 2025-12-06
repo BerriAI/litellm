@@ -1272,15 +1272,16 @@ class MCPServerManager:
         prefix = get_server_prefix(server)
 
         for tool in tools:
-            prefixed_name = add_server_prefix_to_name(tool.name, prefix)
+            tool_copy = tool.model_copy(deep=True)
 
-            name_to_use = prefixed_name if add_prefix else tool.name
+            original_name = tool_copy.name
+            prefixed_name = add_server_prefix_to_name(original_name, prefix)
 
-            # Preserve all tool fields including metadata/_meta by mutating the original tool
-            # Similar to how _create_prefixed_prompts works
-            original_name = tool.name
-            tool.name = name_to_use
-            prefixed_tools.append(tool)
+            name_to_use = prefixed_name if add_prefix else original_name
+
+            # Preserve all tool fields including metadata/_meta by avoiding mutation
+            tool_copy.name = name_to_use
+            prefixed_tools.append(tool_copy)
 
             # Update tool to server mapping for resolution (support both forms)
             self.tool_name_to_mcp_server_name_mapping[original_name] = prefix
@@ -1952,9 +1953,9 @@ class MCPServerManager:
                             server_name_from_prefix
                         ):
                             return server
-                    elif normalize_server_name(server.server_name) == normalize_server_name(
-                        server_name_from_prefix
-                    ):
+                    elif normalize_server_name(
+                        server.server_name
+                    ) == normalize_server_name(server_name_from_prefix):
                         return server
 
         return None
