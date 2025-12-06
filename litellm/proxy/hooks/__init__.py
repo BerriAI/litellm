@@ -2,6 +2,7 @@ import os
 from typing import Literal, Union
 
 from . import *
+from .batch_id_security import BatchIDSecurity
 from .cache_control_check import _PROXY_CacheControlCheck
 from .max_budget_limiter import _PROXY_MaxBudgetLimiter
 from .parallel_request_limiter import _PROXY_MaxParallelRequestsHandler
@@ -21,6 +22,7 @@ PROXY_HOOKS = {
     "parallel_request_limiter": _PROXY_MaxParallelRequestsHandler_v3,
     "cache_control_check": _PROXY_CacheControlCheck,
     "responses_id_security": ResponsesIDSecurity,
+    "batch_id_security": BatchIDSecurity,
 }
 
 ## FEATURE FLAG HOOKS ##
@@ -40,6 +42,8 @@ def get_proxy_hook(
             "managed_files",
             "parallel_request_limiter",
             "cache_control_check",
+            "responses_id_security",
+            "batch_id_security",
         ],
         str,
     ],
