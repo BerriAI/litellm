@@ -39,7 +39,7 @@ import {
 } from "../networking";
 import ObjectPermissionsView from "../object_permissions_view";
 import NumericalInput from "../shared/numerical_input";
-import MemberModal from "../team/edit_membership";
+import MemberModal from "../team/EditMembership";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 
 interface OrganizationInfoProps {

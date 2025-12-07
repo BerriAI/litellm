@@ -1,6 +1,6 @@
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import Papa from "papaparse";
-import type { EntitySpendData, EntityBreakdown, ExportMetadata, ExportScope } from "./types";
+import type { EntitySpendData, EntityBreakdown, ExportMetadata, ExportScope, EntityType } from "./types";
 import type { DateRangePickerValue } from "@tremor/react";
 
 export const getEntityBreakdown = (spendData: EntitySpendData): EntityBreakdown[] => {
@@ -139,7 +139,7 @@ export const generateExportData = (
 };
 
 export const generateMetadata = (
-  entityType: "tag" | "team" | "organization",
+  entityType: EntityType,
   dateRange: DateRangePickerValue,
   selectedFilters: string[],
   exportScope: ExportScope,
@@ -166,7 +166,7 @@ export const handleExportCSV = (
   spendData: EntitySpendData,
   exportScope: ExportScope,
   entityLabel: string,
-  entityType: "tag" | "team" | "organization",
+  entityType: EntityType,
 ): void => {
   const data = generateExportData(spendData, exportScope, entityLabel);
   const csv = Papa.unparse(data);
@@ -186,7 +186,7 @@ export const handleExportJSON = (
   spendData: EntitySpendData,
   exportScope: ExportScope,
   entityLabel: string,
-  entityType: "tag" | "team" | "organization",
+  entityType: EntityType,
   dateRange: DateRangePickerValue,
   selectedFilters: string[],
 ): void => {

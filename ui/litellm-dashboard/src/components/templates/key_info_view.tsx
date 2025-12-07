@@ -144,6 +144,17 @@ export default function KeyInfoView({
         delete formValues.mcp_tool_permissions;
       }
 
+      // Handle agent permissions
+      if (formValues.agents_and_groups !== undefined) {
+        const { agents, accessGroups } = formValues.agents_and_groups || { agents: [], accessGroups: [] };
+        formValues.object_permission = {
+          ...formValues.object_permission,
+          agents: agents || [],
+          agent_access_groups: accessGroups || [],
+        };
+        delete formValues.agents_and_groups;
+      }
+
       formValues.max_budget = mapEmptyStringToNull(formValues.max_budget);
       formValues.tpm_limit = mapEmptyStringToNull(formValues.tpm_limit);
       formValues.rpm_limit = mapEmptyStringToNull(formValues.rpm_limit);

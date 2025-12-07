@@ -6,7 +6,7 @@ Unified Guardrail, leveraging LiteLLM's /applyGuardrail endpoint
 3. Implements a way to call /applyGuardrail endpoint for `/chat/completions` + `/v1/messages` requests on async_post_call_streaming_iterator_hook
 """
 
-from typing import Any, AsyncGenerator, Union
+from typing import Any, AsyncGenerator, List, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -96,6 +96,51 @@ class UnifiedLLMGuardrails(CustomLogger):
         )
         return data
 
+    async def async_moderation_hook(
+        self, data: dict, user_api_key_dict: UserAPIKeyAuth, call_type: CallTypesLiteral
+    ) -> Any:
+        """
+        Runs in parallel to LLM API call
+        Runs on only Input
+
+        This can NOT modify the input, only used to reject or accept a call before going to LLM API
+        """
+        global endpoint_guardrail_translation_mappings
+
+        verbose_proxy_logger.debug("Running UnifiedLLMGuardrails moderation hook")
+
+        guardrail_to_apply: CustomGuardrail = data.pop("guardrail_to_apply", None)
+        if guardrail_to_apply is None:
+            return data
+
+        event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
+        if (
+            guardrail_to_apply.should_run_guardrail(data=data, event_type=event_type)
+            is not True
+        ):
+            verbose_proxy_logger.debug(
+                "UnifiedLLMGuardrails: Pre-call scanning disabled for %s",
+                guardrail_to_apply.guardrail_name,
+            )
+            return data
+
+        if endpoint_guardrail_translation_mappings is None:
+            endpoint_guardrail_translation_mappings = (
+                load_guardrail_translation_mappings()
+            )
+        if CallTypes(call_type) not in endpoint_guardrail_translation_mappings:
+            return data
+
+        endpoint_translation = endpoint_guardrail_translation_mappings[
+            CallTypes(call_type)
+        ]()
+
+        return await endpoint_translation.process_input_messages(
+            data=data,
+            guardrail_to_apply=guardrail_to_apply,
+            litellm_logging_obj=data.get("litellm_logging_obj"),
+        )
+
     async def async_post_call_success_hook(
         self,
         data: dict,
@@ -126,16 +171,21 @@ class UnifiedLLMGuardrails(CustomLogger):
             )
             is not True
         ):
-
             return
 
         verbose_proxy_logger.debug(
             "async_post_call_success_hook response: %s", response
         )
 
-        call_type = _infer_call_type(call_type=None, completion_response=response)
+        call_type: Optional[CallTypesLiteral] = None
+        if user_api_key_dict.request_route is not None:
+            call_types = get_call_types_for_route(user_api_key_dict.request_route)
+            if call_types is not None:
+                call_type = call_types[0]
         if call_type is None:
+            call_type = _infer_call_type(call_type=None, completion_response=response)
 
+        if call_type is None:
             return response
 
         if endpoint_guardrail_translation_mappings is None:
@@ -183,9 +233,6 @@ class UnifiedLLMGuardrails(CustomLogger):
         """
 
         global endpoint_guardrail_translation_mappings
-        from litellm.proxy.common_utils.callback_utils import (
-            add_guardrail_to_applied_guardrails_header,
-        )
 
         guardrail_to_apply: CustomGuardrail = request_data.pop(
             "guardrail_to_apply", None
@@ -234,9 +281,11 @@ class UnifiedLLMGuardrails(CustomLogger):
         # Infer call type from first chunk
         call_type = None
         chunk_counter = 0
+        responses_so_far: List[Any] = []
 
         async for item in response:
             chunk_counter += 1
+            responses_so_far.append(item)
 
             # Infer call type from first chunk if not already done
             if call_type is None and user_api_key_dict.request_route is not None:
@@ -244,19 +293,22 @@ class UnifiedLLMGuardrails(CustomLogger):
                 if call_types is not None:
                     call_type = call_types[0]
 
-                # If call type not supported, just pass through all chunks
-                if (
-                    call_type is None
-                    or CallTypes(call_type)
-                    not in endpoint_guardrail_translation_mappings
-                ):
-                    yield item
-                    async for remaining_item in response:
-                        yield remaining_item
-                    return
+            if call_type is None:
+                call_type = _infer_call_type(call_type=None, completion_response=item)
+
+            # If call type not supported, just pass through all chunks
+            if (
+                call_type is None
+                or CallTypes(call_type) not in endpoint_guardrail_translation_mappings
+            ):
+                yield item
+                async for remaining_item in response:
+                    yield remaining_item
+                return
 
             # Process chunk based on sampling rate
             if chunk_counter % sampling_rate == 0:
+
                 verbose_proxy_logger.debug(
                     "Processing streaming chunk %s (sampling_rate=%s) with guardrail %s",
                     chunk_counter,
@@ -268,22 +320,17 @@ class UnifiedLLMGuardrails(CustomLogger):
                     CallTypes(call_type)
                 ]()
 
-                processed_item = (
+                processed_items = (
                     await endpoint_translation.process_output_streaming_response(
-                        response=item,
+                        responses_so_far=responses_so_far,
                         guardrail_to_apply=guardrail_to_apply,
                         litellm_logging_obj=request_data.get("litellm_logging_obj"),
                         user_api_key_dict=user_api_key_dict,
                     )
                 )
 
-                # Add guardrail to applied guardrails header (only once, on first processed chunk)
-                if chunk_counter == sampling_rate:
-                    add_guardrail_to_applied_guardrails_header(
-                        request_data=request_data,
-                        guardrail_name=guardrail_to_apply.guardrail_name,
-                    )
+                last_item = processed_items[-1]
 
-                yield processed_item
+                yield last_item
             else:
                 yield item

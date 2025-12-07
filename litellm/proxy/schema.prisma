@@ -61,6 +61,7 @@ model LiteLLM_AgentsTable {
   agent_name String @unique
   litellm_params Json?
   agent_card_params Json
+  agent_access_groups String[]       @default([])
   created_at    DateTime               @default(now()) @map("created_at")
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
@@ -172,6 +173,8 @@ model LiteLLM_ObjectPermissionTable {
   mcp_access_groups     String[]       @default([])
   mcp_tool_permissions  Json?          // Tool-level permissions for MCP servers. Format: {"server_id": ["tool_name_1", "tool_name_2"]}
   vector_stores         String[]       @default([])
+  agents                String[]       @default([])
+  agent_access_groups   String[]       @default([])
   teams                 LiteLLM_TeamTable[]
   verification_tokens   LiteLLM_VerificationToken[]
   organizations         LiteLLM_OrganizationTable[]
@@ -457,6 +460,34 @@ model LiteLLM_DailyOrganizationSpend {
   @@unique([organization_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name])
   @@index([date])
   @@index([organization_id])
+  @@index([api_key])
+  @@index([model])
+  @@index([mcp_namespaced_tool_name])
+}
+
+// Track daily end user (customer) spend metrics per model and key
+model LiteLLM_DailyEndUserSpend {
+  id                  String   @id @default(uuid())
+  end_user_id         String?
+  date                String
+  api_key             String   
+  model               String?
+  model_group         String?  
+  custom_llm_provider String?
+  mcp_namespaced_tool_name String?
+  prompt_tokens       BigInt      @default(0)
+  completion_tokens   BigInt      @default(0)
+  cache_read_input_tokens     BigInt      @default(0)
+  cache_creation_input_tokens BigInt      @default(0)
+  spend               Float    @default(0.0)
+  api_requests        BigInt      @default(0)
+  successful_requests BigInt      @default(0)
+  failed_requests     BigInt      @default(0)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+  @@unique([end_user_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name])
+  @@index([date])
+  @@index([end_user_id])
   @@index([api_key])
   @@index([model])
   @@index([mcp_namespaced_tool_name])

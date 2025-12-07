@@ -151,6 +151,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "mlflow",
     "langfuse",
     "langfuse_otel",
+    "weave_otel",
     "pagerduty",
     "humanloop",
     "gcs_pubsub",
@@ -264,6 +265,7 @@ heroku_key: Optional[str] = None
 cometapi_key: Optional[str] = None
 ovhcloud_key: Optional[str] = None
 lemonade_key: Optional[str] = None
+amazon_nova_api_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
@@ -519,6 +521,7 @@ perplexity_models: Set = set()
 watsonx_models: Set = set()
 gemini_models: Set = set()
 xai_models: Set = set()
+zai_models: Set = set()
 deepseek_models: Set = set()
 runwayml_models: Set = set()
 azure_ai_models: Set = set()
@@ -570,6 +573,7 @@ ovhcloud_models: Set = set()
 ovhcloud_embedding_models: Set = set()
 lemonade_models: Set = set()
 docker_model_runner_models: Set = set()
+amazon_nova_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -710,6 +714,8 @@ def add_known_models():
             text_completion_codestral_models.add(key)
         elif value.get("litellm_provider") == "xai":
             xai_models.add(key)
+        elif value.get("litellm_provider") == "zai":
+            zai_models.add(key)
         elif value.get("litellm_provider") == "fal_ai":
             fal_ai_models.add(key)
         elif value.get("litellm_provider") == "deepseek":
@@ -810,6 +816,8 @@ def add_known_models():
             lemonade_models.add(key)
         elif value.get("litellm_provider") == "docker_model_runner":
             docker_model_runner_models.add(key)
+        elif value.get("litellm_provider") == "amazon_nova":
+            amazon_nova_models.add(key)
 
 
 add_known_models()
@@ -871,6 +879,7 @@ model_list = list(
     | gemini_models
     | text_completion_codestral_models
     | xai_models
+    | zai_models
     | fal_ai_models
     | deepseek_models
     | azure_ai_models
@@ -959,6 +968,7 @@ models_by_provider: dict = {
     "aleph_alpha": aleph_alpha_models,
     "text-completion-codestral": text_completion_codestral_models,
     "xai": xai_models,
+    "zai": zai_models,
     "fal_ai": fal_ai_models,
     "deepseek": deepseek_models,
     "runwayml": runwayml_models,
@@ -1009,6 +1019,7 @@ models_by_provider: dict = {
     "ovhcloud": ovhcloud_models | ovhcloud_embedding_models,
     "lemonade": lemonade_models,
     "clarifai": clarifai_models,
+    "amazon_nova": amazon_nova_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1056,57 +1067,10 @@ from .timeout import timeout
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
 from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
-from .utils import (
-    client,
-    exception_type,
-    get_optional_params,
-    get_response_string,
-    token_counter,
-    create_pretrained_tokenizer,
-    create_tokenizer,
-    supports_function_calling,
-    supports_web_search,
-    supports_url_context,
-    supports_response_schema,
-    supports_parallel_function_calling,
-    supports_vision,
-    supports_audio_input,
-    supports_audio_output,
-    supports_system_messages,
-    supports_reasoning,
-    get_litellm_params,
-    acreate,
-    get_max_tokens,
-    get_model_info,
-    register_prompt_template,
-    validate_environment,
-    check_valid_key,
-    register_model,
-    encode,
-    decode,
-    _calculate_retry_after,
-    _should_retry,
-    get_supported_openai_params,
-    get_api_base,
-    get_first_chars_messages,
-    ModelResponse,
-    ModelResponseStream,
-    EmbeddingResponse,
-    ImageResponse,
-    TranscriptionResponse,
-    TextCompletionResponse,
-    get_provider_fields,
-    ModelResponseListIterator,
-    get_valid_models,
-)
-
-ALL_LITELLM_RESPONSE_TYPES = [
-    ModelResponse,
-    EmbeddingResponse,
-    ImageResponse,
-    TranscriptionResponse,
-    TextCompletionResponse,
-]
+# client must be imported immediately as it's used as a decorator at function definition time
+from .utils import client
+# Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py 
+# (which imports tiktoken) at import time
 
 from .llms.bytez.chat.transformation import BytezChatConfig
 from .llms.custom_llm import CustomLLM
@@ -1209,6 +1173,9 @@ from .llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation import
 )
 from .llms.bedrock.chat.invoke_transformations.amazon_nova_transformation import (
     AmazonInvokeNovaConfig,
+)
+from .llms.bedrock.chat.invoke_transformations.amazon_qwen2_transformation import (
+    AmazonQwen2Config,
 )
 from .llms.bedrock.chat.invoke_transformations.amazon_qwen3_transformation import (
     AmazonQwen3Config,
@@ -1343,6 +1310,7 @@ from .llms.friendliai.chat.transformation import FriendliaiChatConfig
 from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
 from .llms.xai.chat.transformation import XAIChatConfig
 from .llms.xai.common_utils import XAIModelInfo
+from .llms.zai.chat.transformation import ZAIChatConfig
 from .llms.aiml.chat.transformation import AIMLChatConfig
 from .llms.volcengine.chat.transformation import (
     VolcEngineChatConfig as VolcEngineConfig,
@@ -1382,7 +1350,7 @@ from .llms.nebius.chat.transformation import NebiusConfig
 from .llms.wandb.chat.transformation import WandbConfig
 from .llms.dashscope.chat.transformation import DashScopeChatConfig
 from .llms.moonshot.chat.transformation import MoonshotChatConfig
-from .llms.publicai.chat.transformation import PublicAIChatConfig
+# PublicAI now uses JSON-based configuration (see litellm/llms/openai_like/providers.json)
 from .llms.docker_model_runner.chat.transformation import DockerModelRunnerChatConfig
 from .llms.v0.chat.transformation import V0ChatConfig
 from .llms.oci.chat.transformation import OCIChatConfig
@@ -1396,6 +1364,7 @@ from .llms.ovhcloud.embedding.transformation import OVHCloudEmbeddingConfig
 from .llms.cometapi.embed.transformation import CometAPIEmbeddingConfig
 from .llms.lemonade.chat.transformation import LemonadeChatConfig
 from .llms.snowflake.embedding.transformation import SnowflakeEmbeddingConfig
+from .llms.amazon_nova.chat.transformation import AmazonNovaChatConfig
 from .main import *  # type: ignore
 
 # Skills API
@@ -1538,67 +1507,91 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
 
 
 # Lazy loading system for heavy modules to reduce initial import time and memory usage
-def _lazy_import_cost_calculator(name: str) -> Any:
-    """Lazy import for cost_calculator functions."""
-    from .cost_calculator import (
-        completion_cost as _completion_cost,
-        cost_per_token as _cost_per_token,
-        response_cost_calculator as _response_cost_calculator,
-    )
-    
-    _cost_functions = {
-        "completion_cost": _completion_cost,
-        "cost_per_token": _cost_per_token,
-        "response_cost_calculator": _response_cost_calculator,
-    }
-    
-    func = _cost_functions[name]
-    globals()[name] = func
-    return func
-
-
-def _lazy_import_litellm_logging(name: str) -> Any:
-    """Lazy import for litellm_logging module."""
-    try:
-        from litellm.litellm_core_utils.litellm_logging import (
-            Logging as _Logging,
-            modify_integration as _modify_integration,
-        )
-        
-        _logging_objects = {
-            "Logging": _Logging,
-            "modify_integration": _modify_integration,
-        }
-        
-        obj = _logging_objects[name]
-        globals()[name] = obj
-        return obj
-    except Exception as e:
-        raise AttributeError(
-            f"module {__name__!r} has no attribute {name!r}. "
-            f"Lazy import failed: {e}"
-        ) from e
-
-
-_LAZY_LOAD_REGISTRY: Dict[str, Callable[[str], Any]] = {
-    "completion_cost": _lazy_import_cost_calculator,
-    "cost_per_token": _lazy_import_cost_calculator,
-    "response_cost_calculator": _lazy_import_cost_calculator,
-    "Logging": _lazy_import_litellm_logging,
-    "modify_integration": _lazy_import_litellm_logging,
-}
-
 
 if TYPE_CHECKING:
+    from litellm.types.utils import ModelInfo as _ModelInfoType
+    
+    # Cost calculator functions
     cost_per_token: Callable[..., Tuple[float, float]]
     completion_cost: Callable[..., float]
     response_cost_calculator: Any
     modify_integration: Any
+    
+    # Utils functions - type stubs for truly lazy loaded functions only
+    # (functions NOT imported via "from .main import *")
+    get_response_string: Callable[..., str]
+    supports_function_calling: Callable[..., bool]
+    supports_web_search: Callable[..., bool]
+    supports_url_context: Callable[..., bool]
+    supports_response_schema: Callable[..., bool]
+    supports_parallel_function_calling: Callable[..., bool]
+    supports_vision: Callable[..., bool]
+    supports_audio_input: Callable[..., bool]
+    supports_audio_output: Callable[..., bool]
+    supports_system_messages: Callable[..., bool]
+    supports_reasoning: Callable[..., bool]
+    acreate: Callable[..., Any]
+    get_max_tokens: Callable[..., int]
+    get_model_info: Callable[..., _ModelInfoType]
+    register_prompt_template: Callable[..., None]
+    validate_environment: Callable[..., dict]
+    check_valid_key: Callable[..., bool]
+    register_model: Callable[..., None]
+    encode: Callable[..., list]
+    decode: Callable[..., str]
+    _calculate_retry_after: Callable[..., float]
+    _should_retry: Callable[..., bool]
+    get_supported_openai_params: Callable[..., Optional[list]]
+    get_api_base: Callable[..., Optional[str]]
+    get_first_chars_messages: Callable[..., str]
+    get_provider_fields: Callable[..., List]
+    get_valid_models: Callable[..., list]
+    
+    # Response types - truly lazy loaded only (not in main.py or elsewhere)
+    ModelResponseListIterator: Type[Any]
 
 
 def __getattr__(name: str) -> Any:
     """Lazy import handler for cost_calculator and litellm_logging functions."""
-    if name in _LAZY_LOAD_REGISTRY:
-        return _LAZY_LOAD_REGISTRY[name](name)
+    # Lazy load cost_calculator functions
+    _cost_calculator_names = (
+        "completion_cost",
+        "cost_per_token",
+        "response_cost_calculator",
+    )
+    if name in _cost_calculator_names:
+        from ._lazy_imports import _lazy_import_cost_calculator
+        return _lazy_import_cost_calculator(name)
+    
+    # Lazy load litellm_logging functions
+    _litellm_logging_names = (
+        "Logging",
+        "modify_integration",
+    )
+    if name in _litellm_logging_names:
+        from ._lazy_imports import _lazy_import_litellm_logging
+        return _lazy_import_litellm_logging(name)
+    
+    # Lazy load utils functions
+    _utils_names = (
+        "exception_type", "get_optional_params", "get_response_string", "token_counter",
+        "create_pretrained_tokenizer", "create_tokenizer", "supports_function_calling",
+        "supports_web_search", "supports_url_context", "supports_response_schema",
+        "supports_parallel_function_calling", "supports_vision", "supports_audio_input",
+        "supports_audio_output", "supports_system_messages", "supports_reasoning",
+        "get_litellm_params", "acreate", "get_max_tokens", "get_model_info",
+        "register_prompt_template", "validate_environment", "check_valid_key",
+        "register_model", "encode", "decode", "_calculate_retry_after", "_should_retry",
+        "get_supported_openai_params", "get_api_base", "get_first_chars_messages",
+        "ModelResponse", "ModelResponseStream", "EmbeddingResponse", "ImageResponse",
+        "TranscriptionResponse", "TextCompletionResponse", "get_provider_fields",
+        "ModelResponseListIterator", "get_valid_models",
+    )
+    if name in _utils_names:
+        from ._lazy_imports import _lazy_import_utils
+        return _lazy_import_utils(name)
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+# ALL_LITELLM_RESPONSE_TYPES is lazy-loaded via __getattr__ to avoid loading utils at import time

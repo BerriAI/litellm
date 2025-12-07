@@ -341,9 +341,21 @@ class CallTypes(str, Enum):
     agenerate_content_stream = "agenerate_content_stream"
 
     #########################################################
+    # OCR Call Types
+    #########################################################
+    ocr = "ocr"
+    aocr = "aocr"
+
+    #########################################################
     # MCP Call Types
     #########################################################
     call_mcp_tool = "call_mcp_tool"
+
+    #########################################################
+    # A2A Call Types
+    #########################################################
+    asend_message = "asend_message"
+    send_message = "send_message"
 
 
 CallTypesLiteral = Literal[
@@ -397,6 +409,8 @@ CallTypesLiteral = Literal[
     "vector_store_file_delete",
     "avector_store_file_delete",
     "call_mcp_tool",
+    "asend_message",
+    "send_message",
     "aresponses",
     "responses",
 ]
@@ -712,6 +726,8 @@ API_ROUTE_TO_CALL_TYPES = {
     ],
     # MCP (Model Context Protocol)
     "/mcp/call_tool": [CallTypes.call_mcp_tool],
+    # A2A (Agent-to-Agent)
+    "/a2a/{agent_id}": [CallTypes.asend_message, CallTypes.send_message],
     # Passthrough endpoints
     "/llm_passthrough": [
         CallTypes.llm_passthrough_route,
@@ -721,6 +737,7 @@ API_ROUTE_TO_CALL_TYPES = {
         CallTypes.llm_passthrough_route,
         CallTypes.allm_passthrough_route,
     ],
+    "/v1/messages": [CallTypes.anthropic_messages],
 }
 
 
@@ -2665,6 +2682,10 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     posthog_api_key: Optional[str]
     posthog_api_url: Optional[str]
 
+    # Weave (W&B) dynamic params
+    wandb_api_key: Optional[str]
+    weave_project_id: Optional[str]
+
     # Logging settings
     turn_off_message_logging: Optional[bool]  # when true will not log messages
     litellm_disabled_callbacks: Optional[List[str]]
@@ -2981,6 +3002,8 @@ class LlmProviders(str, Enum):
     WANDB = "wandb"
     OVHCLOUD = "ovhcloud"
     LEMONADE = "lemonade"
+    AMAZON_NOVA = "amazon_nova"
+    A2A_AGENT = "a2a_agent"
 
 
 # Create a set of all provider values for quick lookup
