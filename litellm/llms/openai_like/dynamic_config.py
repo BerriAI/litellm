@@ -19,11 +19,11 @@ def create_config_class(provider: SimpleProviderConfig):
     """Generate config class dynamically from JSON configuration"""
 
     # Choose base class
-    base_class = (
+    base_class: type = (
         OpenAIGPTConfig if provider.base_class == "openai_gpt" else OpenAILikeChatConfig
     )
 
-    class JSONProviderConfig(base_class):
+    class JSONProviderConfig(base_class):  # type: ignore[valid-type,misc]
         @overload
         def _transform_messages(
             self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
@@ -86,6 +86,9 @@ def create_config_class(provider: SimpleProviderConfig):
             """Build complete URL for the API endpoint"""
             if not api_base:
                 api_base = provider.base_url
+
+            if api_base is None:
+                raise ValueError(f"api_base is required for provider {provider.slug}")
 
             if not api_base.endswith("/chat/completions"):
                 api_base = f"{api_base}/chat/completions"

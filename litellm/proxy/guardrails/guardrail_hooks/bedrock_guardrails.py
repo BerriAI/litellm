@@ -1318,6 +1318,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                             masked_text = str(text_content)
                             masked_texts.append(masked_text)
 
+            # If no output/outputs were provided, use the original texts
+            # This happens when the guardrail allows content without modification
+            if not masked_texts:
+                masked_texts = texts
+
             verbose_proxy_logger.debug(
                 "Bedrock Guardrail: Successfully applied guardrail"
             )

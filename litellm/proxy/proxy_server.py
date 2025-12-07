@@ -45,7 +45,10 @@ from litellm.constants import (
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy.common_utils.callback_utils import normalize_callback_names
+from litellm.proxy.common_utils.callback_utils import (
+    normalize_callback_names,
+    process_callback,
+)
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.types.utils import (
     ModelResponse,
@@ -54,7 +57,6 @@ from litellm.types.utils import (
     TokenCountResponse,
 )
 from litellm.utils import load_credentials_from_list
-from litellm.proxy.common_utils.callback_utils import process_callback
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -168,8 +170,8 @@ from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
 )
 from litellm.exceptions import RejectedRequestError
-from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
@@ -566,7 +568,7 @@ ui_message = (
 )
 ui_message += "\n\n💸 [```LiteLLM Model Cost Map```](https://models.litellm.ai/)."
 
-ui_message += f"\n\n🔎 [```LiteLLM Model Hub```]({model_hub_link}). See available models on the proxy. [**Docs**](https://docs.litellm.ai/docs/proxy/model_hub)"
+ui_message += f"\n\n🔎 [```LiteLLM Model Hub```]({model_hub_link}). See available models on the proxy. [**Docs**](https://docs.litellm.ai/docs/proxy/ai_hub)"
 
 custom_swagger_message = "[**Customize Swagger Docs**](https://docs.litellm.ai/docs/proxy/enterprise#swagger-docs---custom-routes--branding)"
 
@@ -613,7 +615,7 @@ async def proxy_shutdown_event():
     await jwt_handler.close()
 
     if db_writer_client is not None:
-        await db_writer_client.close()
+        await db_writer_client.close()  # type: ignore[reportGeneralTypeIssues]
 
     # flush remaining langfuse logs
     if "langfuse" in litellm.success_callback:
@@ -792,7 +794,7 @@ async def proxy_startup_event(app: FastAPI):
         except Exception as e:
             verbose_proxy_logger.error(f"Error closing shared aiohttp session: {e}")
 
-    await proxy_shutdown_event()
+    await proxy_shutdown_event()  # type: ignore[reportGeneralTypeIssues]
 
 
 app = FastAPI(
@@ -802,7 +804,7 @@ app = FastAPI(
     description=_description,
     version=version,
     root_path=server_root_path,  # check if user passed root path, FastAPI defaults this value to ""
-    lifespan=proxy_startup_event,
+    lifespan=proxy_startup_event,  # type: ignore[reportGeneralTypeIssues]
 )
 
 vertex_live_passthrough_vertex_base = VertexBase()
@@ -8330,9 +8332,9 @@ async def login(request: Request):  # noqa: PLR0915
     # Generate JWT token
     import jwt
 
-    jwt_token = jwt.encode(  # type: ignore
+    jwt_token = jwt.encode(
         cast(dict, returned_ui_token_object),
-        master_key,
+        cast(str, master_key),
         algorithm="HS256",
     )
 
@@ -8377,9 +8379,9 @@ async def login_v2(request: Request):  # noqa: PLR0915
 
     import jwt
 
-    jwt_token = jwt.encode(  # type: ignore
+    jwt_token = jwt.encode(
         cast(dict, returned_ui_token_object),
-        master_key,
+        cast(str, master_key),
         algorithm="HS256",
     )
 

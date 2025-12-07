@@ -127,7 +127,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         for field_name in GenericGuardrailAPIMetadata.__annotations__.keys():
             value = metadata_dict.get(field_name)
             if value is not None:
-                result_metadata[field_name] = value
+                result_metadata[field_name] = value  # type: ignore[literal-required]
 
         # handle user_api_key_token = user_api_key_hash
         if metadata_dict.get("user_api_key_token") is not None:

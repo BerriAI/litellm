@@ -91,6 +91,7 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.utils.get_server_root_path", lambda: "")
 
     client = TestClient(app)
     response = client.post(
