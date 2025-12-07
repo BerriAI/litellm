@@ -245,9 +245,9 @@ describe("EntityUsage", () => {
       expect(mockTagDailyActivityCall).toHaveBeenCalled();
     });
 
-    await waitFor(() => {
-      expect(screen.getByText("$0.00")).toBeInTheDocument();
-      expect(screen.getByText("Total Spend")).toBeInTheDocument();
-    });
+    expect(await screen.findByText("Tag Spend Overview")).toBeInTheDocument();
+    expect(await screen.findByText("$-")).toBeInTheDocument();
+    expect(screen.getByText("Total Spend")).toBeInTheDocument();
+    expect(screen.getAllByText("0")[0]).toBeInTheDocument();
   });
 });
