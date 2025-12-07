@@ -3389,7 +3389,19 @@ def get_optional_params(  # noqa: PLR0915
     safety_identifier: Optional[str] = None,
     **kwargs,
 ):
+    # Normalize model for parameter support checks (e.g., responses API models)
+    model_for_param_support = model
+    if "responses/" in model_for_param_support:
+        # Strip the responses prefix and any leading provider prefix to match standard model ids
+        model_for_param_support = model_for_param_support.split("responses/", 1)[1]
+        if custom_llm_provider and model_for_param_support.startswith(
+            f"{custom_llm_provider}/"
+        ):
+            model_for_param_support = model_for_param_support.split("/", 1)[1]
+
     passed_params = locals().copy()
+    # Remove helper-only variables from further processing
+    passed_params.pop("model_for_param_support", None)
     special_params = passed_params.pop("kwargs")
     non_default_params = pre_process_non_default_params(
         passed_params=passed_params,
@@ -3455,11 +3467,11 @@ def get_optional_params(  # noqa: PLR0915
                 )
 
     supported_params = get_supported_openai_params(
-        model=model, custom_llm_provider=custom_llm_provider
+        model=model_for_param_support, custom_llm_provider=custom_llm_provider
     )
     if supported_params is None:
         supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider="openai"
+            model=model_for_param_support, custom_llm_provider="openai"
         )
 
     supported_params = supported_params or []
@@ -3469,6 +3481,9 @@ def get_optional_params(  # noqa: PLR0915
     _check_valid_arg(
         supported_params=supported_params or [],
     )
+    # Use normalized model name for mapping so responses/ models inherit the correct OpenAI param set
+    if "responses/" in model:
+        model = model_for_param_support
     ## raise exception if provider doesn't support passed in param
     if custom_llm_provider == "anthropic":
         ## check if unsupported param passed in
