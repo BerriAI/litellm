@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+from litellm.constants import LITELLM_PROXY_ADMIN_NAME, TEAM_MODEL_MODEL_INFO_FIELDS
 from litellm.proxy._types import (
     CommonProxyErrors,
     LiteLLM_ProxyModelTable,
@@ -86,8 +86,11 @@ async def get_db_model(
 
 
 def update_db_model(
-    db_model: Deployment, updated_patch: updateDeployment
+    db_model: Deployment,
+    updated_patch: updateDeployment,
+    make_team_model_public: bool = False,
 ) -> PrismaCompatibleUpdateDBModel:
+
     merged_deployment_dict = DeploymentTypedDict(
         model_name=db_model.model_name,
         litellm_params=LiteLLMParamsTypedDict(
@@ -115,9 +118,28 @@ def update_db_model(
     if updated_patch.model_info:
         if "model_info" not in merged_deployment_dict:
             merged_deployment_dict["model_info"] = {}
+
         merged_deployment_dict["model_info"].update(
             updated_patch.model_info.model_dump(exclude_none=True)
         )
+
+        if make_team_model_public:
+            team_model_public_name = merged_deployment_dict["model_info"].get(
+                "team_public_model_name"
+            )
+            if team_model_public_name is not None:
+                merged_deployment_dict["model_name"] = team_model_public_name
+            if (
+                merged_deployment_dict["model_info"].get("has_requested_public_access")
+                is not None
+            ):
+                merged_deployment_dict["model_info"][
+                    "has_requested_public_access"
+                ] = "approved"
+
+            ## remove team model parameters - this is now a global proxy deployment
+            for key in TEAM_MODEL_MODEL_INFO_FIELDS:
+                merged_deployment_dict["model_info"].pop(key, None)
 
     # convert to prisma compatible format
 
@@ -150,6 +172,7 @@ def update_db_model(
 async def patch_model(
     model_id: str,  # Get model_id from path parameter
     patch_data: updateDeployment,  # Create a specific schema for PATCH operations
+    make_team_model_public: bool = False,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -225,6 +248,7 @@ async def patch_model(
             patch_data=patch_data,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
+            make_team_model_public=make_team_model_public,
         )
 
         # Add metadata about update
@@ -372,6 +396,7 @@ async def _update_team_model_in_db(
     patch_data: updateDeployment,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
+    make_team_model_public: bool = False,
 ) -> PrismaCompatibleUpdateDBModel:
     """
     Handle team model updates with proper alias management.
@@ -395,7 +420,11 @@ async def _update_team_model_in_db(
 
     # No team_id in patch, proceed with standard update
     if patch_team_id is None:
-        return update_db_model(db_model=db_model, updated_patch=patch_data)
+        return update_db_model(
+            db_model=db_model,
+            updated_patch=patch_data,
+            make_team_model_public=make_team_model_public,
+        )
 
     # Determine public model name
     public_model_name = _get_public_model_name(
@@ -1371,13 +1400,84 @@ async def list_public_model_requests(
         public_models = [
             model
             for model in models
-            if model.get("model_info", {}).get("has_requested_public_access", False)
+            if model.get("model_info", {}).get("has_requested_public_access", None)
+            is not None
+            and model.get("model_info", {}).get("has_requested_public_access")
+            == "requested"
         ]
         return public_models
     except Exception as e:
         verbose_proxy_logger.exception(f"Error listing public model requests: {str(e)}")
         raise ProxyException(
             message=f"Error listing public model requests: {str(e)}",
+            type=ProxyErrorTypes.internal_server_error,
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            param=None,
+        )
+
+
+@router.put(
+    "/model/public_requests/{model_id}",
+    description="Approve a public model request by ID",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def approve_public_model_request(
+    model_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Approve a public model request by ID
+    """
+    from litellm.proxy.proxy_server import llm_router, prisma_client
+    from litellm.types.router import ModelInfo
+
+    if llm_router is None:
+        raise HTTPException(
+            status_code=400, detail=CommonProxyErrors.no_llm_router.value
+        )
+    try:
+        # Get the model by ID
+        model = llm_router.get_deployment(model_id=model_id)
+        if model is None:
+            raise HTTPException(
+                status_code=404, detail=f"Model with ID {model_id} not found"
+            )
+        if not model.model_info.db_model:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model with ID {model_id} is not a DB model. You can only approve public model requests for DB models.",
+            )
+        # update the model to remove has_requested_public_access, remove the 'team_id', and replace the 'model_name' with the 'team_public_model_name'
+
+        model_info_dict = model.model_info.model_dump()
+        model_info_dict.pop("team_id")
+        public_model_name = model_info_dict.pop("team_public_model_name")
+        model_info_dict.pop("has_requested_public_access")
+        model.model_info = ModelInfo(**model_info_dict)
+        model.model_name = public_model_name
+
+        # update the model in the router
+        llm_router.upsert_deployment(deployment=model)
+
+        # update the model in the db
+        update_deployment = updateDeployment(
+            model_name=public_model_name,
+            model_info=model.model_info,
+        )
+        await patch_model(
+            model_id=model_id,
+            patch_data=update_deployment,
+            user_api_key_dict=user_api_key_dict,
+            make_team_model_public=True,
+        )
+        return model
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            f"Error approving public model request: {str(e)}"
+        )
+        raise ProxyException(
+            message=f"Error approving public model request: {str(e)}",
             type=ProxyErrorTypes.internal_server_error,
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             param=None,

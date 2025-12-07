@@ -103,15 +103,19 @@ _DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client fo
 # Aiohttp connection pooling - prevents memory leaks from unbounded connection growth
 # Set to 0 for unlimited (not recommended for production)
 AIOHTTP_CONNECTOR_LIMIT = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 300))
-AIOHTTP_CONNECTOR_LIMIT_PER_HOST = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT_PER_HOST", 50))
+AIOHTTP_CONNECTOR_LIMIT_PER_HOST = int(
+    os.getenv("AIOHTTP_CONNECTOR_LIMIT_PER_HOST", 50)
+)
 AIOHTTP_KEEPALIVE_TIMEOUT = int(os.getenv("AIOHTTP_KEEPALIVE_TIMEOUT", 120))
 AIOHTTP_TTL_DNS_CACHE = int(os.getenv("AIOHTTP_TTL_DNS_CACHE", 300))
 # enable_cleanup_closed is only needed for Python versions with the SSL leak bug
 # Fixed in Python 3.12.7+ and 3.13.1+ (see https://github.com/python/cpython/pull/118960)
 # Reference: https://github.com/aio-libs/aiohttp/blob/master/aiohttp/connector.py#L74-L78
-AIOHTTP_NEEDS_CLEANUP_CLOSED = (
-    (3, 13, 0) <= sys.version_info < (3, 13, 1) or sys.version_info < (3, 12, 7)
-)
+AIOHTTP_NEEDS_CLEANUP_CLOSED = (3, 13, 0) <= sys.version_info < (
+    3,
+    13,
+    1,
+) or sys.version_info < (3, 12, 7)
 
 # WebSocket constants
 # Default to None (unlimited) to match OpenAI's official agents SDK behavior
@@ -149,7 +153,9 @@ REDIS_UPDATE_BUFFER_KEY = "litellm_spend_update_buffer"
 REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_spend_update_buffer"
 REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_team_spend_update_buffer"
 REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_org_spend_update_buffer"
-REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_end_user_spend_update_buffer"
+REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY = (
+    "litellm_daily_end_user_spend_update_buffer"
+)
 REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_tag_spend_update_buffer"
 MAX_REDIS_BUFFER_DEQUEUE_COUNT = int(os.getenv("MAX_REDIS_BUFFER_DEQUEUE_COUNT", 100))
 MAX_SIZE_IN_MEMORY_QUEUE = int(os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", 10000))
@@ -1252,3 +1258,9 @@ COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY = int(
 ########################### RAG Text Splitter Constants ###########################
 DEFAULT_CHUNK_SIZE = int(os.getenv("DEFAULT_CHUNK_SIZE", 1000))
 DEFAULT_CHUNK_OVERLAP = int(os.getenv("DEFAULT_CHUNK_OVERLAP", 200))
+
+########################### Team Model Constants ###########################
+TEAM_MODEL_MODEL_INFO_FIELDS = [
+    "team_id",
+    "team_public_model_name",
+]
