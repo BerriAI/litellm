@@ -1429,7 +1429,7 @@ async def approve_public_model_request(
     """
     Approve a public model request by ID
     """
-    from litellm.proxy.proxy_server import llm_router, prisma_client
+    from litellm.proxy.proxy_server import llm_router
     from litellm.types.router import ModelInfo
 
     if llm_router is None:
