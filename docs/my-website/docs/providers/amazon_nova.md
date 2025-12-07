@@ -6,7 +6,7 @@ import TabItem from '@theme/TabItem';
 | Property | Details |
 |-------|-------|
 | Description | Amazon Nova is a family of foundation models built by Amazon that deliver frontier intelligence and industry-leading price performance. |
-| Provider Route on LiteLLM | `amazon-nova/` |
+| Provider Route on LiteLLM | `amazon_nova/` |
 | Provider Doc | [Amazon Nova ↗](https://docs.aws.amazon.com/nova/latest/userguide/what-is-nova.html) |
 | Supported OpenAI Endpoints | `/chat/completions`, `v1/responses` |
 | Other Supported Endpoints | `v1/messages`, `/generateContent` | 
@@ -32,7 +32,7 @@ from litellm import completion
 os.environ["AMAZON_NOVA_API_KEY"] = "your-api-key"
 
 response = completion(
-    model="amazon-nova/nova-micro-v1",
+    model="amazon_nova/nova-micro-v1",
     messages=[
         {"role": "system", "content": "You are a helpful assistant"},
         {"role": "user", "content": "Hello, how are you?"}
@@ -51,7 +51,7 @@ print(response)
 model_list:
   - model_name: amazon-nova-micro
     litellm_params:
-      model: amazon-nova/nova-micro-v1
+      model: amazon_nova/nova-micro-v1
       api_key: os.environ/AMAZON_NOVA_API_KEY
 ```
 ### 2. Start the proxy
@@ -82,7 +82,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 | Model Name | Usage | Context Window |
 |------------|-------|----------------|
-| Nova Micro | `completion(model="amazon-nova/nova-micro-v1", messages=messages)` | 128K tokens |
+| Nova Micro | `completion(model="amazon_nova/nova-micro-v1", messages=messages)` | 128K tokens |
 | Nova Lite | `completion(model="amazon-nova/nova-lite-v1", messages=messages)` | 300K tokens |
 | Nova Pro | `completion(model="amazon-nova/nova-pro-v1", messages=messages)` | 300K tokens |
 | Nova Premier | `completion(model="amazon-nova/nova-premier-v1", messages=messages)` | 1M tokens |
@@ -99,7 +99,7 @@ from litellm import completion
 os.environ["AMAZON_NOVA_API_KEY"] = "your-api-key"
 
 response = completion(
-    model="amazon-nova/nova-micro-v1",
+    model="amazon_nova/nova-micro-v1",
     messages=[
         {"role": "system", "content": "You are a helpful assistant"},
         {"role": "user", "content": "Tell me about machine learning"}
@@ -164,7 +164,7 @@ tools = [
 ]
 
 response = completion(
-    model="amazon-nova/nova-micro-v1",
+    model="amazon_nova/nova-micro-v1",
     messages=[
         {"role": "user", "content": "What's the weather like in San Francisco?"}
     ],
@@ -246,7 +246,7 @@ print(response)
 model_list:
   - model_name: amazon-nova-pro
     litellm_params:
-      model: amazon-nova/nova-pro-v1
+      model: amazon_nova/nova-pro-v1
       temperature: 0.8
       max_tokens: 500
       top_p: 0.9
