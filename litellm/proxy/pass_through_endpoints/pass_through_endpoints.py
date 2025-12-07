@@ -735,6 +735,11 @@ async def pass_through_request(  # noqa: PLR0915
             logging_obj=logging_obj,
         )
 
+        # Store custom_llm_provider in kwargs and logging object if provided
+        if custom_llm_provider:
+            logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
+            logging_obj.model_call_details["litellm_params"] = kwargs.get("litellm_params", {})
+
         # done for supporting 'parallel_request_limiter.py' with pass-through endpoints
         logging_obj.update_environment_variables(
             model="unknown",
@@ -923,6 +928,12 @@ async def pass_through_request(  # noqa: PLR0915
         if kwargs:
             for key, value in kwargs.items():
                 request_payload[key] = value
+        
+        if "model" not in request_payload and _parsed_body and isinstance(_parsed_body, dict):
+            request_payload["model"] = _parsed_body.get("model", "")
+        if "custom_llm_provider" not in request_payload and custom_llm_provider:
+            request_payload["custom_llm_provider"] = custom_llm_provider
+        
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
@@ -957,11 +968,26 @@ def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> di
     """
     If tags are in the request headers, add them to the metadata
 
-    Used for google and vertex JS SDKs
+    Used for google and vertex JS SDKs, and Azure passthrough
+    Checks both 'tags' and 'x-litellm-tags' headers
     """
+    tags_to_add = []
+
+    # Check for 'tags' header first
     _tags = request.headers.get("tags")
     if _tags:
-        metadata["tags"] = _tags.split(",")
+        tags_to_add.extend([tag.strip() for tag in _tags.split(",")])
+
+    _tags = request.headers.get("x-litellm-tags")
+    if _tags:
+        tags_to_add.extend([tag.strip() for tag in _tags.split(",")])
+
+    # Only add tags key if there are tags to add
+    if tags_to_add:
+        if "tags" not in metadata:
+            metadata["tags"] = []
+        metadata["tags"].extend(tags_to_add)
+
     return metadata
 
 

@@ -41,6 +41,7 @@ CYBERARK_CLIENT_KEY="path/to/client.key"
 
 # OPTIONAL
 CYBERARK_REFRESH_INTERVAL="300" # defaults to 300 seconds (5 minutes), frequency of token refresh
+CYBERARK_SSL_VERIFY="true" # defaults to true, set to "false" to disable SSL verification (for self-signed certificates)
 ```
 
 **Step 2.** Add to proxy config.yaml
@@ -171,6 +172,24 @@ If these commands work successfully against your CyberArk instance, then CyberAr
 - Your environment variables are correctly set
 - The `CYBERARK_API_BASE` URL is accessible from your LiteLLM instance
 - Your API key or certificates have the necessary permissions in CyberArk
+
+### SSL Certificate Errors
+
+If you encounter SSL certificate verification errors like:
+
+```
+RuntimeError: Could not authenticate to CyberArk Conjur: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate in certificate chain
+```
+
+This typically occurs when your CyberArk Conjur instance uses a self-signed certificate. You can disable SSL verification by setting:
+
+```bash
+CYBERARK_SSL_VERIFY="false"
+```
+
+:::warning
+Disabling SSL verification is insecure and should only be used for testing or development environments with self-signed certificates. For production, configure your certificate chain properly or use certificate-based authentication with `CYBERARK_CLIENT_CERT` and `CYBERARK_CLIENT_KEY`.
+:::
 
 ## Video Walkthrough
 

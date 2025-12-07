@@ -49,14 +49,20 @@ class CohereRerankHandler(BaseTranslation):
         # Process query only
         query = data.get("query")
         if query is not None and isinstance(query, str):
-            guardrailed_query = await guardrail_to_apply.apply_guardrail(text=query)
-            data["query"] = guardrailed_query
+            guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+                inputs={"texts": [query]},
+                request_data=data,
+                input_type="request",
+                logging_obj=litellm_logging_obj,
+            )
+            guardrailed_texts = guardrailed_inputs.get("texts", [])
+            data["query"] = guardrailed_texts[0] if guardrailed_texts else query
 
             verbose_proxy_logger.debug(
                 "Rerank: Applied guardrail to query. "
                 "Original length: %d, New length: %d",
                 len(query),
-                len(guardrailed_query),
+                len(data["query"]),
             )
         else:
             verbose_proxy_logger.debug(
@@ -70,6 +76,7 @@ class CohereRerankHandler(BaseTranslation):
         response: "RerankResponse",
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional[Any] = None,
+        user_api_key_dict: Optional[Any] = None,
     ) -> Any:
         """
         Process output response - not applicable for rerank.
@@ -81,6 +88,8 @@ class CohereRerankHandler(BaseTranslation):
         Args:
             response: Rerank response object with rankings
             guardrail_to_apply: The guardrail instance (unused)
+            litellm_logging_obj: Optional logging object (unused)
+            user_api_key_dict: User API key metadata (unused)
 
         Returns:
             Unmodified response (rankings don't need text guardrails)
