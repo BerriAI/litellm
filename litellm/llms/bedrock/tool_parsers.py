@@ -16,7 +16,7 @@ from typing import Dict, Optional
 # =============================================================================
 
 TOOL_CALL_PATTERNS: Dict[str, Dict[str, str]] = {
-    # Kimi-style: <|marker|> format
+    # Pipe-style markers: <|marker|> format (used by Kimi-K2-Thinking)
     "pipe_markers": {
         "begin": "<|tool_call_begin|>",
         "arg_begin": "<|tool_call_argument_begin|>",
@@ -24,11 +24,7 @@ TOOL_CALL_PATTERNS: Dict[str, Dict[str, str]] = {
         "section_begin": "<|tool_calls_section_begin|>",
         "section_end": "<|tool_calls_section_end|>",
     },
-    # Bracket-style: [MARKER] format
-    "bracket_markers": {
-        "begin": "[TOOL_CALL]",
-        "end": "[/TOOL_CALL]",
-    },
+    # Add more patterns here as discovered from other models
 }
 
 
