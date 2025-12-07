@@ -424,7 +424,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
       <div className="flex items-end justify-between gap-6 mb-6">
         <div className="flex-1">
           <TabGroup>
-            <div className="flex items-end justify-start gap-6 mb-6">
+            <div className="flex items-end justify-between gap-6 mb-6 w-full">
               <TabList variant="solid">
                 {all_admin_roles.includes(userRole || "") ? <Tab>Global Usage</Tab> : <Tab>Your Usage</Tab>}
                 {all_admin_roles.includes(userRole || "") ? (
