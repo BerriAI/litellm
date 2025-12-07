@@ -4,7 +4,6 @@
 #                   https://onyx.security/
 #
 # +-------------------------------------------------------------+
-from enum import Enum
 import os
 from typing import TYPE_CHECKING, Any, Literal, Optional, Type
 import uuid
