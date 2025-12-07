@@ -3,15 +3,18 @@ Unit tests for Tool Permission Guardrail (OpenAI tool_calls semantics)
 """
 
 import os
+import re
 import sys
 from unittest.mock import patch
 
-from litellm.caching.dual_cache import DualCache
 import pytest
+
+from litellm.caching.dual_cache import DualCache
 
 sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 from fastapi import HTTPException
+
 from litellm.exceptions import GuardrailRaisedException
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.tool_permission import (
@@ -22,9 +25,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     PermissionError,
 )
 from litellm.types.utils import (
-    ModelResponse,
-    Choices,
     ChatCompletionMessageToolCall,
+    Choices,
+    ModelResponse,
 )
 
 
@@ -34,15 +37,19 @@ class TestToolPermissionGuardrail:
     def setup_method(self):
         """Set up test fixtures"""
         self.test_rules = [
-            {"id": "allow_bash", "tool_name": "Bash", "decision": "allow"},
-            {"id": "allow_github", "tool_name": "mcp__github_*", "decision": "allow"},
+            {"id": "allow_bash", "tool_name": r"^Bash$", "decision": "allow"},
             {
-                "id": "allow_documentation",
-                "tool_name": "mcp__aws-documentation_*_documentation",
+                "id": "allow_github",
+                "tool_name": r"^mcp__github_.*$",
                 "decision": "allow",
             },
-            {"id": "deny_read", "tool_name": "Read", "decision": "deny"},
-            {"id": "deny_get", "tool_name": "*_get", "decision": "deny"},
+            {
+                "id": "allow_documentation",
+                "tool_name": r"^mcp__aws-documentation_.*_documentation$",
+                "decision": "allow",
+            },
+            {"id": "deny_read", "tool_name": r"^Read$", "decision": "deny"},
+            {"id": "deny_get", "tool_name": r".*_get$", "decision": "deny"},
         ]
 
         self.guardrail = ToolPermissionGuardrail(
@@ -62,49 +69,90 @@ class TestToolPermissionGuardrail:
             self.guardrail.supported_event_hooks or []
         )
 
-    def test_pattern_matching_exact(self):
-        """Test exact pattern matching"""
-        assert self.guardrail._matches_pattern("Read", "Read") is True
-        assert self.guardrail._matches_pattern("Write", "Read") is False
+    def test_matches_regex_helper(self):
+        pattern = re.compile(r"^Read$")
+        assert self.guardrail._matches_regex(pattern, "Read") is True
+        assert self.guardrail._matches_regex(pattern, "Write") is False
+        assert self.guardrail._matches_regex(None, "Any") is True
+        assert self.guardrail._matches_regex(pattern, None) is False
 
-    def test_pattern_matching_wildcards(self):
-        """Test wildcard pattern matching"""
-        assert (
-            self.guardrail._matches_pattern(
-                "mcp__github_add_issue_comment", "mcp__github_*"
-            )
-            is True
+    def test_rule_matches_tool_with_type_only(self):
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="type-only",
+            rules=[
+                {
+                    "id": "allow_functions",
+                    "tool_type": r"^function$",
+                    "decision": "allow",
+                }
+            ],
+            default_action="deny",
+            on_disallowed_action="block",
         )
-        assert (
-            self.guardrail._matches_pattern(
-                "mcp__github_add_issue_comment", "mcp__github_*_comment"
-            )
-            is True
+
+        is_allowed, rule_id, _ = guardrail._check_tool_permission("AnyTool", "function")
+        assert is_allowed is True
+        assert rule_id == "allow_functions"
+
+        is_allowed, rule_id, _ = guardrail._check_tool_permission("AnyTool", "custom")
+        assert is_allowed is False
+        assert rule_id is None
+
+    def test_rule_matches_tool_with_name_and_type(self):
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="name-type",
+            rules=[
+                {
+                    "id": "allow_specific",
+                    "tool_name": r"^Bash$",
+                    "tool_type": r"^function$",
+                    "decision": "allow",
+                }
+            ],
+            default_action="deny",
+            on_disallowed_action="block",
         )
-        assert (
-            self.guardrail._matches_pattern(
-                "mcp__github_add_issue_comment", "*_comment"
+
+        is_allowed, rule_id, _ = guardrail._check_tool_permission("Bash", "function")
+        assert is_allowed is True
+        assert rule_id == "allow_specific"
+
+        is_allowed, rule_id, _ = guardrail._check_tool_permission("Bash", "custom")
+        assert is_allowed is False
+        assert rule_id is None
+
+    def test_rule_requires_name_or_type(self):
+        with pytest.raises(ValueError):
+            ToolPermissionGuardrail(
+                guardrail_name="invalid-rule",
+                rules=[{"id": "no_target", "decision": "allow"}],
+                default_action="deny",
+                on_disallowed_action="block",
             )
-            is True
+
+    def test_type_only_rule_skips_param_patterns(self):
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="type-param",
+            rules=[
+                {
+                    "id": "allow_type_only",
+                    "tool_type": r"^function$",
+                    "decision": "allow",
+                    "allowed_param_patterns": {"foo": r"^bar$"},
+                }
+            ],
+            default_action="deny",
+            on_disallowed_action="block",
         )
-        assert (
-            self.guardrail._matches_pattern(
-                "mcp__git_add_issue_comment", "mcp__github_*"
-            )
-            is False
+
+        tool_call = ChatCompletionMessageToolCall(
+            function={"name": "AnyTool", "arguments": "{}"},
+            type="function",
         )
-        assert (
-            self.guardrail._matches_pattern(
-                "mcp__github_assign_copilot_to_issue", "mcp__github_*_comment"
-            )
-            is False
-        )
-        assert (
-            self.guardrail._matches_pattern(
-                "mcp__github_assign_copilot_to_issue", "*_comment"
-            )
-            is False
-        )
+
+        is_allowed, rule_id, _ = guardrail._get_permission_for_tool_call(tool_call)
+        assert is_allowed is True
+        assert rule_id == "allow_type_only"
 
     def test_check_tool_permission_allow(self):
         is_allowed, rule_id, msg = self.guardrail._check_tool_permission("Bash")
@@ -179,6 +227,7 @@ class TestToolPermissionGuardrail:
 
     @pytest.mark.asyncio
     async def test_async_post_call_success_hook_no_tools(self):
+        """Test that async_post_call_success_hook returns response when no tool calls are present."""
         response = ModelResponse(choices=[Choices(message={})])
         user_api_key_dict = UserAPIKeyAuth()
         data = {"guardrails": ["test-tool-permission"]}
@@ -187,10 +236,11 @@ class TestToolPermissionGuardrail:
             result = await self.guardrail.async_post_call_success_hook(
                 data=data, user_api_key_dict=user_api_key_dict, response=response
             )
-        assert result is None
+        assert result is response
 
     @pytest.mark.asyncio
     async def test_async_post_call_success_hook_with_allowed_tools(self):
+        """Test that async_post_call_success_hook returns response when tool calls are allowed."""
         tool_call = {
             "function": {"name": "Bash", "arguments": "{}"},
             "type": "function",
@@ -203,7 +253,7 @@ class TestToolPermissionGuardrail:
             result = await self.guardrail.async_post_call_success_hook(
                 data=data, user_api_key_dict=user_api_key_dict, response=response
             )
-        assert result is None
+        assert result is response
 
     @pytest.mark.asyncio
     async def test_async_post_call_success_hook_with_denied_tools_raises(self):
@@ -220,6 +270,144 @@ class TestToolPermissionGuardrail:
                 await self.guardrail.async_post_call_success_hook(
                     data=data, user_api_key_dict=user_api_key_dict, response=response
                 )
+
+    @pytest.mark.asyncio
+    async def test_async_post_call_success_hook_param_patterns_allow(self):
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="mail-guardrail",
+            rules=[
+                {
+                    "id": "allow_mail",
+                    "tool_name": r"^mail_mcp-send_email$",
+                    "decision": "allow",
+                    "allowed_param_patterns": {
+                        "to[]": r"^.+@berri\.ai$",
+                        "subject": r"^.{1,120}$",
+                    },
+                }
+            ],
+            default_action="deny",
+            on_disallowed_action="block",
+        )
+
+        tool_call = {
+            "function": {
+                "name": "mail_mcp-send_email",
+                "arguments": '{"to": ["owner@berri.ai"], "subject": "Hi"}',
+            },
+            "type": "function",
+        }
+        response = ModelResponse(choices=[Choices(message={"tool_calls": [tool_call]})])
+        user_api_key_dict = UserAPIKeyAuth()
+        data = {"guardrails": ["mail-guardrail"]}
+
+        with patch.object(guardrail, "should_run_guardrail", return_value=True):
+            await guardrail.async_post_call_success_hook(
+                data=data, user_api_key_dict=user_api_key_dict, response=response
+            )
+
+    @pytest.mark.asyncio
+    async def test_async_post_call_success_hook_param_patterns_block(self):
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="mail-guardrail",
+            rules=[
+                {
+                    "id": "allow_mail",
+                    "tool_name": r"^mail_mcp-send_email$",
+                    "decision": "allow",
+                    "allowed_param_patterns": {"to[]": r"^.+@berri\.ai$"},
+                }
+            ],
+            default_action="deny",
+            on_disallowed_action="block",
+        )
+
+        tool_call = {
+            "function": {
+                "name": "mail_mcp-send_email",
+                "arguments": '{"to": ["intruder@example.com"]}',
+            },
+            "type": "function",
+        }
+        response = ModelResponse(choices=[Choices(message={"tool_calls": [tool_call]})])
+        user_api_key_dict = UserAPIKeyAuth()
+        data = {"guardrails": ["mail-guardrail"]}
+
+        with patch.object(guardrail, "should_run_guardrail", return_value=True):
+            with pytest.raises(GuardrailRaisedException):
+                await guardrail.async_post_call_success_hook(
+                    data=data, user_api_key_dict=user_api_key_dict, response=response
+                )
+
+    @pytest.mark.asyncio
+    async def test_async_post_call_success_hook_param_patterns_rewrite(self):
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="mail-guardrail",
+            rules=[
+                {
+                    "id": "allow_mail",
+                    "tool_name": r"^mail_mcp-send_email$",
+                    "decision": "allow",
+                    "allowed_param_patterns": {"to[]": r"^.+@berri\.ai$"},
+                }
+            ],
+            default_action="deny",
+            on_disallowed_action="rewrite",
+        )
+
+        tool_call = {
+            "id": "call_berri",
+            "function": {
+                "name": "mail_mcp-send_email",
+                "arguments": '{"to": ["visitor@example.com"]}',
+            },
+            "type": "function",
+        }
+        response = ModelResponse(choices=[Choices(message={"tool_calls": [tool_call]})])
+        user_api_key_dict = UserAPIKeyAuth()
+        data = {"guardrails": ["mail-guardrail"]}
+
+        with patch.object(guardrail, "should_run_guardrail", return_value=True):
+            await guardrail.async_post_call_success_hook(
+                data=data, user_api_key_dict=user_api_key_dict, response=response
+            )
+
+        choice = response.choices[0]
+        assert isinstance(choice, Choices)
+        assert not choice.message.tool_calls
+        assert isinstance(choice.message.content, str)
+        assert "berri" in choice.message.content
+
+    @pytest.mark.asyncio
+    async def test_async_post_call_success_hook_missing_arguments_default_allows(self):
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="mail-guardrail",
+            rules=[
+                {
+                    "id": "deny_gmail",
+                    "tool_name": r"^mail_mcp-send_email$",
+                    "decision": "deny",
+                    "allowed_param_patterns": {"to[]": r"^.+@gmail\.com$"},
+                }
+            ],
+            default_action="allow",
+            on_disallowed_action="block",
+        )
+
+        tool_call = {
+            "function": {
+                "name": "mail_mcp-send_email",
+            },
+            "type": "function",
+        }
+        response = ModelResponse(choices=[Choices(message={"tool_calls": [tool_call]})])
+        user_api_key_dict = UserAPIKeyAuth()
+        data = {"guardrails": ["mail-guardrail"]}
+
+        with patch.object(guardrail, "should_run_guardrail", return_value=True):
+            await guardrail.async_post_call_success_hook(
+                data=data, user_api_key_dict=user_api_key_dict, response=response
+            )
 
     @pytest.mark.asyncio
     async def test_async_pre_call_hook_block_mode(self):
@@ -344,7 +532,9 @@ class TestToolPermissionGuardrailIntegration:
     def test_default_action_allow(self):
         guardrail = ToolPermissionGuardrail(
             guardrail_name="test-allow-default",
-            rules=[{"id": "deny_read", "tool_name": "Read", "decision": "deny"}],
+            rules=[
+                {"id": "deny_read", "tool_name": r"^Read$", "decision": "deny"}
+            ],
             default_action="allow",
         )
 

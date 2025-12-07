@@ -5,7 +5,7 @@ This module provides guardrail translation support for OpenAI's image generation
 The handler processes the 'prompt' parameter for guardrails.
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -31,6 +31,7 @@ class OpenAIImageGenerationHandler(BaseTranslation):
         self,
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: Optional[Any] = None,
     ) -> Any:
         """
         Process input prompt by applying guardrails to text content.
@@ -51,14 +52,20 @@ class OpenAIImageGenerationHandler(BaseTranslation):
 
         # Apply guardrail to the prompt
         if isinstance(prompt, str):
-            guardrailed_prompt = await guardrail_to_apply.apply_guardrail(text=prompt)
-            data["prompt"] = guardrailed_prompt
+            guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+                inputs={"texts": [prompt]},
+                request_data=data,
+                input_type="request",
+                logging_obj=litellm_logging_obj,
+            )
+            guardrailed_texts = guardrailed_inputs.get("texts", [])
+            data["prompt"] = guardrailed_texts[0] if guardrailed_texts else prompt
 
             verbose_proxy_logger.debug(
                 "OpenAI Image Generation: Applied guardrail to prompt. "
                 "Original length: %d, New length: %d",
                 len(prompt),
-                len(guardrailed_prompt),
+                len(data["prompt"]),
             )
         else:
             verbose_proxy_logger.debug(
@@ -72,6 +79,8 @@ class OpenAIImageGenerationHandler(BaseTranslation):
         self,
         response: "ImageResponse",
         guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: Optional[Any] = None,
+        user_api_key_dict: Optional[Any] = None,
     ) -> Any:
         """
         Process output response - typically not needed for image generation.
@@ -83,6 +92,8 @@ class OpenAIImageGenerationHandler(BaseTranslation):
         Args:
             response: Image generation response object
             guardrail_to_apply: The guardrail instance to apply
+            litellm_logging_obj: Optional logging object (unused)
+            user_api_key_dict: User API key metadata (unused)
 
         Returns:
             Unmodified response (images don't need text guardrails)

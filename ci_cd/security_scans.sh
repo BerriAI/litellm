@@ -69,10 +69,15 @@ run_grype_scans() {
     # Allowlist of CVEs to be ignored in failure threshold/reporting
     # - CVE-2025-8869: Not applicable on Python >=3.13 (PEP 706 implemented); pip fallback unused; no OS-level fix
     # - GHSA-4xh5-x5gv-qwph: GitHub Security Advisory alias for CVE-2025-8869
+    # - GHSA-5j98-mcp5-4vw2: glob CLI command injection via -c/--cmd; glob CLI is not used in the litellm runtime image,
+    #   and the vulnerable versions are pulled in only via OS-level/node tooling outside of our application code
     ALLOWED_CVES=(
         "CVE-2025-8869"
         "GHSA-4xh5-x5gv-qwph"
         "CVE-2025-8291" # no fix available as of Oct 11, 2025
+        "GHSA-5j98-mcp5-4vw2"
+        "CVE-2025-13836" # Python 3.13 HTTP response reading OOM/DoS - no fix available in base image
+        "CVE-2025-12084" # Python 3.13 xml.dom.minidom quadratic algorithm - no fix available in base image
     )
 
     # Build JSON array of allowlisted CVE IDs for jq

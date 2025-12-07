@@ -74,6 +74,10 @@ Note: Reasoning cannot be turned off on Gemini 2.5 Pro models.
 For **Gemini 3+ models** (e.g., `gemini-3-pro-preview`), LiteLLM automatically maps `reasoning_effort` to the new `thinking_level` parameter instead of `thinking_budget`. The `thinking_level` parameter uses `"low"` or `"high"` values for better control over reasoning depth.
 :::
 
+:::warning Image Models
+**Gemini image models** (e.g., `gemini-3-pro-image-preview`, `gemini-2.0-flash-exp-image-generation`) do **not** support the `thinking_level` parameter. LiteLLM automatically excludes image models from receiving thinking configuration to prevent API errors.
+:::
+
 **Mapping for Gemini 2.5 and earlier models**
 
 | reasoning_effort | thinking | Notes |
@@ -2001,4 +2005,35 @@ curl -L -X POST 'http://localhost:4000/v1/chat/completions' \
 
 </TabItem>
 </Tabs>
+
+### Image Generation Pricing
+
+Gemini image generation models (like `gemini-3-pro-image-preview`) return `image_tokens` in the response usage. These tokens are priced differently from text tokens:
+
+| Token Type | Price per 1M tokens | Price per token |
+|------------|---------------------|-----------------|
+| Text output | $12 | $0.000012 |
+| Image output | $120 | $0.00012 |
+
+The number of image tokens depends on the output resolution:
+
+| Resolution | Tokens per image | Cost per image |
+|------------|------------------|----------------|
+| 1K-2K (1024x1024 to 2048x2048) | 1,120 | $0.134 |
+| 4K (4096x4096) | 2,000 | $0.24 |
+
+LiteLLM automatically calculates costs using `output_cost_per_image_token` from the model pricing configuration.
+
+**Example response usage:**
+```json
+{
+    "completion_tokens_details": {
+        "reasoning_tokens": 225,
+        "text_tokens": 0,
+        "image_tokens": 1120
+    }
+}
+```
+
+For more details, see [Google's Gemini pricing documentation](https://ai.google.dev/gemini-api/docs/pricing).
 

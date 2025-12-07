@@ -29,7 +29,7 @@ router = APIRouter()
 
 @router.get(
     "/v1/agents",
-    tags=["[beta] Agents"],
+    tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=List[AgentResponse],
 )
@@ -49,25 +49,35 @@ async def get_agents(
 
     """
     from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+        AgentRequestHandler,
+    )
 
     try:
         returned_agents: List[AgentResponse] = []
+        
+        # Admin users get all agents
         if (
             user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
             or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
         ):
             returned_agents = global_agent_registry.get_agent_list()
-        key_agents = user_api_key_dict.metadata.get("agents")
-        _team_metadata = user_api_key_dict.team_metadata or {}
-        team_agents = _team_metadata.get("agents")
-        if key_agents is not None:
-            returned_agents = global_agent_registry.get_agent_list(
-                agent_names=key_agents
+        else:
+            # Get allowed agents from object_permission (key/team level)
+            allowed_agent_ids = await AgentRequestHandler.get_allowed_agents(
+                user_api_key_auth=user_api_key_dict
             )
-        if team_agents is not None:
-            returned_agents = global_agent_registry.get_agent_list(
-                agent_names=team_agents
-            )
+            
+            # If no restrictions (empty list), return all agents
+            if len(allowed_agent_ids) == 0:
+                returned_agents = global_agent_registry.get_agent_list()
+            else:
+                # Filter agents by allowed IDs
+                all_agents = global_agent_registry.get_agent_list()
+                returned_agents = [
+                    agent for agent in all_agents
+                    if agent.agent_id in allowed_agent_ids
+                ]
 
         # add is_public field to each agent - we do it this way, to allow setting config agents as public
         for agent in returned_agents:
@@ -83,7 +93,7 @@ async def get_agents(
         raise
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.anthropic_endpoints.count_tokens(): Exception occurred - {}".format(
+            "litellm.proxy.agent_endpoints.get_agents(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -101,7 +111,7 @@ from litellm.proxy.agent_endpoints.agent_registry import (
 
 @router.post(
     "/v1/agents",
-    tags=["[beta] Agents"],
+    tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=AgentResponse,
 )
@@ -196,7 +206,7 @@ async def create_agent(
 
 @router.get(
     "/v1/agents/{agent_id}",
-    tags=["[beta] Agents"],
+    tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=AgentResponse,
 )
@@ -239,7 +249,7 @@ async def get_agent_by_id(agent_id: str):
 
 @router.put(
     "/v1/agents/{agent_id}",
-    tags=["[beta] Agents"],
+    tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=AgentResponse,
 )
@@ -328,7 +338,7 @@ async def update_agent(
 
 @router.patch(
     "/v1/agents/{agent_id}",
-    tags=["[beta] Agents"],
+    tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=AgentResponse,
 )
@@ -471,7 +481,7 @@ async def delete_agent(agent_id: str):
 
 @router.post(
     "/v1/agents/{agent_id}/make_public",
-    tags=["[beta] Agents"],
+    tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=AgentMakePublicResponse,
 )
@@ -585,7 +595,7 @@ async def make_agent_public(
 
 @router.post(
     "/v1/agents/make_public",
-    tags=["[beta] Agents"],
+    tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=AgentMakePublicResponse,
 )

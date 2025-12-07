@@ -42,6 +42,7 @@ from litellm.types.llms.openai import (
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
+    ChatCompletionToolCallFunctionChunk,
 )
 from litellm.types.utils import (
     Delta,
@@ -435,9 +436,7 @@ class AnthropicChatCompletion(BaseLLM):
 
             else:
                 if client is None or not isinstance(client, HTTPHandler):
-                    client = _get_httpx_client(
-                        params={"timeout": timeout}
-                    )
+                    client = _get_httpx_client(params={"timeout": timeout})
                 else:
                     client = client
 
@@ -527,9 +526,7 @@ class ModelResponseIterator:
             usage_object=cast(dict, anthropic_usage_chunk), reasoning_content=None
         )
 
-    def _content_block_delta_helper(
-        self, chunk: dict
-    ) -> Tuple[
+    def _content_block_delta_helper(self, chunk: dict) -> Tuple[
         str,
         Optional[ChatCompletionToolCallChunk],
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]],
@@ -550,15 +547,18 @@ class ModelResponseIterator:
         if "text" in content_block["delta"]:
             text = content_block["delta"]["text"]
         elif "partial_json" in content_block["delta"]:
-            tool_use = {
-                "id": None,
-                "type": "function",
-                "function": {
-                    "name": None,
-                    "arguments": content_block["delta"]["partial_json"],
+            tool_use = cast(
+                ChatCompletionToolCallChunk,
+                {
+                    "id": None,
+                    "type": "function",
+                    "function": {
+                        "name": None,
+                        "arguments": content_block["delta"]["partial_json"],
+                    },
+                    "index": self.tool_index,
                 },
-                "index": self.tool_index,
-            }
+            )
         elif "citation" in content_block["delta"]:
             provider_specific_fields["citation"] = content_block["delta"]["citation"]
         elif (
@@ -569,7 +569,7 @@ class ModelResponseIterator:
                 ChatCompletionThinkingBlock(
                     type="thinking",
                     thinking=content_block["delta"].get("thinking") or "",
-                    signature=content_block["delta"].get("signature"),
+                    signature=str(content_block["delta"].get("signature") or ""),
                 )
             ]
             provider_specific_fields["thinking_blocks"] = thinking_blocks
@@ -625,7 +625,7 @@ class ModelResponseIterator:
 
         return content_block_start
 
-    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:  # noqa: PLR0915
         try:
             type_chunk = chunk.get("type", "") or ""
 
@@ -672,15 +672,32 @@ class ModelResponseIterator:
                     text = content_block_start["content_block"]["text"]
                 elif content_block_start["content_block"]["type"] == "tool_use":
                     self.tool_index += 1
-                    tool_use = {
-                        "id": content_block_start["content_block"]["id"],
-                        "type": "function",
-                        "function": {
-                            "name": content_block_start["content_block"]["name"],
-                            "arguments": "",
-                        },
-                        "index": self.tool_index,
-                    }
+                    tool_use = ChatCompletionToolCallChunk(
+                        id=content_block_start["content_block"]["id"],
+                        type="function",
+                        function=ChatCompletionToolCallFunctionChunk(
+                            name=content_block_start["content_block"]["name"],
+                            arguments="",
+                        ),
+                        index=self.tool_index,
+                    )
+                    # Include caller information if present (for programmatic tool calling)
+                    if "caller" in content_block_start["content_block"]:
+                        caller_data = content_block_start["content_block"]["caller"]
+                        if caller_data:
+                            tool_use["caller"] = cast(Dict[str, Any], caller_data)  # type: ignore[typeddict-item]
+                elif content_block_start["content_block"]["type"] == "server_tool_use":
+                    # Handle server tool use (for tool search)
+                    self.tool_index += 1
+                    tool_use = ChatCompletionToolCallChunk(
+                        id=content_block_start["content_block"]["id"],
+                        type="function",
+                        function=ChatCompletionToolCallFunctionChunk(
+                            name=content_block_start["content_block"]["name"],
+                            arguments="",
+                        ),
+                        index=self.tool_index,
+                    )
                 elif (
                     content_block_start["content_block"]["type"] == "redacted_thinking"
                 ):
@@ -696,17 +713,21 @@ class ModelResponseIterator:
                 # check if tool call content block
                 is_empty = self.check_empty_tool_call_args()
                 if is_empty:
-                    tool_use = {
-                        "id": None,
-                        "type": "function",
-                        "function": {
-                            "name": None,
-                            "arguments": "{}",
-                        },
-                        "index": self.tool_index,
-                    }
+                    tool_use = ChatCompletionToolCallChunk(
+                        id=None,  # type: ignore[typeddict-item]
+                        type="function",
+                        function=ChatCompletionToolCallFunctionChunk(
+                            name=None,  # type: ignore[typeddict-item]
+                            arguments="{}",
+                        ),
+                        index=self.tool_index,
+                    )
                 # Reset response_format tool tracking when block stops
                 self.is_response_format_tool = False
+            elif type_chunk == "tool_result":
+                # Handle tool_result blocks (for tool search results with tool_reference)
+                # These are automatically handled by Anthropic API, we just pass them through
+                pass
             elif type_chunk == "message_delta":
                 finish_reason, usage = self._handle_message_delta(chunk)
             elif type_chunk == "message_start":

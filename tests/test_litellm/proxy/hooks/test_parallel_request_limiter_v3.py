@@ -22,6 +22,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types.utils import ModelResponse, Usage
 
+
 class TimeController:
     def __init__(self):
         self._current = datetime.utcnow()
@@ -461,10 +462,11 @@ async def test_token_rate_limit_type_respected_v3(monkeypatch, token_rate_limit_
     )
 
     # Create mock kwargs for the success event
+    # Use standard_logging_object which is the canonical source for metadata
     mock_kwargs = {
-        "litellm_params": {
+        "standard_logging_object": {
             "metadata": {
-                "user_api_key": _api_key,
+                "user_api_key_hash": _api_key,
                 "user_api_key_user_id": None,
                 "user_api_key_team_id": None,
                 "user_api_key_end_user_id": None,
@@ -532,8 +534,8 @@ async def test_async_log_failure_event_v3():
         internal_usage_cache=InternalUsageCache(local_cache)
     )
 
-    # Mock kwargs with user_api_key
-    mock_kwargs = {"litellm_params": {"metadata": {"user_api_key": _api_key}}}
+    # Mock kwargs with user_api_key via standard_logging_object
+    mock_kwargs = {"standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}}}
 
     # Capture pipeline operations
     captured_ops = []

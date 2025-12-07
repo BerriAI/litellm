@@ -408,6 +408,7 @@ class CompletionTokensDetailsResult(TypedDict):
     audio_tokens: int
     text_tokens: int
     reasoning_tokens: int
+    image_tokens: int
 
 
 def _parse_completion_tokens_details(usage: Usage) -> CompletionTokensDetailsResult:
@@ -432,11 +433,19 @@ def _parse_completion_tokens_details(usage: Usage) -> CompletionTokensDetailsRes
         )
         or 0
     )
+    image_tokens = (
+        cast(
+            Optional[int],
+            getattr(usage.completion_tokens_details, "image_tokens", 0),
+        )
+        or 0
+    )
 
     return CompletionTokensDetailsResult(
         audio_tokens=audio_tokens,
         text_tokens=text_tokens,
         reasoning_tokens=reasoning_tokens,
+        image_tokens=image_tokens,
     )
 
 
@@ -565,16 +574,20 @@ def generic_cost_per_token(
     text_tokens = 0
     audio_tokens = 0
     reasoning_tokens = 0
+    image_tokens = 0
     is_text_tokens_total = False
     if usage.completion_tokens_details is not None:
         completion_tokens_details = _parse_completion_tokens_details(usage)
         audio_tokens = completion_tokens_details["audio_tokens"]
         text_tokens = completion_tokens_details["text_tokens"]
         reasoning_tokens = completion_tokens_details["reasoning_tokens"]
+        image_tokens = completion_tokens_details["image_tokens"]
 
-    if text_tokens == 0:
+    # Only assume all tokens are text if there's NO breakdown at all
+    # If image_tokens, audio_tokens, or reasoning_tokens exist, respect text_tokens=0
+    has_token_breakdown = image_tokens > 0 or audio_tokens > 0 or reasoning_tokens > 0
+    if text_tokens == 0 and not has_token_breakdown:
         text_tokens = usage.completion_tokens
-    if text_tokens == usage.completion_tokens:
         is_text_tokens_total = True
     ## TEXT COST
     completion_cost = float(text_tokens) * completion_base_cost
@@ -584,6 +597,9 @@ def generic_cost_per_token(
     )
     _output_cost_per_reasoning_token = _get_cost_per_unit(
         model_info, "output_cost_per_reasoning_token", None
+    )
+    _output_cost_per_image_token = _get_cost_per_unit(
+        model_info, "output_cost_per_image_token", None
     )
 
     ## AUDIO COST
@@ -603,6 +619,15 @@ def generic_cost_per_token(
             else completion_base_cost
         )
         completion_cost += float(reasoning_tokens) * _output_cost_per_reasoning_token
+
+    ## IMAGE COST
+    if not is_text_tokens_total and image_tokens and image_tokens > 0:
+        _output_cost_per_image_token = (
+            _output_cost_per_image_token
+            if _output_cost_per_image_token is not None
+            else completion_base_cost
+        )
+        completion_cost += float(image_tokens) * _output_cost_per_image_token
 
     return prompt_cost, completion_cost
 

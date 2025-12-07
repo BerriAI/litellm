@@ -21,4 +21,16 @@ describe("MessageInput", () => {
 
     expect(button).toBeDisabled();
   });
+
+  it("should enable send button when hasAttachment is true even with empty value", () => {
+    const onChange = vi.fn();
+    const onSend = vi.fn();
+    const uploadComponent = <div data-testid="upload-component">Upload</div>;
+    const { container, getByTestId } = render(
+      <MessageInput value="" onChange={onChange} onSend={onSend} hasAttachment={true} uploadComponent={uploadComponent} />,
+    );
+    const button = container.querySelector("button") as HTMLButtonElement;
+    expect(getByTestId("upload-component")).toBeInTheDocument();
+    expect(button).not.toBeDisabled();
+  });
 });

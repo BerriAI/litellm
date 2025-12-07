@@ -1389,7 +1389,9 @@ async def test_custom_validate_called():
 
     jwt_handler = MagicMock()
     jwt_handler.litellm_jwtauth = MagicMock(
-        custom_validate=mock_custom_validate, allowed_routes=["/chat/completions"]
+        custom_validate=mock_custom_validate,
+        allowed_routes=["/chat/completions"],
+        oidc_userinfo_enabled=False,
     )
     jwt_handler.auth_jwt = AsyncMock(return_value={"sub": "test_user"})
 

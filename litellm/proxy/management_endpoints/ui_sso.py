@@ -435,9 +435,9 @@ async def add_missing_team_member(
     - Get missing teams (diff b/w user_info.team_ids and sso_teams)
     - Add missing user to missing teams
     """
-    if user_info.teams is None:
-        return
-    missing_teams = set(sso_teams) - set(user_info.teams)
+    # Handle None as empty list for new users
+    user_teams = user_info.teams if user_info.teams is not None else []
+    missing_teams = set(sso_teams) - set(user_teams)
     missing_teams_list = list(missing_teams)
     tasks = []
     tasks = [
@@ -1253,7 +1253,8 @@ class SSOAuthenticationHandler:
         Priority order:
         1. CLI state (if provided)
         2. GENERIC_CLIENT_STATE environment variable
-        3. Generated UUID for Okta (if Okta endpoint detected)
+        3. Generated UUID (required by Okta and most OAuth providers)
+
 
         Args:
             state: Optional state parameter (e.g., CLI state)
@@ -1275,13 +1276,8 @@ class SSOAuthenticationHandler:
             generic_client_state = os.getenv("GENERIC_CLIENT_STATE", None)
             if generic_client_state:
                 redirect_params["state"] = generic_client_state
-            elif (
-                generic_authorization_endpoint
-                and "okta" in generic_authorization_endpoint
-            ):
-                redirect_params["state"] = (
-                    uuid.uuid4().hex
-                )  # set state param for okta - required
+            else:
+                redirect_params["state"] = uuid.uuid4().hex
 
         # Handle PKCE (Proof Key for Code Exchange) if enabled
         # Set GENERIC_CLIENT_USE_PKCE=true to enable PKCE for enhanced OAuth security
