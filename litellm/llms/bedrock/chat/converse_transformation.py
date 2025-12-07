@@ -1362,7 +1362,9 @@ class AmazonConverseConfig(BaseConfig):
 
         return message, returned_finish_reason
 
-    def _translate_message_content(self, content_blocks: List[ContentBlock]) -> Tuple[
+    def _translate_message_content(
+        self, content_blocks: List[ContentBlock], model: str
+    ) -> Tuple[
         str,
         List[ChatCompletionToolCallChunk],
         Optional[List[BedrockConverseReasoningContentBlock]],
@@ -1523,7 +1525,7 @@ class AmazonConverseConfig(BaseConfig):
                 content_str,
                 tools,
                 reasoningContentBlocks,
-            ) = self._translate_message_content(message["content"])
+            ) = self._translate_message_content(message["content"], model=model)
 
         if reasoningContentBlocks is not None:
             chat_completion_message["provider_specific_fields"] = {

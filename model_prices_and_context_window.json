@@ -333,7 +333,6 @@
         "supports_video_input": true,
         "supports_vision": true
     },
-
     "amazon.nova-micro-v1:0": {
         "input_cost_per_token": 3.5e-08,
         "litellm_provider": "bedrock_converse",
@@ -2767,7 +2766,7 @@
             "/v1/audio/transcriptions"
         ]
     },
-   "azure/gpt-5.1-2025-11-13": {
+    "azure/gpt-5.1-2025-11-13": {
         "cache_read_input_token_cost": 1.25e-07,
         "cache_read_input_token_cost_priority": 2.5e-07,
         "input_cost_per_token": 1.25e-06,
@@ -2803,7 +2802,7 @@
         "supports_service_tier": true,
         "supports_vision": true
     },
-   "azure/gpt-5.1-chat-2025-11-13": {
+    "azure/gpt-5.1-chat-2025-11-13": {
         "cache_read_input_token_cost": 1.25e-07,
         "cache_read_input_token_cost_priority": 2.5e-07,
         "input_cost_per_token": 1.25e-06,
@@ -2838,7 +2837,7 @@
         "supports_tool_choice": false,
         "supports_vision": true
     },
-   "azure/gpt-5.1-codex-2025-11-13": {
+    "azure/gpt-5.1-codex-2025-11-13": {
         "cache_read_input_token_cost": 1.25e-07,
         "cache_read_input_token_cost_priority": 2.5e-07,
         "input_cost_per_token": 1.25e-06,
@@ -18388,6 +18387,18 @@
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
+    "minimax.minimax-m2": {
+        "input_cost_per_token": 3e-7,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 204800,
+        "max_output_tokens": 204800,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-6,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
     "mistral.mistral-7b-instruct-v0:2": {
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "bedrock",
@@ -18437,6 +18448,18 @@
         "max_tokens": 8191,
         "mode": "chat",
         "output_cost_per_token": 7e-07,
+        "supports_tool_choice": true
+    },
+    "moonshot.kimi-k2-thinking": {
+        "input_cost_per_token": 6e-7,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-6,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_tool_choice": true
     },
     "mistral/codestral-2405": {
@@ -20093,7 +20116,7 @@
         "output_cost_per_token": 0.0,
         "supports_function_calling": true
     },
-    "ollama/deepseek-v3.1:671b-cloud" : {
+    "ollama/deepseek-v3.1:671b-cloud": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "ollama",
         "max_input_tokens": 163840,
@@ -20103,7 +20126,7 @@
         "output_cost_per_token": 0.0,
         "supports_function_calling": true
     },
-    "ollama/gpt-oss:120b-cloud" : {
+    "ollama/gpt-oss:120b-cloud": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "ollama",
         "max_input_tokens": 131072,
@@ -20113,7 +20136,7 @@
         "output_cost_per_token": 0.0,
         "supports_function_calling": true
     },
-    "ollama/gpt-oss:20b-cloud" : {
+    "ollama/gpt-oss:20b-cloud": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "ollama",
         "max_input_tokens": 131072,
@@ -22753,7 +22776,6 @@
         "supports_reasoning": true,
         "source": "https://cloud.sambanova.ai/plans/pricing"
     },
-
     "snowflake/claude-3-5-sonnet": {
         "litellm_provider": "snowflake",
         "max_input_tokens": 18000,

@@ -170,6 +170,91 @@ def parse_tool_calls_for_model(
     return parser(text, **kwargs)
 
 
+def is_kimi_model(model: str) -> bool:
+    """
+    Check if the model is a Kimi-K2-Thinking model.
+
+    Args:
+        model: The model identifier
+
+    Returns:
+        True if it's a Kimi model, False otherwise
+    """
+    return "moonshot.kimi-k2-thinking" in model.lower()
+
+
+def is_minimax_m2_model(model: str) -> bool:
+    """
+    Check if the model is a MiniMax M2 model.
+
+    Args:
+        model: The model identifier
+
+    Returns:
+        True if it's a MiniMax M2 model, False otherwise
+    """
+    return "minimax.minimax-m2" in model.lower()
+
+
+def needs_kimi_parsing(text_content: str) -> bool:
+    """
+    Check if the text content contains Kimi-specific tool call markers.
+
+    Args:
+        text_content: The text content to check
+
+    Returns:
+        True if Kimi parsing is needed, False otherwise
+    """
+    return (
+        "<|tool_calls_section_begin|>" in text_content
+        or "<|tool_call_begin|>" in text_content
+    )
+
+
+def parse_kimi_tool_calls(text_content: str) -> List[ChatCompletionToolCallChunk]:
+    """
+    Parse Kimi-K2-Thinking proprietary token-stream format to extract tool calls.
+
+    Kimi-K2-Thinking outputs raw tokens with markers like:
+    <|tool_calls_section_begin|>...<|tool_call_begin|>function_name<|tool_call_argument_begin|>{...}<|tool_call_end|>...<|tool_calls_section_end|>
+
+    Args:
+        text_content: The text content from the model response
+
+    Returns:
+        List of parsed tool call chunks
+    """
+    tool_calls = []
+
+    # Pattern to capture individual tool calls
+    # Matches: <|tool_call_begin|>function_name<|tool_call_argument_begin|>{arguments}<|tool_call_end|>
+    pattern = r"<\|tool_call_begin\|>\s*([\w\.]+)\s*<\|tool_call_argument_begin\|>\s*(\{.*?\})\s*<\|tool_call_end\|>"
+
+    matches = re.finditer(pattern, text_content, re.DOTALL)
+
+    for i, match in enumerate(matches):
+        function_name = match.group(1)
+        arguments = match.group(2)
+
+        # Generate a unique ID for the tool call
+        tool_call_id = f"call_kimi_{i}_{hash(arguments) % 100000000}"
+
+        # Create the function chunk
+        function_chunk = ChatCompletionToolCallFunctionChunk(
+            name=function_name, arguments=arguments
+        )
+
+        # Create the tool call chunk
+        tool_call_chunk = ChatCompletionToolCallChunk(
+            id=tool_call_id, type="function", function=function_chunk, index=i
+        )
+
+        tool_calls.append(tool_call_chunk)
+
+    return tool_calls
+
+
 # Export public API
 __all__ = [
     "ToolCallParser",
@@ -177,4 +262,8 @@ __all__ = [
     "register_parser",
     "get_tool_call_parser",
     "parse_tool_calls_for_model",
+    "is_kimi_model",
+    "is_minimax_m2_model",
+    "needs_kimi_parsing",
+    "parse_kimi_tool_calls",
 ]
