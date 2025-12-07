@@ -101,7 +101,7 @@ def test_azure_gpt5_codex_series_transform_request(config: AzureOpenAIGPT5Reason
 
 
 # GPT-5.1 temperature handling tests for Azure
-def test_azure_gpt5_1_temperature_with_reasoning_effort_none(config: AzureOpenAIGPT5Config):
+def test_azure_gpt5_1_temperature_with_reasoning_effort_none(config: AzureOpenAIGPT5ReasoningConfig):
     """Test that Azure GPT-5.1 supports any temperature when reasoning_effort='none'.
 
     Azure OpenAI supports reasoning_effort='none' for gpt-5.1 models.
@@ -119,7 +119,7 @@ def test_azure_gpt5_1_temperature_with_reasoning_effort_none(config: AzureOpenAI
     assert params.get("reasoning_effort") == "none"
 
 
-def test_azure_gpt5_1_reasoning_effort_none_supported(config: AzureOpenAIGPT5Config):
+def test_azure_gpt5_1_reasoning_effort_none_supported(config: AzureOpenAIGPT5ReasoningConfig):
     """Test that Azure GPT-5.1 supports reasoning_effort='none' without error."""
     params = config.map_openai_params(
         non_default_params={"reasoning_effort": "none"},
@@ -131,7 +131,7 @@ def test_azure_gpt5_1_reasoning_effort_none_supported(config: AzureOpenAIGPT5Con
     assert params.get("reasoning_effort") == "none"
 
 
-def test_azure_gpt5_1_temperature_without_reasoning_effort(config: AzureOpenAIGPT5Config):
+def test_azure_gpt5_1_temperature_without_reasoning_effort(config: AzureOpenAIGPT5ReasoningConfig):
     """Test that Azure GPT-5.1 supports any temperature when reasoning_effort is not specified."""
     params = config.map_openai_params(
         non_default_params={"temperature": 0.7},
@@ -143,7 +143,7 @@ def test_azure_gpt5_1_temperature_without_reasoning_effort(config: AzureOpenAIGP
     assert params["temperature"] == 0.7
 
 
-def test_azure_gpt5_1_temperature_with_reasoning_effort_other_values(config: AzureOpenAIGPT5Config):
+def test_azure_gpt5_1_temperature_with_reasoning_effort_other_values(config: AzureOpenAIGPT5ReasoningConfig):
     """Test that Azure GPT-5.1 only allows temperature=1 when reasoning_effort is not 'none'."""
     # Test that temperature != 1 raises error when reasoning_effort is set to other values
     with pytest.raises(litellm.utils.UnsupportedParamsError):
@@ -167,7 +167,7 @@ def test_azure_gpt5_1_temperature_with_reasoning_effort_other_values(config: Azu
     assert params["reasoning_effort"] == "medium"
 
 
-def test_azure_gpt5_1_series_temperature_handling(config: AzureOpenAIGPT5Config):
+def test_azure_gpt5_1_series_temperature_handling(config: AzureOpenAIGPT5ReasoningConfig):
     """Test that Azure GPT-5.1 with gpt5_series prefix supports temperature with reasoning_effort='none'."""
     params = config.map_openai_params(
         non_default_params={"temperature": 0.6},
@@ -179,7 +179,7 @@ def test_azure_gpt5_1_series_temperature_handling(config: AzureOpenAIGPT5Config)
     assert params["temperature"] == 0.6
 
 
-def test_azure_gpt5_reasoning_effort_none_error(config: AzureOpenAIGPT5Config):
+def test_azure_gpt5_reasoning_effort_none_error(config: AzureOpenAIGPT5ReasoningConfig):
     """Test that Azure GPT-5 (non-5.1) raises error for reasoning_effort='none' when drop_params=False."""
     with pytest.raises(litellm.utils.UnsupportedParamsError):
         config.map_openai_params(
@@ -191,7 +191,7 @@ def test_azure_gpt5_reasoning_effort_none_error(config: AzureOpenAIGPT5Config):
         )
 
 
-def test_azure_gpt5_reasoning_effort_none_dropped(config: AzureOpenAIGPT5Config):
+def test_azure_gpt5_reasoning_effort_none_dropped(config: AzureOpenAIGPT5ReasoningConfig):
     """Test that Azure GPT-5 (non-5.1) drops reasoning_effort='none' when drop_params=True."""
     params = config.map_openai_params(
         non_default_params={"reasoning_effort": "none"},
