@@ -83,9 +83,9 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 | Model Name | Usage | Context Window |
 |------------|-------|----------------|
 | Nova Micro | `completion(model="amazon_nova/nova-micro-v1", messages=messages)` | 128K tokens |
-| Nova Lite | `completion(model="amazon-nova/nova-lite-v1", messages=messages)` | 300K tokens |
-| Nova Pro | `completion(model="amazon-nova/nova-pro-v1", messages=messages)` | 300K tokens |
-| Nova Premier | `completion(model="amazon-nova/nova-premier-v1", messages=messages)` | 1M tokens |
+| Nova Lite | `completion(model="amazon_nova/nova-lite-v1", messages=messages)` | 300K tokens |
+| Nova Pro | `completion(model="amazon_nova/nova-pro-v1", messages=messages)` | 300K tokens |
+| Nova Premier | `completion(model="amazon_nova/nova-premier-v1", messages=messages)` | 1M tokens |
 
 ## Usage - Streaming
 
@@ -225,7 +225,7 @@ from litellm import completion
 os.environ["AMAZON_NOVA_API_KEY"] = "your-api-key"
 
 response = completion(
-    model="amazon-nova/nova-pro-v1",
+    model="amazon_nova/nova-pro-v1",
     messages=[
         {"role": "user", "content": "Write a creative story"}
     ],
