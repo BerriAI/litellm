@@ -41,7 +41,7 @@ class AmazonNovaChatConfig(OpenAILikeChatConfig):
 
     @property
     def custom_llm_provider(self) -> Optional[str]:
-        return "amazon-nova"
+        return "amazon_nova"
 
     @classmethod
     def get_config(cls):

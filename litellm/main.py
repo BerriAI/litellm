@@ -52,10 +52,13 @@ from pydantic import BaseModel
 from typing_extensions import overload
 
 import litellm
+
 # client must be imported from litellm as it's a decorator used at function definition time
 from litellm import client
+
 # Other utils are imported directly to avoid circular imports
 from litellm.utils import exception_type, get_litellm_params, get_optional_params
+
 # Logging is imported lazily when needed to avoid loading litellm_logging at import time
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -2662,7 +2665,7 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
             response = model_response
-        elif custom_llm_provider == "amazon-nova":
+        elif custom_llm_provider == "amazon_nova":
             api_key = (
                 api_key
                 or litellm.amazon_nova_api_key

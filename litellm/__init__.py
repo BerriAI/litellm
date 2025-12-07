@@ -816,7 +816,7 @@ def add_known_models():
             lemonade_models.add(key)
         elif value.get("litellm_provider") == "docker_model_runner":
             docker_model_runner_models.add(key)
-        elif value.get("litellm_provider") == "amazon-nova":
+        elif value.get("litellm_provider") == "amazon_nova":
             amazon_nova_models.add(key)
 
 
@@ -1019,7 +1019,7 @@ models_by_provider: dict = {
     "ovhcloud": ovhcloud_models | ovhcloud_embedding_models,
     "lemonade": lemonade_models,
     "clarifai": clarifai_models,
-    "amazon-nova": amazon_nova_models,
+    "amazon_nova": amazon_nova_models,
 }
 
 # mapping for those models which have larger equivalents
