@@ -130,3 +130,36 @@ async def test_update_budget_db_not_connected(client_and_mocks, monkeypatch):
     assert resp.status_code == 500
     detail = resp.json()["detail"]
     assert detail["error"] == CommonProxyErrors.db_not_connected_error.value
+
+
+@pytest.mark.asyncio
+async def test_update_budget_allows_null_max_budget(client_and_mocks):
+    """
+    Test that /budget/update allows setting max_budget to null.
+    
+    Previously, using exclude_none=True would drop null values,
+    making it impossible to remove a budget limit. With exclude_unset=True,
+    explicitly setting max_budget to null should include it in the update.
+    """
+    client, _, mock_table = client_and_mocks
+
+    captured_data = {}
+    
+    async def capture_update(*, where, data):
+        captured_data.update(data)
+        return {**where, **data}
+    
+    mock_table.update = AsyncMock(side_effect=capture_update)
+
+    payload = {
+        "budget_id": "budget_789",
+        "max_budget": None,  # Explicitly setting to null to remove budget limit
+    }
+    resp = client.post("/budget/update", json=payload)
+    assert resp.status_code == 200, resp.text
+
+    # Verify that max_budget=None was included in the update data
+    assert "max_budget" in captured_data, "max_budget should be included when explicitly set to null"
+    assert captured_data["max_budget"] is None, "max_budget should be None"
+    
+    mock_table.update.assert_awaited_once()

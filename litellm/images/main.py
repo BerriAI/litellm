@@ -6,7 +6,9 @@ from typing import Any, Coroutine, Dict, List, Literal, Optional, Union, cast, o
 import httpx
 
 import litellm
-from litellm import client, exception_type, get_litellm_params
+from litellm.utils import exception_type, get_litellm_params
+# client is imported from litellm as it's a decorator
+from litellm import client
 from litellm.constants import DEFAULT_IMAGE_ENDPOINT_MODEL
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
 from litellm.exceptions import LiteLLMUnknownProvider
