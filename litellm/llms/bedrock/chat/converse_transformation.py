@@ -960,7 +960,10 @@ class AmazonConverseConfig(BaseConfig):
             bedrock_tools = _bedrock_tools_pt(filtered_tools)
 
         # Set anthropic_beta in additional_request_params if we have any beta features
-        if anthropic_beta_list:
+        # ONLY apply to Anthropic/Claude models - other models (e.g., Qwen, Llama) don't support this field
+        # and will error with "unknown variant anthropic_beta" if included
+        base_model = BedrockModelInfo.get_base_model(model)
+        if anthropic_beta_list and base_model.startswith("anthropic"):
             # Remove duplicates while preserving order
             unique_betas = []
             seen = set()

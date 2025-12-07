@@ -46,12 +46,12 @@ class MockGuardrail(CustomGuardrail):
         request_data: dict,
         input_type: Literal["request", "response"],
         logging_obj: Optional[Any] = None,
-    ) -> Tuple[List[str], Optional[List[str]]]:
+    ) -> GenericGuardrailAPIInputs:
         """Mock apply_guardrail that uppercases text and modifies tool calls"""
         self.last_inputs = inputs
         self.last_request_data = request_data
 
-        # Return modified texts (uppercase for testing)
+        # Return modified inputs (uppercase texts for testing)
         texts = inputs.get("texts", [])
         modified_texts = [text.upper() for text in texts]
 
@@ -75,7 +75,13 @@ class MockGuardrail(CustomGuardrail):
                             # If not JSON, just uppercase the string
                             function["arguments"] = function["arguments"].upper()
 
-        return modified_texts, []
+        # Return modified inputs as GenericGuardrailAPIInputs
+        result: GenericGuardrailAPIInputs = {"texts": modified_texts}
+        if tool_calls:
+            result["tool_calls"] = tool_calls  # type: ignore
+        if "images" in inputs:
+            result["images"] = inputs["images"]  # type: ignore
+        return result
 
 
 class TestOpenAIChatCompletionsHandlerToolCallsInput:
@@ -511,6 +517,68 @@ class TestOpenAIChatCompletionsHandlerToolCallsOutput:
         args2 = json.loads(response_tool_calls[1].function.arguments)
         assert args1["location"] == "TOKYO"
         assert args2["topic"] == "TECHNOLOGY"
+
+    @pytest.mark.asyncio
+    async def test_extract_tool_calls_from_real_openai_response(self):
+        """Test extraction of tool calls from a real OpenAI API response structure"""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail()
+
+        # Create a response matching the exact structure from OpenAI API
+        response = ModelResponse(
+            id="chatcmpl-abc123",
+            created=1699896916,
+            model="gpt-4o-mini",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_abc123",
+                                type="function",
+                                function=Function(
+                                    name="get_current_weather",
+                                    arguments='{\n"location": "Boston, MA"\n}',
+                                ),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        # Process the output
+        await handler.process_output_response(response, guardrail)
+
+        # Verify tool calls were extracted and passed to guardrail
+        assert guardrail.last_inputs is not None
+        assert "tool_calls" in guardrail.last_inputs
+        assert len(guardrail.last_inputs["tool_calls"]) == 1
+
+        # Verify the tool call details
+        tool_call = guardrail.last_inputs["tool_calls"][0]
+        assert tool_call["id"] == "call_abc123"
+        assert tool_call["type"] == "function"
+        assert tool_call["function"]["name"] == "get_current_weather"
+
+        # Verify arguments can be parsed
+        args = json.loads(tool_call["function"]["arguments"])
+        assert "location" in args
+
+        # Verify tool call was modified by guardrail (location should be uppercased)
+        response_tool_call = response.choices[0].message.tool_calls[0]
+        modified_args = json.loads(response_tool_call.function.arguments)
+        assert modified_args["location"] == "BOSTON, MA"  # Should be uppercased
+
+        # Verify response metadata
+        assert response.id == "chatcmpl-abc123"
+        assert response.model == "gpt-4o-mini"
+        assert response.choices[0].finish_reason == "tool_calls"
 
 
 if __name__ == "__main__":

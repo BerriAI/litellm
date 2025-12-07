@@ -109,7 +109,11 @@ async def test_mcp_cost_tracking():
             
             # Add assertions
             assert response is not None
-            response_list = list(response)  # Convert iterable to list
+            # Handle CallToolResult - access .content for the list of content items
+            if isinstance(response, CallToolResult):
+                response_list = response.content
+            else:
+                response_list = list(response)  # Convert iterable to list for backward compatibility
             assert len(response_list) == 1
             assert isinstance(response_list[0], TextContent)
             assert response_list[0].text == "Test response"
@@ -238,8 +242,8 @@ async def test_mcp_cost_tracking_per_tool():
             assert response1 is not None
             assert response2 is not None
             
-            response_list_1 = list(response1)
-            response_list_2 = list(response2)
+            response_list_1 = list(response1.content)
+            response_list_2 = list(response2.content)
             
             assert len(response_list_1) == 1
             assert len(response_list_2) == 1
