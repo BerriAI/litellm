@@ -3639,6 +3639,8 @@ class DailyOrganizationSpendTransaction(BaseDailySpendTransaction):
 class DailyUserSpendTransaction(BaseDailySpendTransaction):
     user_id: str
 
+class DailyEndUserSpendTransaction(BaseDailySpendTransaction):
+    end_user_id: str
 
 class DailyTagSpendTransaction(BaseDailySpendTransaction):
     request_id: Optional[str]

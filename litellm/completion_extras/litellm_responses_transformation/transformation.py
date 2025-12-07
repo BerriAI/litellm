@@ -632,6 +632,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             return Reasoning(effort="none")  # type: ignore
         elif reasoning_effort == "high":
             return Reasoning(effort="high")
+        elif reasoning_effort == "xhigh":
+            return Reasoning(effort="xhigh")  # type: ignore[typeddict-item]
         elif reasoning_effort == "medium":
             return Reasoning(effort="medium")
         elif reasoning_effort == "low":

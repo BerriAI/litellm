@@ -9,9 +9,9 @@ import os
 import secrets
 from typing import Literal, Optional, cast
 
-import litellm
 from fastapi import HTTPException
 
+import litellm
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._types import (
     LiteLLM_UserTable,
@@ -64,13 +64,19 @@ def get_ui_credentials(master_key: Optional[str]) -> tuple[str, str]:
 class LoginResult:
     """Result object containing authentication data from login."""
 
+    user_id: str
+    key: str
+    user_email: Optional[str]
+    user_role: str
+    login_method: Literal["sso", "username_password"]
+
     def __init__(
         self,
         user_id: str,
         key: str,
         user_email: Optional[str],
         user_role: str,
-        login_method: str = "username_password",
+        login_method: Literal["sso", "username_password"] = "username_password",
     ):
         self.user_id = user_id
         self.key = key
@@ -193,14 +199,14 @@ async def authenticate_user(
         key = response["token"]  # type: ignore
 
         if get_secret_bool("EXPERIMENTAL_UI_LOGIN"):
+            from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+
             user_info: Optional[LiteLLM_UserTable] = None
             if _user_row is not None:
                 user_info = _user_row
             elif (
                 user_id is not None
             ):  # if user_id is not None, we are using the UI_USERNAME and UI_PASSWORD
-                from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
-
                 user_info = LiteLLM_UserTable(
                     user_id=user_id,
                     user_role=user_role,

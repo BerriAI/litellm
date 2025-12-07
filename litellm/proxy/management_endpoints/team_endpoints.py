@@ -31,6 +31,7 @@ from litellm.proxy._types import (
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
     LiteLLM_ModelTable,
     LiteLLM_OrganizationTable,
+    LiteLLM_OrganizationTableWithMembers,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_TeamTableCachedObj,
@@ -1051,7 +1052,7 @@ async def fetch_and_validate_organization(
 
     organization_row = await prisma_client.db.litellm_organizationtable.find_unique(
         where={"organization_id": organization_id},
-        include={"litellm_budget_table": True, "users": True},
+        include={"litellm_budget_table": True, "members": True},
     )
 
     if organization_row is None:
@@ -1064,7 +1065,7 @@ async def fetch_and_validate_organization(
 
     validate_team_org_change(
         team=LiteLLM_TeamTable(**existing_team_row.model_dump()),
-        organization=LiteLLM_OrganizationTable(**organization_row.model_dump()),
+        organization=LiteLLM_OrganizationTableWithMembers(**organization_row.model_dump()),
         llm_router=llm_router,
     )
 
@@ -1072,7 +1073,7 @@ async def fetch_and_validate_organization(
 
 
 def validate_team_org_change(
-    team: LiteLLM_TeamTable, organization: LiteLLM_OrganizationTable, llm_router: Router
+    team: LiteLLM_TeamTable, organization: LiteLLM_OrganizationTableWithMembers, llm_router: Router
 ) -> bool:
     """
     Validate that a team can be moved to an organization.
@@ -1123,7 +1124,7 @@ def validate_team_org_change(
 
     # Check if the team's user_id is a member of the org
     team_members = [m.user_id for m in team.members_with_roles]
-    org_members = [m.user_id for m in organization.users] if organization.users else []
+    org_members = [m.user_id for m in organization.members] if organization.members else []
     not_in_org = [
         m
         for m in team_members

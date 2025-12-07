@@ -1,6 +1,6 @@
 import { Text, TextInput } from "@tremor/react";
 import { Button as AntButton, Form, Modal, Select } from "antd";
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import NumericalInput from "../shared/numerical_input";
 
 interface BaseMember {
@@ -48,6 +48,7 @@ const MemberModal = <T extends BaseMember>({
   config,
 }: MemberModalProps<T>) => {
   const [form] = Form.useForm();
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   console.log("Initial Data:", initialData);
 
@@ -79,6 +80,7 @@ const MemberModal = <T extends BaseMember>({
 
   const handleSubmit = async (values: any) => {
     try {
+      setIsSubmitting(true);
       // Trim string values and clean up form data
       const formData = Object.entries(values).reduce((acc, [key, value]) => {
         if (typeof value === "string") {
@@ -94,12 +96,14 @@ const MemberModal = <T extends BaseMember>({
       }, {}) as T;
 
       console.log("Submitting form data:", formData);
-      onSubmit(formData);
+      await Promise.resolve(onSubmit(formData));
       form.resetFields();
       // NotificationsManager.success(`Successfully ${mode === 'add' ? 'added' : 'updated'} member`);
     } catch (error) {
       // NotificationManager.fromBackend('Failed to submit form');
       console.error("Form submission error:", error);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -217,11 +221,17 @@ const MemberModal = <T extends BaseMember>({
         ))}
 
         <div className="text-right mt-6">
-          <AntButton onClick={onCancel} className="mr-2">
+          <AntButton onClick={onCancel} className="mr-2" disabled={isSubmitting}>
             Cancel
           </AntButton>
-          <AntButton type="default" htmlType="submit">
-            {mode === "add" ? "Add Member" : "Save Changes"}
+          <AntButton type="default" htmlType="submit" loading={isSubmitting}>
+            {mode === "add"
+              ? isSubmitting
+                ? "Adding..."
+                : "Add Member"
+              : isSubmitting
+                ? "Saving..."
+                : "Save Changes"}
           </AntButton>
         </div>
       </Form>
