@@ -3496,8 +3496,13 @@ jobs:
           command: |
             npx playwright test e2e_ui_tests/ --reporter=html --output=test-results
           no_output_timeout: 120m
-      - store_test_results:
+      - store_artifacts:
           path: test-results
+          destination: playwright-results
+
+      - store_artifacts:
+          path: playwright-report
+          destination: playwright-report
 
   test_nonroot_image:
     machine:

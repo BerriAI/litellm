@@ -290,7 +290,13 @@ response = client.chat.completions.create(
 
 ### Beta Header
 
-LiteLLM automatically adds the `advanced-tool-use-2025-11-20` beta header when tool search tools are detected. You don't need to manually specify it.
+LiteLLM automatically detects tool search tools and adds the appropriate beta header based on your provider:
+
+- **Anthropic API & Microsoft Foundry**: `advanced-tool-use-2025-11-20`
+- **Google Cloud Vertex AI**: `tool-search-tool-2025-10-19`
+- **Amazon Bedrock** (Invoke API, Opus 4.5 only): `tool-search-tool-2025-10-19`
+
+You don't need to manually specify beta headers—LiteLLM handles this automatically.
 
 ### Deferred Loading
 
@@ -387,8 +393,17 @@ If Claude references a tool that isn't in your deferred tools list, you'll get a
 - Not compatible with tool use examples
 - Requires Claude Opus 4.5 or Sonnet 4.5
 - On Bedrock, only available via invoke API (not converse API)
+- On Bedrock, only supported for Claude Opus 4.5 (not Sonnet 4.5)
+- BM25 variant (`tool_search_tool_bm25_20251119`) is not supported on Bedrock
 - Maximum 10,000 tools in catalog
 - Returns 3-5 most relevant tools per search
+
+### Bedrock-Specific Notes
+
+When using Bedrock's Invoke API:
+- The regex variant (`tool_search_tool_regex_20251119`) is automatically normalized to `tool_search_tool_regex`
+- The BM25 variant (`tool_search_tool_bm25_20251119`) is automatically filtered out as it's not supported
+- Tool search is only available for Claude Opus 4.5 models
 
 ## Additional Resources
 

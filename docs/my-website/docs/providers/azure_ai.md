@@ -312,6 +312,82 @@ LiteLLM supports **ALL** azure ai models. Here's a few examples:
 | mistral-large-latest | `completion(model="azure_ai/mistral-large-latest", messages)` | 
 | AI21-Jamba-Instruct | `completion(model="azure_ai/ai21-jamba-instruct", messages)` | 
 
+## Usage - Azure Anthropic (Azure Foundry Claude)
+
+LiteLLM funnels Azure Claude deployments through the `azure_ai/` provider so Claude Opus models on Azure Foundry keep working with Tool Search, Effort, streaming, and the rest of the advanced feature set. Point `AZURE_AI_API_BASE` to `https://<resource>.services.ai.azure.com/anthropic` (LiteLLM appends `/v1/messages` automatically) and authenticate with `AZURE_AI_API_KEY` or an Azure AD token.
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM Python SDK">
+
+```python
+import os
+from litellm import completion
+
+# Configure Azure credentials
+os.environ["AZURE_AI_API_KEY"] = "your-azure-ai-api-key"
+os.environ["AZURE_AI_API_BASE"] = "https://my-resource.services.ai.azure.com/anthropic"
+
+response = completion(
+    model="azure_ai/claude-opus-4-1",
+    messages=[{"role": "user", "content": "Explain how Azure Anthropic hosts Claude Opus differently from the public Anthropic API."}],
+    max_tokens=1200,
+    temperature=0.7,
+    stream=True,
+)
+
+for chunk in response:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="", flush=True)
+```
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+**1. Set environment variables**
+
+```bash
+export AZURE_AI_API_KEY="your-azure-ai-api-key"
+export AZURE_AI_API_BASE="https://my-resource.services.ai.azure.com/anthropic"
+```
+
+**2. Configure the proxy**
+
+```yaml
+model_list:
+  - model_name: claude-4-azure
+    litellm_params:
+      model: azure_ai/claude-opus-4-1
+      api_key: os.environ/AZURE_AI_API_KEY
+      api_base: os.environ/AZURE_AI_API_BASE
+```
+
+**3. Start LiteLLM**
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+**4. Test the Azure Claude route**
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+  --header 'Content-Type: application/json' \
+  --header 'Authorization: Bearer $LITELLM_KEY' \
+  --data '{
+    "model": "claude-4-azure",
+    "messages": [
+      {
+        "role": "user",
+        "content": "How do I use Claude Opus 4 via Azure Anthropic in LiteLLM?"
+      }
+    ],
+    "max_tokens": 1024
+  }'
+```
+
+</TabItem>
+</Tabs>
+
 
 
 ## Rerank Endpoint
@@ -398,3 +474,4 @@ curl http://0.0.0.0:4000/rerank \
 
 </TabItem>
 </Tabs>
+

@@ -22,7 +22,7 @@ import httpx  # type: ignore
 
 from litellm.utils import ModelResponse
 
-from ..common_utils import VertexAIError
+from ..common_utils import VertexAIError, get_vertex_base_model_name
 from ..vertex_llm_base import VertexBase
 
 
@@ -89,7 +89,7 @@ class VertexAIModelGardenModels(VertexBase):
                 message="""Upgrade vertex ai. Run `pip install "google-cloud-aiplatform>=1.38"`""",
             )
         try:
-            model = model.replace("openai/", "")
+            model = get_vertex_base_model_name(model=model)
             vertex_httpx_logic = VertexLLM()
 
             access_token, project_id = vertex_httpx_logic._ensure_access_token(
@@ -123,6 +123,10 @@ class VertexAIModelGardenModels(VertexBase):
                 stream=stream,
                 auth_header=None,
                 url=default_api_base,
+                model=model,
+                vertex_project=vertex_project or project_id,
+                vertex_location=vertex_location or "us-central1",
+                vertex_api_version="v1beta1",
             )
             model = ""
             return openai_like_chat_completions.completion(

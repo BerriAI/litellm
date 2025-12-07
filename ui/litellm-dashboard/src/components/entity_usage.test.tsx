@@ -18,6 +18,7 @@ vi.mock("./networking", () => ({
   tagDailyActivityCall: vi.fn(),
   teamDailyActivityCall: vi.fn(),
   organizationDailyActivityCall: vi.fn(),
+  customerDailyActivityCall: vi.fn(),
 }));
 
 // Mock the child components to simplify testing
@@ -42,6 +43,7 @@ describe("EntityUsage", () => {
   const mockTagDailyActivityCall = vi.mocked(networking.tagDailyActivityCall);
   const mockTeamDailyActivityCall = vi.mocked(networking.teamDailyActivityCall);
   const mockOrganizationDailyActivityCall = vi.mocked(networking.organizationDailyActivityCall);
+  const mockCustomerDailyActivityCall = vi.mocked(networking.customerDailyActivityCall);
 
   const mockSpendData = {
     results: [
@@ -128,9 +130,11 @@ describe("EntityUsage", () => {
     mockTagDailyActivityCall.mockClear();
     mockTeamDailyActivityCall.mockClear();
     mockOrganizationDailyActivityCall.mockClear();
+    mockCustomerDailyActivityCall.mockClear();
     mockTagDailyActivityCall.mockResolvedValue(mockSpendData);
     mockTeamDailyActivityCall.mockResolvedValue(mockSpendData);
     mockOrganizationDailyActivityCall.mockResolvedValue(mockSpendData);
+    mockCustomerDailyActivityCall.mockResolvedValue(mockSpendData);
   });
 
   it("should render with tag entity type and display spend metrics", async () => {
@@ -168,16 +172,33 @@ describe("EntityUsage", () => {
   });
 
   it("should render with organization entity type and call organization API", async () => {
-    const { getByText, getAllByText } = render(<EntityUsage {...defaultProps} entityType="organization" />);
+    render(<EntityUsage {...defaultProps} entityType="organization" />);
 
     await waitFor(() => {
       expect(mockOrganizationDailyActivityCall).toHaveBeenCalled();
     });
 
-    expect(getByText("Organization Spend Overview")).toBeInTheDocument();
+    expect(screen.getByText("Organization Spend Overview")).toBeInTheDocument();
 
-    const spendElements = getAllByText("$100.50");
-    expect(spendElements.length).toBeGreaterThan(0);
+    await waitFor(() => {
+      const spendElements = screen.getAllByText("$100.50");
+      expect(spendElements.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("should render with customer entity type and call customer API", async () => {
+    render(<EntityUsage {...defaultProps} entityType="customer" />);
+
+    await waitFor(() => {
+      expect(mockCustomerDailyActivityCall).toHaveBeenCalled();
+    });
+
+    expect(screen.getByText("Customer Spend Overview")).toBeInTheDocument();
+
+    await waitFor(() => {
+      const spendElements = screen.getAllByText("$100.50");
+      expect(spendElements.length).toBeGreaterThan(0);
+    });
   });
 
   it("should switch between tabs", async () => {
@@ -224,9 +245,9 @@ describe("EntityUsage", () => {
       expect(mockTagDailyActivityCall).toHaveBeenCalled();
     });
 
-    await waitFor(() => {
-      expect(screen.getByText("$0.00")).toBeInTheDocument();
-      expect(screen.getByText("Total Spend")).toBeInTheDocument();
-    });
+    expect(await screen.findByText("Tag Spend Overview")).toBeInTheDocument();
+    expect(await screen.findByText("$-")).toBeInTheDocument();
+    expect(screen.getByText("Total Spend")).toBeInTheDocument();
+    expect(screen.getAllByText("0")[0]).toBeInTheDocument();
   });
 });

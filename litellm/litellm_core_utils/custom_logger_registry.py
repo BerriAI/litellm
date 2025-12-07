@@ -75,6 +75,7 @@ class CustomLoggerRegistry:
         "langfuse_otel": OpenTelemetry,
         "arize_phoenix": OpenTelemetry,
         "langtrace": OpenTelemetry,
+        "weave_otel": OpenTelemetry,
         "mlflow": MlflowLogger,
         "langfuse": LangfusePromptManagement,
         "otel": OpenTelemetry,

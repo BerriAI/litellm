@@ -1,14 +1,16 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
-import { v4 as uuidv4 } from "uuid";
-import { Select, Input, Tooltip, Button } from "antd";
-import { ClearOutlined, PlusOutlined } from "@ant-design/icons";
 import NotificationsManager from "@/components/molecules/notifications_manager";
-import { fetchAvailableModels } from "../llm_calls/fetch_models";
-import { makeOpenAIChatCompletionRequest } from "../llm_calls/chat_completion";
+import { ClearOutlined, DeleteOutlined, FilePdfOutlined, PlusOutlined } from "@ant-design/icons";
+import { Button, Input, Select, Tooltip } from "antd";
+import { useEffect, useMemo, useState } from "react";
+import { v4 as uuidv4 } from "uuid";
+import ChatImageUpload from "../chat_ui/ChatImageUpload";
+import { createChatDisplayMessage, createChatMultimodalMessage } from "../chat_ui/ChatImageUtils";
 import type { TokenUsage } from "../chat_ui/ResponseMetrics";
 import type { MessageType, VectorStoreSearchResponse } from "../chat_ui/types";
+import { makeOpenAIChatCompletionRequest } from "../llm_calls/chat_completion";
+import { fetchAvailableModels } from "../llm_calls/fetch_models";
 import { ComparisonPanel } from "./components/ComparisonPanel";
 import { MessageInput } from "./components/MessageInput";
 export interface ComparisonInstance {
@@ -71,6 +73,8 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
   const [modelOptions, setModelOptions] = useState<string[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [inputValue, setInputValue] = useState("");
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [uploadedFilePreviewUrl, setUploadedFilePreviewUrl] = useState<string | null>(null);
   const [apiKeySource, setApiKeySource] = useState<"session" | "custom">(
     disabledPersonalKeyCreation ? "custom" : "session",
   );
@@ -82,6 +86,13 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
     }, 300);
     return () => clearTimeout(timer);
   }, [customApiKey]);
+  useEffect(() => {
+    return () => {
+      if (uploadedFilePreviewUrl) {
+        URL.revokeObjectURL(uploadedFilePreviewUrl);
+      }
+    };
+  }, [uploadedFilePreviewUrl]);
   const effectiveApiKey = useMemo(
     () => (apiKeySource === "session" ? accessToken || "" : debouncedCustomApiKey.trim()),
     [apiKeySource, accessToken, debouncedCustomApiKey],
@@ -215,6 +226,21 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
       );
     });
   };
+  const handleFileUpload = (file: File): false => {
+    if (uploadedFilePreviewUrl) {
+      URL.revokeObjectURL(uploadedFilePreviewUrl);
+    }
+    setUploadedFile(file);
+    setUploadedFilePreviewUrl(URL.createObjectURL(file));
+    return false;
+  };
+  const handleRemoveFile = () => {
+    if (uploadedFilePreviewUrl) {
+      URL.revokeObjectURL(uploadedFilePreviewUrl);
+    }
+    setUploadedFile(null);
+    setUploadedFilePreviewUrl(null);
+  };
   const clearAllChats = () => {
     setComparisons((prev) =>
       prev.map((comparison) => ({
@@ -225,6 +251,7 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
       })),
     );
     setInputValue("");
+    handleRemoveFile();
   };
   const appendAssistantChunk = (comparisonId: string, chunk: string, model?: string) => {
     if (!chunk) {
@@ -389,13 +416,14 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
     );
   };
   const canUseSessionKey = Boolean(accessToken);
-  const handleSendMessage = (input: string) => {
+  const handleSendMessage = async (input: string) => {
     const trimmed = input.trim();
-    if (!trimmed) {
+    const hasAttachment = Boolean(uploadedFile);
+    if (!trimmed && !hasAttachment) {
       return;
     }
     if (!effectiveApiKey) {
-      NotificationsManager.fromBackend("Please provide an API key or select Current UI Session");
+      NotificationsManager.fromBackend("Please provide a Virtual Key or select Current UI Session");
       return;
     }
     const targetComparisons = comparisons;
@@ -406,6 +434,17 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
       NotificationsManager.fromBackend("Select a model before sending a message.");
       return;
     }
+
+    const apiUserMessage = hasAttachment
+      ? await createChatMultimodalMessage(trimmed, uploadedFile as File)
+      : { role: "user", content: trimmed };
+    const displayUserMessage = createChatDisplayMessage(
+      trimmed,
+      hasAttachment,
+      uploadedFilePreviewUrl || undefined,
+      uploadedFile?.name,
+    );
+
     const preparedTargets = new Map<
       string,
       {
@@ -417,15 +456,19 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
         guardrails: string[];
         temperature: number;
         maxTokens: number;
-        messages: MessageType[];
+        displayMessages: MessageType[];
+        apiChatHistory: Array<{ role: string; content: string | any[] }>;
       }
     >();
     targetComparisons.forEach((comparison) => {
       const traceId = comparison.traceId ?? uuidv4();
-      const userMessage: MessageType = {
-        role: "user",
-        content: trimmed,
-      };
+      const apiChatHistory = [
+        ...comparison.messages.map(({ role, content }) => ({
+          role,
+          content: Array.isArray(content) ? content : typeof content === "string" ? content : "",
+        })),
+        apiUserMessage,
+      ];
       preparedTargets.set(comparison.id, {
         id: comparison.id,
         model: comparison.model,
@@ -435,7 +478,8 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
         guardrails: comparison.guardrails,
         temperature: comparison.temperature,
         maxTokens: comparison.maxTokens,
-        messages: [...comparison.messages, userMessage],
+        displayMessages: [...comparison.messages, displayUserMessage],
+        apiChatHistory,
       });
     });
     if (preparedTargets.size === 0) {
@@ -450,23 +494,22 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
         return {
           ...comparison,
           traceId: prepared.traceId,
-          messages: prepared.messages,
+          messages: prepared.displayMessages,
           isLoading: true,
         };
       }),
     );
+    setInputValue("");
+    handleRemoveFile();
+
     preparedTargets.forEach((prepared) => {
-      const apiChatHistory = prepared.messages.map(({ role, content }) => ({
-        role,
-        content: typeof content === "string" ? content : "",
-      }));
       const tags = prepared.tags.length > 0 ? prepared.tags : undefined;
       const vectorStoreIds = prepared.vectorStores.length > 0 ? prepared.vectorStores : undefined;
       const guardrails = prepared.guardrails.length > 0 ? prepared.guardrails : undefined;
       const comparison = comparisons.find((c) => c.id === prepared.id);
       const useAdvancedParams = comparison?.useAdvancedParams ?? false;
       makeOpenAIChatCompletionRequest(
-        apiChatHistory,
+        prepared.apiChatHistory,
         (chunk, model) => appendAssistantChunk(prepared.id, chunk, model),
         prepared.model,
         effectiveApiKey,
@@ -536,22 +579,23 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
     setInputValue(value);
   };
   const handleSubmit = () => {
-    handleSendMessage(inputValue);
-    setInputValue("");
+    void handleSendMessage(inputValue);
   };
   const handleFollowUpSelect = (question: string) => {
     setInputValue(question);
   };
   const hasMessages = comparisons.some((comparison) => comparison.messages.length > 0);
   const isAnyComparisonLoading = comparisons.some((comparison) => comparison.isLoading);
-  const showSuggestedPrompts = !hasMessages && !isAnyComparisonLoading;
+  const hasAttachment = Boolean(uploadedFile);
+  const isUploadedFilePdf = Boolean(uploadedFile?.name.toLowerCase().endsWith(".pdf"));
+  const showSuggestedPrompts = !hasMessages && !isAnyComparisonLoading && !hasAttachment;
   return (
     <div className="w-full h-full p-4 bg-white">
-      <div className="rounded-2xl border border-gray-200 bg-white shadow-sm min-h-[calc(100vh-140px)] flex flex-col">
+      <div className="rounded-2xl border border-gray-200 bg-white shadow-sm min-h-[calc(100vh-160px)] flex flex-col">
         <div className="border-b px-4 py-2">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-gray-600">API Key Source</span>
+              <span className="text-sm font-medium text-gray-600">Virtual Key Source</span>
               <Select
                 value={apiKeySource}
                 onChange={(value) => setApiKeySource(value as "session" | "custom")}
@@ -567,7 +611,7 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
                 <Input.Password
                   value={customApiKey}
                   onChange={(event) => setCustomApiKey(event.target.value)}
-                  placeholder="Enter API key"
+                  placeholder="Enter Virtual Key"
                   className="w-56"
                 />
               )}
@@ -620,7 +664,9 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
           <div className="w-full max-w-3xl px-4">
             <div className="border border-gray-200 shadow-lg rounded-xl bg-white p-4">
               <div className="flex items-center justify-between gap-4 mb-3 min-h-8">
-                {showSuggestedPrompts ? (
+                {hasAttachment ? (
+                  <span className="text-sm text-gray-500">Attachment ready to send</span>
+                ) : showSuggestedPrompts ? (
                   <div className="flex items-center gap-2 overflow-x-auto">
                     {SUGGESTED_PROMPTS.map((prompt) => (
                       <button
@@ -633,7 +679,7 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
                       </button>
                     ))}
                   </div>
-                ) : haveAllResponses ? (
+                ) : haveAllResponses && !hasAttachment ? (
                   <div className="flex items-center gap-2 overflow-x-auto">
                     {GENERIC_FOLLOW_UPS.map((question) => (
                       <button
@@ -655,11 +701,49 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
                   <span className="text-sm text-gray-500">Send a prompt to compare models</span>
                 )}
               </div>
+              {uploadedFile && (
+                <div className="mb-3">
+                  <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                    <div className="relative inline-block">
+                      {isUploadedFilePdf ? (
+                        <div className="w-10 h-10 rounded-md bg-red-500 flex items-center justify-center">
+                          <FilePdfOutlined style={{ fontSize: "16px", color: "white" }} />
+                        </div>
+                      ) : (
+                        <img
+                          src={uploadedFilePreviewUrl || ""}
+                          alt="Upload preview"
+                          className="w-10 h-10 rounded-md border border-gray-200 object-cover"
+                        />
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-gray-900 truncate">{uploadedFile.name}</div>
+                      <div className="text-xs text-gray-500">{isUploadedFilePdf ? "PDF" : "Image"}</div>
+                    </div>
+                    <button
+                      className="flex items-center justify-center w-6 h-6 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded-full transition-colors"
+                      onClick={handleRemoveFile}
+                    >
+                      <DeleteOutlined style={{ fontSize: "12px" }} />
+                    </button>
+                  </div>
+                </div>
+              )}
               <MessageInput
                 value={inputValue}
                 onChange={handleInputChange}
                 onSend={handleSubmit}
                 disabled={comparisons.length === 0 || comparisons.every((comparison) => comparison.isLoading)}
+                hasAttachment={hasAttachment}
+                uploadComponent={
+                  <ChatImageUpload
+                    chatUploadedImage={uploadedFile}
+                    chatImagePreviewUrl={uploadedFilePreviewUrl}
+                    onImageUpload={handleFileUpload}
+                    onRemoveImage={handleRemoveFile}
+                  />
+                }
               />
             </div>
           </div>

@@ -73,6 +73,9 @@ bedrock_tool_name_mappings: InMemoryCache = InMemoryCache(
     max_size_in_memory=50, default_ttl=600
 )
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+from litellm.llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
+    AmazonBedrockOpenAIConfig,
+)
 
 converse_config = AmazonConverseConfig()
 
@@ -189,6 +192,7 @@ async def make_call(
     fake_stream: bool = False,
     json_mode: Optional[bool] = False,
     bedrock_invoke_provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL] = None,
+    stream_chunk_size: int = 1024,
 ):
     try:
         if client is None:
@@ -232,7 +236,7 @@ async def make_call(
                 json_mode=json_mode,
             )
             completion_stream = decoder.aiter_bytes(
-                response.aiter_bytes(chunk_size=1024)
+                response.aiter_bytes(chunk_size=stream_chunk_size)
             )
         elif bedrock_invoke_provider == "deepseek_r1":
             decoder = AmazonDeepSeekR1StreamDecoder(
@@ -240,12 +244,12 @@ async def make_call(
                 sync_stream=False,
             )
             completion_stream = decoder.aiter_bytes(
-                response.aiter_bytes(chunk_size=1024)
+                response.aiter_bytes(chunk_size=stream_chunk_size)
             )
         else:
             decoder = AWSEventStreamDecoder(model=model)
             completion_stream = decoder.aiter_bytes(
-                response.aiter_bytes(chunk_size=1024)
+                response.aiter_bytes(chunk_size=stream_chunk_size)
             )
 
         # LOGGING
@@ -278,6 +282,7 @@ def make_sync_call(
     fake_stream: bool = False,
     json_mode: Optional[bool] = False,
     bedrock_invoke_provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL] = None,
+    stream_chunk_size: int = 1024,
 ):
     try:
         if client is None:
@@ -318,16 +323,16 @@ def make_sync_call(
                 sync_stream=True,
                 json_mode=json_mode,
             )
-            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
+            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
         elif bedrock_invoke_provider == "deepseek_r1":
             decoder = AmazonDeepSeekR1StreamDecoder(
                 model=model,
                 sync_stream=True,
             )
-            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
+            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
         else:
             decoder = AWSEventStreamDecoder(model=model)
-            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
+            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
 
         # LOGGING
         logging_obj.post_call(
@@ -401,6 +406,10 @@ class BedrockLLM(BaseAWSLLM):
             prompt = prompt_factory(
                 model=model, messages=messages, custom_llm_provider="bedrock"
             )
+        elif provider == "openai":
+            # OpenAI uses messages directly, no prompt conversion needed
+            # Return empty prompt as it won't be used
+            prompt = ""
         elif provider == "cohere":
             prompt, chat_history = cohere_message_pt(messages=messages)
         else:
@@ -578,6 +587,30 @@ class BedrockLLM(BaseAWSLLM):
                 )
             elif provider == "meta" or provider == "llama":
                 outputText = completion_response["generation"]
+            elif provider == "openai":
+                # OpenAI imported models use OpenAI Chat Completions format
+                if "choices" in completion_response and len(completion_response["choices"]) > 0:
+                    choice = completion_response["choices"][0]
+                    if "message" in choice:
+                        outputText = choice["message"].get("content")
+                    elif "text" in choice:  # fallback for completion format
+                        outputText = choice["text"]
+                    
+                    # Set finish reason
+                    if "finish_reason" in choice:
+                        model_response.choices[0].finish_reason = map_finish_reason(
+                            choice["finish_reason"]
+                        )
+                    
+                    # Set usage if available
+                    if "usage" in completion_response:
+                        usage = completion_response["usage"]
+                        _usage = litellm.Usage(
+                            prompt_tokens=usage.get("prompt_tokens", 0),
+                            completion_tokens=usage.get("completion_tokens", 0),
+                            total_tokens=usage.get("total_tokens", 0),
+                        )
+                        setattr(model_response, "usage", _usage)
             elif provider == "mistral":
                 outputText = completion_response["outputs"][0]["text"]
                 model_response.choices[0].finish_reason = completion_response[
@@ -641,33 +674,39 @@ class BedrockLLM(BaseAWSLLM):
             )
 
         ## CALCULATING USAGE - bedrock returns usage in the headers
-        bedrock_input_tokens = response.headers.get(
-            "x-amzn-bedrock-input-token-count", None
-        )
-        bedrock_output_tokens = response.headers.get(
-            "x-amzn-bedrock-output-token-count", None
-        )
-
-        prompt_tokens = int(
-            bedrock_input_tokens or litellm.token_counter(messages=messages)
-        )
-
-        completion_tokens = int(
-            bedrock_output_tokens
-            or litellm.token_counter(
-                text=model_response.choices[0].message.content,  # type: ignore
-                count_response_tokens=True,
+        # Skip if usage was already set (e.g., from JSON response for OpenAI provider)
+        if not hasattr(model_response, "usage") or getattr(model_response, "usage", None) is None:
+            bedrock_input_tokens = response.headers.get(
+                "x-amzn-bedrock-input-token-count", None
             )
-        )
+            bedrock_output_tokens = response.headers.get(
+                "x-amzn-bedrock-output-token-count", None
+            )
 
-        model_response.created = int(time.time())
-        model_response.model = model
-        usage = Usage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=prompt_tokens + completion_tokens,
-        )
-        setattr(model_response, "usage", usage)
+            prompt_tokens = int(
+                bedrock_input_tokens or litellm.token_counter(messages=messages)
+            )
+
+            completion_tokens = int(
+                bedrock_output_tokens
+                or litellm.token_counter(
+                    text=model_response.choices[0].message.content,  # type: ignore
+                    count_response_tokens=True,
+                )
+            )
+
+            model_response.created = int(time.time())
+            model_response.model = model
+            usage = Usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens + completion_tokens,
+            )
+            setattr(model_response, "usage", usage)
+        else:
+            # Ensure created and model are set even if usage was already set
+            model_response.created = int(time.time())
+            model_response.model = model
 
         return model_response
 
@@ -698,6 +737,7 @@ class BedrockLLM(BaseAWSLLM):
 
         ## SETUP ##
         stream = optional_params.pop("stream", None)
+        stream_chunk_size = optional_params.pop("stream_chunk_size", 1024)
 
         provider = self.get_bedrock_invoke_provider(model)
         modelId = self.get_bedrock_model_id(
@@ -895,6 +935,20 @@ class BedrockLLM(BaseAWSLLM):
                 ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                     inference_params[k] = v
             data = json.dumps({"prompt": prompt, **inference_params})
+        elif provider == "openai":
+            ## OpenAI imported models use OpenAI Chat Completions format (messages-based)
+            # Use AmazonBedrockOpenAIConfig for proper OpenAI transformation
+            openai_config = AmazonBedrockOpenAIConfig()
+            supported_params = openai_config.get_supported_openai_params(model=model)
+            
+            # Filter to only supported OpenAI params
+            filtered_params = {
+                k: v for k, v in inference_params.items() 
+                if k in supported_params
+            }
+            
+            # OpenAI uses messages format, not prompt
+            data = json.dumps({"messages": messages, **filtered_params})
         else:
             ## LOGGING
             logging_obj.pre_call(
@@ -958,6 +1012,7 @@ class BedrockLLM(BaseAWSLLM):
                     headers=prepped.headers,
                     timeout=timeout,
                     client=client,
+                    stream_chunk_size=stream_chunk_size,
                 )  # type: ignore
             ### ASYNC COMPLETION
             return self.async_completion(
@@ -1003,7 +1058,7 @@ class BedrockLLM(BaseAWSLLM):
 
             decoder = AWSEventStreamDecoder(model=model)
 
-            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
+            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
             streaming_response = CustomStreamWrapper(
                 completion_stream=completion_stream,
                 model=model,
@@ -1123,6 +1178,7 @@ class BedrockLLM(BaseAWSLLM):
         logger_fn=None,
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
+        stream_chunk_size: int = 1024,
     ) -> CustomStreamWrapper:
         # The call is not made here; instead, we prepare the necessary objects for the stream.
 
@@ -1138,6 +1194,7 @@ class BedrockLLM(BaseAWSLLM):
                 messages=messages,
                 logging_obj=logging_obj,
                 fake_stream=True if "ai21" in api_base else False,
+                stream_chunk_size=stream_chunk_size,
             ),
             model=model,
             custom_llm_provider="bedrock",

@@ -1804,15 +1804,21 @@ class BaseLLMHTTPHandler:
             Optional[litellm.types.utils.ProviderSpecificHeader],
             kwargs.get("provider_specific_header", None),
         )
-        extra_headers = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+        provider_specific_headers = ProviderSpecificHeaderUtils.get_provider_specific_headers(
             provider_specific_header=provider_specific_header,
             custom_llm_provider=custom_llm_provider,
         )
         forwarded_headers = kwargs.get("headers", None)
-        if forwarded_headers and extra_headers:
-            merged_headers = {**forwarded_headers, **extra_headers}
-        else:
-            merged_headers = forwarded_headers or extra_headers
+        # Also check for extra_headers in kwargs (from config or direct calls)
+        extra_headers_from_kwargs = kwargs.get("extra_headers", None)
+        # Merge all header sources: forwarded < extra_headers < provider_specific
+        merged_headers = {}
+        if forwarded_headers:
+            merged_headers.update(forwarded_headers)
+        if extra_headers_from_kwargs:
+            merged_headers.update(extra_headers_from_kwargs)
+        if provider_specific_headers:
+            merged_headers.update(provider_specific_headers)
         (
             headers,
             api_base,

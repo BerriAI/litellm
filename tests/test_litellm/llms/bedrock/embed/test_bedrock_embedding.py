@@ -555,3 +555,56 @@ def test_bedrock_embedding_extra_headers_and_headers_merge():
             
         except Exception as e:
             pytest.fail(f"Failed to merge and forward headers: {str(e)}")
+
+
+def test_bedrock_cohere_v4_embedding_response_parsing():
+    """
+    Test parsing of Bedrock Cohere v4 embedding response which returns a dictionary of embeddings
+    keyed by type (e.g. 'float', 'int8') instead of a direct list.
+    """
+    litellm.set_verbose = True
+    client = HTTPHandler()
+    test_api_key = "test-bearer-token-12345"
+    model = "bedrock/cohere.embed-v4:0"
+
+    # Mock response for Cohere v4 with multiple embedding types
+    cohere_v4_response = {
+        "embeddings": {
+            "float": [[0.1, 0.2, 0.3]],
+            "int8": [[1, 2, 3]]
+        },
+        "response_type": "embeddings_by_type",
+        "id": "test-id",
+        "texts": ["test input"]
+    }
+
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(cohere_v4_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        response = litellm.embedding(
+            model=model,
+            input=["test input"],
+            client=client,
+            aws_region_name="us-east-1",
+            aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
+            api_key=test_api_key
+        )
+
+        assert isinstance(response, litellm.EmbeddingResponse)
+        
+        # Verify we get two embedding objects back (one for float, one for int8)
+        assert len(response.data) == 2
+        
+        # Check first embedding (float)
+        assert response.data[0]['object'] == 'embedding'
+        assert response.data[0]['embedding'] == [0.1, 0.2, 0.3]
+        assert response.data[0]['type'] == 'float'
+        
+        # Check second embedding (int8)
+        assert response.data[1]['object'] == 'embedding'
+        assert response.data[1]['embedding'] == [1, 2, 3]
+        assert response.data[1]['type'] == 'int8'
