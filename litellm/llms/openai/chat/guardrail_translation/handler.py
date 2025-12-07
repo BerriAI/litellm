@@ -80,6 +80,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 inputs["images"] = images_to_check
             if tool_calls_to_check:
                 inputs["tool_calls"] = tool_calls_to_check  # type: ignore
+            if messages:
+                inputs["structured_messages"] = (
+                    messages  # pass the openai /chat/completions messages to the guardrail, as-is
+                )
 
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
@@ -89,7 +93,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             )
 
             guardrailed_texts = guardrailed_inputs.get("texts", [])
-            guardrailed_tool_calls = guardrailed_inputs.get("tools", [])
+            guardrailed_tool_calls = guardrailed_inputs.get("tool_calls", [])
 
             # Step 3: Map guardrail responses back to original message structure
             if guardrailed_texts and texts_to_check:
@@ -155,12 +159,12 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                                 images_to_check.append(url)
 
         # Extract tool calls (typically in assistant messages)
-        tool_calls = message.get("tools", None)
+        tool_calls = message.get("tool_calls", None)
         if tool_calls is not None and isinstance(tool_calls, list):
             for tool_call_idx, tool_call in enumerate(tool_calls):
                 if isinstance(tool_call, dict):
                     # Add the full tool call object to the list
-                    tool_calls_to_check.append(ChatCompletionToolParam(**tool_call))
+                    tool_calls_to_check.append(cast(ChatCompletionToolParam, tool_call))
                     tool_call_task_mappings.append((msg_idx, int(tool_call_idx)))
 
     async def _apply_guardrail_responses_to_input_texts(
@@ -261,7 +265,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         # Step 1: Extract all text content, images, and tool calls from response choices
         for choice_idx, choice in enumerate(response.choices):
-            self._extract_output_text_and_images(
+            self._extract_output_text_images_and_tool_calls(
                 choice=choice,
                 choice_idx=choice_idx,
                 texts_to_check=texts_to_check,
@@ -376,20 +380,20 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
                 if isinstance(content, str):
                     # String content - accumulate for this choice
-                    key = (choice_idx, None)
-                    if key not in combined_texts:
-                        combined_texts[key] = ""
-                    combined_texts[key] += content
+                    str_key: Tuple[int, Optional[int]] = (choice_idx, None)
+                    if str_key not in combined_texts:
+                        combined_texts[str_key] = ""
+                    combined_texts[str_key] += content
 
                 elif isinstance(content, list):
                     # List content - accumulate for each content item
                     for content_idx, content_item in enumerate(content):
                         text_str = content_item.get("text")
                         if text_str:
-                            key = (choice_idx, content_idx)
-                            if key not in combined_texts:
-                                combined_texts[key] = ""
-                            combined_texts[key] += text_str
+                            list_key: Tuple[int, Optional[int]] = (choice_idx, content_idx)
+                            if list_key not in combined_texts:
+                                combined_texts[list_key] = ""
+                            combined_texts[list_key] += text_str
 
         # Step 2: Create lists for guardrail processing
         texts_to_check: List[str] = []
@@ -397,9 +401,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         task_mappings: List[Tuple[int, Optional[int]]] = []
         # Track (choice_index, content_index) for each combined text
 
-        for (choice_idx, content_idx), combined_text in combined_texts.items():
+        for (map_choice_idx, map_content_idx), combined_text in combined_texts.items():
             texts_to_check.append(combined_text)
-            task_mappings.append((choice_idx, content_idx))
+            task_mappings.append((map_choice_idx, map_content_idx))
 
         # Step 3: Apply guardrail to all combined texts in batch
         if texts_to_check:
@@ -478,7 +482,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                             return True
         return False
 
-    def _extract_output_text_and_images(
+    def _extract_output_text_images_and_tool_calls(
         self,
         choice: Union[Choices, StreamingChoices],
         choice_idx: int,
@@ -499,7 +503,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         # Determine content source and tool calls based on choice type
         content = None
-        tool_calls = None
+        tool_calls: Optional[List[Any]] = None
         if isinstance(choice, litellm.Choices):
             content = choice.message.content
             tool_calls = choice.message.tool_calls
@@ -682,15 +686,15 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
                 if isinstance(content, str):
                     # String content
-                    key = (choice_idx_in_response, None)
-                    if key in guardrail_map:
-                        if key not in already_set:
+                    str_key: Tuple[int, Optional[int]] = (choice_idx_in_response, None)
+                    if str_key in guardrail_map:
+                        if str_key not in already_set:
                             # First chunk - set the complete guardrailed text
                             if isinstance(choice, litellm.StreamingChoices):
-                                choice.delta.content = guardrail_map[key]
+                                choice.delta.content = guardrail_map[str_key]
                             elif isinstance(choice, litellm.Choices):
-                                choice.message.content = guardrail_map[key]
-                            already_set[key] = True
+                                choice.message.content = guardrail_map[str_key]
+                            already_set[str_key] = True
                         else:
                             # Subsequent chunks - clear the content
                             if isinstance(choice, litellm.StreamingChoices):
@@ -702,12 +706,12 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     # List content - handle each content item
                     for content_idx, content_item in enumerate(content):
                         if "text" in content_item:
-                            key = (choice_idx_in_response, content_idx)
-                            if key in guardrail_map:
-                                if key not in already_set:
+                            list_key: Tuple[int, Optional[int]] = (choice_idx_in_response, content_idx)
+                            if list_key in guardrail_map:
+                                if list_key not in already_set:
                                     # First chunk - set the complete guardrailed text
-                                    content_item["text"] = guardrail_map[key]
-                                    already_set[key] = True
+                                    content_item["text"] = guardrail_map[list_key]
+                                    already_set[list_key] = True
                                 else:
                                     # Subsequent chunks - clear the text
                                     content_item["text"] = ""

@@ -220,7 +220,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         Returns:
             Tuple of (mapped_voice_str, mapped_params)
         """
-        mapped_params = {}
+        mapped_params: Dict[str, Any] = {}
 
         ##########################################################
         # Map voice using helper

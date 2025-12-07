@@ -2465,6 +2465,157 @@ def test_non_root_ui_path_logic(monkeypatch, tmp_path, ui_exists, ui_has_content
 
 
 @pytest.mark.asyncio
+async def test_get_config_callbacks_with_all_types(client_no_auth):
+    """
+    Test that /get/config/callbacks returns all three callback types:
+    - success_callback with type="success"
+    - failure_callback with type="failure"  
+    - callbacks (success_and_failure) with type="success_and_failure"
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+    
+    # Create a mock config with all three callback types
+    mock_config_data = {
+        "litellm_settings": {
+            "success_callback": ["langfuse", "braintrust"],
+            "failure_callback": ["sentry"],
+            "callbacks": ["otel", "langsmith"]
+        },
+        "environment_variables": {
+            "LANGFUSE_PUBLIC_KEY": "test-public-key",
+            "LANGFUSE_SECRET_KEY": "test-secret-key",
+            "LANGFUSE_HOST": "https://test.langfuse.com",
+            "BRAINTRUST_API_KEY": "test-braintrust-key",
+            "OTEL_EXPORTER": "otlp",
+            "OTEL_ENDPOINT": "http://localhost:4317",
+            "LANGSMITH_API_KEY": "test-langsmith-key",
+        },
+        "general_settings": {}
+    }
+    
+    proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
+    
+    with patch.object(
+        proxy_config, "get_config", new=AsyncMock(return_value=mock_config_data)
+    ):
+        response = client_no_auth.get("/get/config/callbacks")
+        
+        assert response.status_code == 200
+        result = response.json()
+        
+        # Verify response structure
+        assert "status" in result
+        assert result["status"] == "success"
+        assert "callbacks" in result
+        
+        callbacks = result["callbacks"]
+        
+        # Verify we have all 5 callbacks (2 success + 1 failure + 2 success_and_failure)
+        assert len(callbacks) == 5
+        
+        # Group callbacks by type
+        success_callbacks = [cb for cb in callbacks if cb.get("type") == "success"]
+        failure_callbacks = [cb for cb in callbacks if cb.get("type") == "failure"]
+        success_and_failure_callbacks = [cb for cb in callbacks if cb.get("type") == "success_and_failure"]
+        
+        # Verify all callbacks have required fields
+        for callback in callbacks:
+            assert "name" in callback
+            assert "variables" in callback
+            assert "type" in callback
+            assert callback["type"] in ["success", "failure", "success_and_failure"]
+        
+        # Verify success callbacks
+        assert len(success_callbacks) == 2
+        success_names = [cb["name"] for cb in success_callbacks]
+        assert "langfuse" in success_names
+        assert "braintrust" in success_names
+        
+        # Verify failure callbacks
+        assert len(failure_callbacks) == 1
+        assert failure_callbacks[0]["name"] == "sentry"
+        
+        # Verify success_and_failure callbacks
+        assert len(success_and_failure_callbacks) == 2
+        success_and_failure_names = [cb["name"] for cb in success_and_failure_callbacks]
+        assert "otel" in success_and_failure_names
+        assert "langsmith" in success_and_failure_names
+
+
+@pytest.mark.asyncio
+async def test_get_config_callbacks_environment_variables(client_no_auth):
+    """
+    Test that /get/config/callbacks correctly includes environment variables
+    for each callback type. Values are returned as-is from the config (no decryption).
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+    
+    # Create a mock config with callbacks and their env vars
+    mock_config_data = {
+        "litellm_settings": {
+            "success_callback": ["langfuse"],
+            "failure_callback": [],
+            "callbacks": ["otel"]
+        },
+        "environment_variables": {
+            "LANGFUSE_PUBLIC_KEY": "test-public-key",
+            "LANGFUSE_SECRET_KEY": "test-secret-key",
+            "LANGFUSE_HOST": "https://cloud.langfuse.com",
+            "OTEL_EXPORTER": "otlp",
+            "OTEL_ENDPOINT": "http://localhost:4317",
+            "OTEL_HEADERS": "key=value",
+        },
+        "general_settings": {}
+    }
+    
+    proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
+    
+    with patch.object(
+        proxy_config, "get_config", new=AsyncMock(return_value=mock_config_data)
+    ):
+        response = client_no_auth.get("/get/config/callbacks")
+        
+        assert response.status_code == 200
+        result = response.json()
+        
+        callbacks = result["callbacks"]
+        
+        # Find langfuse callback (success type)
+        langfuse_callback = next(
+            (cb for cb in callbacks if cb["name"] == "langfuse"), None
+        )
+        assert langfuse_callback is not None
+        assert langfuse_callback["type"] == "success"
+        assert "variables" in langfuse_callback
+        
+        # Verify langfuse env vars are present (values returned as-is, no decryption)
+        langfuse_vars = langfuse_callback["variables"]
+        assert "LANGFUSE_PUBLIC_KEY" in langfuse_vars
+        assert langfuse_vars["LANGFUSE_PUBLIC_KEY"] == "test-public-key"
+        assert "LANGFUSE_SECRET_KEY" in langfuse_vars
+        assert langfuse_vars["LANGFUSE_SECRET_KEY"] == "test-secret-key"
+        assert "LANGFUSE_HOST" in langfuse_vars
+        assert langfuse_vars["LANGFUSE_HOST"] == "https://cloud.langfuse.com"
+        
+        # Find otel callback (success_and_failure type)
+        otel_callback = next(
+            (cb for cb in callbacks if cb["name"] == "otel"), None
+        )
+        assert otel_callback is not None
+        assert otel_callback["type"] == "success_and_failure"
+        assert "variables" in otel_callback
+        
+        # Verify otel env vars are present
+        otel_vars = otel_callback["variables"]
+        assert "OTEL_EXPORTER" in otel_vars
+        assert otel_vars["OTEL_EXPORTER"] == "otlp"
+        assert "OTEL_ENDPOINT" in otel_vars
+        assert otel_vars["OTEL_ENDPOINT"] == "http://localhost:4317"
+        assert "OTEL_HEADERS" in otel_vars
+        assert otel_vars["OTEL_HEADERS"] == "key=value"
+
+
+@pytest.mark.asyncio
 async def test_update_config_success_callback_normalization():
     """
     Ensure success_callback values are normalized to lowercase when updating config.

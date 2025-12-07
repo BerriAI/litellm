@@ -483,7 +483,7 @@ async def get_spend_by_team_and_customer(
         ON 
             sl.team_id = tt.team_id
         WHERE
-            sl."startTime" BETWEEN $1::date AND $2::date
+            sl."startTime" >= $1::timestamptz AND sl."startTime" < ($2::timestamptz + INTERVAL '1 day')
             AND sl.team_id = $3
             AND sl.end_user = $4
         GROUP BY
