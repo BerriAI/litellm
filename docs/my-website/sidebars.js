@@ -53,6 +53,7 @@ const sidebars = {
         "proxy/guardrails/test_playground",
         ...[
           "proxy/guardrails/aim_security",
+          "proxy/guardrails/onyx_security",
           "proxy/guardrails/aporia_api",
           "proxy/guardrails/azure_content_guardrail",
           "proxy/guardrails/bedrock",

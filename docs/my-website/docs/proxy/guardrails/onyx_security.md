@@ -89,7 +89,7 @@ curl -i http://0.0.0.0:4000/v1/chat/completions \
   }'
 ```
 
-Expected response on failure
+Expected response
 
 ```json
 {
