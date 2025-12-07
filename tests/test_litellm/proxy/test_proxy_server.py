@@ -1391,30 +1391,16 @@ class TestPriceDataReloadAPI:
         assert "Access denied" in data["detail"]
         assert "Admin role required" in data["detail"]
 
-    def test_get_model_cost_map_admin_access(self, client_with_auth):
-        """Test that admin users can access the get model cost map endpoint"""
+    def test_get_model_cost_map_public_access(self, client_no_auth):
+        """Test that the model cost map endpoint is publicly accessible"""
         with patch(
             "litellm.model_cost", {"gpt-3.5-turbo": {"input_cost_per_token": 0.001}}
         ):
-            response = client_with_auth.get("/get/litellm_model_cost_map")
+            response = client_no_auth.get("/public/litellm_model_cost_map")
 
             assert response.status_code == 200
             data = response.json()
             assert "gpt-3.5-turbo" in data
-
-    def test_get_model_cost_map_non_admin_access(self, client_with_auth):
-        """Test that non-admin users cannot access the get model cost map endpoint"""
-        # Mock non-admin user
-        mock_auth = MagicMock()
-        mock_auth.user_role = "user"  # Non-admin role
-        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
-
-        response = client_with_auth.get("/get/litellm_model_cost_map")
-
-        assert response.status_code == 403
-        data = response.json()
-        assert "Access denied" in data["detail"]
-        assert "Admin role required" in data["detail"]
 
     def test_reload_model_cost_map_error_handling(self, client_with_auth):
         """Test error handling in the reload endpoint"""
@@ -1625,7 +1611,7 @@ class TestPriceDataReloadIntegration:
                 assert response.status_code == 200
 
                 # Test get endpoint
-                response = client_with_auth.get("/get/litellm_model_cost_map")
+                response = client_with_auth.get("/public/litellm_model_cost_map")
                 assert response.status_code == 200
 
     def test_distributed_reload_check_function(self):
