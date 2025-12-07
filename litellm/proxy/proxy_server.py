@@ -8609,7 +8609,19 @@ def get_image():
 
     # get current_dir
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    default_logo = os.path.join(current_dir, "logo.jpg")
+    default_site_logo = os.path.join(current_dir, "logo.jpg")
+
+    is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
+    assets_dir = "/tmp/litellm_assets" if is_non_root else current_dir
+
+    if is_non_root:
+        os.makedirs(assets_dir, exist_ok=True)
+
+    default_logo = (
+        os.path.join(assets_dir, "logo.jpg") if is_non_root else default_site_logo
+    )
+    if is_non_root and not os.path.exists(default_logo):
+        default_logo = default_site_logo
 
     logo_path = os.getenv("UI_LOGO_PATH", default_logo)
     verbose_proxy_logger.debug("Reading logo from path: %s", logo_path)
@@ -8621,7 +8633,8 @@ def get_image():
         response = client.get(logo_path)
         if response.status_code == 200:
             # Save the image to a local file
-            cache_path = os.path.join(current_dir, "cached_logo.jpg")
+            cache_dir = assets_dir if is_non_root else current_dir
+            cache_path = os.path.join(cache_dir, "cached_logo.jpg")
             with open(cache_path, "wb") as f:
                 f.write(response.content)
 
