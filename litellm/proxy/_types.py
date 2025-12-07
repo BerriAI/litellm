@@ -2614,6 +2614,14 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ui_callback_name="Lago Billing",
     )
 
+    traceloop: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="traceloop",
+        litellm_callback_params=[
+            "TRACELOOP_API_KEY",
+        ],
+        ui_callback_name="Traceloop",
+    )   
+
 
 class SpendLogsMetadata(TypedDict):
     """
@@ -3631,6 +3639,8 @@ class DailyOrganizationSpendTransaction(BaseDailySpendTransaction):
 class DailyUserSpendTransaction(BaseDailySpendTransaction):
     user_id: str
 
+class DailyEndUserSpendTransaction(BaseDailySpendTransaction):
+    end_user_id: str
 
 class DailyTagSpendTransaction(BaseDailySpendTransaction):
     request_id: Optional[str]

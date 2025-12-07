@@ -290,3 +290,103 @@ class TestAnthropicBetaHeaderSupport:
         else:
             # If no beta headers, that's also fine
             assert True
+
+    def test_converse_non_anthropic_model_no_anthropic_beta(self):
+        """Test that non-Anthropic models (e.g., Qwen) do NOT get anthropic_beta in additionalModelRequestFields.
+        
+        This is critical because non-Anthropic models on Bedrock will error with
+        "unknown variant anthropic_beta" if this field is included.
+        """
+        config = AmazonConverseConfig()
+        # Even if headers contain anthropic-beta, non-Anthropic models should NOT get it
+        headers = {"anthropic-beta": "context-1m-2025-08-07,interleaved-thinking-2025-05-14"}
+        
+        # Test with Qwen model (using ARN format like the user's config)
+        result = config._transform_request_helper(
+            model="qwen.qwen3-coder-480b-a35b-v1:0",
+            system_content_blocks=[],
+            optional_params={},
+            messages=[{"role": "user", "content": "Test"}],
+            headers=headers
+        )
+        
+        additional_fields = result.get("additionalModelRequestFields", {})
+        assert "anthropic_beta" not in additional_fields, (
+            "anthropic_beta should NOT be added for non-Anthropic models like Qwen. "
+            "This field is only supported by Anthropic/Claude models on Bedrock."
+        )
+
+    def test_converse_llama_model_no_anthropic_beta(self):
+        """Test that Llama models do NOT get anthropic_beta in additionalModelRequestFields."""
+        config = AmazonConverseConfig()
+        headers = {"anthropic-beta": "context-1m-2025-08-07"}
+        
+        result = config._transform_request_helper(
+            model="meta.llama3-2-11b-instruct-v1:0",
+            system_content_blocks=[],
+            optional_params={},
+            messages=[{"role": "user", "content": "Test"}],
+            headers=headers
+        )
+        
+        additional_fields = result.get("additionalModelRequestFields", {})
+        assert "anthropic_beta" not in additional_fields, (
+            "anthropic_beta should NOT be added for Llama models."
+        )
+
+    def test_converse_nova_model_no_anthropic_beta(self):
+        """Test that Amazon Nova models do NOT get anthropic_beta in additionalModelRequestFields."""
+        config = AmazonConverseConfig()
+        headers = {"anthropic-beta": "computer-use-2024-10-22"}
+        
+        result = config._transform_request_helper(
+            model="amazon.nova-pro-v1:0",
+            system_content_blocks=[],
+            optional_params={},
+            messages=[{"role": "user", "content": "Test"}],
+            headers=headers
+        )
+        
+        additional_fields = result.get("additionalModelRequestFields", {})
+        assert "anthropic_beta" not in additional_fields, (
+            "anthropic_beta should NOT be added for Amazon Nova models."
+        )
+
+    def test_converse_anthropic_model_gets_anthropic_beta(self):
+        """Test that Anthropic models DO get anthropic_beta in additionalModelRequestFields."""
+        config = AmazonConverseConfig()
+        headers = {"anthropic-beta": "context-1m-2025-08-07"}
+        
+        result = config._transform_request_helper(
+            model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+            system_content_blocks=[],
+            optional_params={},
+            messages=[{"role": "user", "content": "Test"}],
+            headers=headers
+        )
+        
+        additional_fields = result.get("additionalModelRequestFields", {})
+        assert "anthropic_beta" in additional_fields, (
+            "anthropic_beta SHOULD be added for Anthropic models."
+        )
+        assert "context-1m-2025-08-07" in additional_fields["anthropic_beta"]
+
+    def test_converse_anthropic_model_with_cross_region_prefix(self):
+        """Test that Anthropic models with cross-region prefix still get anthropic_beta."""
+        config = AmazonConverseConfig()
+        headers = {"anthropic-beta": "context-1m-2025-08-07"}
+        
+        # Model with 'us.' cross-region prefix
+        result = config._transform_request_helper(
+            model="us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+            system_content_blocks=[],
+            optional_params={},
+            messages=[{"role": "user", "content": "Test"}],
+            headers=headers
+        )
+        
+        additional_fields = result.get("additionalModelRequestFields", {})
+        assert "anthropic_beta" in additional_fields, (
+            "anthropic_beta SHOULD be added for Anthropic models with cross-region prefix."
+        )
+        assert "context-1m-2025-08-07" in additional_fields["anthropic_beta"]

@@ -182,7 +182,7 @@ export interface ProviderCredentialFieldMetadata {
   placeholder?: string | null;
   tooltip?: string | null;
   required?: boolean;
-  field_type?: "text" | "password" | "select" | "upload";
+  field_type?: "text" | "password" | "select" | "upload" | "textarea";
   options?: string[] | null;
   default_value?: string | null;
 }
@@ -1736,6 +1736,25 @@ export const organizationDailyActivityCall = async (
   });
 };
 
+export const customerDailyActivityCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  page: number = 1,
+  customerIds: string[] | null = null,
+) => {
+  return fetchDailyActivity({
+    accessToken,
+    endpoint: "/customer/daily/activity",
+    startTime,
+    endTime,
+    page,
+    extraQueryParams: {
+      end_user_ids: customerIds,
+    },
+  });
+};
+
 export const getTotalSpendCall = async (accessToken: string) => {
   /**
    * Get all models on proxy
@@ -2511,7 +2530,7 @@ export const allEndUsersCall = async (accessToken: string) => {
     console.log(data);
     return data;
   } catch (error) {
-    console.error("Failed to create key:", error);
+    console.error("Failed to fetch end users:", error);
     throw error;
   }
 };
@@ -5964,7 +5983,7 @@ export const listMCPTools = async (accessToken: string, serverId: string) => {
       throw new Error("Failed to fetch MCP tools");
     }
 
-    // Return the full response object which includes tools, error, and message
+    // Return the full response object which includes tools, error, message, and stack_trace
     return data;
   } catch (error) {
     console.error("Failed to fetch MCP tools:", error);
@@ -5973,6 +5992,7 @@ export const listMCPTools = async (accessToken: string, serverId: string) => {
       tools: [],
       error: "network_error",
       message: error instanceof Error ? error.message : "Failed to fetch MCP tools",
+      stack_trace: null,
     };
   }
 };

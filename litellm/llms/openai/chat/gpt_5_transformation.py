@@ -25,6 +25,12 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
     def is_model_gpt_5_codex_model(cls, model: str) -> bool:
         """Check if the model is specifically a GPT-5 Codex variant."""
         return "gpt-5-codex" in model
+
+    @classmethod
+    def is_model_gpt_5_1_codex_max_model(cls, model: str) -> bool:
+        """Check if the model is the gpt-5.1-codex-max variant."""
+        model_name = model.split("/")[-1]  # handle provider prefixes
+        return model_name == "gpt-5.1-codex-max"
     
     @classmethod
     def is_model_gpt_5_1_model(cls, model: str) -> bool:
@@ -66,6 +72,22 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
+        reasoning_effort = (
+            non_default_params.get("reasoning_effort")
+            or optional_params.get("reasoning_effort")
+        )
+        if reasoning_effort is not None and reasoning_effort == "xhigh":
+            if not self.is_model_gpt_5_1_codex_max_model(model):
+                if litellm.drop_params or drop_params:
+                    non_default_params.pop("reasoning_effort", None)
+                else:
+                    raise litellm.utils.UnsupportedParamsError(
+                        message=(
+                            "reasoning_effort='xhigh' is only supported for gpt-5.1-codex-max."
+                        ),
+                        status_code=400,
+                    )
+
         ################################################################
         # max_tokens is not supported for gpt-5 models on OpenAI API
         # Relevant issue: https://github.com/BerriAI/litellm/issues/13381
@@ -79,10 +101,6 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             temperature_value: Optional[float] = non_default_params.pop("temperature")
             if temperature_value is not None:
                 is_gpt_5_1 = self.is_model_gpt_5_1_model(model)
-                reasoning_effort = (
-                    non_default_params.get("reasoning_effort") 
-                    or optional_params.get("reasoning_effort")
-                )
                 
                 # gpt-5.1 supports any temperature when reasoning_effort="none" (or not specified, as it defaults to "none")
                 if is_gpt_5_1 and (reasoning_effort == "none" or reasoning_effort is None):

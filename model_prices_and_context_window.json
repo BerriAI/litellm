@@ -3316,6 +3316,36 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "azure/gpt-5.1-codex-max": {
+        "cache_read_input_token_cost": 1.25e-07,
+        "input_cost_per_token": 1.25e-06,
+        "litellm_provider": "azure",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "output_cost_per_token": 1e-05,
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": false,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "azure/gpt-5.1-codex-mini": {
         "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_token": 2.5e-07,
@@ -5133,6 +5163,19 @@
         "source": "https://azuremarketplace.microsoft.com/en/marketplace/apps/000-000.mistral-ai-large-2407-offer?tab=Overview",
         "supports_function_calling": true,
         "supports_tool_choice": true
+    },
+    "azure_ai/mistral-large-3": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 8191,
+        "max_tokens": 8191,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-06,
+        "source": "https://azure.microsoft.com/en-us/blog/introducing-mistral-large-3-in-microsoft-foundry-open-capable-and-ready-for-production-workloads/",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "azure_ai/mistral-medium-2505": {
         "input_cost_per_token": 4e-07,
@@ -12104,6 +12147,7 @@
         "max_tokens": 65536,
         "mode": "image_generation",
         "output_cost_per_image": 0.134,
+        "output_cost_per_image_token": 1.2e-04,
         "output_cost_per_token": 1.2e-05,
         "output_cost_per_token_batches": 6e-06,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
@@ -13841,6 +13885,7 @@
         "max_tokens": 65536,
         "mode": "image_generation",
         "output_cost_per_image": 0.134,
+        "output_cost_per_image_token": 1.2e-04,
         "output_cost_per_token": 1.2e-05,
         "rpm": 1000,
         "tpm": 4000000,
@@ -16345,6 +16390,36 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "gpt-5.1-codex-max": {
+        "cache_read_input_token_cost": 1.25e-07,
+        "input_cost_per_token": 1.25e-06,
+        "litellm_provider": "openai",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "output_cost_per_token": 1e-05,
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": false,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "gpt-5.1-codex-mini": {
         "cache_read_input_token_cost": 2.5e-08,
         "cache_read_input_token_cost_priority": 4.5e-08,
@@ -16879,6 +16954,60 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
+    },
+    "amazon-nova/nova-micro-v1": {
+        "input_cost_per_token": 3.5e-08,
+        "litellm_provider": "amazon_nova",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 10000,
+        "max_tokens": 10000,
+        "mode": "chat",
+        "output_cost_per_token": 1.4e-07,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
+    },
+    "amazon-nova/nova-lite-v1": {
+        "input_cost_per_token": 6e-08,
+        "litellm_provider": "amazon_nova",
+        "max_input_tokens": 300000,
+        "max_output_tokens": 10000,
+        "max_tokens": 10000,
+        "mode": "chat",
+        "output_cost_per_token": 2.4e-07,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "amazon-nova/nova-premier-v1": {
+        "input_cost_per_token": 2.5e-06,
+        "litellm_provider": "amazon_nova",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 10000,
+        "max_tokens": 10000,
+        "mode": "chat",
+        "output_cost_per_token": 1.25e-05,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": false,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "amazon-nova/nova-pro-v1": {
+        "input_cost_per_token": 8e-07,
+        "litellm_provider": "amazon_nova",
+        "max_input_tokens": 300000,
+        "max_output_tokens": 10000,
+        "max_tokens": 10000,
+        "mode": "chat",
+        "output_cost_per_token": 3.2e-06,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_vision": true
     },
     "groq/deepseek-r1-distill-llama-70b": {
         "input_cost_per_token": 7.5e-07,
@@ -18684,6 +18813,21 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
+    },
+    "mistral/mistral-large-3": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 8191,
+        "max_tokens": 8191,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-06,
+        "source": "https://docs.mistral.ai/models/mistral-large-3-25-12",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "mistral/mistral-medium": {
         "input_cost_per_token": 2.7e-06,
@@ -25714,6 +25858,7 @@
         "max_tokens": 65536,
         "mode": "image_generation",
         "output_cost_per_image": 0.134,
+        "output_cost_per_image_token": 1.2e-04,
         "output_cost_per_token": 1.2e-05,
         "output_cost_per_token_batches": 6e-06,
         "source": "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-pro-image"

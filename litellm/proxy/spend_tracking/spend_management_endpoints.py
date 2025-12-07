@@ -213,7 +213,7 @@ async def get_global_activity_internal_user(
         COUNT(*) AS api_requests,
         SUM(total_tokens) AS total_tokens
     FROM "LiteLLM_SpendLogs"
-    WHERE "startTime" BETWEEN $1::date AND $2::date + interval '1 day'
+    WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
     AND "user" = $3
     GROUP BY date_trunc('day', "startTime")
     """
@@ -297,7 +297,7 @@ async def get_global_activity(
                 COUNT(*) AS api_requests,
                 SUM(total_tokens) AS total_tokens
             FROM "LiteLLM_SpendLogs"
-            WHERE "startTime" BETWEEN $1::date AND $2::date + interval '1 day'
+            WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
             GROUP BY date_trunc('day', "startTime")
             """
             db_response = await prisma_client.db.query_raw(
@@ -356,7 +356,7 @@ async def get_global_activity_model_internal_user(
         COUNT(*) AS api_requests,
         SUM(total_tokens) AS total_tokens
     FROM "LiteLLM_SpendLogs"
-    WHERE "startTime" BETWEEN $1::date AND $2::date + interval '1 day'
+    WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
     AND "user" = $3
     GROUP BY model_group, date_trunc('day', "startTime")
     """
@@ -464,7 +464,7 @@ async def get_global_activity_model(
                 COUNT(*) AS api_requests,
                 SUM(total_tokens) AS total_tokens
             FROM "LiteLLM_SpendLogs"
-            WHERE "startTime" BETWEEN $1::date AND $2::date + interval '1 day'
+            WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
             GROUP BY model_group, date_trunc('day', "startTime")
             """
             db_response = await prisma_client.db.query_raw(
@@ -609,8 +609,7 @@ async def get_global_activity_exceptions_per_deployment(
         FROM
             "LiteLLM_ErrorLogs"
         WHERE
-            "startTime" >= $1::date
-            AND "startTime" < ($2::date + INTERVAL '1 day')
+            "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
             AND model_group = $3
             AND status_code = '429'
         GROUP BY
@@ -741,8 +740,7 @@ async def get_global_activity_exceptions(
         FROM
             "LiteLLM_ErrorLogs"
         WHERE
-            "startTime" >= $1::date
-            AND "startTime" < ($2::date + INTERVAL '1 day')
+            "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
             AND model_group = $3
             AND status_code = '429'
         GROUP BY
@@ -855,7 +853,7 @@ async def get_global_spend_provider(
             model_id,
             SUM(spend) AS spend
             FROM "LiteLLM_SpendLogs"
-            WHERE "startTime" BETWEEN $1::date AND $2::date 
+            WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\') 
             AND length(model_id) > 0
             AND "user" = $3
             GROUP BY model_id
@@ -869,7 +867,7 @@ async def get_global_spend_provider(
             model_id,
             SUM(spend) AS spend
             FROM "LiteLLM_SpendLogs"
-            WHERE "startTime" BETWEEN $1::date AND $2::date AND length(model_id) > 0
+            WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\') AND length(model_id) > 0
             GROUP BY model_id
             """
             db_response = await prisma_client.db.query_raw(
@@ -1019,7 +1017,7 @@ async def get_global_spend_report(
                     FROM
                         "LiteLLM_SpendLogs" sl
                     WHERE
-                        sl."startTime" BETWEEN $1::date AND $2::date AND sl.api_key = $3
+                        sl."startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\') AND sl.api_key = $3
                     GROUP BY
                         sl.api_key,
                         sl.model
@@ -1064,7 +1062,7 @@ async def get_global_spend_report(
                     FROM
                         "LiteLLM_SpendLogs" sl
                     WHERE
-                        sl."startTime" BETWEEN $1::date AND $2::date AND sl.user = $3
+                        sl."startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\') AND sl.user = $3
                     GROUP BY
                         sl.api_key,
                         sl.model
@@ -1118,7 +1116,7 @@ async def get_global_spend_report(
                 ON 
                     sl.team_id = tt.team_id
                 WHERE
-                    sl."startTime" BETWEEN $1::date AND $2::date
+                    sl."startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
                 GROUP BY
                     date_trunc('day', sl."startTime"),
                     tt.team_alias,
@@ -1177,7 +1175,7 @@ async def get_global_spend_report(
                 FROM
                     "LiteLLM_SpendLogs" sl
                 WHERE
-                    sl."startTime" BETWEEN $1::date AND $2::date
+                    sl."startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
                 GROUP BY
                     date_trunc('day', sl."startTime"),
                     customer,
@@ -1234,7 +1232,7 @@ async def get_global_spend_report(
                     FROM
                         "LiteLLM_SpendLogs" sl
                     WHERE
-                        sl."startTime" BETWEEN $1::date AND $2::date
+                        sl."startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
                     GROUP BY
                         sl.api_key,
                         sl.model
@@ -1442,7 +1440,7 @@ async def _get_spend_report_for_time_range(
         jsonb_array_elements_text(request_tags) AS individual_request_tag,
         SUM(spend) AS total_spend
         FROM "LiteLLM_SpendLogs"
-        WHERE "startTime" >= $1::date AND "startTime" < ($2::date + INTERVAL '1 day')
+        WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
         GROUP BY individual_request_tag
         ORDER BY total_spend DESC;
         """
@@ -2683,8 +2681,8 @@ async def global_spend_end_users(data: Optional[GlobalEndUsersSpend] = None):
     sql_query = """
 SELECT end_user, COUNT(*) AS total_count, SUM(spend) AS total_spend
 FROM "LiteLLM_SpendLogs"
-WHERE "startTime" >= $1::timestamp
-  AND "startTime" < $2::timestamp
+WHERE "startTime" >= $1::timestamptz
+  AND "startTime" < $2::timestamptz
   AND (
     CASE
       WHEN $3::TEXT IS NULL THEN TRUE
