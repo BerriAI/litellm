@@ -2577,7 +2577,13 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
 
     custom_callback_api: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="custom_callback_api",
-        litellm_callback_params=["GENERIC_LOGGER_ENDPOINT"],
+        litellm_callback_params=["GENERIC_LOGGER_ENDPOINT", "GENERIC_LOGGER_HEADERS"],
+        ui_callback_name="Custom Callback API",
+    )
+
+    generic_api: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="generic_api",
+        litellm_callback_params=["GENERIC_LOGGER_ENDPOINT", "GENERIC_LOGGER_HEADERS"],
         ui_callback_name="Custom Callback API",
     )
 
