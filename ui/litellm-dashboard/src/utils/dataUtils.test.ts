@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import { copyToClipboard, formatNumberWithCommas, updateExistingKeys } from "../../src/utils/dataUtils";
+import { copyToClipboard, formatNumberWithCommas, getSpendString, updateExistingKeys } from "./dataUtils";
 
 // Mock NotificationsManager
 vi.mock("../../src/components/molecules/notifications_manager", () => ({
@@ -10,7 +10,7 @@ vi.mock("../../src/components/molecules/notifications_manager", () => ({
 }));
 
 // Import the mocked module
-import NotificationsManager from "../../src/components/molecules/notifications_manager";
+import NotificationsManager from "../components/molecules/notifications_manager";
 const mockNotificationsManager = vi.mocked(NotificationsManager);
 
 describe("dataUtils", () => {
@@ -71,9 +71,41 @@ describe("dataUtils", () => {
       expect(formatNumberWithCommas(undefined)).toBe("-");
     });
 
-    it("should handle zero", () => {
-      expect(formatNumberWithCommas(0)).toBe("0");
-      expect(formatNumberWithCommas(0, 2)).toBe("0.00");
+    it("should handle zero and non-finite values", () => {
+      expect(formatNumberWithCommas(0)).toBe("-");
+      expect(formatNumberWithCommas(0, 2)).toBe("-");
+      expect(formatNumberWithCommas(Infinity)).toBe("-");
+      expect(formatNumberWithCommas(Number.NaN)).toBe("-");
+    });
+
+    it("should abbreviate large numbers", () => {
+      expect(formatNumberWithCommas(1_234_567, 1, true)).toBe("1.2M");
+      expect(formatNumberWithCommas(12_345, 2, true)).toBe("12.35K");
+      expect(formatNumberWithCommas(-1_200, 2, true)).toBe("-1.20K");
+    });
+  });
+
+  describe("getSpendString", () => {
+    it("should return '-' for null, undefined, zero, or non-finite", () => {
+      expect(getSpendString(null)).toBe("-");
+      expect(getSpendString(undefined)).toBe("-");
+      expect(getSpendString(0)).toBe("-");
+      expect(getSpendString(Number.NaN)).toBe("-");
+    });
+
+    it("should format spend with dollar sign", () => {
+      expect(getSpendString(1234.5, 2)).toBe("$1,234.50");
+      expect(getSpendString(-2500, 0)).toBe("$-2,500");
+    });
+
+    it("should return threshold string for very small values", () => {
+      expect(getSpendString(0.0000004, 6)).toBe("< $0.000001");
+      expect(getSpendString(-0.0000004, 6)).toBe("< $0.000001");
+    });
+
+    it("should respect custom decimals", () => {
+      expect(getSpendString(0.01234, 3)).toBe("$0.012");
+      expect(getSpendString(999.9999, 1)).toBe("$1,000.0");
     });
   });
 
@@ -118,7 +150,7 @@ describe("dataUtils", () => {
         // Mock DOM methods
         const mockTextArea = {
           value: "",
-          style: {},
+          style: {} as Record<string, string>,
           setAttribute: vi.fn(),
           focus: vi.fn(),
           select: vi.fn(),
@@ -149,7 +181,7 @@ describe("dataUtils", () => {
         // Mock DOM methods
         const mockTextArea = {
           value: "",
-          style: {},
+          style: {} as Record<string, string>,
           setAttribute: vi.fn(),
           focus: vi.fn(),
           select: vi.fn(),
@@ -171,7 +203,7 @@ describe("dataUtils", () => {
       it("should set textarea properties correctly", async () => {
         const mockTextArea = {
           value: "",
-          style: {},
+          style: {} as Record<string, string>,
           setAttribute: vi.fn(),
           focus: vi.fn(),
           select: vi.fn(),
@@ -213,7 +245,7 @@ describe("dataUtils", () => {
       it("should clean up textarea element after successful copy", async () => {
         const mockTextArea = {
           value: "",
-          style: {},
+          style: {} as Record<string, string>,
           setAttribute: vi.fn(),
           focus: vi.fn(),
           select: vi.fn(),
@@ -237,7 +269,7 @@ describe("dataUtils", () => {
         document.execCommand = vi.fn().mockReturnValue(true);
         const mockTextArea = {
           value: "",
-          style: {},
+          style: {} as Record<string, string>,
           setAttribute: vi.fn(),
           focus: vi.fn(),
           select: vi.fn(),
