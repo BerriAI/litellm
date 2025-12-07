@@ -645,7 +645,7 @@ class LiteLLMAnthropicMessagesAdapter:
                     type="tool_use",
                     id=choice.delta.tool_calls[0].id or str(uuid.uuid4()),
                     name=choice.delta.tool_calls[0].function.name or "",
-                    input={},
+                    input={},  # type: ignore[typeddict-item]
                 )
             elif isinstance(choice, StreamingChoices) and hasattr(
                 choice.delta, "thinking_blocks"

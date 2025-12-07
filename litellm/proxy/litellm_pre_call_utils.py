@@ -585,7 +585,6 @@ class LiteLLMProxyRequestSetup:
                 if user_api_key_dict.budget_reset_at
                 else None
             ),
-            
             user_api_key_auth_metadata=user_api_key_dict.metadata,
         )
         return user_api_key_logged_metadata
@@ -612,6 +611,8 @@ class LiteLLMProxyRequestSetup:
         data[_metadata_variable_name]["user_api_end_user_max_budget"] = getattr(
             user_api_key_dict, "end_user_max_budget", None
         )
+        # Add the full UserAPIKeyAuth object for MCP server access control
+        data[_metadata_variable_name]["user_api_key_auth"] = user_api_key_dict
         return data
 
     @staticmethod
@@ -668,6 +669,12 @@ class LiteLLMProxyRequestSetup:
                     tags_to_add=key_metadata["tags"],
                 )
             )
+        if "disable_global_guardrails" in key_metadata and isinstance(
+            key_metadata["disable_global_guardrails"], bool
+        ):
+            data[_metadata_variable_name]["disable_global_guardrails"] = key_metadata[
+                "disable_global_guardrails"
+            ]
         if "spend_logs_metadata" in key_metadata and isinstance(
             key_metadata["spend_logs_metadata"], dict
         ):
@@ -894,6 +901,22 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             data["metadata"]
         )
 
+    # Parse litellm_metadata if it's a string (e.g., from multipart/form-data or extra_body)
+    if "litellm_metadata" in data and data["litellm_metadata"] is not None:
+        if isinstance(data["litellm_metadata"], str):
+            parsed_litellm_metadata = safe_json_loads(data["litellm_metadata"])
+            if not isinstance(parsed_litellm_metadata, dict):
+                verbose_proxy_logger.warning(
+                    f"Failed to parse 'litellm_metadata' as JSON dict. Received value: {data['litellm_metadata']}"
+                )
+            else:
+                data["litellm_metadata"] = parsed_litellm_metadata
+        # Merge litellm_metadata into the metadata variable (preserving existing values)
+        if isinstance(data["litellm_metadata"], dict):
+            for key, value in data["litellm_metadata"].items():
+                if key not in data[_metadata_variable_name]:
+                    data[_metadata_variable_name][key] = value
+
     data = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
         data=data,
         user_api_key_dict=user_api_key_dict,
@@ -920,6 +943,12 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             request_tags=data[_metadata_variable_name].get("tags"),
             tags_to_add=team_metadata["tags"],
         )
+    if "disable_global_guardrails" in team_metadata and isinstance(
+        team_metadata["disable_global_guardrails"], bool
+    ):
+        data[_metadata_variable_name]["disable_global_guardrails"] = team_metadata[
+            "disable_global_guardrails"
+        ]
     if "spend_logs_metadata" in team_metadata and isinstance(
         team_metadata["spend_logs_metadata"], dict
     ):
@@ -1224,7 +1253,7 @@ def _add_guardrails_from_key_or_team_metadata(
 ) -> None:
     """
     Helper add guardrails from key or team metadata to request data
-    
+
     Key guardrails are set first, then team guardrails are appended (without duplicates).
 
     Args:
@@ -1238,19 +1267,25 @@ def _add_guardrails_from_key_or_team_metadata(
 
     # Initialize guardrails set (avoiding duplicates)
     combined_guardrails = set()
-    
+
     # Add key-level guardrails first
     if key_metadata and "guardrails" in key_metadata:
-        if isinstance(key_metadata["guardrails"], list) and len(key_metadata["guardrails"]) > 0:
+        if (
+            isinstance(key_metadata["guardrails"], list)
+            and len(key_metadata["guardrails"]) > 0
+        ):
             _premium_user_check()
             combined_guardrails.update(key_metadata["guardrails"])
-    
+
     # Add team-level guardrails (set automatically handles duplicates)
     if team_metadata and "guardrails" in team_metadata:
-        if isinstance(team_metadata["guardrails"], list) and len(team_metadata["guardrails"]) > 0:
+        if (
+            isinstance(team_metadata["guardrails"], list)
+            and len(team_metadata["guardrails"]) > 0
+        ):
             _premium_user_check()
             combined_guardrails.update(team_metadata["guardrails"])
-    
+
     # Set combined guardrails in metadata as list
     if combined_guardrails:
         data[metadata_variable_name]["guardrails"] = list(combined_guardrails)
@@ -1276,23 +1311,32 @@ def move_guardrails_to_metadata(
     )
 
     #########################################################################################
-    # User's might send "guardrails" in the request body, we need to add them to the request metadata. 
+    # User's might send "guardrails" in the request body, we need to add them to the request metadata.
     # Since downstream logic requires "guardrails" to be in the request metadata
     #########################################################################################
     if "guardrails" in data:
         request_body_guardrails = data.pop("guardrails")
-        if "guardrails" in data[_metadata_variable_name] and isinstance(data[_metadata_variable_name]["guardrails"], list):
+        if "guardrails" in data[_metadata_variable_name] and isinstance(
+            data[_metadata_variable_name]["guardrails"], list
+        ):
             data[_metadata_variable_name]["guardrails"].extend(request_body_guardrails)
         else:
             data[_metadata_variable_name]["guardrails"] = request_body_guardrails
-    
+
     #########################################################################################
     if "guardrail_config" in data:
         request_body_guardrail_config = data.pop("guardrail_config")
-        if "guardrail_config" in data[_metadata_variable_name] and isinstance(data[_metadata_variable_name]["guardrail_config"], dict):
-            data[_metadata_variable_name]["guardrail_config"].update(request_body_guardrail_config)
+        if "guardrail_config" in data[_metadata_variable_name] and isinstance(
+            data[_metadata_variable_name]["guardrail_config"], dict
+        ):
+            data[_metadata_variable_name]["guardrail_config"].update(
+                request_body_guardrail_config
+            )
         else:
-            data[_metadata_variable_name]["guardrail_config"] = request_body_guardrail_config
+            data[_metadata_variable_name][
+                "guardrail_config"
+            ] = request_body_guardrail_config
+
 
 def add_provider_specific_headers_to_request(
     data: dict,

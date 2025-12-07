@@ -1,21 +1,14 @@
 """
 LiteLLM MCP Server Routes
 """
+# pyright: reportInvalidTypeForm=false, reportArgumentType=false, reportOptionalCall=false
 
 import asyncio
 import contextlib
 from datetime import datetime
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union, cast
 
 from fastapi import FastAPI, HTTPException
-from mcp import ReadResourceResult, Resource
-from mcp.server.lowlevel.helper_types import ReadResourceContents
-from mcp.types import (
-    BlobResourceContents,
-    GetPromptResult,
-    ResourceTemplate,
-    TextResourceContents,
-)
 from pydantic import AnyUrl, ConfigDict
 from starlette.types import Receive, Scope, Send
 
@@ -41,10 +34,29 @@ from litellm.utils import client
 # TODO: Make this a util function for litellm client usage
 MCP_AVAILABLE: bool = True
 try:
+    from mcp import ReadResourceResult, Resource
     from mcp.server import Server
+    from mcp.server.lowlevel.helper_types import ReadResourceContents
+    from mcp.types import (
+        BlobResourceContents,
+        GetPromptResult,
+        ResourceTemplate,
+        TextResourceContents,
+    )
 except ImportError as e:
     verbose_logger.debug(f"MCP module not found: {e}")
     MCP_AVAILABLE = False
+    # When MCP is not available, we set these to None at module level
+    # All code using these types is inside `if MCP_AVAILABLE:` blocks
+    # so they will never be accessed at runtime
+    BlobResourceContents = None  # type: ignore
+    GetPromptResult = None  # type: ignore
+    ReadResourceContents = None  # type: ignore
+    ReadResourceResult = None  # type: ignore
+    Resource = None  # type: ignore
+    ResourceTemplate = None  # type: ignore
+    Server = None  # type: ignore
+    TextResourceContents = None  # type: ignore
 
 
 # Global variables to track initialization
@@ -60,9 +72,14 @@ if MCP_AVAILABLE:
         auth_context_var,
     )
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-    from mcp.types import EmbeddedResource, ImageContent, TextContent
+    from mcp.types import (
+        CallToolResult,
+        EmbeddedResource,
+        ImageContent,
+        Prompt,
+        TextContent,
+    )
     from mcp.types import Tool as MCPTool
-    from mcp.types import Prompt
 
     from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
         MCPAuthenticatedUser,
@@ -223,7 +240,7 @@ if MCP_AVAILABLE:
     @server.call_tool()
     async def mcp_server_tool_call(
         name: str, arguments: Dict[str, Any] | None
-    ) -> List[Union[TextContent, ImageContent, EmbeddedResource]]:
+    ) -> CallToolResult:
         """
         Call a specific tool with the provided arguments
 
@@ -289,26 +306,37 @@ if MCP_AVAILABLE:
             )
         except BlockedPiiEntityError as e:
             verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {str(e)}")
-            # Return error as text content for MCP protocol
-            return [
-                TextContent(
-                    text=f"Error: Blocked PII entity detected - {str(e)}", type="text"
-                )
-            ]
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        text=f"Error: Blocked PII entity detected - {str(e)}",
+                        type="text",
+                    )
+                ],
+                isError=True,
+            )
         except GuardrailRaisedException as e:
             verbose_logger.error(f"GuardrailRaisedException in MCP tool call: {str(e)}")
-            # Return error as text content for MCP protocol
-            return [
-                TextContent(text=f"Error: Guardrail violation - {str(e)}", type="text")
-            ]
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        text=f"Error: Guardrail violation - {str(e)}", type="text"
+                    )
+                ],
+                isError=True,
+            )
         except HTTPException as e:
             verbose_logger.error(f"HTTPException in MCP tool call: {str(e)}")
-            # Return error as text content for MCP protocol
-            return [TextContent(text=f"Error: {str(e.detail)}", type="text")]
+            return CallToolResult(
+                content=[TextContent(text=f"Error: {str(e.detail)}", type="text")],
+                isError=True,
+            )
         except Exception as e:
             verbose_logger.exception(f"MCP mcp_server_tool_call - error: {e}")
-            # Return error as text content for MCP protocol
-            return [TextContent(text=f"Error: {str(e)}", type="text")]
+            return CallToolResult(
+                content=[TextContent(text=f"Error: {str(e)}", type="text")],
+                isError=True,
+            )
 
         return response
 
@@ -498,16 +526,18 @@ if MCP_AVAILABLE:
         normalized_contents: List[ReadResourceContents] = []
         for content in read_resource_result.contents:
             if isinstance(content, TextResourceContents):
+                text_content: TextResourceContents = content
                 normalized_contents.append(
                     ReadResourceContents(
-                        content=content.text,
-                        mime_type=content.mimeType,
+                        content=text_content.text,
+                        mime_type=text_content.mimeType,
                     )
                 )
             elif isinstance(content, BlobResourceContents):
+                blob_content: BlobResourceContents = content
                 normalized_contents.append(
                     ReadResourceContents(
-                        content=content.blob,
+                        content=blob_content.blob,
                         mime_type=None,
                     )
                 )
@@ -647,9 +677,13 @@ if MCP_AVAILABLE:
         allowed_mcp_server_ids = (
             await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
         )
-        allowed_mcp_servers = global_mcp_server_manager.get_mcp_servers_from_ids(  # type: ignore[attr-defined]
-            allowed_mcp_server_ids
-        )
+        allowed_mcp_servers: List[MCPServer] = []
+        for allowed_mcp_server_id in allowed_mcp_server_ids:
+            mcp_server = global_mcp_server_manager.get_mcp_server_by_id(
+                allowed_mcp_server_id
+            )
+            if mcp_server is not None:
+                allowed_mcp_servers.append(mcp_server)
 
         if mcp_servers is not None:
             allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(
@@ -1156,7 +1190,7 @@ if MCP_AVAILABLE:
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
         **kwargs: Any,
-    ) -> List[Union[TextContent, ImageContent, EmbeddedResource]]:
+    ) -> CallToolResult:
         """
         Call a specific tool with the provided arguments (handles prefixed tool names)
         """
@@ -1173,9 +1207,13 @@ if MCP_AVAILABLE:
             )
         )
 
-        allowed_mcp_servers = global_mcp_server_manager.get_mcp_servers_from_ids(  # type: ignore[attr-defined]
-            allowed_mcp_server_ids
-        )
+        allowed_mcp_servers: List[MCPServer] = []
+        for allowed_mcp_server_id in allowed_mcp_server_ids:
+            allowed_server = global_mcp_server_manager.get_mcp_server_by_id(
+                allowed_mcp_server_id
+            )
+            if allowed_server is not None:
+                allowed_mcp_servers.append(allowed_server)
 
         allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(
             mcp_servers=mcp_servers,
@@ -1226,7 +1264,8 @@ if MCP_AVAILABLE:
         local_tool = global_mcp_tool_registry.get_tool(name)
         if local_tool:
             verbose_logger.debug(f"Executing local registry tool: {name}")
-            response = await _handle_local_mcp_tool(name, arguments)
+            local_content = await _handle_local_mcp_tool(name, arguments)
+            response = CallToolResult(content=cast(Any, local_content), isError=False)
 
         # Try managed MCP server tool (pass the full prefixed name)
         # Primary and recommended way to use external MCP servers
@@ -1258,13 +1297,19 @@ if MCP_AVAILABLE:
             # Deprecated: Local MCP Server Tool
             #########################################################
             else:
-                response = await _handle_local_mcp_tool(original_tool_name, arguments)
+                local_content = await _handle_local_mcp_tool(
+                    original_tool_name, arguments
+                )
+                response = CallToolResult(
+                    content=cast(Any, local_content), isError=False
+                )
 
         #########################################################
         # Post MCP Tool Call Hook
         # Allow modifying the MCP tool call response before it is returned to the user
         #########################################################
         if litellm_logging_obj:
+            litellm_logging_obj.post_call(original_response=response)
             end_time = datetime.now()
             await litellm_logging_obj.async_post_mcp_tool_call_hook(
                 kwargs=litellm_logging_obj.model_call_details,
@@ -1410,7 +1455,7 @@ if MCP_AVAILABLE:
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
         litellm_logging_obj: Optional[Any] = None,
-    ) -> List[Union[TextContent, ImageContent, EmbeddedResource]]:
+    ) -> CallToolResult:
         """Handle tool execution for managed server tools"""
         # Import here to avoid circular import
         from litellm.proxy.proxy_server import proxy_logging_obj
@@ -1427,7 +1472,7 @@ if MCP_AVAILABLE:
             proxy_logging_obj=proxy_logging_obj,
         )
         verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
-        return call_tool_result.content  # type: ignore[return-value]
+        return call_tool_result
 
     async def _handle_local_mcp_tool(
         name: str, arguments: Dict[str, Any]

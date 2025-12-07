@@ -42,4 +42,5 @@ export const ENDPOINT_OPTIONS = [
   { value: EndpointType.EMBEDDINGS, label: "/v1/embeddings" },
   { value: EndpointType.SPEECH, label: "/v1/audio/speech" },
   { value: EndpointType.TRANSCRIPTION, label: "/v1/audio/transcriptions" },
+  { value: EndpointType.A2A_AGENTS, label: "/v1/a2a/message/send" },
 ];

@@ -1,4 +1,4 @@
-import { Button as Button2, Form, Input, Modal, Select as Select2, Tooltip } from "antd";
+import { Button as Button2, Form, Input, Modal, Select as Select2, Switch, Tooltip } from "antd";
 import { Accordion, AccordionBody, AccordionHeader, Text, TextInput } from "@tremor/react";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import {
@@ -9,6 +9,7 @@ import {
 import NumericalInput from "@/components/shared/numerical_input";
 import VectorStoreSelector from "@/components/vector_store_management/VectorStoreSelector";
 import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelector";
+import AgentSelector from "@/components/agent_management/AgentSelector";
 import PremiumLoggingSettings from "@/components/common_components/PremiumLoggingSettings";
 import ModelAliasManager from "@/components/common_components/ModelAliasManager";
 import React, { useEffect, useState } from "react";
@@ -209,6 +210,21 @@ const CreateTeamModal = ({
             }
             formValues.object_permission.mcp_tool_permissions = formValues.mcp_tool_permissions;
             delete formValues.mcp_tool_permissions;
+          }
+
+          // Handle agent permissions
+          if (formValues.allowed_agents_and_groups) {
+            const { agents, accessGroups } = formValues.allowed_agents_and_groups;
+            if (!formValues.object_permission) {
+              formValues.object_permission = {};
+            }
+            if (agents && agents.length > 0) {
+              formValues.object_permission.agents = agents;
+            }
+            if (accessGroups && accessGroups.length > 0) {
+              formValues.object_permission.agent_access_groups = accessGroups;
+            }
+            delete formValues.allowed_agents_and_groups;
           }
         }
 
@@ -455,6 +471,25 @@ const CreateTeamModal = ({
               <Form.Item
                 label={
                   <span>
+                    Disable Global Guardrails{" "}
+                    <Tooltip title="When enabled, this team will bypass any guardrails configured to run on every request (global guardrails)">
+                      <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                    </Tooltip>
+                  </span>
+                }
+                name="disable_global_guardrails"
+                className="mt-4"
+                valuePropName="checked"
+                help="Bypass global guardrails for this team"
+              >
+                <Switch 
+                  checkedChildren="Yes"
+                  unCheckedChildren="No"
+                />
+              </Form.Item>
+              <Form.Item
+                label={
+                  <span>
                     Allowed Vector Stores{" "}
                     <Tooltip title="Select which vector stores this team can access by default. Leave empty for access to all vector stores">
                       <InfoCircleOutlined style={{ marginLeft: "4px" }} />
@@ -523,6 +558,34 @@ const CreateTeamModal = ({
                     />
                   </div>
                 )}
+              </Form.Item>
+            </AccordionBody>
+          </Accordion>
+
+          <Accordion className="mt-8 mb-8">
+            <AccordionHeader>
+              <b>Agent Settings</b>
+            </AccordionHeader>
+            <AccordionBody>
+              <Form.Item
+                label={
+                  <span>
+                    Allowed Agents{" "}
+                    <Tooltip title="Select which agents or access groups this team can access">
+                      <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                    </Tooltip>
+                  </span>
+                }
+                name="allowed_agents_and_groups"
+                className="mt-4"
+                help="Select agents or access groups this team can access"
+              >
+                <AgentSelector
+                  onChange={(val: any) => form.setFieldValue("allowed_agents_and_groups", val)}
+                  value={form.getFieldValue("allowed_agents_and_groups")}
+                  accessToken={accessToken || ""}
+                  placeholder="Select agents or access groups (optional)"
+                />
               </Form.Item>
             </AccordionBody>
           </Accordion>

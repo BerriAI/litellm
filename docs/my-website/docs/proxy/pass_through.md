@@ -275,6 +275,20 @@ In this video, we'll add the Azure OpenAI Assistants API as a pass through endpo
 - Check LiteLLM proxy logs for error details
 - Verify the target API's expected request format
 
+### Allowing Team JWTs to use pass-through routes
+
+If you are using pass-through provider routes (e.g., `/anthropic/*`) and want your JWT team tokens to access these routes, add `mapped_pass_through_routes` to the `team_allowed_routes` in `litellm_jwtauth` or explicitly add the relevant route(s).
+
+Example (`proxy_server_config.yaml`):
+
+```yaml
+general_settings:
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    team_ids_jwt_field: "team_ids"
+    team_allowed_routes: ["openai_routes","info_routes","mapped_pass_through_routes"]
+```
+
 ### Getting Help
 
 [Schedule Demo 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)

@@ -9,6 +9,14 @@ from fastapi import HTTPException
 sys.path.insert(0, "../../../../../")
 
 import httpx
+from mcp import ReadResourceResult, Resource
+from mcp.types import (
+    GetPromptResult,
+    Prompt,
+    ResourceTemplate,
+    TextResourceContents,
+    Tool as MCPTool,
+)
 
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
@@ -17,8 +25,6 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
 from litellm.proxy._types import LiteLLM_MCPServerTable, MCPTransport
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer
-from mcp import ReadResourceResult, Resource
-from mcp.types import GetPromptResult, Prompt, ResourceTemplate, TextResourceContents
 
 
 class TestMCPServerManager:
@@ -58,7 +64,7 @@ class TestMCPServerManager:
             updated_at=datetime.now(),
         )
 
-        manager.add_update_server(stdio_server)
+        await manager.add_update_server(stdio_server)
 
         # Verify server was added
         assert "stdio-server-1" in manager.registry
@@ -995,10 +1001,11 @@ class TestMCPServerManager:
         manager._create_mcp_client = MagicMock(return_value=object())
 
         # Tools returned upstream (unprefixed from provider)
-        upstream_tool = MagicMock()
-        upstream_tool.name = "send_email"
-        upstream_tool.description = "Send an email"
-        upstream_tool.inputSchema = {}
+        upstream_tool = MCPTool(
+            name="send_email",
+            description="Send an email",
+            inputSchema={},
+        )
 
         manager._fetch_tools_with_timeout = AsyncMock(return_value=[upstream_tool])
 
@@ -1025,14 +1032,16 @@ class TestMCPServerManager:
         )
 
         # Input tools as would come from upstream
-        t1 = MagicMock()
-        t1.name = "create_issue"
-        t1.description = ""
-        t1.inputSchema = {}
-        t2 = MagicMock()
-        t2.name = "close_issue"
-        t2.description = ""
-        t2.inputSchema = {}
+        t1 = MCPTool(
+            name="create_issue",
+            description="",
+            inputSchema={},
+        )
+        t2 = MCPTool(
+            name="close_issue",
+            description="",
+            inputSchema={},
+        )
 
         # Do not add prefix in returned objects
         out_tools = manager._create_prefixed_tools([t1, t2], server, add_prefix=False)
@@ -1066,10 +1075,11 @@ class TestMCPServerManager:
         manager.registry = {server.server_id: server}
 
         # Populate mapping (add_prefix value doesn't matter for mapping population)
-        base_tool = MagicMock()
-        base_tool.name = "create_zap"
-        base_tool.description = ""
-        base_tool.inputSchema = {}
+        base_tool = MCPTool(
+            name="create_zap",
+            description="",
+            inputSchema={},
+        )
         _ = manager._create_prefixed_tools([base_tool], server, add_prefix=False)
 
         # Unprefixed resolution
@@ -1265,7 +1275,7 @@ class TestMCPServerManager:
                 "env": {},
             },
         )
-        manager.add_update_server(server)
+        await manager.add_update_server(server)
         assert server.server_id in manager.get_registry()
 
     @pytest.mark.asyncio
@@ -1605,6 +1615,104 @@ class TestMCPServerManager:
 
         # Verify the MCP client call was awaited exactly once
         assert mock_client.call_tool.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_get_allowed_mcp_servers_with_user_api_key_auth(self):
+        """
+        Test that get_allowed_mcp_servers properly receives and uses user_api_key_auth
+        when called. This verifies the fix where user_api_key_auth is passed through
+        litellm_metadata from responses API.
+        """
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+
+        manager = MCPServerManager()
+
+        # Create a mock user_api_key_auth with object_permission
+        object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm_123",
+            mcp_servers=["test_server_1", "test_server_2"],
+            mcp_access_groups=[],
+        )
+
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="sk-test",
+            user_id="user-123",
+            object_permission=object_permission,
+            object_permission_id="perm_123",
+        )
+
+        # Mock MCPRequestHandler.get_allowed_mcp_servers to verify it receives user_api_key_auth
+        with patch.object(
+            MCPRequestHandler,
+            "get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+        ) as mock_get_allowed:
+            # Configure mock to return servers from object_permission
+            mock_get_allowed.return_value = ["test_server_1", "test_server_2"]
+
+            # Call get_allowed_mcp_servers with user_api_key_auth
+            result = await manager.get_allowed_mcp_servers(user_api_key_auth)
+
+            # Verify MCPRequestHandler.get_allowed_mcp_servers was called with user_api_key_auth
+            mock_get_allowed.assert_called_once()
+            call_args = mock_get_allowed.call_args
+            assert call_args[0][0] is user_api_key_auth  # First positional arg should be user_api_key_auth
+            assert call_args[0][0].user_id == "user-123"
+            assert call_args[0][0].object_permission_id == "perm_123"
+            assert call_args[0][0].object_permission is not None
+            assert call_args[0][0].object_permission.mcp_servers == ["test_server_1", "test_server_2"]
+
+            # Verify result contains the expected servers
+            assert "test_server_1" in result
+            assert "test_server_2" in result
+
+    def test_get_mcp_server_from_tool_name_uses_server_name_not_name(self):
+        """
+        Test that _get_mcp_server_from_tool_name uses server.server_name instead of server.name
+        when extracting server name from prefixed tool name (second case).
+        This ensures the fix for using server_name instead of name works correctly.
+        """
+        from litellm.proxy._experimental.mcp_server.utils import (
+            add_server_prefix_to_name,
+        )
+
+        manager = MCPServerManager()
+
+        # Create a server where server_name differs from name
+        # This tests the scenario where server.name != server.server_name
+        server = MCPServer(
+            server_id="test-server-id",
+            name="Test Server Name",  # Different from server_name
+            server_name="test_server",  # This is what should be used
+            alias="test_server",
+            transport=MCPTransport.http,
+        )
+
+        # Register the server
+        manager.registry = {server.server_id: server}
+
+        # Create a tool with prefixed name
+        tool_name = "test_tool"
+        prefixed_tool_name = add_server_prefix_to_name(tool_name, "test_server")
+
+        # Populate the mapping with the original tool name
+        manager.tool_name_to_mcp_server_name_mapping[tool_name] = "test_server"
+        manager.tool_name_to_mcp_server_name_mapping[prefixed_tool_name] = "test_server"
+
+        # Test: _get_mcp_server_from_tool_name should find the server using server.server_name
+        # even when server.name is different
+        resolved_server = manager._get_mcp_server_from_tool_name(prefixed_tool_name)
+
+        # Verify the server was found correctly
+        assert resolved_server is not None
+        assert resolved_server.server_id == server.server_id
+        assert resolved_server.server_name == "test_server"
+        # Verify it matched using server_name, not name
+        assert resolved_server.name == "Test Server Name"  # name is different
+        assert resolved_server.server_name == "test_server"  # server_name matches
 
 
 if __name__ == "__main__":
