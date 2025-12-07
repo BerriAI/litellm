@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sys
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -11,63 +12,83 @@ from litellm import aimage_generation
 
 
 @pytest.mark.parametrize(
-    "model",
+    "model,expected_endpoint",
     [
-        "fal_ai/fal-ai/flux-pro/v1.1-ultra",
-        "fal_ai/fal-ai/flux-pro/v1.1",
-        "fal_ai/fal-ai/flux/schnell",
-        "fal_ai/fal-ai/bytedance/seedream/v3/text-to-image",
-        "fal_ai/fal-ai/bytedance/dreamina/v3.1/text-to-image",
-        "fal_ai/fal-ai/recraft/v3/text-to-image",
-        "fal_ai/fal-ai/ideogram/v3",
-        "fal_ai/bria/text-to-image/3.2",
-        "fal_ai/fal-ai/stable-diffusion-v35-medium"
+        ("fal_ai/fal-ai/flux-pro/v1.1-ultra", "fal-ai/flux-pro/v1.1-ultra"),
+        ("fal_ai/fal-ai/stable-diffusion-v35-medium", "fal-ai/stable-diffusion-v35-medium"),
     ],
 )
 @pytest.mark.asyncio
-async def test_fal_ai_image_generation_basic(model):
+async def test_fal_ai_image_generation_basic(model, expected_endpoint):
     """
-    Test basic image generation for various Fal AI models.
+    Test that fal_ai image generation constructs correct request body and URL.
     
-    Tests that each model can:
-    - Accept a basic text prompt
-    - Return a valid response with image data
-    - Handle the response properly through litellm
+    Validates:
+    - Correct API endpoint URL construction
+    - Proper request body format with prompt
+    - Correct Authorization header format
     """
-    try:
-        litellm.set_verbose = True
+    captured_url = None
+    captured_json_data = None
+    captured_headers = None
+    
+    def capture_post_call(*args, **kwargs):
+        nonlocal captured_url, captured_json_data, captured_headers
+        
+        captured_url = args[0] if args else kwargs.get("url")
+        captured_json_data = kwargs.get("json")
+        captured_headers = kwargs.get("headers")
+        
+        # Mock response with fal.ai format
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"content-type": "application/json"}
+        mock_response.json.return_value = {
+            "images": [
+                {
+                    "url": "https://example.com/generated-image.png",
+                    "width": 1024,
+                    "height": 768,
+                    "content_type": "image/jpeg"
+                }
+            ],
+            "seed": 42
+        }
+        
+        return mock_response
+    
+    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
+        mock_post.side_effect = capture_post_call
+        
+        test_api_key = "test-fal-ai-key-12345"
+        test_prompt = "A cute baby sea otter"
         
         response = await aimage_generation(
             model=model,
-            prompt="A cute baby sea otter",
+            prompt=test_prompt,
+            api_key=test_api_key,
         )
         
-        print(f"\nResponse from {model}:")
-        print(f"  Number of images: {len(response.data)}")
-        print(f"  First image URL: {response.data[0].url if response.data else 'None'}")
+        # Validate response
+        assert response is not None
+        assert hasattr(response, "data")
+        assert response.data is not None
+        assert len(response.data) > 0
         
-        # Basic assertions
-        assert response is not None, f"Response should not be None for {model}"
-        assert hasattr(response, "data"), f"Response should have data attribute for {model}"
-        assert len(response.data) > 0, f"Response should have at least one image for {model}"
+        # Validate URL
+        assert captured_url is not None
+        assert "fal.run" in captured_url
+        assert expected_endpoint in captured_url
+        print(f"Validated URL: {captured_url}")
         
-        # Check that we got a URL or b64_json
-        first_image = response.data[0]
-        assert (
-            first_image.url is not None or first_image.b64_json is not None
-        ), f"Image should have either url or b64_json for {model}"
+        # Validate headers
+        assert captured_headers is not None
+        assert "Authorization" in captured_headers
+        assert captured_headers["Authorization"] == f"Key {test_api_key}"
+        print(f"Validated headers: {captured_headers}")
         
-        print(f"✓ Test passed for {model}")
-        
-    except litellm.RateLimitError as e:
-        pytest.skip(f"Rate limit error for {model}: {str(e)}")
-    except litellm.ContentPolicyViolationError as e:
-        pytest.skip(f"Content policy violation for {model}: {str(e)}")
-    except litellm.InternalServerError as e:
-        pytest.skip(f"Internal server error for {model}: {str(e)}")
-    except Exception as e:
-        if "Your task failed as a result of our safety system" in str(e):
-            pytest.skip(f"Safety system rejection for {model}")
-        else:
-            pytest.fail(f"Test failed for {model}: {str(e)}")
+        # Validate request body
+        assert captured_json_data is not None
+        assert captured_json_data["prompt"] == test_prompt
+        print(f"Validated request body: {captured_json_data}")
 

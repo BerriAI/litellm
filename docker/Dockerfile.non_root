@@ -1,6 +1,6 @@
 # Base images
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/python:latest-dev
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/python:latest-dev
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base
 
 # -----------------
 # Builder Stage
@@ -10,7 +10,20 @@ WORKDIR /app
 
 # Install build dependencies including Node.js for UI build
 USER root
-RUN apk add --no-cache build-base bash nodejs npm \
+RUN for i in 1 2 3; do \
+  apk add --no-cache \
+  python3 \
+  py3-pip \
+  clang \
+  llvm \
+  lld \
+  gcc \
+  linux-headers \
+  build-base \
+  bash \
+  nodejs \
+  npm && break || sleep 5; \
+  done \
   && pip install --no-cache-dir --upgrade pip build
 
 # Copy project files
@@ -20,24 +33,34 @@ COPY . .
 ENV LITELLM_NON_ROOT=true
 
 # Build Admin UI
-RUN mkdir -p /tmp/litellm_ui && \
-  cd ui/litellm-dashboard && \
-  if [ -f "../../enterprise/enterprise_ui/enterprise_colors.json" ]; then \
-    cp ../../enterprise/enterprise_ui/enterprise_colors.json ./ui_colors.json; \
-  fi && \
-  npm install && \
-  npm run build && \
-  cp -r ./out/* /tmp/litellm_ui/ && \
-  cd /tmp/litellm_ui && \
+RUN mkdir -p /tmp/litellm_ui
+
+RUN npm install -g npm@latest && npm cache clean --force
+
+RUN cd /app/ui/litellm-dashboard && \
+  if [ -f "/app/enterprise/enterprise_ui/enterprise_colors.json" ]; then \
+  cp /app/enterprise/enterprise_ui/enterprise_colors.json ./ui_colors.json; \
+  fi
+
+RUN cd /app/ui/litellm-dashboard && rm -f package-lock.json
+
+RUN cd /app/ui/litellm-dashboard && npm install --legacy-peer-deps
+
+RUN cd /app/ui/litellm-dashboard && npm run build
+
+RUN cp -r /app/ui/litellm-dashboard/out/* /tmp/litellm_ui/
+RUN mkdir -p /tmp/litellm_assets && cp /app/litellm/proxy/logo.jpg /tmp/litellm_assets/logo.jpg
+
+RUN cd /tmp/litellm_ui && \
   for html_file in *.html; do \
-    if [ "$html_file" != "index.html" ] && [ -f "$html_file" ]; then \
-      folder_name="${html_file%.html}" && \
-      mkdir -p "$folder_name" && \
-      mv "$html_file" "$folder_name/index.html"; \
-    fi; \
-  done && \
-  cd /app/ui/litellm-dashboard && \
-  rm -rf ./out
+  if [ "$html_file" != "index.html" ] && [ -f "$html_file" ]; then \
+  folder_name="${html_file%.html}" && \
+  mkdir -p "$folder_name" && \
+  mv "$html_file" "$folder_name/index.html"; \
+  fi; \
+  done
+
+RUN cd /app/ui/litellm-dashboard && rm -rf ./out
 
 # Build package and wheel dependencies
 RUN rm -rf dist/* && python -m build && \
@@ -52,8 +75,12 @@ WORKDIR /app
 
 # Install runtime dependencies
 USER root
-RUN apk upgrade --no-cache && \
-  apk add --no-cache bash libstdc++ ca-certificates openssl supervisor
+RUN for i in 1 2 3; do \
+  apk upgrade --no-cache && break || sleep 5; \
+  done \
+  && for i in 1 2 3; do \
+  apk add --no-cache python3 py3-pip bash openssl tzdata nodejs npm supervisor && break || sleep 5; \
+  done
 
 # Copy only necessary artifacts from builder stage for runtime
 COPY . .
@@ -63,6 +90,7 @@ COPY --from=builder /app/schema.prisma /app/schema.prisma
 COPY --from=builder /app/dist/*.whl .
 COPY --from=builder /wheels/ /wheels/
 COPY --from=builder /tmp/litellm_ui /tmp/litellm_ui
+COPY --from=builder /tmp/litellm_assets /tmp/litellm_assets
 
 # Install package from wheel and dependencies
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ \
@@ -71,7 +99,7 @@ RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ \
 
 # Remove test files and keys from dependencies
 RUN find /usr/lib -type f -path "*/tornado/test/*" -delete && \
-    find /usr/lib -type d -path "*/tornado/test" -delete
+  find /usr/lib -type d -path "*/tornado/test" -delete
 
 # Install semantic_router and aurelio-sdk using script
 RUN chmod +x docker/install_auto_router.sh && ./docker/install_auto_router.sh
@@ -91,8 +119,8 @@ RUN pip install --no-cache-dir prisma && \
   chmod +x docker/prod_entrypoint.sh
 
 # Create directories and set permissions for non-root user
-RUN mkdir -p /nonexistent /.npm && \
-  chown -R nobody:nogroup /app /tmp/litellm_ui /nonexistent /.npm && \
+RUN mkdir -p /nonexistent /.npm /tmp/litellm_assets && \
+  chown -R nobody:nogroup /app /tmp/litellm_ui /tmp/litellm_assets /nonexistent /.npm && \
   PRISMA_PATH=$(python -c "import os, prisma; print(os.path.dirname(prisma.__file__))") && \
   chown -R nobody:nogroup $PRISMA_PATH && \
   LITELLM_PKG_MIGRATIONS_PATH="$(python -c 'import os, litellm_proxy_extras; print(os.path.dirname(litellm_proxy_extras.__file__))' 2>/dev/null || echo '')/migrations" && \
@@ -101,11 +129,11 @@ RUN mkdir -p /nonexistent /.npm && \
 # OpenShift compatibility
 RUN PRISMA_PATH=$(python -c "import os, prisma; print(os.path.dirname(prisma.__file__))") && \
   LITELLM_PROXY_EXTRAS_PATH=$(python -c "import os, litellm_proxy_extras; print(os.path.dirname(litellm_proxy_extras.__file__))" 2>/dev/null || echo "") && \
-  chgrp -R 0 $PRISMA_PATH /tmp/litellm_ui && \
+  chgrp -R 0 $PRISMA_PATH /tmp/litellm_ui /tmp/litellm_assets && \
   [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chgrp -R 0 $LITELLM_PROXY_EXTRAS_PATH || true && \
-  chmod -R g=u $PRISMA_PATH /tmp/litellm_ui && \
+  chmod -R g=u $PRISMA_PATH /tmp/litellm_ui /tmp/litellm_assets && \
   [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g=u $LITELLM_PROXY_EXTRAS_PATH || true && \
-  chmod -R g+w $PRISMA_PATH /tmp/litellm_ui && \
+  chmod -R g+w $PRISMA_PATH /tmp/litellm_ui /tmp/litellm_assets && \
   [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g+w $LITELLM_PROXY_EXTRAS_PATH || true
 
 # Switch to non-root user

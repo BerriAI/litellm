@@ -1,12 +1,11 @@
 import React, { useState } from "react";
 import { Button } from "@tremor/react";
 import { Modal } from "antd";
-import Papa from "papaparse";
 import NotificationsManager from "../molecules/notifications_manager";
 import ExportSummary from "./ExportSummary";
 import ExportTypeSelector from "./ExportTypeSelector";
 import ExportFormatSelector from "./ExportFormatSelector";
-import { generateExportData, generateMetadata } from "./utils";
+import { handleExportCSV, handleExportJSON } from "./utils";
 import type { EntityUsageExportModalProps, ExportFormat, ExportScope } from "./types";
 
 const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
@@ -25,50 +24,15 @@ const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
   const entityLabel = entityType.charAt(0).toUpperCase() + entityType.slice(1);
   const modalTitle = customTitle || `Export ${entityLabel} Usage`;
 
-  const handleExportCSV = () => {
-    const data = generateExportData(spendData, exportScope, entityLabel);
-    const csv = Papa.unparse(data);
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    const fileName = `${entityType}_usage_${exportScope}_${new Date().toISOString().split("T")[0]}.csv`;
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
-  };
-
-  const handleExportJSON = () => {
-    const data = generateExportData(spendData, exportScope, entityLabel);
-    const metadata = generateMetadata(entityType, dateRange, selectedFilters, exportScope, spendData);
-    const exportObject = {
-      metadata,
-      data,
-    };
-    const jsonString = JSON.stringify(exportObject, null, 2);
-    const blob = new Blob([jsonString], { type: "application/json" });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    const fileName = `${entityType}_usage_${exportScope}_${new Date().toISOString().split("T")[0]}.json`;
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
-  };
-
   const handleExport = async (format?: ExportFormat) => {
     const formatToUse = format || exportFormat;
     setIsExporting(true);
     try {
       if (formatToUse === "csv") {
-        handleExportCSV();
+        handleExportCSV(spendData, exportScope, entityLabel, entityType);
         NotificationsManager.success(`${entityLabel} usage data exported successfully as CSV`);
       } else {
-        handleExportJSON();
+        handleExportJSON(spendData, exportScope, entityLabel, entityType, dateRange, selectedFilters);
         NotificationsManager.success(`${entityLabel} usage data exported successfully as JSON`);
       }
       onClose();
