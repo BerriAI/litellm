@@ -1,21 +1,16 @@
-import useFeatureFlags from "@/hooks/useFeatureFlags";
-import Sidebar from "@/components/leftnav";
-import Sidebar2 from "@/app/(dashboard)/components/Sidebar2";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import Sidebar from "@/components/leftnav";
 
 interface SidebarProviderProps {
+  setPage: (page: string) => void;
   defaultSelectedKey: string;
-  setPage: (newPage: string) => void;
   sidebarCollapsed: boolean;
 }
 
 const SidebarProvider = ({ setPage, defaultSelectedKey, sidebarCollapsed }: SidebarProviderProps) => {
-  const { refactoredUIFlag } = useFeatureFlags();
   const { accessToken, userRole } = useAuthorized();
 
-  return refactoredUIFlag ? (
-    <Sidebar2 accessToken={accessToken} defaultSelectedKey={defaultSelectedKey} userRole={userRole} />
-  ) : (
+  return (
     <Sidebar
       accessToken={accessToken}
       setPage={setPage}

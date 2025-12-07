@@ -113,7 +113,7 @@ export function RegenerateKeyModal({
         formValues,
       );
       setRegeneratedKey(response.key);
-      NotificationManager.success("API Key regenerated successfully");
+      NotificationManager.success("Virtual Key regenerated successfully");
 
       console.log("Full regenerate response:", response); // Debug log to see what's returned
 
@@ -164,7 +164,7 @@ export function RegenerateKeyModal({
 
   return (
     <Modal
-      title="Regenerate API Key"
+      title="Regenerate Virtual Key"
       open={visible}
       onCancel={handleClose}
       footer={
@@ -199,15 +199,15 @@ export function RegenerateKeyModal({
             <div className="bg-gray-100 p-2 rounded mb-2">
               <pre className="break-words whitespace-normal">{selectedToken?.key_alias || "No alias set"}</pre>
             </div>
-            <Text className="mt-3">New API Key:</Text>
+            <Text className="mt-3">New Virtual Key:</Text>
             <div className="bg-gray-100 p-2 rounded mb-2">
               <pre className="break-words whitespace-normal">{regeneratedKey}</pre>
             </div>
             <CopyToClipboard
               text={regeneratedKey}
-              onCopy={() => NotificationManager.success("API Key copied to clipboard")}
+              onCopy={() => NotificationManager.success("Virtual Key copied to clipboard")}
             >
-              <Button className="mt-3">Copy API Key</Button>
+              <Button className="mt-3">Copy Virtual Key</Button>
             </CopyToClipboard>
           </Col>
         </Grid>

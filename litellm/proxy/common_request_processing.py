@@ -337,6 +337,7 @@ class ProxyBaseLLMRequestProcessing:
             "alist_skills",
             "aget_skill",
             "adelete_skill",
+            "anthropic_messages",
         ],
         version: Optional[str] = None,
         user_model: Optional[str] = None,
@@ -461,11 +462,12 @@ class ProxyBaseLLMRequestProcessing:
             "alist_skills",
             "aget_skill",
             "adelete_skill",
+            "anthropic_messages",
         ],
         proxy_logging_obj: ProxyLogging,
         general_settings: dict,
         proxy_config: ProxyConfig,
-        select_data_generator: Callable,
+        select_data_generator: Optional[Callable] = None,
         llm_router: Optional[Router] = None,
         model: Optional[str] = None,
         user_model: Optional[str] = None,
@@ -605,7 +607,21 @@ class ProxyBaseLLMRequestProcessing:
                         status_code=response.status_code,
                         headers=custom_headers,
                     )
-            else:
+            elif route_type == "anthropic_messages":
+                selected_data_generator = (
+                    ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+                        response=response,
+                        user_api_key_dict=user_api_key_dict,
+                        request_data=self.data,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+                )
+                return await create_streaming_response(
+                    generator=selected_data_generator,
+                    media_type="text/event-stream",
+                    headers=custom_headers,
+                )
+            elif select_data_generator:
                 selected_data_generator = select_data_generator(
                     response=response,
                     user_api_key_dict=user_api_key_dict,
@@ -804,12 +820,38 @@ class ProxyBaseLLMRequestProcessing:
             # This matches the original behavior before the refactor in commit 511d435f6f
             error_body = await e.response.aread()
             error_text = error_body.decode("utf-8")
-            
+
             raise HTTPException(
                 status_code=e.response.status_code,
                 detail={"error": error_text},
             )
         error_msg = f"{str(e)}"
+        # Check for AttributeError in various places:
+        # 1. Direct AttributeError (already handled above)
+        # 2. In underlying exception (__cause__, __context__, original_exception)
+        has_attribute_error = (
+            (
+                isinstance(e, Exception)
+                and isinstance(getattr(e, "__cause__", None), AttributeError)
+            )
+            or (
+                isinstance(e, Exception)
+                and isinstance(getattr(e, "__context__", None), AttributeError)
+            )
+            or (
+                isinstance(e, Exception)
+                and isinstance(getattr(e, "original_exception", None), AttributeError)
+            )
+        )
+
+        if has_attribute_error:
+            raise ProxyException(
+                message=f"Invalid request format: {error_msg}",
+                type="invalid_request_error",
+                param=None,
+                code=status.HTTP_400_BAD_REQUEST,
+                headers=headers,
+            )
         raise ProxyException(
             message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),
@@ -1093,7 +1135,9 @@ class ProxyBaseLLMRequestProcessing:
                 return obj
         return None
 
-    def maybe_get_model_id(self, _logging_obj: Optional[LiteLLMLoggingObj]) -> Optional[str]:
+    def maybe_get_model_id(
+        self, _logging_obj: Optional[LiteLLMLoggingObj]
+    ) -> Optional[str]:
         """
         Get model_id from logging object or request metadata.
 
@@ -1103,10 +1147,7 @@ class ProxyBaseLLMRequestProcessing:
         model_id = None
         if _logging_obj:
             # 1. Try getting from litellm_params (updated during call)
-            if (
-                hasattr(_logging_obj, "litellm_params")
-                and _logging_obj.litellm_params
-            ):
+            if hasattr(_logging_obj, "litellm_params") and _logging_obj.litellm_params:
                 # First check direct model_info path (set by router.py with selected deployment)
                 model_info = _logging_obj.litellm_params.get("model_info") or {}
                 model_id = model_info.get("id", None)

@@ -80,6 +80,44 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         self.turn_off_message_logging = turn_off_message_logging
         pass
 
+    @staticmethod
+    def get_callback_env_vars(callback_name: Optional[str] = None) -> List[str]:
+        """
+        Return the environment variables associated with a given callback
+        name as defined in the proxy callback registry.
+
+        Args:
+            callback_name: The name of the callback to look up.
+
+        Returns:
+            List[str]: A list of required environment variable names.
+        """
+        if callback_name is None:
+            return []
+
+        normalized_name = callback_name.lower()
+
+        alias_map = {
+            "langfuse_otel": "langfuse",
+        }
+        lookup_name = alias_map.get(normalized_name, normalized_name)
+
+        try:
+            from litellm.proxy._types import AllCallbacks
+        except Exception:
+            return []
+
+        callbacks = AllCallbacks()
+        callback_info = getattr(callbacks, lookup_name, None)
+        if callback_info is None:
+            return []
+
+        params = getattr(callback_info, "litellm_callback_params", None)
+        if not params:
+            return []
+
+        return list(params)
+
     def log_pre_api_call(self, model, messages, kwargs):
         pass
 

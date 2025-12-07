@@ -114,20 +114,27 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
                         img_element = element
                         _image_url: Optional[str] = None
                         format: Optional[str] = None
+                        detail: Optional[str] = None
                         if isinstance(img_element.get("image_url"), dict):
                             _image_url = img_element["image_url"].get("url")  # type: ignore
                             format = img_element["image_url"].get("format")  # type: ignore
+                            detail = img_element["image_url"].get("detail")  # type: ignore
                         else:
                             _image_url = img_element.get("image_url")  # type: ignore
                         if _image_url and "https://" in _image_url:
                             image_obj = convert_to_anthropic_image_obj(
                                 _image_url, format=format
                             )
-                            img_element["image_url"] = (  # type: ignore
-                                convert_generic_image_chunk_to_openai_image_obj(
-                                    image_obj
-                                )
+                            converted_image_url = convert_generic_image_chunk_to_openai_image_obj(
+                                image_obj
                             )
+                            if detail is not None:
+                                img_element["image_url"] = {  # type: ignore
+                                    "url": converted_image_url,
+                                    "detail": detail
+                                }
+                            else:
+                                img_element["image_url"] = converted_image_url  # type: ignore
                     elif element.get("type") == "file":
                         file_element = cast(ChatCompletionFileObject, element)
                         file_id = file_element["file"].get("file_id")

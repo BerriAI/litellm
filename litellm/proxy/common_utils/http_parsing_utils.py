@@ -309,7 +309,7 @@ def get_tags_from_request_body(request_body: dict) -> List[str]:
         List of tag names (strings), empty list if no valid tags found
     """
     metadata_variable_name = get_metadata_variable_name_from_kwargs(request_body)
-    metadata = request_body.get(metadata_variable_name, {})
+    metadata = request_body.get(metadata_variable_name) or {}
     tags_in_metadata: Any = metadata.get("tags", [])
     tags_in_request_body: Any = request_body.get("tags", [])
     combined_tags: List[str] = []

@@ -1290,10 +1290,95 @@ def test_effort_with_other_features():
         litellm_params={},
         headers={}
     )
-    
+
     # Verify all features are present
     assert "output_config" in result
     assert result["output_config"]["effort"] == "low"
     assert "tools" in result
     assert len(result["tools"]) > 0
     assert "thinking" in result
+
+
+def test_translate_system_message_skips_empty_string_content():
+    """
+    Test that translate_system_message skips system messages with empty string content.
+
+    Fixes: Vertex AI Anthropic API error "messages: text content blocks must be non-empty"
+    """
+    config = AnthropicConfig()
+
+    # Test empty string content - should not produce any anthropic system message content
+    messages = [
+        {"role": "system", "content": ""},
+        {"role": "user", "content": "Hello"},
+    ]
+
+    result = config.translate_system_message(messages)
+
+    # Empty system message should produce no anthropic content blocks
+    assert len(result) == 0
+
+
+def test_translate_system_message_skips_empty_list_content():
+    """
+    Test that translate_system_message skips empty text blocks in list content.
+
+    Fixes: Vertex AI Anthropic API error "messages: text content blocks must be non-empty"
+    """
+    config = AnthropicConfig()
+
+    # Test list content with empty text block
+    messages = [
+        {"role": "system", "content": [
+            {"type": "text", "text": ""},
+            {"type": "text", "text": "Valid content"},
+            {"type": "text", "text": ""},
+        ]},
+        {"role": "user", "content": "Hello"},
+    ]
+
+    result = config.translate_system_message(messages)
+
+    # Only non-empty text blocks should be included
+    assert len(result) == 1
+    assert result[0]["text"] == "Valid content"
+
+
+def test_translate_system_message_preserves_valid_content():
+    """
+    Test that translate_system_message preserves valid system message content.
+    """
+    config = AnthropicConfig()
+
+    # Test valid string content
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Hello"},
+    ]
+
+    result = config.translate_system_message(messages)
+
+    assert len(result) == 1
+    assert result[0]["type"] == "text"
+    assert result[0]["text"] == "You are a helpful assistant."
+
+
+def test_translate_system_message_preserves_cache_control():
+    """
+    Test that translate_system_message preserves cache_control on valid content.
+    """
+    config = AnthropicConfig()
+
+    # Test list content with cache_control
+    messages = [
+        {"role": "system", "content": [
+            {"type": "text", "text": "Cached content", "cache_control": {"type": "ephemeral"}},
+        ]},
+        {"role": "user", "content": "Hello"},
+    ]
+
+    result = config.translate_system_message(messages)
+
+    assert len(result) == 1
+    assert result[0]["text"] == "Cached content"
+    assert result[0]["cache_control"] == {"type": "ephemeral"}

@@ -9,6 +9,7 @@ import {
 import NumericalInput from "@/components/shared/numerical_input";
 import VectorStoreSelector from "@/components/vector_store_management/VectorStoreSelector";
 import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelector";
+import AgentSelector from "@/components/agent_management/AgentSelector";
 import PremiumLoggingSettings from "@/components/common_components/PremiumLoggingSettings";
 import ModelAliasManager from "@/components/common_components/ModelAliasManager";
 import React, { useEffect, useState } from "react";
@@ -209,6 +210,21 @@ const CreateTeamModal = ({
             }
             formValues.object_permission.mcp_tool_permissions = formValues.mcp_tool_permissions;
             delete formValues.mcp_tool_permissions;
+          }
+
+          // Handle agent permissions
+          if (formValues.allowed_agents_and_groups) {
+            const { agents, accessGroups } = formValues.allowed_agents_and_groups;
+            if (!formValues.object_permission) {
+              formValues.object_permission = {};
+            }
+            if (agents && agents.length > 0) {
+              formValues.object_permission.agents = agents;
+            }
+            if (accessGroups && accessGroups.length > 0) {
+              formValues.object_permission.agent_access_groups = accessGroups;
+            }
+            delete formValues.allowed_agents_and_groups;
           }
         }
 
@@ -542,6 +558,34 @@ const CreateTeamModal = ({
                     />
                   </div>
                 )}
+              </Form.Item>
+            </AccordionBody>
+          </Accordion>
+
+          <Accordion className="mt-8 mb-8">
+            <AccordionHeader>
+              <b>Agent Settings</b>
+            </AccordionHeader>
+            <AccordionBody>
+              <Form.Item
+                label={
+                  <span>
+                    Allowed Agents{" "}
+                    <Tooltip title="Select which agents or access groups this team can access">
+                      <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                    </Tooltip>
+                  </span>
+                }
+                name="allowed_agents_and_groups"
+                className="mt-4"
+                help="Select agents or access groups this team can access"
+              >
+                <AgentSelector
+                  onChange={(val: any) => form.setFieldValue("allowed_agents_and_groups", val)}
+                  value={form.getFieldValue("allowed_agents_and_groups")}
+                  accessToken={accessToken || ""}
+                  placeholder="Select agents or access groups (optional)"
+                />
               </Form.Item>
             </AccordionBody>
           </Accordion>
