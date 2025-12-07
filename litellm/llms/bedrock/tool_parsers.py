@@ -1,269 +1,217 @@
 """
-Generic tool call parsing system for Bedrock models.
+Generic tool call parsing for Bedrock models with proprietary token formats.
 
-This module provides a registry-based system for handling proprietary
-tool call formats from different model providers.
+Some Bedrock models (Kimi-K2, MiniMax M2) return tool calls as proprietary
+tokens embedded in text rather than structured toolUse blocks. This module
+parses and cleans those tokens.
 """
 
 import re
-from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
+from typing import Dict, List, Optional, Tuple
 
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
 )
 
-if TYPE_CHECKING:
-    from litellm.types.llms.bedrock import BedrockConverseReasoningContentBlock
 
-# Parser registry: model_pattern -> parser_function
-PARSER_REGISTRY: Dict[
-    str, Callable[[str, Any], tuple[str, List[ChatCompletionToolCallChunk]]]
-] = {}
+# =============================================================================
+# Pattern Definitions
+# =============================================================================
 
+# Tool call marker patterns for models with proprietary formats
+TOOL_CALL_PATTERNS: Dict[str, Dict[str, str]] = {
+    # Kimi-K2-Thinking format
+    "kimi": {
+        "begin": "<|tool_call_begin|>",
+        "arg_begin": "<|tool_call_argument_begin|>",
+        "end": "<|tool_call_end|>",
+        "section_begin": "<|tool_calls_section_begin|>",
+        "section_end": "<|tool_calls_section_end|>",
+    },
+    # MiniMax M2 format (if discovered)
+    "minimax": {
+        "begin": "[TOOL_CALL]",
+        "arg_begin": "=>",
+        "end": "[/TOOL_CALL]",
+    },
+}
 
-class ToolCallParser:
-    """Base class for model-specific tool call parsers"""
-
-    model_pattern: str = ""
-
-    @classmethod
-    def matches(cls, model: str) -> bool:
-        """Check if this parser matches the given model"""
-        return cls.model_pattern in model.lower()
-
-    @classmethod
-    def parse(
-        cls, text: str, **kwargs
-    ) -> tuple[str, List[ChatCompletionToolCallChunk]]:
-        """Parse text and return (cleaned_text, tool_calls)"""
-        raise NotImplementedError
-
-
-class KimiK2ToolCallParser(ToolCallParser):
-    """Parser for Kimi-K2-Thinking proprietary token format"""
-
-    model_pattern = "moonshot.kimi-k2-thinking"
-
-    @classmethod
-    def parse(
-        cls, text: str, **kwargs
-    ) -> tuple[str, List[ChatCompletionToolCallChunk]]:
-        """
-        Parse Kimi-K2-Thinking proprietary token format.
-
-        Markers: <|tool_call_begin|>, <|tool_call_argument_begin|>, <|tool_call_end|>
-        Supports: <|tool_calls_section_begin|>...<|tool_calls_section_end|> wrapper
-        """
-        import json
-        import re
-
-        cleaned_text = ""
-        parsed_tools = []
-
-        # Regex to match Kimi tool call blocks
-        # Pattern: <|tool_call_begin|>function_name<|tool_call_argument_begin|>{json_args}<|tool_call_end|>
-        tool_call_pattern = r"<\|tool_call_begin\|>([^<]+)<\|tool_call_argument_begin\|>([^<]+)<\|tool_call_end\|>"
-
-        # Find all tool call matches
-        matches = re.finditer(tool_call_pattern, text)
-
-        last_end = 0
-        tool_index = 0
-
-        for match in matches:
-            # Add text before this tool call to cleaned_text
-            cleaned_text += text[last_end : match.start()]
-
-            # Extract function name and arguments
-            func_name = match.group(1).strip()
-            args_json = match.group(2).strip()
-
-            try:
-                # Parse the arguments JSON (for validation)
-                json.loads(args_json)
-
-                # Create OpenAI-compatible tool call chunk
-                function_chunk = ChatCompletionToolCallFunctionChunk(
-                    name=func_name, arguments=args_json
-                )
-
-                tool_chunk = ChatCompletionToolCallChunk(
-                    id=f"call_{tool_index}",
-                    type="function",
-                    function=function_chunk,
-                    index=tool_index,
-                )
-
-                parsed_tools.append(tool_chunk)
-                tool_index += 1
-
-                # Add a placeholder in the cleaned text indicating where the tool was
-                cleaned_text += f"[Tool call: {func_name}]"
-
-            except json.JSONDecodeError as e:
-                # If JSON parsing fails, just add the raw text
-                cleaned_text += match.group(0)
-
-            last_end = match.end()
-
-        # Add any remaining text after the last tool call
-        cleaned_text += text[last_end:]
-
-        # If no tool calls were found, return the original text
-        if not parsed_tools:
-            return text, []
-
-        return cleaned_text, parsed_tools
+# Model ID -> Pattern name mapping
+MODEL_TO_PATTERN: Dict[str, str] = {
+    "moonshot.kimi-k2-thinking": "kimi",
+    "minimax.minimax-m2": "minimax",
+}
 
 
-# Register built-in parsers
-def register_parser(parser_class: type):
-    """Register a tool call parser for a specific model"""
-    PARSER_REGISTRY[parser_class.model_pattern] = parser_class.parse
-    return parser_class
+# =============================================================================
+# Core Functions
+# =============================================================================
 
 
-# Auto-register all built-in parsers
-register_parser(KimiK2ToolCallParser)
-
-
-def get_tool_call_parser(
-    model: str,
-) -> Optional[Callable[[str], tuple[str, List[ChatCompletionToolCallChunk]]]]:
-    """
-    Get an appropriate tool call parser for the given model.
-
-    Args:
-        model: The model identifier
-
-    Returns:
-        A parser function if found, None otherwise
-    """
-    for pattern, parser in PARSER_REGISTRY.items():
-        if pattern in model.lower():
-            return parser
-
+def get_pattern_for_model(model: str) -> Optional[str]:
+    """Get the pattern name for a model, or None if no parsing needed."""
+    model_lower = model.lower()
+    for model_id, pattern_name in MODEL_TO_PATTERN.items():
+        if model_id in model_lower:
+            return pattern_name
     return None
 
 
-def parse_tool_calls_for_model(
-    model: str, text: str, **kwargs
-) -> tuple[str, List[ChatCompletionToolCallChunk]]:
+def clean_tool_tokens_from_text(text: str, model: str) -> str:
     """
-    Parse tool calls using the appropriate model-specific parser.
+    Remove proprietary tool call tokens from text content.
+
+    This is the main function called from converse_transformation.py
+    to clean model responses before returning to users.
 
     Args:
+        text: The raw text content from model response
         model: The model identifier
-        text: Text content that may contain proprietary tool call markers
-        **kwargs: Additional arguments for the parser
 
     Returns:
-        Tuple of (cleaned_text_without_markers, list_of_parsed_tools)
+        Cleaned text with proprietary tokens removed
     """
-    parser = get_tool_call_parser(model)
+    pattern_name = get_pattern_for_model(model)
+    if pattern_name is None:
+        return text
 
-    if parser is None:
-        # No specific parser found, return original text with no tools
+    if pattern_name not in TOOL_CALL_PATTERNS:
+        return text
+
+    markers = TOOL_CALL_PATTERNS[pattern_name]
+    cleaned = text
+
+    # Remove section markers if present (Kimi)
+    if "section_begin" in markers:
+        section_pattern = (
+            rf"{re.escape(markers['section_begin'])}"
+            rf".*?"
+            rf"{re.escape(markers['section_end'])}"
+        )
+        cleaned = re.sub(section_pattern, "", cleaned, flags=re.DOTALL)
+
+    # Remove individual tool call blocks
+    if pattern_name == "kimi":
+        # Kimi format: <|tool_call_begin|>func<|tool_call_argument_begin|>{...}<|tool_call_end|>
+        tool_pattern = (
+            rf"{re.escape(markers['begin'])}"
+            rf"[^<]*"
+            rf"{re.escape(markers['arg_begin'])}"
+            rf"[^<]*"
+            rf"{re.escape(markers['end'])}"
+        )
+        cleaned = re.sub(tool_pattern, "", cleaned, flags=re.DOTALL)
+    elif pattern_name == "minimax":
+        # MiniMax format: [TOOL_CALL] {...} [/TOOL_CALL]
+        tool_pattern = (
+            rf"{re.escape(markers['begin'])}" rf".*?" rf"{re.escape(markers['end'])}"
+        )
+        cleaned = re.sub(tool_pattern, "", cleaned, flags=re.DOTALL)
+
+    # Clean up extra whitespace
+    cleaned = re.sub(r"\n\s*\n", "\n\n", cleaned)
+    cleaned = cleaned.strip()
+
+    return cleaned
+
+
+def parse_tool_calls_for_model(
+    model: str, text: str
+) -> Tuple[str, List[ChatCompletionToolCallChunk]]:
+    """
+    Parse tool calls from text and return cleaned text.
+
+    Args:
+        model: Model identifier
+        text: Raw text that may contain tool call markers
+
+    Returns:
+        Tuple of (cleaned_text, tool_calls)
+    """
+    pattern_name = get_pattern_for_model(model)
+    if pattern_name is None:
         return text, []
 
-    return parser(text, **kwargs)
+    if pattern_name not in TOOL_CALL_PATTERNS:
+        return text, []
+
+    markers = TOOL_CALL_PATTERNS[pattern_name]
+    tool_calls = []
+
+    if pattern_name == "kimi":
+        # Parse Kimi format
+        pattern = (
+            rf"{re.escape(markers['begin'])}"
+            rf"\s*([\w\.:\-]+)\s*"
+            rf"{re.escape(markers['arg_begin'])}"
+            rf"\s*(\{{.*?\}})\s*"
+            rf"{re.escape(markers['end'])}"
+        )
+
+        for idx, match in enumerate(re.finditer(pattern, text, re.DOTALL)):
+            func_name = match.group(1).strip()
+            # Clean function name (remove prefixes like "functions.")
+            if "." in func_name and func_name.startswith("functions."):
+                func_name = func_name.replace("functions.", "").split(":")[0]
+
+            args_json = match.group(2).strip()
+
+            tool_calls.append(
+                ChatCompletionToolCallChunk(
+                    id=f"call_{idx}",
+                    type="function",
+                    function=ChatCompletionToolCallFunctionChunk(
+                        name=func_name, arguments=args_json
+                    ),
+                    index=idx,
+                )
+            )
+
+    elif pattern_name == "minimax":
+        # Parse MiniMax format: [TOOL_CALL] {tool => "name", args => {...}} [/TOOL_CALL]
+        pattern = (
+            rf"{re.escape(markers['begin'])}"
+            rf"\s*\{{\s*tool\s*=>\s*\"([^\"]+)\"\s*,\s*args\s*=>\s*(\{{.*?\}})\s*\}}\s*"
+            rf"{re.escape(markers['end'])}"
+        )
+
+        for idx, match in enumerate(re.finditer(pattern, text, re.DOTALL)):
+            func_name = match.group(1).strip()
+            args_json = match.group(2).strip()
+
+            tool_calls.append(
+                ChatCompletionToolCallChunk(
+                    id=f"call_{idx}",
+                    type="function",
+                    function=ChatCompletionToolCallFunctionChunk(
+                        name=func_name, arguments=args_json
+                    ),
+                    index=idx,
+                )
+            )
+
+    # Clean the text
+    cleaned_text = clean_tool_tokens_from_text(text, model)
+
+    return cleaned_text, tool_calls
+
+
+# =============================================================================
+# Model Detection
+# =============================================================================
 
 
 def is_kimi_model(model: str) -> bool:
-    """
-    Check if the model is a Kimi-K2-Thinking model.
-
-    Args:
-        model: The model identifier
-
-    Returns:
-        True if it's a Kimi model, False otherwise
-    """
+    """Check if model is Kimi-K2-Thinking."""
     return "moonshot.kimi-k2-thinking" in model.lower()
 
 
 def is_minimax_m2_model(model: str) -> bool:
-    """
-    Check if the model is a MiniMax M2 model.
-
-    Args:
-        model: The model identifier
-
-    Returns:
-        True if it's a MiniMax M2 model, False otherwise
-    """
+    """Check if model is MiniMax M2."""
     return "minimax.minimax-m2" in model.lower()
 
 
-def needs_kimi_parsing(text_content: str) -> bool:
-    """
-    Check if the text content contains Kimi-specific tool call markers.
-
-    Args:
-        text_content: The text content to check
-
-    Returns:
-        True if Kimi parsing is needed, False otherwise
-    """
-    return (
-        "<|tool_calls_section_begin|>" in text_content
-        or "<|tool_call_begin|>" in text_content
-    )
-
-
-def parse_kimi_tool_calls(text_content: str) -> List[ChatCompletionToolCallChunk]:
-    """
-    Parse Kimi-K2-Thinking proprietary token-stream format to extract tool calls.
-
-    Kimi-K2-Thinking outputs raw tokens with markers like:
-    <|tool_calls_section_begin|>...<|tool_call_begin|>function_name<|tool_call_argument_begin|>{...}<|tool_call_end|>...<|tool_calls_section_end|>
-
-    Args:
-        text_content: The text content from the model response
-
-    Returns:
-        List of parsed tool call chunks
-    """
-    tool_calls = []
-
-    # Pattern to capture individual tool calls
-    # Matches: <|tool_call_begin|>function_name<|tool_call_argument_begin|>{arguments}<|tool_call_end|>
-    pattern = r"<\|tool_call_begin\|>\s*([\w\.]+)\s*<\|tool_call_argument_begin\|>\s*(\{.*?\})\s*<\|tool_call_end\|>"
-
-    matches = re.finditer(pattern, text_content, re.DOTALL)
-
-    for i, match in enumerate(matches):
-        function_name = match.group(1)
-        arguments = match.group(2)
-
-        # Generate a unique ID for the tool call
-        tool_call_id = f"call_kimi_{i}_{hash(arguments) % 100000000}"
-
-        # Create the function chunk
-        function_chunk = ChatCompletionToolCallFunctionChunk(
-            name=function_name, arguments=arguments
-        )
-
-        # Create the tool call chunk
-        tool_call_chunk = ChatCompletionToolCallChunk(
-            id=tool_call_id, type="function", function=function_chunk, index=i
-        )
-
-        tool_calls.append(tool_call_chunk)
-
-    return tool_calls
-
-
-# Export public API
-__all__ = [
-    "ToolCallParser",
-    "KimiK2ToolCallParser",
-    "register_parser",
-    "get_tool_call_parser",
-    "parse_tool_calls_for_model",
-    "is_kimi_model",
-    "is_minimax_m2_model",
-    "needs_kimi_parsing",
-    "parse_kimi_tool_calls",
-]
+def needs_token_cleaning(model: str) -> bool:
+    """Check if model may return proprietary tokens that need cleaning."""
+    return get_pattern_for_model(model) is not None
