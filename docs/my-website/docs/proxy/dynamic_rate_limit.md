@@ -175,7 +175,37 @@ general_settings:
 litellm --config /path/to/config.yaml
 ```
 
-#### 2. Create Keys with Priority Levels
+### Set priority on either a team or a key
+
+Priority can be set at either the **team level** or **key level**. Team-level priority takes precedence over key-level priority.
+
+**Option A: Set Priority on Team (Recommended)**
+
+All keys within a team will inherit the team's priority. This is useful when you want all keys for a specific environment or project to have the same priority.
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/team/new' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+  "team_alias": "production-team",
+  "metadata": {"priority": "prod"}
+}'
+```
+
+Create a key for this team:
+```bash
+curl -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+  "team_id": "team-id-from-previous-response"
+}'
+```
+
+**Option B: Set Priority on Individual Keys**
+
+Set priority directly on the key. This is useful when you need fine-grained control per key.
 
 **Production Key:**
 ```bash
@@ -205,7 +235,7 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
 -d '{}'
 ```
 
-**Expected Response for both:**
+**Expected Response:**
 ```json
 {
   "key": "sk-...",
@@ -213,6 +243,11 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
   ...
 }
 ```
+
+**Priority Resolution Order:**
+1. If key belongs to a team with `metadata.priority` set → use team priority
+2. Else if key has `metadata.priority` set → use key priority  
+3. Else → use `default_priority` from config
 
 #### 3. Test Priority Allocation
 

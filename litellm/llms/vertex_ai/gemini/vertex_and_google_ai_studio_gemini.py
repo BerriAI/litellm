@@ -1085,24 +1085,26 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def _extract_thinking_blocks_from_parts(
         self, parts: List[HttpxPartType]
     ) -> List[ChatCompletionThinkingBlock]:
-        """Extract thinking blocks from parts if present"""
+        """Extract thinking blocks from parts if present.
+
+        Per Google's docs (https://ai.google.dev/gemini-api/docs/thinking):
+        - Parts with `thought: true` contain thinking/reasoning content
+        - `thoughtSignature` is a separate token for multi-turn context preservation,
+          it does NOT indicate that the content is thinking (a part can have
+          thoughtSignature without thought: true, e.g., function calls)
+        """
         thinking_blocks: List[ChatCompletionThinkingBlock] = []
         for part in parts:
-            if "thoughtSignature" in part:
-                part_copy = part.copy()
-                part_copy.pop("thoughtSignature")
-
-                text_content = part_copy.get("text")
-                if isinstance(text_content, str) and text_content.strip() == "":
-                    continue
-
-                thinking_blocks.append(
-                    ChatCompletionThinkingBlock(
-                        type="thinking",
-                        thinking=json.dumps(part_copy),
-                        signature=part["thoughtSignature"],
-                    )
-                )
+            if part.get("thought") is True:
+                thinking_text = part.get("text", "")
+                block: ChatCompletionThinkingBlock = {
+                    "type": "thinking",
+                    "thinking": thinking_text,
+                }                
+                signature = part.get("thoughtSignature")
+                if signature is not None:
+                    block["signature"] = signature
+                thinking_blocks.append(block)
         return thinking_blocks
 
     def _extract_image_response_from_parts(
