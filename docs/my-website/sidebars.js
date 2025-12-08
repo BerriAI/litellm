@@ -614,6 +614,7 @@ const sidebars = {
         "providers/github_copilot",
         "providers/gradient_ai",
         "providers/groq",
+        "providers/helicone",
         "providers/heroku",
         {
           type: "category",
@@ -850,7 +851,7 @@ const sidebars = {
               "Learn how to deploy + call models from different providers on LiteLLM",
             slug: "/project",
           },
-          items: [            
+          items: [
             "projects/smolagents",
             "projects/mini-swe-agent",
             "projects/openai-agents",

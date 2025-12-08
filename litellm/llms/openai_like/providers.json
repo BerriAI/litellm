@@ -10,5 +10,9 @@
     "special_handling": {
       "convert_content_list_to_string": true
     }
+  },
+  "helicone": {
+    "base_url": "https://ai-gateway.helicone.ai/",
+    "api_key_env": "HELICONE_API_KEY"
   }
 }
