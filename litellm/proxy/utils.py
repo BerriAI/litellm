@@ -3440,11 +3440,18 @@ async def update_spend(  # noqa: PLR0915
     spend_logs: list,
     """
     n_retry_times = 3
-    await proxy_logging_obj.db_spend_update_writer.db_update_spend_transaction_handler(
-        prisma_client=prisma_client,
-        n_retry_times=n_retry_times,
-        proxy_logging_obj=proxy_logging_obj,
-    )
+    try:
+        await proxy_logging_obj.db_spend_update_writer.db_update_spend_transaction_handler(
+            prisma_client=prisma_client,
+            n_retry_times=n_retry_times,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception as e:
+        # We catch it here to prevent it from blocking update_spend_logs from being executed.
+        # And for more precise observability of where the error occurred.
+        verbose_proxy_logger.error(
+            f"Error in db_update_spend_transaction_handler: {type(e).__name__}: {str(e)}"
+        )
 
     ### UPDATE SPEND LOGS ###
     verbose_proxy_logger.debug(
@@ -3452,12 +3459,18 @@ async def update_spend(  # noqa: PLR0915
     )
 
     if len(prisma_client.spend_log_transactions) > 0:
-        await ProxyUpdateSpend.update_spend_logs(
-            n_retry_times=n_retry_times,
-            prisma_client=prisma_client,
-            proxy_logging_obj=proxy_logging_obj,
-            db_writer_client=db_writer_client,
-        )
+        try:
+            await ProxyUpdateSpend.update_spend_logs(
+                n_retry_times=n_retry_times,
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
+                db_writer_client=db_writer_client,
+            )
+        except Exception as e:
+            # We catch it here for more precise observability of where the error occurred.
+            verbose_proxy_logger.error(
+                f"Error in update_spend_logs: {type(e).__name__}: {str(e)}"
+            )
 
 
 def _raise_failed_update_spend_exception(
