@@ -56,8 +56,7 @@ async def resolve_ui_session_team_ids(
         )
     except Exception as exc:  # pragma: no cover - defensive logging
         verbose_logger.warning(
-            "Failed to load teams for UI session token user=%s: %s",
-            user_api_key_auth.user_id,
+            "Failed to load teams for UI session token user.",
             exc,
         )
         return []
