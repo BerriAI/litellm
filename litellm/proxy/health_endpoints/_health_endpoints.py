@@ -47,7 +47,7 @@ services = Union[
         "datadog",
         "generic_api",
         "arize",
-        "sqs"
+        "sqs",
     ],
     str,
 ]
@@ -119,7 +119,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             "datadog",
             "generic_api",
             "arize",
-            "sqs"
+            "sqs",
         ]:
             raise HTTPException(
                 status_code=400,
@@ -202,6 +202,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             )
         elif service == "sqs":
             from litellm.integrations.sqs import SQSLogger
+
             sqs_logger = SQSLogger()
             response = await sqs_logger.async_health_check()
             return {
@@ -400,12 +401,12 @@ async def _save_health_check_to_db(
 def _build_model_param_to_info_mapping(model_list: list) -> dict:
     """
     Build a mapping from model parameter to model info (model_name, model_id).
-    
+
     Multiple models might share the same model parameter, so we use a list.
-    
+
     Args:
         model_list: List of model configurations
-        
+
     Returns:
         Dictionary mapping model parameter to list of model info dicts
     """
@@ -416,14 +417,16 @@ def _build_model_param_to_info_mapping(model_list: list) -> dict:
         model_id = model_info.get("id")
         litellm_params = model.get("litellm_params", {})
         model_param = litellm_params.get("model")
-        
+
         if model_param and model_name:
             if model_param not in model_param_to_info:
                 model_param_to_info[model_param] = []
-            model_param_to_info[model_param].append({
-                "model_name": model_name,
-                "model_id": model_id,
-            })
+            model_param_to_info[model_param].append(
+                {
+                    "model_name": model_name,
+                    "model_id": model_id,
+                }
+            )
     return model_param_to_info
 
 
@@ -434,19 +437,19 @@ def _aggregate_health_check_results(
 ) -> dict:
     """
     Aggregate health check results per unique model.
-    
+
     Uses (model_id, model_name) as key, or (None, model_name) if model_id is None.
-    
+
     Args:
         model_param_to_info: Mapping from model parameter to model info
         healthy_endpoints: List of healthy endpoint results
         unhealthy_endpoints: List of unhealthy endpoint results
-        
+
     Returns:
         Dictionary mapping (model_id, model_name) to aggregated health check results
     """
     model_results = {}
-    
+
     # Process healthy endpoints
     for endpoint in healthy_endpoints:
         model_param = endpoint.get("model")
@@ -462,7 +465,7 @@ def _aggregate_health_check_results(
                         "error_message": None,
                     }
                 model_results[key]["healthy_count"] += 1
-    
+
     # Process unhealthy endpoints
     for endpoint in unhealthy_endpoints:
         model_param = endpoint.get("model")
@@ -482,7 +485,7 @@ def _aggregate_health_check_results(
                 # Use the first error message encountered
                 if not model_results[key]["error_message"] and error_message:
                     model_results[key]["error_message"] = str(error_message)[:500]
-    
+
     return model_results
 
 
@@ -495,14 +498,14 @@ async def _save_health_check_results_if_changed(
 ):
     """
     Save health check results to database, but only if status changed or >1 hour since last save.
-    
+
     OPTIMIZATION: Only saves to database if the status has changed from the last saved check.
     This dramatically reduces database writes when health status remains stable.
-    
+
     - Stable systems: ~1 write/hour per model (instead of 12 writes/hour with 5-min intervals)
     - Status changes: Immediate write (no delay)
     - Result: ~92% reduction in DB writes for stable systems, while maintaining real-time updates on changes
-    
+
     Args:
         prisma_client: Database client
         model_results: Dictionary of aggregated health check results per model
@@ -512,7 +515,7 @@ async def _save_health_check_results_if_changed(
     """
     for result in model_results.values():
         new_status = "healthy" if result["healthy_count"] > 0 else "unhealthy"
-        
+
         # Check if we should save this result
         should_save = True
         lookup_key = result["model_id"] if result["model_id"] else result["model_name"]
@@ -523,6 +526,7 @@ async def _save_health_check_results_if_changed(
                 # Check if last check was recent (within 1 hour)
                 if last_check.checked_at:
                     from datetime import datetime, timezone
+
                     time_since_last_check = (
                         datetime.now(timezone.utc) - last_check.checked_at
                     ).total_seconds()
@@ -530,7 +534,7 @@ async def _save_health_check_results_if_changed(
                     # This ensures we still get periodic updates even if status is stable
                     if time_since_last_check < 3600:  # 1 hour threshold
                         should_save = False
-        
+
         if should_save:
             asyncio.create_task(
                 prisma_client.save_health_check_result(
@@ -557,27 +561,27 @@ async def _save_background_health_checks_to_db(
 ):
     """
     Save background health check results to database for each model.
-    
+
     Maps health check endpoints back to their original models to get model_name and model_id.
     Aggregates results per unique model (by model_id if available, otherwise model_name).
-    
+
     OPTIMIZATION: Only saves to database if the status has changed from the last saved check.
     This dramatically reduces database writes when health status remains stable.
     """
     if prisma_client is None:
         return
-    
+
     try:
         # Step 1: Build mapping from model parameter to model info
         model_param_to_info = _build_model_param_to_info_mapping(model_list)
-        
+
         # Step 2: Aggregate health check results per unique model
         model_results = _aggregate_health_check_results(
             model_param_to_info,
             healthy_endpoints,
             unhealthy_endpoints,
         )
-        
+
         # Step 3: Get latest health checks for all models in one query to compare status
         latest_checks = await prisma_client.get_all_latest_health_checks()
         latest_checks_map = {}
@@ -586,7 +590,7 @@ async def _save_background_health_checks_to_db(
             key = check.model_id if check.model_id else check.model_name
             if key not in latest_checks_map:
                 latest_checks_map[key] = check
-        
+
         # Step 4: Save aggregated results, but only if status changed
         await _save_health_check_results_if_changed(
             prisma_client,
@@ -1197,7 +1201,7 @@ async def test_model_connection(
                 status_code=500,
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
-        ## Auth check
+        # Auth check
         await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=Deployment(
                 model_name="test_model",

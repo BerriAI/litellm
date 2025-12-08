@@ -74,6 +74,8 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
           modelInfoObj[key] = value;
         } else if (key === "team_id") {
           modelInfoObj["team_id"] = value;
+        } else if (key === "has_requested_public_access") {
+          modelInfoObj["has_requested_public_access"] = value;
         } else if (key === "model_access_group") {
           modelInfoObj["access_groups"] = value;
         } else if (key == "mode") {

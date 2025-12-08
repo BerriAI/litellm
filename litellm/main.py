@@ -52,10 +52,13 @@ from pydantic import BaseModel
 from typing_extensions import overload
 
 import litellm
+
 # client must be imported from litellm as it's a decorator used at function definition time
 from litellm import client
+
 # Other utils are imported directly to avoid circular imports
 from litellm.utils import exception_type, get_litellm_params, get_optional_params
+
 # Logging is imported lazily when needed to avoid loading litellm_logging at import time
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -3571,7 +3574,6 @@ def completion(  # type: ignore # noqa: PLR0915
             if api_key is not None and "Authorization" not in headers:
                 headers["Authorization"] = f"Bearer {api_key}"
 
-
             response = base_llm_http_handler.completion(
                 model=model,
                 stream=stream,
@@ -4325,7 +4327,7 @@ def embedding(  # noqa: PLR0915
                 litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "github_copilot":
-            api_key = (api_key or litellm.api_key)
+            api_key = api_key or litellm.api_key
             response = base_llm_http_handler.embedding(
                 model=model,
                 input=input,
@@ -6234,16 +6236,16 @@ def speech(  # noqa: PLR0915
             text_to_speech_provider_config = VertexAITextToSpeechConfig()
 
         # Cast to specific Vertex AI config type to access dispatch method
-        vertex_config = cast(
-            VertexAITextToSpeechConfig, text_to_speech_provider_config
-        )
+        vertex_config = cast(VertexAITextToSpeechConfig, text_to_speech_provider_config)
 
         # Store Vertex AI specific params in litellm_params_dict
-        litellm_params_dict.update({
-            "vertex_project": generic_optional_params.vertex_project,
-            "vertex_location": generic_optional_params.vertex_location,
-            "vertex_credentials": generic_optional_params.vertex_credentials,
-        })
+        litellm_params_dict.update(
+            {
+                "vertex_project": generic_optional_params.vertex_project,
+                "vertex_location": generic_optional_params.vertex_location,
+                "vertex_credentials": generic_optional_params.vertex_credentials,
+            }
+        )
 
         response = vertex_config.dispatch_text_to_speech(
             model=model,
@@ -6381,13 +6383,17 @@ async def ahealth_check(
     #########################################################
     try:
         model: Optional[str] = model_params.get("model", None)
+
         if model is None:
             raise Exception("model not set")
 
         if model in litellm.model_cost and mode is None:
             mode = litellm.model_cost[model].get("mode")
 
-        model, custom_llm_provider, _, _ = get_llm_provider(model=model)
+        model, custom_llm_provider, _, _ = get_llm_provider(
+            model=model,
+            custom_llm_provider=model_params.get("custom_llm_provider", None),
+        )
         if model in litellm.model_cost and mode is None:
             mode = litellm.model_cost[model].get("mode")
 
@@ -6396,6 +6402,7 @@ async def ahealth_check(
         }  # don't used cached responses for making health check calls
         mode = mode or "chat"
         if "*" in model:
+
             return await HealthCheckHelpers.ahealth_check_wildcard_models(
                 model=model,
                 custom_llm_provider=custom_llm_provider,

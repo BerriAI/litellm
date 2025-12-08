@@ -107,7 +107,7 @@ class HealthCheckHelpers:
         Callable,
     ]:
         """
-        Returns a dictionary of mode handlers for health check calls. 
+        Returns a dictionary of mode handlers for health check calls.
 
         Mode Handlers are Callables that need to be run for execution of the health check call.
 
