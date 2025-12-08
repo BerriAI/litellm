@@ -414,6 +414,7 @@ LITELLM_CHAT_PROVIDERS = [
     "ovhcloud",
     "lemonade",
     "docker_model_runner",
+    "amazon_nova",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [

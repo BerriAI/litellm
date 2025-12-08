@@ -265,6 +265,7 @@ heroku_key: Optional[str] = None
 cometapi_key: Optional[str] = None
 ovhcloud_key: Optional[str] = None
 lemonade_key: Optional[str] = None
+amazon_nova_api_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
@@ -572,6 +573,7 @@ ovhcloud_models: Set = set()
 ovhcloud_embedding_models: Set = set()
 lemonade_models: Set = set()
 docker_model_runner_models: Set = set()
+amazon_nova_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -814,6 +816,8 @@ def add_known_models():
             lemonade_models.add(key)
         elif value.get("litellm_provider") == "docker_model_runner":
             docker_model_runner_models.add(key)
+        elif value.get("litellm_provider") == "amazon_nova":
+            amazon_nova_models.add(key)
 
 
 add_known_models()
@@ -1015,6 +1019,7 @@ models_by_provider: dict = {
     "ovhcloud": ovhcloud_models | ovhcloud_embedding_models,
     "lemonade": lemonade_models,
     "clarifai": clarifai_models,
+    "amazon_nova": amazon_nova_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1359,6 +1364,7 @@ from .llms.ovhcloud.embedding.transformation import OVHCloudEmbeddingConfig
 from .llms.cometapi.embed.transformation import CometAPIEmbeddingConfig
 from .llms.lemonade.chat.transformation import LemonadeChatConfig
 from .llms.snowflake.embedding.transformation import SnowflakeEmbeddingConfig
+from .llms.amazon_nova.chat.transformation import AmazonNovaChatConfig
 from .main import *  # type: ignore
 
 # Skills API
