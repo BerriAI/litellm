@@ -54,6 +54,20 @@ model LiteLLM_ProxyModelTable {
   updated_by String
 }
 
+
+// Agents on proxy
+model LiteLLM_AgentsTable {
+  agent_id String @id @default(uuid())
+  agent_name String @unique
+  litellm_params Json?
+  agent_card_params Json
+  agent_access_groups String[]       @default([])
+  created_at    DateTime               @default(now()) @map("created_at")
+  created_by String
+  updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
+  updated_by String
+}
+
 model LiteLLM_OrganizationTable {
 		organization_id String @id @default(uuid())
     organization_alias  String
@@ -159,6 +173,8 @@ model LiteLLM_ObjectPermissionTable {
   mcp_access_groups     String[]       @default([])
   mcp_tool_permissions  Json?          // Tool-level permissions for MCP servers. Format: {"server_id": ["tool_name_1", "tool_name_2"]}
   vector_stores         String[]       @default([])
+  agents                String[]       @default([])
+  agent_access_groups   String[]       @default([])
   teams                 LiteLLM_TeamTable[]
   verification_tokens   LiteLLM_VerificationToken[]
   organizations         LiteLLM_OrganizationTable[]
@@ -174,6 +190,7 @@ model LiteLLM_MCPServerTable {
   url          String?
   transport    String         @default("sse")
   auth_type    String?        
+  credentials  Json?          @default("{}")
   created_at   DateTime?      @default(now()) @map("created_at")
   created_by   String?
   updated_at   DateTime?      @default(now()) @updatedAt @map("updated_at")
@@ -290,6 +307,7 @@ model LiteLLM_SpendLogs {
   cache_key           String?   @default("")
   request_tags        Json?     @default("[]")
   team_id             String? 
+  organization_id     String?
   end_user            String?
   requester_ip_address String?
   messages            Json?     @default("{}")
@@ -418,6 +436,63 @@ model LiteLLM_DailyUserSpend {
   @@index([mcp_namespaced_tool_name])
 }
 
+// Track daily organization spend metrics per model and key
+model LiteLLM_DailyOrganizationSpend {
+  id                  String   @id @default(uuid())
+  organization_id     String?
+  date                String
+  api_key             String   
+  model               String?
+  model_group         String?  
+  custom_llm_provider String?
+  mcp_namespaced_tool_name String?
+  prompt_tokens       BigInt      @default(0)
+  completion_tokens   BigInt      @default(0)
+  cache_read_input_tokens     BigInt      @default(0)
+  cache_creation_input_tokens BigInt      @default(0)
+  spend               Float    @default(0.0)
+  api_requests        BigInt      @default(0)
+  successful_requests BigInt      @default(0)
+  failed_requests     BigInt      @default(0)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  @@unique([organization_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name])
+  @@index([date])
+  @@index([organization_id])
+  @@index([api_key])
+  @@index([model])
+  @@index([mcp_namespaced_tool_name])
+}
+
+// Track daily end user (customer) spend metrics per model and key
+model LiteLLM_DailyEndUserSpend {
+  id                  String   @id @default(uuid())
+  end_user_id         String?
+  date                String
+  api_key             String   
+  model               String?
+  model_group         String?  
+  custom_llm_provider String?
+  mcp_namespaced_tool_name String?
+  prompt_tokens       BigInt      @default(0)
+  completion_tokens   BigInt      @default(0)
+  cache_read_input_tokens     BigInt      @default(0)
+  cache_creation_input_tokens BigInt      @default(0)
+  spend               Float    @default(0.0)
+  api_requests        BigInt      @default(0)
+  successful_requests BigInt      @default(0)
+  failed_requests     BigInt      @default(0)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+  @@unique([end_user_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name])
+  @@index([date])
+  @@index([end_user_id])
+  @@index([api_key])
+  @@index([model])
+  @@index([mcp_namespaced_tool_name])
+}
+
 // Track daily team spend metrics per model and key
 model LiteLLM_DailyTeamSpend {
   id                  String   @id @default(uuid())
@@ -450,6 +525,7 @@ model LiteLLM_DailyTeamSpend {
 // Track daily team spend metrics per model and key
 model LiteLLM_DailyTagSpend {
   id                  String   @id @default(uuid())
+  request_id          String?
   tag                 String?   
   date                String
   api_key             String   
@@ -546,11 +622,15 @@ model LiteLLM_GuardrailsTable {
 // Prompt table for storing prompt configurations
 model LiteLLM_PromptTable {
   id String @id @default(uuid())
-  prompt_id String @unique
+  prompt_id String
+  version Int @default(1)
   litellm_params Json
   prompt_info Json?
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
+
+  @@unique([prompt_id, version])
+  @@index([prompt_id])
 }
 
 model LiteLLM_HealthCheckTable {

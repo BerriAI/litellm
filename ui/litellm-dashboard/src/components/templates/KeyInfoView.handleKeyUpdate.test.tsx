@@ -43,6 +43,7 @@ vi.mock("@/utils/dataUtils", () => ({
 vi.mock("../key_info_utils", () => ({
   extractLoggingSettings: () => ({}),
   formatMetadataForDisplay: (m: any) => JSON.stringify(m, null, 2),
+  stripTagsFromMetadata: (m: any) => m,
 }));
 vi.mock("../callback_info_helpers", () => ({
   callback_map: {},
@@ -244,7 +245,7 @@ import KeyInfoView from "./key_info_view";
 const baseKeyData = {
   token_id: "tok_123",
   token: "tok_123",
-  key_alias: "My API Key",
+  key_alias: "My Virtual Key",
   key_name: "sk-xxxx",
   created_at: new Date().toISOString(),
   updated_at: new Date().toISOString(),

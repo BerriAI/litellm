@@ -118,7 +118,23 @@ def get_litellm_params(
         "bucket_name": kwargs.get("bucket_name"),
         "vertex_credentials": kwargs.get("vertex_credentials"),
         "vertex_project": kwargs.get("vertex_project"),
+        "vertex_location": kwargs.get("vertex_location"),
+        "vertex_ai_project": kwargs.get("vertex_ai_project"),
+        "vertex_ai_location": kwargs.get("vertex_ai_location"),
+        "vertex_ai_credentials": kwargs.get("vertex_ai_credentials"),
         "use_litellm_proxy": use_litellm_proxy,
         "litellm_request_debug": litellm_request_debug,
+        "aws_region_name": kwargs.get("aws_region_name"),
+        # AWS credentials for Bedrock/Sagemaker
+        "aws_access_key_id": kwargs.get("aws_access_key_id"),
+        "aws_secret_access_key": kwargs.get("aws_secret_access_key"),
+        "aws_session_token": kwargs.get("aws_session_token"),
+        "aws_session_name": kwargs.get("aws_session_name"),
+        "aws_profile_name": kwargs.get("aws_profile_name"),
+        "aws_role_name": kwargs.get("aws_role_name"),
+        "aws_web_identity_token": kwargs.get("aws_web_identity_token"),
+        "aws_sts_endpoint": kwargs.get("aws_sts_endpoint"),
+        "aws_external_id": kwargs.get("aws_external_id"),
+        "aws_bedrock_runtime_endpoint": kwargs.get("aws_bedrock_runtime_endpoint"),
     }
     return litellm_params

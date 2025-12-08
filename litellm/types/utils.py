@@ -1,16 +1,7 @@
 import json
 import time
 from enum import Enum
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    List,
-    Literal,
-    Mapping,
-    Optional,
-    Union,
-)
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Optional, Union
 
 from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
@@ -128,6 +119,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
         float
     ]  # OpenAI priority service tier pricing
     cache_creation_input_token_cost: Optional[float]
+    cache_creation_input_token_cost_above_200k_tokens: Optional[float]
     cache_creation_input_token_cost_above_1hr: Optional[float]
     cache_read_input_token_cost: Optional[float]
     cache_read_input_token_cost_flex: Optional[
@@ -136,6 +128,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_priority: Optional[
         float
     ]  # OpenAI priority service tier pricing
+    cache_read_input_token_cost_above_200k_tokens: Optional[float]
     input_cost_per_character: Optional[float]  # only for vertex ai models
     input_cost_per_audio_token: Optional[float]
     input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
@@ -169,6 +162,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
         float
     ]  # only for vertex ai models
     output_cost_per_image: Optional[float]
+    output_cost_per_image_token: Optional[float]
     output_vector_size: Optional[int]
     output_cost_per_reasoning_token: Optional[float]
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
@@ -297,7 +291,23 @@ class CallTypes(str, Enum):
     avideo_retrieve_job = "avideo_retrieve_job"
     video_delete = "video_delete"
     avideo_delete = "avideo_delete"
-    
+    vector_store_file_create = "vector_store_file_create"
+    avector_store_file_create = "avector_store_file_create"
+    vector_store_file_list = "vector_store_file_list"
+    avector_store_file_list = "avector_store_file_list"
+    vector_store_file_retrieve = "vector_store_file_retrieve"
+    avector_store_file_retrieve = "avector_store_file_retrieve"
+    vector_store_file_content = "vector_store_file_content"
+    avector_store_file_content = "avector_store_file_content"
+    vector_store_file_update = "vector_store_file_update"
+    avector_store_file_update = "avector_store_file_update"
+    vector_store_file_delete = "vector_store_file_delete"
+    avector_store_file_delete = "avector_store_file_delete"
+    vector_store_create = "vector_store_create"
+    avector_store_create = "avector_store_create"
+    vector_store_search = "vector_store_search"
+    avector_store_search = "avector_store_search"
+
     #########################################################
     # Container Call Types
     #########################################################
@@ -309,7 +319,7 @@ class CallTypes(str, Enum):
     aretrieve_container = "aretrieve_container"
     delete_container = "delete_container"
     adelete_container = "adelete_container"
-    
+
     acancel_fine_tuning_job = "acancel_fine_tuning_job"
     cancel_fine_tuning_job = "cancel_fine_tuning_job"
     alist_fine_tuning_jobs = "alist_fine_tuning_jobs"
@@ -331,9 +341,21 @@ class CallTypes(str, Enum):
     agenerate_content_stream = "agenerate_content_stream"
 
     #########################################################
+    # OCR Call Types
+    #########################################################
+    ocr = "ocr"
+    aocr = "aocr"
+
+    #########################################################
     # MCP Call Types
     #########################################################
     call_mcp_tool = "call_mcp_tool"
+
+    #########################################################
+    # A2A Call Types
+    #########################################################
+    asend_message = "asend_message"
+    send_message = "send_message"
 
 
 CallTypesLiteral = Literal[
@@ -370,9 +392,353 @@ CallTypesLiteral = Literal[
     "agenerate_content_stream",
     "ocr",
     "aocr",
-    "avector_store_search",
+    "vector_store_create",
+    "avector_store_create",
     "vector_store_search",
+    "avector_store_search",
+    "vector_store_file_create",
+    "avector_store_file_create",
+    "vector_store_file_list",
+    "avector_store_file_list",
+    "vector_store_file_retrieve",
+    "avector_store_file_retrieve",
+    "vector_store_file_content",
+    "avector_store_file_content",
+    "vector_store_file_update",
+    "avector_store_file_update",
+    "vector_store_file_delete",
+    "avector_store_file_delete",
+    "call_mcp_tool",
+    "asend_message",
+    "send_message",
+    "aresponses",
+    "responses",
 ]
+
+# Mapping of API routes to their corresponding call types
+API_ROUTE_TO_CALL_TYPES = {
+    # Chat Completions
+    "/chat/completions": [CallTypes.acompletion, CallTypes.completion],
+    "/v1/chat/completions": [CallTypes.acompletion, CallTypes.completion],
+    "/engines/{model}/chat/completions": [CallTypes.acompletion, CallTypes.completion],
+    "/openai/deployments/{model}/chat/completions": [
+        CallTypes.acompletion,
+        CallTypes.completion,
+    ],
+    # Text Completions
+    "/completions": [CallTypes.atext_completion, CallTypes.text_completion],
+    "/v1/completions": [CallTypes.atext_completion, CallTypes.text_completion],
+    "/engines/{model}/completions": [
+        CallTypes.atext_completion,
+        CallTypes.text_completion,
+    ],
+    "/openai/deployments/{model}/completions": [
+        CallTypes.atext_completion,
+        CallTypes.text_completion,
+    ],
+    # Embeddings
+    "/embeddings": [CallTypes.aembedding, CallTypes.embedding],
+    "/v1/embeddings": [CallTypes.aembedding, CallTypes.embedding],
+    "/engines/{model}/embeddings": [CallTypes.aembedding, CallTypes.embedding],
+    "/openai/deployments/{model}/embeddings": [
+        CallTypes.aembedding,
+        CallTypes.embedding,
+    ],
+    # Image Generation
+    "/images/generations": [CallTypes.aimage_generation, CallTypes.image_generation],
+    "/v1/images/generations": [CallTypes.aimage_generation, CallTypes.image_generation],
+    "/engines/{model}/images/generations": [
+        CallTypes.aimage_generation,
+        CallTypes.image_generation,
+    ],
+    "/openai/deployments/{model}/images/generations": [
+        CallTypes.aimage_generation,
+        CallTypes.image_generation,
+    ],
+    # Image Edits
+    "/images/edits": [CallTypes.aimage_edit, CallTypes.image_edit],
+    "/v1/images/edits": [CallTypes.aimage_edit, CallTypes.image_edit],
+    # Audio Transcriptions
+    "/audio/transcriptions": [CallTypes.atranscription, CallTypes.transcription],
+    "/v1/audio/transcriptions": [CallTypes.atranscription, CallTypes.transcription],
+    # Audio Speech
+    "/audio/speech": [CallTypes.aspeech, CallTypes.speech],
+    "/v1/audio/speech": [CallTypes.aspeech, CallTypes.speech],
+    # Moderations
+    "/moderations": [CallTypes.amoderation, CallTypes.moderation],
+    "/v1/moderations": [CallTypes.amoderation, CallTypes.moderation],
+    # Rerank
+    "/rerank": [CallTypes.arerank, CallTypes.rerank],
+    "/v1/rerank": [CallTypes.arerank, CallTypes.rerank],
+    "/v2/rerank": [CallTypes.arerank, CallTypes.rerank],
+    # Search
+    "/search": [CallTypes.asearch, CallTypes.search],
+    "/v1/search": [CallTypes.asearch, CallTypes.search],
+    # Batches
+    "/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
+    "/v1/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
+    "/batches/{batch_id}": [CallTypes.aretrieve_batch, CallTypes.retrieve_batch],
+    "/v1/batches/{batch_id}": [CallTypes.aretrieve_batch, CallTypes.retrieve_batch],
+    # Files
+    "/files": [
+        CallTypes.acreate_file,
+        CallTypes.create_file,
+        CallTypes.afile_list,
+        CallTypes.file_list,
+    ],
+    "/v1/files": [
+        CallTypes.acreate_file,
+        CallTypes.create_file,
+        CallTypes.afile_list,
+        CallTypes.file_list,
+    ],
+    "/files/{file_id}": [
+        CallTypes.afile_retrieve,
+        CallTypes.file_retrieve,
+        CallTypes.afile_delete,
+        CallTypes.file_delete,
+    ],
+    "/v1/files/{file_id}": [
+        CallTypes.afile_retrieve,
+        CallTypes.file_retrieve,
+        CallTypes.afile_delete,
+        CallTypes.file_delete,
+    ],
+    "/files/{file_id}/content": [CallTypes.afile_content, CallTypes.file_content],
+    "/v1/files/{file_id}/content": [CallTypes.afile_content, CallTypes.file_content],
+    # Assistants
+    "/assistants": [
+        CallTypes.aget_assistants,
+        CallTypes.get_assistants,
+        CallTypes.acreate_assistants,
+        CallTypes.create_assistants,
+    ],
+    "/v1/assistants": [
+        CallTypes.aget_assistants,
+        CallTypes.get_assistants,
+        CallTypes.acreate_assistants,
+        CallTypes.create_assistants,
+    ],
+    "/assistants/{assistant_id}": [
+        CallTypes.adelete_assistant,
+        CallTypes.delete_assistant,
+    ],
+    "/v1/assistants/{assistant_id}": [
+        CallTypes.adelete_assistant,
+        CallTypes.delete_assistant,
+    ],
+    # Threads
+    "/threads": [CallTypes.acreate_thread, CallTypes.create_thread],
+    "/v1/threads": [CallTypes.acreate_thread, CallTypes.create_thread],
+    "/threads/{thread_id}": [CallTypes.aget_thread, CallTypes.get_thread],
+    "/v1/threads/{thread_id}": [CallTypes.aget_thread, CallTypes.get_thread],
+    # Thread Messages
+    "/threads/{thread_id}/messages": [
+        CallTypes.a_add_message,
+        CallTypes.add_message,
+        CallTypes.aget_messages,
+        CallTypes.get_messages,
+    ],
+    "/v1/threads/{thread_id}/messages": [
+        CallTypes.a_add_message,
+        CallTypes.add_message,
+        CallTypes.aget_messages,
+        CallTypes.get_messages,
+    ],
+    # Thread Runs
+    "/threads/{thread_id}/runs": [
+        CallTypes.arun_thread,
+        CallTypes.run_thread,
+        CallTypes.arun_thread_stream,
+        CallTypes.run_thread_stream,
+    ],
+    "/v1/threads/{thread_id}/runs": [
+        CallTypes.arun_thread,
+        CallTypes.run_thread,
+        CallTypes.arun_thread_stream,
+        CallTypes.run_thread_stream,
+    ],
+    # Fine-tuning Jobs
+    "/fine_tuning/jobs": [
+        CallTypes.acreate_fine_tuning_job,
+        CallTypes.create_fine_tuning_job,
+        CallTypes.alist_fine_tuning_jobs,
+        CallTypes.list_fine_tuning_jobs,
+    ],
+    "/v1/fine_tuning/jobs": [
+        CallTypes.acreate_fine_tuning_job,
+        CallTypes.create_fine_tuning_job,
+        CallTypes.alist_fine_tuning_jobs,
+        CallTypes.list_fine_tuning_jobs,
+    ],
+    "/fine_tuning/jobs/{fine_tuning_job_id}": [
+        CallTypes.aretrieve_fine_tuning_job,
+        CallTypes.retrieve_fine_tuning_job,
+    ],
+    "/v1/fine_tuning/jobs/{fine_tuning_job_id}": [
+        CallTypes.aretrieve_fine_tuning_job,
+        CallTypes.retrieve_fine_tuning_job,
+    ],
+    "/fine_tuning/jobs/{fine_tuning_job_id}/cancel": [
+        CallTypes.acancel_fine_tuning_job,
+        CallTypes.cancel_fine_tuning_job,
+    ],
+    "/v1/fine_tuning/jobs/{fine_tuning_job_id}/cancel": [
+        CallTypes.acancel_fine_tuning_job,
+        CallTypes.cancel_fine_tuning_job,
+    ],
+    # Video Generation
+    "/videos": [
+        CallTypes.acreate_video,
+        CallTypes.create_video,
+        CallTypes.avideo_list,
+        CallTypes.video_list,
+    ],
+    "/v1/videos": [
+        CallTypes.acreate_video,
+        CallTypes.create_video,
+        CallTypes.avideo_list,
+        CallTypes.video_list,
+    ],
+    "/videos/{video_id}": [
+        CallTypes.avideo_retrieve,
+        CallTypes.video_retrieve,
+        CallTypes.avideo_delete,
+        CallTypes.video_delete,
+    ],
+    "/v1/videos/{video_id}": [
+        CallTypes.avideo_retrieve,
+        CallTypes.video_retrieve,
+        CallTypes.avideo_delete,
+        CallTypes.video_delete,
+    ],
+    "/videos/{video_id}/content": [CallTypes.avideo_content, CallTypes.video_content],
+    "/v1/videos/{video_id}/content": [
+        CallTypes.avideo_content,
+        CallTypes.video_content,
+    ],
+    "/videos/{video_id}/remix": [CallTypes.avideo_remix, CallTypes.video_remix],
+    "/v1/videos/{video_id}/remix": [CallTypes.avideo_remix, CallTypes.video_remix],
+    # Vector Stores
+    "/vector_stores": [CallTypes.avector_store_create, CallTypes.vector_store_create],
+    "/v1/vector_stores": [
+        CallTypes.avector_store_create,
+        CallTypes.vector_store_create,
+    ],
+    "/vector_stores/{vector_store_id}/search": [
+        CallTypes.avector_store_search,
+        CallTypes.vector_store_search,
+    ],
+    "/v1/vector_stores/{vector_store_id}/search": [
+        CallTypes.avector_store_search,
+        CallTypes.vector_store_search,
+    ],
+    "/vector_stores/{vector_store_id}/files": [
+        CallTypes.avector_store_file_create,
+        CallTypes.vector_store_file_create,
+        CallTypes.avector_store_file_list,
+        CallTypes.vector_store_file_list,
+    ],
+    "/v1/vector_stores/{vector_store_id}/files": [
+        CallTypes.avector_store_file_create,
+        CallTypes.vector_store_file_create,
+        CallTypes.avector_store_file_list,
+        CallTypes.vector_store_file_list,
+    ],
+    "/vector_stores/{vector_store_id}/files/{file_id}": [
+        CallTypes.avector_store_file_retrieve,
+        CallTypes.vector_store_file_retrieve,
+        CallTypes.avector_store_file_delete,
+        CallTypes.vector_store_file_delete,
+    ],
+    "/v1/vector_stores/{vector_store_id}/files/{file_id}": [
+        CallTypes.avector_store_file_retrieve,
+        CallTypes.vector_store_file_retrieve,
+        CallTypes.avector_store_file_delete,
+        CallTypes.vector_store_file_delete,
+    ],
+    "/vector_stores/{vector_store_id}/files/{file_id}/content": [
+        CallTypes.avector_store_file_content,
+        CallTypes.vector_store_file_content,
+    ],
+    "/v1/vector_stores/{vector_store_id}/files/{file_id}/content": [
+        CallTypes.avector_store_file_content,
+        CallTypes.vector_store_file_content,
+    ],
+    "/vector_stores/{vector_store_id}/files/{file_id}/update": [
+        CallTypes.avector_store_file_update,
+        CallTypes.vector_store_file_update,
+    ],
+    "/v1/vector_stores/{vector_store_id}/files/{file_id}/update": [
+        CallTypes.avector_store_file_update,
+        CallTypes.vector_store_file_update,
+    ],
+    # Containers
+    "/containers": [
+        CallTypes.acreate_container,
+        CallTypes.create_container,
+        CallTypes.alist_containers,
+        CallTypes.list_containers,
+    ],
+    "/v1/containers": [
+        CallTypes.acreate_container,
+        CallTypes.create_container,
+        CallTypes.alist_containers,
+        CallTypes.list_containers,
+    ],
+    "/containers/{container_id}": [
+        CallTypes.aretrieve_container,
+        CallTypes.retrieve_container,
+        CallTypes.adelete_container,
+        CallTypes.delete_container,
+    ],
+    "/v1/containers/{container_id}": [
+        CallTypes.aretrieve_container,
+        CallTypes.retrieve_container,
+        CallTypes.adelete_container,
+        CallTypes.delete_container,
+    ],
+    # Responses API
+    "/responses": [CallTypes.aresponses, CallTypes.responses],
+    "/v1/responses": [CallTypes.aresponses, CallTypes.responses],
+    "/responses/{response_id}": [CallTypes.aresponses, CallTypes.responses],
+    "/v1/responses/{response_id}": [CallTypes.aresponses, CallTypes.responses],
+    "/responses/{response_id}/input_items": [CallTypes.alist_input_items],
+    "/v1/responses/{response_id}/input_items": [CallTypes.alist_input_items],
+    # Realtime API
+    "/realtime": [CallTypes.arealtime],
+    "/v1/realtime": [CallTypes.arealtime],
+    # Provider-specific routes
+    "/anthropic/v1/messages": [CallTypes.anthropic_messages],
+    # Google GenAI routes
+    "/generate_content": [CallTypes.agenerate_content, CallTypes.generate_content],
+    "/models/{model}:generateContent": [
+        CallTypes.agenerate_content,
+        CallTypes.generate_content,
+    ],
+    "/generate_content_stream": [
+        CallTypes.agenerate_content_stream,
+        CallTypes.generate_content_stream,
+    ],
+    "/models/{model}:streamGenerateContent": [
+        CallTypes.agenerate_content_stream,
+        CallTypes.generate_content_stream,
+    ],
+    # MCP (Model Context Protocol)
+    "/mcp/call_tool": [CallTypes.call_mcp_tool],
+    # A2A (Agent-to-Agent)
+    "/a2a/{agent_id}": [CallTypes.asend_message, CallTypes.send_message],
+    # Passthrough endpoints
+    "/llm_passthrough": [
+        CallTypes.llm_passthrough_route,
+        CallTypes.allm_passthrough_route,
+    ],
+    "/v1/llm_passthrough": [
+        CallTypes.llm_passthrough_route,
+        CallTypes.allm_passthrough_route,
+    ],
+    "/v1/messages": [CallTypes.anthropic_messages],
+}
 
 
 class PassthroughCallTypes(Enum):
@@ -638,9 +1004,7 @@ class Message(OpenAIObject):
     thinking_blocks: Optional[
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
     ] = None
-    provider_specific_fields: Optional[Dict[str, Any]] = Field(
-        default=None, exclude=True
-    )
+    provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
     annotations: Optional[List[ChatCompletionAnnotation]] = None
 
     def __init__(
@@ -819,6 +1183,8 @@ class Delta(OpenAIObject):
                     if tool_call.get("index", None) is None:
                         tool_call["index"] = current_index
                         current_index += 1
+                    if tool_call.get("type", None) is None:
+                        tool_call["type"] = "function"
                     self.tool_calls.append(ChatCompletionDeltaToolCall(**tool_call))
                 elif isinstance(tool_call, ChatCompletionDeltaToolCall):
                     self.tool_calls.append(tool_call)
@@ -919,6 +1285,9 @@ class CompletionTokensDetailsWrapper(
     text_tokens: Optional[int] = None
     """Text tokens generated by the model."""
 
+    image_tokens: Optional[int] = None
+    """Image tokens generated by the model."""
+
 
 class CacheCreationTokenDetails(BaseModel):
     ephemeral_5m_input_tokens: Optional[int] = None
@@ -969,7 +1338,8 @@ class PromptTokensDetailsWrapper(
 
 
 class ServerToolUse(BaseModel):
-    web_search_requests: Optional[int]
+    web_search_requests: Optional[int] = None
+    tool_search_requests: Optional[int] = None
 
 
 class Usage(CompletionUsage):
@@ -1007,15 +1377,8 @@ class Usage(CompletionUsage):
     ):
         # handle reasoning_tokens
         _completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
-        if reasoning_tokens:
-            text_tokens = (
-                completion_tokens - reasoning_tokens if completion_tokens else None
-            )
-            completion_tokens_details = CompletionTokensDetailsWrapper(
-                reasoning_tokens=reasoning_tokens, text_tokens=text_tokens
-            )
 
-        # Ensure completion_tokens_details is properly handled
+        # First, handle existing completion_tokens_details
         if completion_tokens_details:
             if isinstance(completion_tokens_details, dict):
                 _completion_tokens_details = CompletionTokensDetailsWrapper(
@@ -1023,6 +1386,33 @@ class Usage(CompletionUsage):
                 )
             elif isinstance(completion_tokens_details, CompletionTokensDetails):
                 _completion_tokens_details = completion_tokens_details
+
+        # Handle reasoning_tokens and auto-calculate text_tokens if needed
+        if reasoning_tokens:
+            # Ensure we have a details object to work with
+            if _completion_tokens_details is None:
+                _completion_tokens_details = CompletionTokensDetailsWrapper()
+
+            # Set reasoning_tokens if not already set by provider
+            if _completion_tokens_details.reasoning_tokens is None:
+                _completion_tokens_details.reasoning_tokens = reasoning_tokens
+
+            # Auto-calculate text_tokens only if provider didn't set it explicitly
+            # Formula: text_tokens = completion_tokens - reasoning_tokens - image_tokens - audio_tokens
+            if (
+                _completion_tokens_details.text_tokens is None
+                and completion_tokens is not None
+            ):
+                calculated_text_tokens = completion_tokens - reasoning_tokens
+
+                # Subtract other modality tokens if present
+                if _completion_tokens_details.image_tokens:
+                    calculated_text_tokens -= _completion_tokens_details.image_tokens
+                if _completion_tokens_details.audio_tokens:
+                    calculated_text_tokens -= _completion_tokens_details.audio_tokens
+
+                # Prevent negative token counts from inconsistent data
+                _completion_tokens_details.text_tokens = max(0, calculated_text_tokens)
 
         # handle prompt_tokens_details
         _prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
@@ -1771,6 +2161,10 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
             total_tokens=0,
         )
         super().__init__(created=created, data=_data, usage=_usage)  # type: ignore
+
+        self.quality = kwargs.get("quality", None)
+        self.output_format = kwargs.get("output_format", None)
+        self.size = kwargs.get("size", None)
         self._hidden_params = hidden_params or {}
 
     def __contains__(self, key):
@@ -1797,8 +2191,29 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
             return self.dict()
 
 
+class TranscriptionUsageDurationObject(BaseModel):
+    type: Literal["duration"]
+    seconds: int
+
+
+class TranscriptionUsageInputTokenDetailsObject(BaseModel):
+    audio_tokens: int
+    text_tokens: int
+
+
+class TranscriptionUsageTokensObject(BaseModel):
+    type: Literal["tokens"]
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    input_token_details: TranscriptionUsageInputTokenDetailsObject
+
+
 class TranscriptionResponse(OpenAIObject):
     text: Optional[str] = None
+    usage: Optional[
+        Union[TranscriptionUsageDurationObject, TranscriptionUsageTokensObject]
+    ] = None
 
     _hidden_params: dict = {}
     _response_headers: Optional[dict] = None
@@ -2267,6 +2682,10 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     posthog_api_key: Optional[str]
     posthog_api_url: Optional[str]
 
+    # Weave (W&B) dynamic params
+    wandb_api_key: Optional[str]
+    weave_project_id: Optional[str]
+
     # Logging settings
     turn_off_message_logging: Optional[bool]  # when true will not log messages
     litellm_disabled_callbacks: Optional[List[str]]
@@ -2319,6 +2738,7 @@ class CustomPricingLiteLLMParams(BaseModel):
     output_cost_per_token_above_200k_tokens: Optional[float] = None
     output_cost_per_character_above_128k_tokens: Optional[float] = None
     output_cost_per_image: Optional[float] = None
+    output_cost_per_image_token: Optional[float] = None
     output_cost_per_reasoning_token: Optional[float] = None
     output_cost_per_video_per_second: Optional[float] = None
     output_cost_per_audio_per_second: Optional[float] = None
@@ -2427,6 +2847,7 @@ all_litellm_params = (
         "use_litellm_proxy",
         "prompt_label",
         "shared_session",
+        "search_tool_name",
     ]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())
@@ -2478,6 +2899,7 @@ class LlmProviders(str, Enum):
     OPENAI_LIKE = "openai_like"  # embedding only
     JINA_AI = "jina_ai"
     XAI = "xai"
+    ZAI = "zai"
     CUSTOM_OPENAI = "custom_openai"
     TEXT_COMPLETION_OPENAI = "text-completion-openai"
     COHERE = "cohere"
@@ -2487,6 +2909,7 @@ class LlmProviders(str, Enum):
     ANTHROPIC_TEXT = "anthropic_text"
     BYTEZ = "bytez"
     REPLICATE = "replicate"
+    RUNWAYML = "runwayml"
     HUGGINGFACE = "huggingface"
     TOGETHER_AI = "together_ai"
     OPENROUTER = "openrouter"
@@ -2521,6 +2944,7 @@ class LlmProviders(str, Enum):
     TEXT_COMPLETION_CODESTRAL = "text-completion-codestral"
     DASHSCOPE = "dashscope"
     MOONSHOT = "moonshot"
+    PUBLICAI = "publicai"
     V0 = "v0"
     MORPH = "morph"
     LAMBDA_AI = "lambda_ai"
@@ -2540,7 +2964,9 @@ class LlmProviders(str, Enum):
     DATABRICKS = "databricks"
     EMPOWER = "empower"
     GITHUB = "github"
+    RAGFLOW = "ragflow"
     COMPACTIFAI = "compactifai"
+    DOCKER_MODEL_RUNNER = "docker_model_runner"
     CUSTOM = "custom"
     LITELLM_PROXY = "litellm_proxy"
     HOSTED_VLLM = "hosted_vllm"
@@ -2576,10 +3002,18 @@ class LlmProviders(str, Enum):
     WANDB = "wandb"
     OVHCLOUD = "ovhcloud"
     LEMONADE = "lemonade"
+    AMAZON_NOVA = "amazon_nova"
+    A2A_AGENT = "a2a_agent"
 
 
 # Create a set of all provider values for quick lookup
 LlmProvidersSet = {provider.value for provider in LlmProviders}
+
+# File and Batch API providers that are OpenAI-compatible
+OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS: set[str] = {
+    LlmProviders.OPENAI.value,
+    LlmProviders.HOSTED_VLLM.value,
+}
 
 
 class SearchProviders(str, Enum):
@@ -2676,7 +3110,7 @@ class LiteLLMFineTuningJob(FineTuningJob):
 
 class LiteLLMBatch(Batch):
     _hidden_params: dict = {}
-    usage: Optional[Usage] = None
+    usage: Optional[Usage] = None  # type: ignore[assignment]
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -2783,6 +3217,10 @@ class SpecialEnums(Enum):
     )
 
     LITELLM_MANAGED_GENERIC_RESPONSE_COMPLETE_STR = "litellm_proxy;model_id:{};generic_response_id:{}"  # generic implementation of 'managed batches' - used for finetuning and any future work.
+
+    LITELLM_MANAGED_VIDEO_COMPLETE_STR = (
+        "litellm:custom_llm_provider:{};model_id:{};video_id:{}"
+    )
 
 
 class ServiceTier(Enum):

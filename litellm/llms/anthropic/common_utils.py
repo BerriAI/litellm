@@ -12,7 +12,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.types.llms.anthropic import AllAnthropicToolsValues, AnthropicMcpServerTool
+from litellm.types.llms.anthropic import AllAnthropicToolsValues, AnthropicMcpServerTool, ANTHROPIC_HOSTED_TOOLS
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import TokenCountResponse
 
@@ -72,6 +72,17 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 return tool["type"]
         return None
 
+    def is_web_search_tool_used(
+        self, tools: Optional[List[AllAnthropicToolsValues]]
+    ) -> bool:
+        """Returns True if web_search tool is used"""
+        if tools is None:
+            return False
+        for tool in tools:
+            if "type" in tool and tool["type"].startswith(ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value):
+                return True
+        return False
+
     def is_pdf_used(self, messages: List[AllMessageValues]) -> bool:
         """
         Set to true if media passed into messages.
@@ -86,6 +97,93 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 for content in message["content"]:
                     if "type" in content and content["type"] != "text":
                         return True
+        return False
+
+    def is_tool_search_used(self, tools: Optional[List]) -> bool:
+        """
+        Check if tool search tools are present in the tools list.
+        """
+        if not tools:
+            return False
+        
+        for tool in tools:
+            tool_type = tool.get("type", "")
+            if tool_type in ["tool_search_tool_regex_20251119", "tool_search_tool_bm25_20251119"]:
+                return True
+        return False
+    
+    def is_programmatic_tool_calling_used(self, tools: Optional[List]) -> bool:
+        """
+        Check if programmatic tool calling is being used (tools with allowed_callers field).
+        
+        Returns True if any tool has allowed_callers containing 'code_execution_20250825'.
+        """
+        if not tools:
+            return False
+        
+        for tool in tools:
+            # Check top-level allowed_callers
+            allowed_callers = tool.get("allowed_callers", None)
+            if allowed_callers and isinstance(allowed_callers, list):
+                if "code_execution_20250825" in allowed_callers:
+                    return True
+            
+            # Check function.allowed_callers for OpenAI format tools
+            function = tool.get("function", {})
+            if isinstance(function, dict):
+                function_allowed_callers = function.get("allowed_callers", None)
+                if function_allowed_callers and isinstance(function_allowed_callers, list):
+                    if "code_execution_20250825" in function_allowed_callers:
+                        return True
+        
+        return False
+    
+    def is_input_examples_used(self, tools: Optional[List]) -> bool:
+        """
+        Check if input_examples is being used in any tools.
+        
+        Returns True if any tool has input_examples field.
+        """
+        if not tools:
+            return False
+        
+        for tool in tools:
+            # Check top-level input_examples
+            input_examples = tool.get("input_examples", None)
+            if input_examples and isinstance(input_examples, list) and len(input_examples) > 0:
+                return True
+            
+            # Check function.input_examples for OpenAI format tools
+            function = tool.get("function", {})
+            if isinstance(function, dict):
+                function_input_examples = function.get("input_examples", None)
+                if function_input_examples and isinstance(function_input_examples, list) and len(function_input_examples) > 0:
+                    return True
+        
+        return False
+    
+    def is_effort_used(self, optional_params: Optional[dict], model: Optional[str] = None) -> bool:
+        """
+        Check if effort parameter is being used.
+        
+        Returns True if effort-related parameters are present.
+        """
+        if not optional_params:
+            return False
+        
+        # Check if reasoning_effort is provided for Claude Opus 4.5
+        if model and ("opus-4-5" in model.lower() or "opus_4_5" in model.lower()):
+            reasoning_effort = optional_params.get("reasoning_effort")
+            if reasoning_effort and isinstance(reasoning_effort, str):
+                return True
+        
+        # Check if output_config is directly provided
+        output_config = optional_params.get("output_config")
+        if output_config and isinstance(output_config, dict):
+            effort = output_config.get("effort")
+            if effort and isinstance(effort, str):
+                return True
+        
         return False
 
     def _get_user_anthropic_beta_headers(
@@ -113,6 +211,49 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             computer_tool_version, "computer-use-2024-10-22"  # Default fallback
         )
 
+    def get_anthropic_beta_list(
+        self,
+        model: str,
+        optional_params: Optional[dict] = None,
+        computer_tool_used: Optional[str] = None,
+        prompt_caching_set: bool = False,
+        file_id_used: bool = False,
+        mcp_server_used: bool = False,
+    ) -> List[str]:
+        """
+        Get list of common beta headers based on the features that are active.
+        
+        Returns:
+            List of beta header strings
+        """
+        from litellm.types.llms.anthropic import (
+            ANTHROPIC_EFFORT_BETA_HEADER,
+        )
+        
+        betas = []
+        
+        # Detect features
+        effort_used = self.is_effort_used(optional_params, model)
+        
+        if effort_used:
+            betas.append(ANTHROPIC_EFFORT_BETA_HEADER)  # effort-2025-11-24
+        
+        if computer_tool_used:
+            beta_header = self.get_computer_tool_beta_header(computer_tool_used)
+            betas.append(beta_header)
+        
+        if prompt_caching_set:
+            betas.append("prompt-caching-2024-07-31")
+        
+        if file_id_used:
+            betas.append("files-api-2025-04-14")
+            betas.append("code-execution-2025-05-22")
+        
+        if mcp_server_used:
+            betas.append("mcp-client-2025-04-04")
+        
+        return list(set(betas))
+
     def get_anthropic_headers(
         self,
         api_key: str,
@@ -122,6 +263,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         pdf_used: bool = False,
         file_id_used: bool = False,
         mcp_server_used: bool = False,
+        web_search_tool_used: bool = False,
+        tool_search_used: bool = False,
+        programmatic_tool_calling_used: bool = False,
+        input_examples_used: bool = False,
+        effort_used: bool = False,
         is_vertex_request: bool = False,
         user_anthropic_beta_headers: Optional[List[str]] = None,
     ) -> dict:
@@ -138,6 +284,15 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             betas.add("code-execution-2025-05-22")
         if mcp_server_used:
             betas.add("mcp-client-2025-04-04")
+        # Tool search, programmatic tool calling, and input_examples all use the same beta header
+        if tool_search_used or programmatic_tool_calling_used or input_examples_used:
+            from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
+            betas.add(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
+        
+        # Effort parameter uses a separate beta header
+        if effort_used:
+            from litellm.types.llms.anthropic import ANTHROPIC_EFFORT_BETA_HEADER
+            betas.add(ANTHROPIC_EFFORT_BETA_HEADER)
 
         headers = {
             "anthropic-version": anthropic_version or "2023-06-01",
@@ -149,9 +304,12 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if user_anthropic_beta_headers is not None:
             betas.update(user_anthropic_beta_headers)
 
-        # Don't send any beta headers to Vertex, Vertex has failed requests when they are sent
+        # Don't send any beta headers to Vertex, except web search which is required
         if is_vertex_request is True:
-            pass
+            # Vertex AI requires web search beta header for web search to work
+            if web_search_tool_used:
+                from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
+                headers["anthropic-beta"] = ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
         elif len(betas) > 0:
             headers["anthropic-beta"] = ",".join(betas)
 
@@ -182,6 +340,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         )
         pdf_used = self.is_pdf_used(messages=messages)
         file_id_used = self.is_file_id_used(messages=messages)
+        web_search_tool_used = self.is_web_search_tool_used(tools=tools)
+        tool_search_used = self.is_tool_search_used(tools=tools)
+        programmatic_tool_calling_used = self.is_programmatic_tool_calling_used(tools=tools)
+        input_examples_used = self.is_input_examples_used(tools=tools)
+        effort_used = self.is_effort_used(optional_params=optional_params, model=model)
         user_anthropic_beta_headers = self._get_user_anthropic_beta_headers(
             anthropic_beta_header=headers.get("anthropic-beta")
         )
@@ -191,9 +354,14 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             pdf_used=pdf_used,
             api_key=api_key,
             file_id_used=file_id_used,
+            web_search_tool_used=web_search_tool_used,
             is_vertex_request=optional_params.get("is_vertex_request", False),
             user_anthropic_beta_headers=user_anthropic_beta_headers,
             mcp_server_used=mcp_server_used,
+            tool_search_used=tool_search_used,
+            programmatic_tool_calling_used=programmatic_tool_calling_used,
+            input_examples_used=input_examples_used,
+            effort_used=effort_used,
         )
 
         headers = {**headers, **anthropic_headers}

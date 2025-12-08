@@ -228,6 +228,8 @@ class LangFuseLogger:
 
             functions = optional_params.pop("functions", None)
             tools = optional_params.pop("tools", None)
+            # Remove secret_fields to prevent leaking sensitive data (e.g., authorization headers)
+            optional_params.pop("secret_fields", None)
             if functions is not None:
                 prompt["functions"] = functions
             if tools is not None:
@@ -683,23 +685,33 @@ class LangFuseLogger:
                 _usage_obj = getattr(response_obj, "usage", None)
 
                 if _usage_obj:
+                    # Safely get usage values, defaulting None to 0 for Langfuse compatibility.
+                    # Some providers may return null for token counts.
+                    prompt_tokens = getattr(_usage_obj, "prompt_tokens", None) or 0
+                    completion_tokens = (
+                        getattr(_usage_obj, "completion_tokens", None) or 0
+                    )
+                    total_tokens = getattr(_usage_obj, "total_tokens", None) or 0
+
+                    cache_creation_input_tokens = (
+                        _usage_obj.get("cache_creation_input_tokens") or 0
+                    )
+                    cache_read_input_tokens = (
+                        _usage_obj.get("cache_read_input_tokens") or 0
+                    )
+
                     usage = {
-                        "prompt_tokens": _usage_obj.prompt_tokens,
-                        "completion_tokens": _usage_obj.completion_tokens,
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
                         "total_cost": cost if self._supports_costs() else None,
                     }
-                    cache_read_input_tokens = _usage_obj.get(
-                            "cache_read_input_tokens", 0
-                    )
                     # According to langfuse documentation: "the input value must be reduced by the number of cache_read_input_tokens"
-                    input_tokens = _usage_obj.prompt_tokens - cache_read_input_tokens
+                    input_tokens = prompt_tokens - cache_read_input_tokens
                     usage_details = LangfuseUsageDetails(
                         input=input_tokens,
-                        output=_usage_obj.completion_tokens,
-                        total=_usage_obj.total_tokens,
-                        cache_creation_input_tokens=_usage_obj.get(
-                            "cache_creation_input_tokens", 0
-                        ),
+                        output=completion_tokens,
+                        total=total_tokens,
+                        cache_creation_input_tokens=cache_creation_input_tokens,
                         cache_read_input_tokens=cache_read_input_tokens,
                     )
 

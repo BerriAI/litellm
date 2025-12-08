@@ -70,7 +70,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
             "1792x1024": "16:9", 
             "1024x1792": "9:16",
             "1280x896": "4:3",
-            "896x1280": "3:4"
+            "896x1280": "3:4",
         }
         return aspect_ratio_map.get(size, "1:1")
 
@@ -97,8 +97,8 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
 
         complete_url = complete_url.rstrip("/")
 
-        # Gemini 2.5 Flash Image Preview uses generateContent endpoint
-        if "2.5-flash-image-preview" in model:
+        # Gemini Flash Image Preview models use generateContent endpoint
+        if "gemini" in model:
             complete_url = f"{complete_url}/models/{model}:generateContent"
         else:
             # All other Imagen models use predict endpoint
@@ -152,8 +152,8 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
           }
         }
         """
-        # For Gemini 2.5 Flash Image Preview, use standard Gemini format
-        if "2.5-flash-image-preview" in model:
+        # For Gemini Flash Image Preview models, use standard Gemini format
+        if "gemini" in model:
             request_body: dict = {
                 "contents": [
                     {
@@ -212,8 +212,8 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
             model_response.data = []
 
         # Handle different response formats based on model
-        if "2.5-flash-image-preview" in model:
-            # Gemini 2.5 Flash Image Preview returns in candidates format
+        if "gemini" in model:
+            # Gemini Flash Image Preview models return in candidates format
             candidates = response_data.get("candidates", [])
             for candidate in candidates:
                 content = candidate.get("content", {})

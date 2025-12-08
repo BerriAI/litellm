@@ -10,6 +10,7 @@ export const AUTH_TYPE = {
   API_KEY: "api_key",
   BEARER_TOKEN: "bearer_token",
   BASIC: "basic",
+  OAUTH2: "oauth2",
 };
 
 export const TRANSPORT = {
@@ -32,10 +33,6 @@ export const handleAuth = (authType?: string | null): string => {
   }
 
   return authType;
-};
-
-export const mcpServerHasAuth = (authType?: string | null): boolean => {
-  return handleAuth(authType) !== AUTH_TYPE.NONE;
 };
 
 // Define the structure for tool input schema properties
@@ -113,7 +110,12 @@ export interface MCPEmbeddedResource {
 export type MCPContent = MCPTextContent | MCPImageContent | MCPEmbeddedResource;
 
 // Define the response structure for the callMCPTool endpoint
-export type CallMCPToolResponse = MCPContent[];
+export type CallMCPToolResponse = {
+  content: MCPContent[];
+  _meta: any;
+  isError: boolean;
+  structuredContent: any;
+};
 
 // Props for the main component
 export interface MCPToolsViewerProps {

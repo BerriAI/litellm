@@ -1,5 +1,6 @@
 import os
 import sys
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -22,6 +23,7 @@ from litellm.proxy.vector_store_endpoints.endpoints import (
 from litellm.proxy.vector_store_endpoints.utils import (
     check_vector_store_permission,
     is_allowed_to_call_vector_store_endpoint,
+    is_allowed_to_call_vector_store_files_endpoint,
 )
 from litellm.types.utils import LlmProviders
 
@@ -58,6 +60,51 @@ async def test_router_avector_store_search_passes_correct_args():
         assert call_args[1]["vector_store_id"] == "test_store_id"
         assert call_args[1]["query"] == "test query"
         assert call_args[1]["custom_llm_provider"] == "bedrock"
+
+
+@pytest.mark.asyncio
+async def test_router_avector_store_file_list_passes_correct_args():
+    with patch(
+        "litellm.vector_store_files.main.alist",
+        new=AsyncMock(return_value={"object": "list", "data": []}),
+    ) as mock_alist:
+        router = litellm.Router(model_list=[])
+
+        result = await router.avector_store_file_list(
+            vector_store_id="test_store_id",
+            limit=5,
+            order="asc",
+            custom_llm_provider="openai",
+        )
+
+        assert result == {"object": "list", "data": []}
+        mock_alist.assert_called_once()
+        call_kwargs = mock_alist.call_args.kwargs
+        assert call_kwargs["vector_store_id"] == "test_store_id"
+        assert call_kwargs["limit"] == 5
+        assert call_kwargs["order"] == "asc"
+        assert call_kwargs["custom_llm_provider"] == "openai"
+
+
+def test_router_vector_store_file_delete_passes_correct_args():
+    with patch(
+        "litellm.vector_store_files.main.delete",
+        return_value={"deleted": True},
+    ) as mock_delete:
+        router = litellm.Router(model_list=[])
+
+        result = router.vector_store_file_delete(
+            vector_store_id="test_store_id",
+            file_id="file-123",
+            custom_llm_provider="openai",
+        )
+
+        assert result == {"deleted": True}
+        mock_delete.assert_called_once()
+        call_kwargs = mock_delete.call_args.kwargs
+        assert call_kwargs["vector_store_id"] == "test_store_id"
+        assert call_kwargs["file_id"] == "file-123"
+        assert call_kwargs["custom_llm_provider"] == "openai"
 
 
 def test_update_request_data_with_litellm_managed_vector_store_registry():
@@ -351,6 +398,7 @@ class TestIsAllowedToCallVectorStoreEndpoint:
 
         # Mock user API key with permissions
         mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = None
         mock_user_api_key.metadata = {
             "allowed_vector_store_indexes": [
                 {"index_name": "my-index", "index_permissions": ["read"]}
@@ -387,6 +435,7 @@ class TestIsAllowedToCallVectorStoreEndpoint:
 
         # Mock user API key with permissions
         mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = None
         mock_user_api_key.metadata = {
             "allowed_vector_store_indexes": [
                 {"index_name": "my-index", "index_permissions": ["write"]}
@@ -423,6 +472,7 @@ class TestIsAllowedToCallVectorStoreEndpoint:
 
         # Mock user API key with only read permissions
         mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = None
         mock_user_api_key.metadata = {
             "allowed_vector_store_indexes": [
                 {"index_name": "my-index", "index_permissions": ["read"]}
@@ -458,6 +508,7 @@ class TestIsAllowedToCallVectorStoreEndpoint:
         mock_request.url.path = "/v1/vector_stores/my-index/search"
 
         mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = None
         mock_user_api_key.metadata = {}
         mock_user_api_key.team_metadata = None
 
@@ -482,6 +533,7 @@ class TestIsAllowedToCallVectorStoreEndpoint:
         mock_request.url.path = "/v1/vector_stores/my-index/unknown"
 
         mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = None
         mock_user_api_key.metadata = {
             "allowed_vector_store_indexes": [
                 {"index_name": "my-index", "index_permissions": ["read", "write"]}
@@ -518,6 +570,7 @@ class TestIsAllowedToCallVectorStoreEndpoint:
 
         # Mock user API key with no key metadata but team metadata
         mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = None
         mock_user_api_key.metadata = None
         mock_user_api_key.team_metadata = {
             "allowed_vector_store_indexes": [
@@ -553,6 +606,7 @@ class TestIsAllowedToCallVectorStoreEndpoint:
         mock_request.url.path = "/v1/vector_stores/my-index/search"
 
         mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = None
         mock_user_api_key.metadata = {}
         mock_user_api_key.team_metadata = {}
 
@@ -618,3 +672,376 @@ class TestIsAllowedToCallVectorStoreEndpoint:
                 )
 
         assert exc_info.value.status_code == 403
+
+
+class TestIsAllowedToCallVectorStoreFilesEndpoint:
+    def _mock_provider_config(self):
+        provider_config = MagicMock()
+        provider_config.get_vector_store_file_endpoints_by_type.return_value = {
+            "read": (("GET", "/vector_stores/{vector_store_id}/files"),),
+            "write": (
+                ("POST", "/vector_stores/{vector_store_id}/files"),
+                ("DELETE", "/vector_stores/{vector_store_id}/files/{file_id}"),
+            ),
+        }
+        return provider_config
+
+    def test_allows_access_with_permissions(self):
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "GET"
+        mock_request.url.path = "/v1/vector_stores/my-index/files"
+
+        mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = None
+        mock_user_api_key.metadata = {
+            "allowed_vector_store_indexes": [
+                {"index_name": "my-index", "index_permissions": ["read", "write"]}
+            ]
+        }
+        mock_user_api_key.team_metadata = None
+
+        with patch(
+            "litellm.proxy.vector_store_endpoints.utils.ProviderConfigManager.get_provider_vector_store_files_config",
+            return_value=self._mock_provider_config(),
+        ):
+            result = is_allowed_to_call_vector_store_files_endpoint(
+                provider=LlmProviders.OPENAI,
+                vector_store_id="my-index",
+                request=mock_request,
+                user_api_key_dict=mock_user_api_key,
+            )
+
+        assert result is True
+
+    def test_raises_when_permission_missing(self):
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.url.path = "/v1/vector_stores/my-index/files"
+
+        mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = None
+        mock_user_api_key.metadata = {
+            "allowed_vector_store_indexes": [
+                {"index_name": "my-index", "index_permissions": ["read"]}
+            ]
+        }
+        mock_user_api_key.team_metadata = None
+
+        with patch(
+            "litellm.proxy.vector_store_endpoints.utils.ProviderConfigManager.get_provider_vector_store_files_config",
+            return_value=self._mock_provider_config(),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                is_allowed_to_call_vector_store_files_endpoint(
+                    provider=LlmProviders.OPENAI,
+                    vector_store_id="my-index",
+                    request=mock_request,
+                    user_api_key_dict=mock_user_api_key,
+                )
+
+        assert exc_info.value.status_code == 403
+
+    def test_returns_none_when_provider_not_supported(self):
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "GET"
+        mock_request.url.path = "/v1/vector_stores/my-index/files"
+
+        mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.user_role = None
+        mock_user_api_key.metadata = {}
+        mock_user_api_key.team_metadata = {}
+
+        with patch(
+            "litellm.proxy.vector_store_endpoints.utils.ProviderConfigManager.get_provider_vector_store_files_config",
+            return_value=None,
+        ):
+            result = is_allowed_to_call_vector_store_files_endpoint(
+                provider=LlmProviders.OPENAI,
+                vector_store_id="my-index",
+                request=mock_request,
+                user_api_key_dict=mock_user_api_key,
+            )
+
+        assert result is None
+
+
+class TestVectorStoreManagementEndpointsExist:
+    def test_vector_store_management_endpoints_exist_on_proxy_startup(self):
+        """
+        Test that all vector store management endpoints are registered on proxy app startup.
+        
+        Verifies the following endpoints exist in the proxy_server app:
+        - POST /vector_store/new
+        - GET /vector_store/list
+        - POST /vector_store/delete
+        - POST /vector_store/info
+        - POST /vector_store/update
+        """
+        from litellm.proxy.proxy_server import app
+
+        # Define expected endpoints
+        expected_endpoints = [
+            ("POST", "/vector_store/new"),
+            ("GET", "/vector_store/list"),
+            ("POST", "/vector_store/delete"),
+            ("POST", "/vector_store/info"),
+            ("POST", "/vector_store/update"),
+        ]
+        
+        # Get all routes from the app
+        app_routes = []
+        for route in app.routes:
+            methods = getattr(route, "methods", None)
+            path = getattr(route, "path", None)
+            if methods is not None and path is not None:
+                for method in methods:
+                    app_routes.append((method, path))
+        
+        # Verify each expected endpoint exists
+        for method, path in expected_endpoints:
+            assert (method, path) in app_routes, (
+                f"Expected endpoint {method} {path} not found in registered routes. "
+                f"Available routes: {app_routes}"
+            )
+
+
+@pytest.mark.asyncio
+async def test_vector_store_synchronization_across_instances():
+    """
+    Test that vector stores are properly synchronized across multiple instances.
+    
+    This test simulates the scenario where:
+    1. Instance 1 creates a vector store (writes to DB, updates its own cache)
+    2. Instance 2 should be able to find it (via database fallback)
+    3. Instance 1 deletes the vector store (removes from DB, updates its own cache)
+    4. Instance 2 should not show it in the list (database is source of truth)
+    """
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.types.vector_stores import (
+        LiteLLM_ManagedVectorStore,
+        VectorStoreDeleteRequest,
+    )
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+    # Simulate two instances with separate in-memory registries
+    instance_1_registry = VectorStoreRegistry(vector_stores=[])
+    instance_2_registry = VectorStoreRegistry(vector_stores=[])
+    
+    # Mock database that both instances share
+    mock_db_vector_stores = []
+    
+    async def mock_find_unique(where):
+        """Mock find_unique for checking if vector store exists"""
+        vector_store_id = where.get("vector_store_id")
+        for vs in mock_db_vector_stores:
+            if vs.get("vector_store_id") == vector_store_id:
+                # Create a simple object that dict() can convert
+                class MockVectorStore:
+                    def __init__(self, data):
+                        for key, value in data.items():
+                            setattr(self, key, value)
+                        self._data = data
+                    
+                    def __iter__(self):
+                        return iter(self._data.items())
+                return MockVectorStore(vs)
+        return None
+    
+    async def mock_find_many(order=None):
+        """Mock find_many for listing vector stores"""
+        # Return objects that can be converted to dict using dict()
+        # The _get_vector_stores_from_db uses dict(vector_store), so we need to make it work
+        result = []
+        for vs in mock_db_vector_stores:
+            # Create a simple object that dict() can convert
+            class MockVectorStore:
+                def __init__(self, data):
+                    for key, value in data.items():
+                        setattr(self, key, value)
+                    self._data = data
+                
+                def __iter__(self):
+                    return iter(self._data.items())
+            result.append(MockVectorStore(vs))
+        return result
+    
+    async def mock_create(data):
+        """Mock create for adding vector store to DB"""
+        vector_store = data.copy()
+        mock_db_vector_stores.append(vector_store)
+        mock_obj = MagicMock()
+        mock_obj.model_dump.return_value = vector_store
+        for key, value in vector_store.items():
+            setattr(mock_obj, key, value)
+        return mock_obj
+    
+    async def mock_delete(where):
+        """Mock delete for removing vector store from DB"""
+        vector_store_id = where.get("vector_store_id")
+        mock_db_vector_stores[:] = [
+            vs for vs in mock_db_vector_stores 
+            if vs.get("vector_store_id") != vector_store_id
+        ]
+        return None
+    
+    # Create mock prisma client
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
+        side_effect=mock_find_unique
+    )
+    mock_prisma_client.db.litellm_managedvectorstorestable.find_many = AsyncMock(
+        side_effect=mock_find_many
+    )
+    mock_prisma_client.db.litellm_managedvectorstorestable.create = AsyncMock(
+        side_effect=mock_create
+    )
+    mock_prisma_client.db.litellm_managedvectorstorestable.delete = AsyncMock(
+        side_effect=mock_delete
+    )
+    
+    # Test vector store data
+    test_vector_store_id = "test-sync-store-001"
+    test_vector_store: LiteLLM_ManagedVectorStore = {
+        "vector_store_id": test_vector_store_id,
+        "custom_llm_provider": "bedrock",
+        "vector_store_name": "Test Sync Store",
+        "vector_store_description": "Testing synchronization",
+        "litellm_params": {
+            "vector_store_id": test_vector_store_id,
+            "custom_llm_provider": "bedrock",
+            "region_name": "us-east-1"
+        },
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
+    }
+    
+    # Step 1: Create vector store on Instance 1
+    # (Simulate what happens in new_vector_store endpoint)
+    await mock_prisma_client.db.litellm_managedvectorstorestable.create(
+        data=test_vector_store
+    )
+    instance_1_registry.add_vector_store_to_registry(vector_store=test_vector_store)
+    
+    # Verify it's in Instance 1's memory
+    assert instance_1_registry.get_litellm_managed_vector_store_from_registry(
+        test_vector_store_id
+    ) is not None, "Vector store should be in Instance 1's memory"
+    
+    # Verify it's in the database
+    db_store = await mock_prisma_client.db.litellm_managedvectorstorestable.find_unique(
+        where={"vector_store_id": test_vector_store_id}
+    )
+    assert db_store is not None, "Vector store should be in database"
+    
+    # Step 2: Instance 2 should be able to find it via database fallback
+    # (Simulate what happens in pop_vector_stores_to_run_with_db_fallback)
+    found_store = await instance_2_registry.get_litellm_managed_vector_store_from_registry_or_db(
+        vector_store_id=test_vector_store_id,
+        prisma_client=mock_prisma_client
+    )
+    assert found_store is not None, "Instance 2 should find vector store from database"
+    assert found_store.get("vector_store_id") == test_vector_store_id
+    
+    # Verify it's now cached in Instance 2's memory
+    assert instance_2_registry.get_litellm_managed_vector_store_from_registry(
+        test_vector_store_id
+    ) is not None, "Vector store should now be cached in Instance 2's memory"
+    
+    # Step 3: Test that Instance 2 can list vector stores from database
+    # (Simulate what happens in list_vector_stores endpoint - using DB as source of truth)
+    vector_stores_from_db = await VectorStoreRegistry._get_vector_stores_from_db(
+        prisma_client=mock_prisma_client
+    )
+    
+    # Verify vector store appears in the database list
+    vector_store_ids = [vs.get("vector_store_id") for vs in vector_stores_from_db]
+    assert test_vector_store_id in vector_store_ids, (
+        "Instance 2 should see vector store from database"
+    )
+    
+    # Verify the list endpoint logic: only show DB stores (filter out stale cache)
+    # This simulates what list_vector_stores does
+    db_vector_store_ids = {
+        vs.get("vector_store_id") 
+        for vs in vector_stores_from_db 
+        if vs.get("vector_store_id")
+    }
+    
+    # Instance 2's in-memory cache should only contain stores that exist in DB
+    # (This is what the list endpoint cleanup does)
+    for vs in list(instance_2_registry.vector_stores):
+        vs_id = vs.get("vector_store_id")
+        if vs_id and vs_id not in db_vector_store_ids:
+            instance_2_registry.delete_vector_store_from_registry(vector_store_id=vs_id)
+    
+    # After cleanup, instance 2 should still have the vector store (it's in DB)
+    assert instance_2_registry.get_litellm_managed_vector_store_from_registry(
+        test_vector_store_id
+    ) is not None, "Instance 2 should still have vector store (it exists in DB)"
+    
+    # Step 4: Delete vector store on Instance 1
+    # (Simulate what happens in delete_vector_store endpoint)
+    await mock_prisma_client.db.litellm_managedvectorstorestable.delete(
+        where={"vector_store_id": test_vector_store_id}
+    )
+    instance_1_registry.delete_vector_store_from_registry(
+        vector_store_id=test_vector_store_id
+    )
+    
+    # Verify it's removed from Instance 1's memory
+    assert instance_1_registry.get_litellm_managed_vector_store_from_registry(
+        test_vector_store_id
+    ) is None, "Vector store should be removed from Instance 1's memory"
+    
+    # Verify it's removed from database
+    db_store_after_delete = await mock_prisma_client.db.litellm_managedvectorstorestable.find_unique(
+        where={"vector_store_id": test_vector_store_id}
+    )
+    assert db_store_after_delete is None, "Vector store should be removed from database"
+    
+    # Step 5: Instance 2 should NOT show it in the list (database is source of truth)
+    # The list endpoint logic should clean up stale cache entries
+    vector_stores_from_db_after_delete = await VectorStoreRegistry._get_vector_stores_from_db(
+        prisma_client=mock_prisma_client
+    )
+    
+    # Verify vector store does NOT appear in the database list
+    vector_store_ids_after_delete = [vs.get("vector_store_id") for vs in vector_stores_from_db_after_delete]
+    assert test_vector_store_id not in vector_store_ids_after_delete, (
+        "Deleted vector store should not be in database"
+    )
+    
+    # Simulate list endpoint cleanup logic
+    db_vector_store_ids_after_delete = {
+        vs.get("vector_store_id") 
+        for vs in vector_stores_from_db_after_delete 
+        if vs.get("vector_store_id")
+    }
+    
+    # Remove any in-memory vector stores that no longer exist in database
+    for vs in list(instance_2_registry.vector_stores):
+        vs_id = vs.get("vector_store_id")
+        if vs_id and vs_id not in db_vector_store_ids_after_delete:
+            instance_2_registry.delete_vector_store_from_registry(vector_store_id=vs_id)
+    
+    # Verify it was removed from Instance 2's cache
+    assert instance_2_registry.get_litellm_managed_vector_store_from_registry(
+        test_vector_store_id
+    ) is None, (
+        "Deleted vector store should be removed from Instance 2's cache"
+    )
+    
+    # Step 6: Test that using a deleted vector store fails gracefully
+    # (Simulate what happens in pop_vector_stores_to_run_with_db_fallback)
+    non_default_params = {"vector_store_ids": [test_vector_store_id]}
+    vector_stores_to_run = await instance_2_registry.pop_vector_stores_to_run_with_db_fallback(
+        non_default_params=non_default_params,
+        tools=None,
+        prisma_client=mock_prisma_client
+    )
+    
+    assert len(vector_stores_to_run) == 0, (
+        "Deleted vector store should not be returned when trying to use it"
+    )

@@ -95,6 +95,181 @@ async def test_organization_update_object_permissions_existing_permission(monkey
 
 
 @pytest.mark.asyncio
+async def test_get_organization_daily_activity_admin_param_passing(monkeypatch):
+    """
+    As admin, ensure parsed params are forwarded to get_daily_activity with correct values.
+    """
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import organization_endpoints
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        get_organization_daily_activity,
+    )
+
+    # Mock prisma client
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(
+        return_value=[]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Admin view -> skip membership restriction
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.organization_endpoints._user_has_admin_view",
+        lambda _: True,
+    )
+
+    # Patch downstream common function and verify call args
+    mocked_response = MagicMock(name="SpendAnalyticsPaginatedResponse")
+    get_daily_activity_mock = AsyncMock(return_value=mocked_response)
+    monkeypatch.setattr(
+        organization_endpoints, "get_daily_activity", get_daily_activity_mock
+    )
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin1")
+    result = await get_organization_daily_activity(
+        organization_ids="org1,org2",
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        model="gpt-4",
+        api_key="test-key",
+        page=2,
+        page_size=5,
+        exclude_organization_ids="org3",
+        user_api_key_dict=auth,
+    )
+
+    # Ensure passthrough to common method with correct args
+    get_daily_activity_mock.assert_awaited_once()
+    kwargs = get_daily_activity_mock.call_args.kwargs
+    assert kwargs["table_name"] == "litellm_dailyorganizationspend"
+    assert kwargs["entity_id_field"] == "organization_id"
+    assert kwargs["entity_id"] == ["org1", "org2"]
+    assert kwargs["exclude_entity_ids"] == ["org3"]
+    assert kwargs["start_date"] == "2024-01-01"
+    assert kwargs["end_date"] == "2024-01-31"
+    assert kwargs["model"] == "gpt-4"
+    assert kwargs["api_key"] == "test-key"
+    assert kwargs["page"] == 2
+    assert kwargs["page_size"] == 5
+
+    assert result is mocked_response
+
+
+@pytest.mark.asyncio
+async def test_get_organization_daily_activity_non_admin_defaults_to_admin_orgs(monkeypatch):
+    """
+    Non-admin with no explicit organization_ids should default to orgs they are ORG_ADMIN of.
+    """
+    from types import SimpleNamespace
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import organization_endpoints
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        get_organization_daily_activity,
+    )
+
+    # Mock prisma client and memberships
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(
+        return_value=[]
+    )
+    mock_prisma_client.db.litellm_organizationmembership.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                organization_id="orgA", user_role=LitellmUserRoles.ORG_ADMIN.value
+            ),
+            SimpleNamespace(
+                organization_id="orgB", user_role=LitellmUserRoles.ORG_ADMIN.value
+            ),
+        ]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Non-admin view
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.organization_endpoints._user_has_admin_view",
+        lambda _: False,
+    )
+
+    # Patch downstream aggregator
+    mocked_response = MagicMock(name="SpendAnalyticsPaginatedResponse")
+    get_daily_activity_mock = AsyncMock(return_value=mocked_response)
+    monkeypatch.setattr(
+        organization_endpoints, "get_daily_activity", get_daily_activity_mock
+    )
+
+    auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="regular-user"
+    )
+    await get_organization_daily_activity(
+        organization_ids=None,
+        start_date="2024-02-01",
+        end_date="2024-02-28",
+        model=None,
+        api_key=None,
+        page=1,
+        page_size=10,
+        exclude_organization_ids=None,
+        user_api_key_dict=auth,
+    )
+
+    kwargs = get_daily_activity_mock.call_args.kwargs
+    assert kwargs["entity_id"] == ["orgA", "orgB"]
+    assert kwargs["start_date"] == "2024-02-01"
+    assert kwargs["end_date"] == "2024-02-28"
+
+
+@pytest.mark.asyncio
+async def test_get_organization_daily_activity_non_admin_unauthorized_org_raises(monkeypatch):
+    """
+    Non-admin requesting an org they aren't ORG_ADMIN for should raise 403.
+    """
+    from types import SimpleNamespace
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        get_organization_daily_activity,
+    )
+
+    # Mock prisma client and memberships (only orgA is admin)
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_organizationmembership.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                organization_id="orgA", user_role=LitellmUserRoles.ORG_ADMIN.value
+            )
+        ]
+    )
+    mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(
+        return_value=[]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Non-admin view
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.organization_endpoints._user_has_admin_view",
+        lambda _: False,
+    )
+
+    auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="regular-user"
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await get_organization_daily_activity(
+            organization_ids="orgA,orgX",  # orgX is unauthorized
+            start_date="2024-03-01",
+            end_date="2024-03-31",
+            model=None,
+            api_key=None,
+            page=1,
+            page_size=10,
+            exclude_organization_ids=None,
+            user_api_key_dict=auth,
+        )
+    assert exc.value.status_code == 403
+
+@pytest.mark.asyncio
 async def test_organization_update_object_permissions_no_existing_permission(
     monkeypatch,
 ):

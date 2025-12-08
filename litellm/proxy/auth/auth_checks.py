@@ -13,7 +13,7 @@ import re
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
-from fastapi import Request, status
+from fastapi import HTTPException, Request, status
 from pydantic import BaseModel
 
 import litellm
@@ -29,6 +29,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.proxy._types import (
     RBAC_ROLES,
     CallInfo,
+    LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
     Litellm_EntityType,
     LiteLLM_JWTAuth,
@@ -142,6 +143,14 @@ async def common_checks(
         valid_token=valid_token,
     )
 
+    # 3.1. If organization is in budget
+    await _organization_max_budget_check(
+        valid_token=valid_token,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
     await _tag_max_budget_check(
         request_body=request_body,
         prisma_client=prisma_client,
@@ -181,9 +190,38 @@ async def common_checks(
         general_settings.get("enforce_user_param", None) is not None
         and general_settings["enforce_user_param"] is True
     ):
-        if RouteChecks.is_llm_api_route(route=route) and "user" not in request_body:
+        # Get HTTP method from request
+        http_method = request.method if hasattr(request, 'method') else None
+        
+        # Check if it's a POST request and if it's an OpenAI route but not MCP
+        is_post_method = http_method and http_method.upper() == "POST"
+        is_openai_route = RouteChecks.is_llm_api_route(route=route)
+        is_mcp_route = route in LiteLLMRoutes.mcp_routes.value or RouteChecks.check_route_access(
+            route=route, allowed_routes=LiteLLMRoutes.mcp_routes.value
+        )
+        
+        # Enforce user param only for POST requests on OpenAI routes (excluding MCP routes)
+        if is_post_method and is_openai_route and not is_mcp_route and "user" not in request_body:
             raise Exception(
                 f"'user' param not passed in. 'enforce_user_param'={general_settings['enforce_user_param']}"
+            )
+    
+    # 6.1 [OPTIONAL] If 'reject_clientside_metadata_tags' enabled - reject request if it has client-side 'metadata.tags'
+    if (
+        general_settings.get("reject_clientside_metadata_tags", None) is not None
+        and general_settings["reject_clientside_metadata_tags"] is True
+    ):
+        if (
+            RouteChecks.is_llm_api_route(route=route)
+            and "metadata" in request_body
+            and isinstance(request_body["metadata"], dict)
+            and "tags" in request_body["metadata"]
+        ):
+            raise ProxyException(
+                message=f"Client-side 'metadata.tags' not allowed in request. 'reject_clientside_metadata_tags'={general_settings['reject_clientside_metadata_tags']}. Tags can only be set via API key metadata.",
+                type=ProxyErrorTypes.bad_request_error,
+                param="metadata.tags",
+                code=status.HTTP_400_BAD_REQUEST,
             )
     # 7. [OPTIONAL] If 'litellm.max_budget' is set (>0), is proxy under budget
     if (
@@ -445,6 +483,135 @@ def get_actual_routes(allowed_routes: list) -> list:
     return actual_routes
 
 
+async def get_default_end_user_budget(
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+    parent_otel_span: Optional[Span] = None,
+) -> Optional[LiteLLM_BudgetTable]:
+    """
+    Fetches the default end user budget from the database if litellm.max_end_user_budget_id is configured.
+    
+    This budget is applied to end users who don't have an explicit budget_id set.
+    Results are cached for performance.
+    
+    Args:
+        prisma_client: Database client instance
+        user_api_key_cache: Cache for storing/retrieving budget data
+        parent_otel_span: Optional OpenTelemetry span for tracing
+        
+    Returns:
+        LiteLLM_BudgetTable if configured and found, None otherwise
+    """
+    if prisma_client is None or litellm.max_end_user_budget_id is None:
+        return None
+    
+    cache_key = f"default_end_user_budget:{litellm.max_end_user_budget_id}"
+    
+    # Check cache first
+    cached_budget = await user_api_key_cache.async_get_cache(key=cache_key)
+    if cached_budget is not None:
+        return LiteLLM_BudgetTable(**cached_budget)
+    
+    # Fetch from database
+    try:
+        budget_record = await prisma_client.db.litellm_budgettable.find_unique(
+            where={"budget_id": litellm.max_end_user_budget_id}
+        )
+        
+        if budget_record is None:
+            verbose_proxy_logger.warning(
+                f"Default end user budget not found in database: {litellm.max_end_user_budget_id}"
+            )
+            return None
+        
+        # Cache the budget for 60 seconds
+        await user_api_key_cache.async_set_cache(
+            key=cache_key, 
+            value=budget_record.dict(),
+            ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+        )
+        
+        return LiteLLM_BudgetTable(**budget_record.dict())
+        
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"Error fetching default end user budget: {str(e)}"
+        )
+        return None
+
+
+async def _apply_default_budget_to_end_user(
+    end_user_obj: LiteLLM_EndUserTable,
+    prisma_client: PrismaClient,
+    user_api_key_cache: DualCache,
+    parent_otel_span: Optional[Span] = None,
+) -> LiteLLM_EndUserTable:
+    """
+    Helper function to apply default budget to end user if they don't have a budget assigned.
+    
+    Args:
+        end_user_obj: The end user object to potentially apply default budget to
+        prisma_client: Database client instance
+        user_api_key_cache: Cache for storing/retrieving data
+        parent_otel_span: Optional OpenTelemetry span for tracing
+        
+    Returns:
+        Updated end user object with default budget applied if applicable
+    """
+    # If end user already has a budget assigned, no need to apply default
+    if end_user_obj.litellm_budget_table is not None:
+        return end_user_obj
+    
+    # If no default budget configured, return as-is
+    if litellm.max_end_user_budget_id is None:
+        return end_user_obj
+    
+    # Fetch and apply default budget
+    default_budget = await get_default_end_user_budget(
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=parent_otel_span,
+    )
+    
+    if default_budget is not None:
+        # Apply default budget to end user object
+        end_user_obj.litellm_budget_table = default_budget
+        verbose_proxy_logger.debug(
+            f"Applied default budget {litellm.max_end_user_budget_id} to end user {end_user_obj.user_id}"
+        )
+    
+    return end_user_obj
+
+
+def _check_end_user_budget(
+    end_user_obj: LiteLLM_EndUserTable,
+    route: str,
+) -> None:
+    """
+    Check if end user is within their budget limit.
+    
+    Args:
+        end_user_obj: The end user object to check
+        route: The request route
+        
+    Raises:
+        litellm.BudgetExceededError: If end user has exceeded their budget
+    """
+    if route in LiteLLMRoutes.info_routes.value:
+        return
+    
+    if end_user_obj.litellm_budget_table is None:
+        return
+    
+    end_user_budget = end_user_obj.litellm_budget_table.max_budget
+    if end_user_budget is not None and end_user_obj.spend > end_user_budget:
+        raise litellm.BudgetExceededError(
+            current_cost=end_user_obj.spend,
+            max_budget=end_user_budget,
+            message=f"ExceededBudget: End User={end_user_obj.user_id} over budget. Spend={end_user_obj.spend}, Budget={end_user_budget}",
+        )
+
+
 @log_db_metrics
 async def get_end_user_object(
     end_user_id: Optional[str],
@@ -455,36 +622,49 @@ async def get_end_user_object(
     proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> Optional[LiteLLM_EndUserTable]:
     """
-    Returns end user object, if in db.
+    Returns end user object from database or cache.
+    
+    If end user exists but has no budget_id, applies the default budget 
+    (if configured via litellm.max_end_user_budget_id).
 
-    Do a isolated check for end user in table vs. doing a combined key + team + user + end-user check, as key might come in frequently for different end-users. Larger call will slowdown query time. This way we get to cache the constant (key/team/user info) and only update based on the changing value (end-user).
+    Args:
+        end_user_id: The ID of the end user
+        prisma_client: Database client instance
+        user_api_key_cache: Cache for storing/retrieving data
+        route: The request route
+        parent_otel_span: Optional OpenTelemetry span for tracing
+        proxy_logging_obj: Optional proxy logging object
+        
+    Returns:
+        LiteLLM_EndUserTable if found, None otherwise
     """
     if prisma_client is None:
         raise Exception("No db connected")
 
     if end_user_id is None:
         return None
+    
     _key = "end_user_id:{}".format(end_user_id)
 
-    def check_in_budget(end_user_obj: LiteLLM_EndUserTable):
-        if route in LiteLLMRoutes.info_routes.value:  # allow calling info routes
-            return
-        if end_user_obj.litellm_budget_table is None:
-            return
-        end_user_budget = end_user_obj.litellm_budget_table.max_budget
-        if end_user_budget is not None and end_user_obj.spend > end_user_budget:
-            raise litellm.BudgetExceededError(
-                current_cost=end_user_obj.spend, max_budget=end_user_budget
-            )
-
-    # check if in cache
+    # Check cache first
     cached_user_obj = await user_api_key_cache.async_get_cache(key=_key)
     if cached_user_obj is not None:
         return_obj = LiteLLM_EndUserTable(**cached_user_obj)
-        check_in_budget(end_user_obj=return_obj)
+        
+        # Apply default budget if needed
+        return_obj = await _apply_default_budget_to_end_user(
+            end_user_obj=return_obj,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+        )
+        
+        # Check budget limits
+        _check_end_user_budget(end_user_obj=return_obj, route=route)
+        
         return return_obj
 
-    # else, check db
+    # Fetch from database
     try:
         response = await prisma_client.db.litellm_endusertable.find_unique(
             where={"user_id": end_user_id},
@@ -494,17 +674,29 @@ async def get_end_user_object(
         if response is None:
             raise Exception
 
-        # save the end-user object to cache (always store as dict for consistency)
-        await user_api_key_cache.async_set_cache(
-            key="end_user_id:{}".format(end_user_id), value=response.dict()
-        )
-
+        # Convert to LiteLLM_EndUserTable object
         _response = LiteLLM_EndUserTable(**response.dict())
-
-        check_in_budget(end_user_obj=_response)
+        
+        # Apply default budget if needed
+        _response = await _apply_default_budget_to_end_user(
+            end_user_obj=_response,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+        )
+        
+        # Save to cache (always store as dict for consistency)
+        await user_api_key_cache.async_set_cache(
+            key="end_user_id:{}".format(end_user_id), 
+            value=_response.dict()
+        )
+        
+        # Check budget limits
+        _check_end_user_budget(end_user_obj=_response, route=route)
 
         return _response
-    except Exception as e:  # if end-user not in db
+        
+    except Exception as e:
         if isinstance(e, litellm.BudgetExceededError):
             raise e
         return None
@@ -543,6 +735,7 @@ async def get_tag_objects_batch(
 
     tag_objects = {}
     uncached_tags = []
+    
 
     # Try to get all tags from cache first
     for tag_name in tag_names:
@@ -1118,7 +1311,7 @@ async def get_team_object(
     - if not, then raise an error
 
     Raises:
-        - Exception: If team doesn't exist in db or cache
+        - HTTPException: If team doesn't exist in db or cache (status_code=404)
     """
     if prisma_client is None:
         raise Exception(
@@ -1140,8 +1333,11 @@ async def get_team_object(
             return cached_team_obj
 
         if check_cache_only:
-            raise Exception(
-                f"Team doesn't exist in cache + check_cache_only=True. Team={team_id}."
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": f"Team doesn't exist in cache + check_cache_only=True. Team={team_id}."
+                },
             )
 
     # else, check db
@@ -1157,8 +1353,11 @@ async def get_team_object(
             team_id_upsert=team_id_upsert,
         )
     except Exception:
-        raise Exception(
-            f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call."
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call."
+            },
         )
 
 
@@ -1189,6 +1388,57 @@ class ExperimentalUIJWTToken:
             expires=expires,
             user_id=user_info.user_id,
             team_id="litellm-dashboard",
+            models=user_info.models,
+            max_parallel_requests=None,
+            user_role=LitellmUserRoles(user_info.user_role),
+        )
+
+        return encrypt_value_helper(valid_token.model_dump_json(exclude_none=True))
+
+    @staticmethod
+    def get_cli_jwt_auth_token(
+        user_info: LiteLLM_UserTable, team_id: Optional[str] = None
+    ) -> str:
+        """
+        Generate a JWT token for CLI authentication with 24-hour expiration.
+        
+        Args:
+            user_info: User information from the database
+            team_id: Team ID for the user (optional, uses user's team if available)
+            
+        Returns:
+            Encrypted JWT token string
+        """
+        from datetime import timedelta
+
+        from litellm.constants import CLI_JWT_TOKEN_NAME
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+            encrypt_value_helper,
+        )
+
+        if user_info.user_role is None:
+            raise Exception("User role is required for CLI JWT login")
+
+        # Calculate expiration time (24 hours from now - matching old CLI key behavior)
+        expiration_time = get_utc_datetime() + timedelta(hours=24)
+
+        # Format the expiration time as ISO 8601 string
+        expires = expiration_time.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+00:00"
+
+        # Use provided team_id, or fall back to user's teams if available
+        _team_id = team_id
+        if _team_id is None and hasattr(user_info, "teams") and user_info.teams:
+            # Use first team if user has teams
+            _team_id = user_info.teams[0] if len(user_info.teams) > 0 else None
+
+        valid_token = UserAPIKeyAuth(
+            token=CLI_JWT_TOKEN_NAME,
+            key_name=CLI_JWT_TOKEN_NAME,
+            key_alias=CLI_JWT_TOKEN_NAME,
+            max_budget=litellm.max_ui_session_budget,
+            expires=expires,
+            user_id=user_info.user_id,
+            team_id=_team_id,
             models=user_info.models,
             max_parallel_requests=None,
             user_role=LitellmUserRoles(user_info.user_role),
@@ -1662,6 +1912,7 @@ async def _virtual_key_max_budget_check(
             max_budget=valid_token.max_budget,
             user_id=valid_token.user_id,
             team_id=valid_token.team_id,
+            organization_id=valid_token.org_id,
             user_email=user_email,
             key_alias=valid_token.key_alias,
             event_group=Litellm_EntityType.KEY,
@@ -1708,6 +1959,7 @@ async def _virtual_key_soft_budget_check(
             user_id=valid_token.user_id,
             team_id=valid_token.team_id,
             team_alias=valid_token.team_alias,
+            organization_id=valid_token.org_id,
             user_email=None,
             key_alias=valid_token.key_alias,
             event_group=Litellm_EntityType.KEY,
@@ -1746,6 +1998,7 @@ async def _team_max_budget_check(
                 user_id=valid_token.user_id,
                 team_id=valid_token.team_id,
                 team_alias=valid_token.team_alias,
+                organization_id=valid_token.org_id,
                 event_group=Litellm_EntityType.TEAM,
             )
             asyncio.create_task(
@@ -1760,6 +2013,65 @@ async def _team_max_budget_check(
             max_budget=team_object.max_budget,
             message=f"Budget has been exceeded! Team={team_object.team_id} Current cost: {team_object.spend}, Max budget: {team_object.max_budget}",
         )
+
+
+async def _organization_max_budget_check(
+    valid_token: Optional[UserAPIKeyAuth],
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+    proxy_logging_obj: ProxyLogging,
+):
+    """
+    Check if the organization is over its max budget.
+
+    Raises:
+        BudgetExceededError if the organization is over its max budget.
+        Triggers a budget alert if the organization is over its max budget.
+    """
+    # Only check if token has organization info and organization_max_budget is set
+    if (
+        valid_token is None
+        or valid_token.org_id is None
+        or valid_token.organization_max_budget is None
+        or valid_token.organization_max_budget <= 0
+    ):
+        return
+
+    # Get organization object to check current spend
+    if prisma_client is not None:
+        org_table = await get_org_object(
+            org_id=valid_token.org_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
+
+        if (
+            org_table is not None
+            and org_table.spend >= valid_token.organization_max_budget
+        ):
+            # Trigger budget alert
+            call_info = CallInfo(
+                token=valid_token.token,
+                spend=org_table.spend,
+                max_budget=valid_token.organization_max_budget,
+                user_id=valid_token.user_id,
+                team_id=valid_token.team_id,
+                team_alias=valid_token.team_alias,
+                organization_id=valid_token.org_id,
+                event_group=Litellm_EntityType.ORGANIZATION,
+            )
+            asyncio.create_task(
+                proxy_logging_obj.budget_alerts(
+                    type="organization_budget",
+                    user_info=call_info,
+                )
+            )
+
+            raise litellm.BudgetExceededError(
+                current_cost=org_table.spend,
+                max_budget=valid_token.organization_max_budget,
+                message=f"Budget has been exceeded! Organization={valid_token.org_id} Current cost: {org_table.spend}, Max budget: {valid_token.organization_max_budget}",
+            )
 
 
 async def _tag_max_budget_check(

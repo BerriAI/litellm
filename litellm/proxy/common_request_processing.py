@@ -292,6 +292,7 @@ class ProxyBaseLLMRequestProcessing:
         proxy_config: ProxyConfig,
         route_type: Literal[
             "acompletion",
+            "aembedding",
             "aresponses",
             "_arealtime",
             "aget_responses",
@@ -314,6 +315,12 @@ class ProxyBaseLLMRequestProcessing:
             "allm_passthrough_route",
             "avector_store_search",
             "avector_store_create",
+            "avector_store_file_create",
+            "avector_store_file_list",
+            "avector_store_file_retrieve",
+            "avector_store_file_content",
+            "avector_store_file_update",
+            "avector_store_file_delete",
             "aocr",
             "asearch",
             "avideo_generation",
@@ -323,8 +330,14 @@ class ProxyBaseLLMRequestProcessing:
             "avideo_remix",
             "acreate_container",
             "alist_containers",
+            "aingest",
             "aretrieve_container",
             "adelete_container",
+            "acreate_skill",
+            "alist_skills",
+            "aget_skill",
+            "adelete_skill",
+            "anthropic_messages",
         ],
         version: Optional[str] = None,
         user_model: Optional[str] = None,
@@ -333,6 +346,7 @@ class ProxyBaseLLMRequestProcessing:
         user_max_tokens: Optional[int] = None,
         user_api_base: Optional[str] = None,
         model: Optional[str] = None,
+        llm_router: Optional[Router] = None,
     ) -> Tuple[dict, LiteLLMLoggingObj]:
         start_time = datetime.now()  # start before calling guardrail hooks
 
@@ -371,6 +385,15 @@ class ProxyBaseLLMRequestProcessing:
         ):
             self.data["model"] = litellm.model_alias_map[self.data["model"]]
 
+        # Check key-specific aliases
+        if (
+            isinstance(self.data["model"], str)
+            and user_api_key_dict.aliases
+            and isinstance(user_api_key_dict.aliases, dict)
+            and self.data["model"] in user_api_key_dict.aliases
+        ):
+            self.data["model"] = user_api_key_dict.aliases[self.data["model"]]
+
         self.data["litellm_call_id"] = request.headers.get(
             "x-litellm-call-id", str(uuid.uuid4())
         )
@@ -403,6 +426,7 @@ class ProxyBaseLLMRequestProcessing:
         user_api_key_dict: UserAPIKeyAuth,
         route_type: Literal[
             "acompletion",
+            "aembedding",
             "aresponses",
             "_arealtime",
             "aget_responses",
@@ -416,6 +440,12 @@ class ProxyBaseLLMRequestProcessing:
             "allm_passthrough_route",
             "avector_store_search",
             "avector_store_create",
+            "avector_store_file_create",
+            "avector_store_file_list",
+            "avector_store_file_retrieve",
+            "avector_store_file_content",
+            "avector_store_file_update",
+            "avector_store_file_delete",
             "aocr",
             "asearch",
             "avideo_generation",
@@ -425,13 +455,19 @@ class ProxyBaseLLMRequestProcessing:
             "avideo_remix",
             "acreate_container",
             "alist_containers",
+            "aingest",
             "aretrieve_container",
             "adelete_container",
+            "acreate_skill",
+            "alist_skills",
+            "aget_skill",
+            "adelete_skill",
+            "anthropic_messages",
         ],
         proxy_logging_obj: ProxyLogging,
         general_settings: dict,
         proxy_config: ProxyConfig,
-        select_data_generator: Callable,
+        select_data_generator: Optional[Callable] = None,
         llm_router: Optional[Router] = None,
         model: Optional[str] = None,
         user_model: Optional[str] = None,
@@ -467,6 +503,7 @@ class ProxyBaseLLMRequestProcessing:
             user_api_base=user_api_base,
             model=model,
             route_type=route_type,
+            llm_router=llm_router,
         )
 
         tasks = []
@@ -505,6 +542,13 @@ class ProxyBaseLLMRequestProcessing:
 
         hidden_params = getattr(response, "_hidden_params", {}) or {}
         model_id = hidden_params.get("model_id", None) or ""
+
+        # Fallback: extract model_id from litellm_metadata if not in hidden_params
+        if not model_id:
+            litellm_metadata = self.data.get("litellm_metadata", {}) or {}
+            model_info = litellm_metadata.get("model_info", {}) or {}
+            model_id = model_info.get("id", "") or ""
+
         cache_key = hidden_params.get("cache_key", None) or ""
         api_base = hidden_params.get("api_base", None) or ""
         response_cost = hidden_params.get("response_cost", None) or ""
@@ -563,7 +607,21 @@ class ProxyBaseLLMRequestProcessing:
                         status_code=response.status_code,
                         headers=custom_headers,
                     )
-            else:
+            elif route_type == "anthropic_messages":
+                selected_data_generator = (
+                    ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+                        response=response,
+                        user_api_key_dict=user_api_key_dict,
+                        request_data=self.data,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+                )
+                return await create_streaming_response(
+                    generator=selected_data_generator,
+                    media_type="text/event-stream",
+                    headers=custom_headers,
+                )
+            elif select_data_generator:
                 selected_data_generator = select_data_generator(
                     response=response,
                     user_api_key_dict=user_api_key_dict,
@@ -725,11 +783,19 @@ class ProxyBaseLLMRequestProcessing:
         _litellm_logging_obj: Optional[LiteLLMLoggingObj] = self.data.get(
             "litellm_logging_obj", None
         )
+
+        # Attempt to get model_id from logging object
+        #
+        # Note: We check the direct model_info path first (not nested in metadata) because that's where the router sets it.
+        # The nested metadata path is only a fallback for cases where model_info wasn't set at the top level.
+        model_id = self.maybe_get_model_id(_litellm_logging_obj)
+
         custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=user_api_key_dict,
             call_id=(
                 _litellm_logging_obj.litellm_call_id if _litellm_logging_obj else None
             ),
+            model_id=model_id,
             version=version,
             response_cost=0,
             model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
@@ -746,6 +812,7 @@ class ProxyBaseLLMRequestProcessing:
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                provider_specific_fields=getattr(e, "provider_specific_fields", None),
                 headers=headers,
             )
         elif isinstance(e, httpx.HTTPStatusError):
@@ -753,27 +820,56 @@ class ProxyBaseLLMRequestProcessing:
             # This matches the original behavior before the refactor in commit 511d435f6f
             error_body = await e.response.aread()
             error_text = error_body.decode("utf-8")
-            
+
             raise HTTPException(
                 status_code=e.response.status_code,
                 detail={"error": error_text},
             )
         error_msg = f"{str(e)}"
+        # Check for AttributeError in various places:
+        # 1. Direct AttributeError (already handled above)
+        # 2. In underlying exception (__cause__, __context__, original_exception)
+        has_attribute_error = (
+            (
+                isinstance(e, Exception)
+                and isinstance(getattr(e, "__cause__", None), AttributeError)
+            )
+            or (
+                isinstance(e, Exception)
+                and isinstance(getattr(e, "__context__", None), AttributeError)
+            )
+            or (
+                isinstance(e, Exception)
+                and isinstance(getattr(e, "original_exception", None), AttributeError)
+            )
+        )
+
+        if has_attribute_error:
+            raise ProxyException(
+                message=f"Invalid request format: {error_msg}",
+                type="invalid_request_error",
+                param=None,
+                code=status.HTTP_400_BAD_REQUEST,
+                headers=headers,
+            )
         raise ProxyException(
             message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
             openai_code=getattr(e, "code", None),
             code=getattr(e, "status_code", 500),
+            provider_specific_fields=getattr(e, "provider_specific_fields", None),
             headers=headers,
         )
 
     @staticmethod
     def _get_pre_call_type(
-        route_type: Literal["acompletion", "aresponses"],
-    ) -> Literal["completion", "responses"]:
+        route_type: Literal["acompletion", "aembedding", "aresponses"],
+    ) -> Literal["completion", "embeddings", "responses"]:
         if route_type == "acompletion":
             return "completion"
+        elif route_type == "aembedding":
+            return "embeddings"
         elif route_type == "aresponses":
             return "responses"
 
@@ -1038,3 +1134,49 @@ class ProxyBaseLLMRequestProcessing:
                 obj.setdefault("usage", {})["cost"] = cost_val
                 return obj
         return None
+
+    def maybe_get_model_id(
+        self, _logging_obj: Optional[LiteLLMLoggingObj]
+    ) -> Optional[str]:
+        """
+        Get model_id from logging object or request metadata.
+
+        The router sets model_info.id when selecting a deployment. This tries multiple locations
+        where the ID might be stored depending on the request lifecycle stage.
+        """
+        model_id = None
+        if _logging_obj:
+            # 1. Try getting from litellm_params (updated during call)
+            if hasattr(_logging_obj, "litellm_params") and _logging_obj.litellm_params:
+                # First check direct model_info path (set by router.py with selected deployment)
+                model_info = _logging_obj.litellm_params.get("model_info") or {}
+                model_id = model_info.get("id", None)
+
+                # Fallback to nested metadata path
+                if not model_id:
+                    metadata = _logging_obj.litellm_params.get("metadata") or {}
+                    model_info = metadata.get("model_info") or {}
+                    model_id = model_info.get("id", None)
+
+            # 2. Fallback to kwargs (initial)
+            if not model_id:
+                _kwargs = getattr(_logging_obj, "kwargs", None)
+                if _kwargs:
+                    litellm_params = _kwargs.get("litellm_params", {})
+                    # First check direct model_info path
+                    model_info = litellm_params.get("model_info") or {}
+                    model_id = model_info.get("id", None)
+
+                    # Fallback to nested metadata path
+                    if not model_id:
+                        metadata = litellm_params.get("metadata") or {}
+                        model_info = metadata.get("model_info") or {}
+                        model_id = model_info.get("id", None)
+
+        # 3. Final fallback to self.data["litellm_metadata"] (for routes like /v1/responses that populate data before error)
+        if not model_id:
+            litellm_metadata = self.data.get("litellm_metadata", {}) or {}
+            model_info = litellm_metadata.get("model_info", {}) or {}
+            model_id = model_info.get("id", None)
+
+        return model_id
