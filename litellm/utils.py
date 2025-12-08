@@ -7346,6 +7346,8 @@ class ProviderConfigManager:
             return litellm.NvidiaNimRerankConfig()
         elif litellm.LlmProviders.VERTEX_AI == provider:
             return litellm.VertexAIRerankConfig()
+        elif litellm.LlmProviders.FIREWORKS_AI == provider:
+            return litellm.FireworksAIRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod
