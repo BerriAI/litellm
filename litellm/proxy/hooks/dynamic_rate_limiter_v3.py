@@ -178,16 +178,41 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
         return priority_weight, priority_key
 
+    async def _get_counter_value_from_redis(self, counter_key: str) -> Optional[float]:
+        """
+        Query Redis directly for counter value, bypassing local cache.
+
+        This ensures multi-node consistency for saturation checks.
+        When Redis window resets, all nodes see it immediately.
+
+        Args:
+            counter_key: The Redis key to query
+
+        Returns:
+            Counter value if found, None otherwise
+        """
+        redis_cache = self.internal_usage_cache.dual_cache.redis_cache
+        if redis_cache is not None:
+            return await redis_cache.async_get_cache(key=counter_key)
+        else:
+            # Fallback to local cache only if no Redis configured (single-node)
+            return await self.internal_usage_cache.async_get_cache(
+                key=counter_key,
+                litellm_parent_otel_span=None,
+                local_only=True,
+            )
+
     async def _check_model_saturation(
         self,
         model: str,
         model_group_info: ModelGroupInfo,
     ) -> float:
         """
-        Check current saturation by directly querying v3 limiter's cache keys.
+        Check current saturation by directly querying Redis.
 
-        Reuses v3 limiter's Redis-based tracking (works across multiple instances).
-        Reads counters WITHOUT incrementing them.
+        Queries Redis directly (bypassing local cache) to ensure all nodes
+        see the same saturation level. This prevents one node from staying
+        stuck in saturated state while others recover.
 
         Returns:
             float: Saturation ratio (0.0 = empty, 1.0 = at capacity, >1.0 = over)
@@ -204,12 +229,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                     rate_limit_type="requests",
                 )
 
-                # Query cache for current counter value
-                counter_value = await self.internal_usage_cache.async_get_cache(
-                    key=counter_key,
-                    litellm_parent_otel_span=None,
-                    local_only=False,  # Check Redis too
-                )
+                # Query Redis directly for current counter value
+                counter_value = await self._get_counter_value_from_redis(counter_key)
 
                 if counter_value is not None:
                     current_requests = int(counter_value)
@@ -229,11 +250,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                     rate_limit_type="tokens",
                 )
 
-                counter_value = await self.internal_usage_cache.async_get_cache(
-                    key=counter_key,
-                    litellm_parent_otel_span=None,
-                    local_only=False,
-                )
+                # Query Redis directly for current counter value
+                counter_value = await self._get_counter_value_from_redis(counter_key)
 
                 if counter_value is not None:
                     current_tokens = float(counter_value)
