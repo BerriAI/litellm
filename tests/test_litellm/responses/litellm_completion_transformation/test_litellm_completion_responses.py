@@ -12,7 +12,14 @@ from litellm.types.llms.openai import (
     ChatCompletionResponseMessage,
     ChatCompletionToolMessage,
 )
-from litellm.types.utils import Choices, Message, ModelResponse
+from litellm.types.utils import (
+    Choices,
+    CompletionTokensDetailsWrapper,
+    Message,
+    ModelResponse,
+    PromptTokensDetailsWrapper,
+    Usage,
+)
 
 
 class TestLiteLLMCompletionResponsesConfig:
@@ -676,3 +683,254 @@ class TestFunctionCallTransformation:
         
         tool_call = tool_calls[0]
         assert tool_call.get("id") == "fallback_id"
+
+
+class TestUsageTransformation:
+    """Test cases for usage transformation from Chat Completion to Responses API format"""
+
+    def test_transform_usage_with_cached_tokens_anthropic(self):
+        """Test that cached_tokens from Anthropic are properly transformed to input_tokens_details"""
+        # Setup: Simulate Anthropic usage with cache_read_input_tokens
+        usage = Usage(
+            prompt_tokens=13,
+            completion_tokens=27,
+            total_tokens=40,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=5,  # From Anthropic cache_read_input_tokens
+                text_tokens=8,
+            ),
+        )
+
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="claude-sonnet-4",
+            object="chat.completion",
+            usage=usage,
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hello!", role="assistant"),
+                )
+            ],
+        )
+
+        # Execute
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=chat_completion_response
+        )
+
+        # Assert
+        assert response_usage.input_tokens == 13
+        assert response_usage.output_tokens == 27
+        assert response_usage.total_tokens == 40
+        assert response_usage.input_tokens_details is not None
+        assert response_usage.input_tokens_details.cached_tokens == 5
+        assert response_usage.input_tokens_details.text_tokens == 8
+
+    def test_transform_usage_with_cached_tokens_gemini(self):
+        """Test that cached_tokens from Gemini are properly transformed to input_tokens_details"""
+        # Setup: Simulate Gemini usage with cachedContentTokenCount
+        usage = Usage(
+            prompt_tokens=9,
+            completion_tokens=27,
+            total_tokens=36,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=3,  # From Gemini cachedContentTokenCount
+                text_tokens=6,
+            ),
+        )
+
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="gemini-2.0-flash",
+            object="chat.completion",
+            usage=usage,
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hello!", role="assistant"),
+                )
+            ],
+        )
+
+        # Execute
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=chat_completion_response
+        )
+
+        # Assert
+        assert response_usage.input_tokens == 9
+        assert response_usage.output_tokens == 27
+        assert response_usage.total_tokens == 36
+        assert response_usage.input_tokens_details is not None
+        assert response_usage.input_tokens_details.cached_tokens == 3
+        assert response_usage.input_tokens_details.text_tokens == 6
+
+    def test_transform_usage_with_reasoning_tokens_gemini(self):
+        """Test that reasoning_tokens from Gemini are properly transformed to output_tokens_details"""
+        # Setup: Simulate Gemini usage with thoughtsTokenCount
+        usage = Usage(
+            prompt_tokens=10,
+            completion_tokens=100,
+            total_tokens=110,
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                reasoning_tokens=50,  # From Gemini thoughtsTokenCount
+                text_tokens=50,
+            ),
+        )
+
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="gemini-2.0-flash",
+            object="chat.completion",
+            usage=usage,
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hello!", role="assistant"),
+                )
+            ],
+        )
+
+        # Execute
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=chat_completion_response
+        )
+
+        # Assert
+        assert response_usage.output_tokens == 100
+        assert response_usage.output_tokens_details is not None
+        assert response_usage.output_tokens_details.reasoning_tokens == 50
+        assert response_usage.output_tokens_details.text_tokens == 50
+
+    def test_transform_usage_with_cached_and_reasoning_tokens(self):
+        """Test transformation with both cached tokens (input) and reasoning tokens (output)"""
+        # Setup: Combined Anthropic cached tokens and Gemini reasoning tokens
+        usage = Usage(
+            prompt_tokens=13,
+            completion_tokens=100,
+            total_tokens=113,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=5,  # Anthropic cache_read_input_tokens
+                text_tokens=8,
+            ),
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                reasoning_tokens=50,  # Gemini thoughtsTokenCount
+                text_tokens=50,
+            ),
+        )
+
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="claude-sonnet-4",
+            object="chat.completion",
+            usage=usage,
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hello!", role="assistant"),
+                )
+            ],
+        )
+
+        # Execute
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=chat_completion_response
+        )
+
+        # Assert
+        assert response_usage.input_tokens == 13
+        assert response_usage.output_tokens == 100
+        assert response_usage.total_tokens == 113
+        
+        # Verify input_tokens_details
+        assert response_usage.input_tokens_details is not None
+        assert response_usage.input_tokens_details.cached_tokens == 5
+        assert response_usage.input_tokens_details.text_tokens == 8
+        
+        # Verify output_tokens_details
+        assert response_usage.output_tokens_details is not None
+        assert response_usage.output_tokens_details.reasoning_tokens == 50
+        assert response_usage.output_tokens_details.text_tokens == 50
+
+    def test_transform_usage_with_zero_cached_tokens(self):
+        """Test that cached_tokens=0 is properly handled (no cached tokens used)"""
+        # Setup: Usage with cached_tokens=0 (no cache hit)
+        usage = Usage(
+            prompt_tokens=9,
+            completion_tokens=27,
+            total_tokens=36,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=0,  # No cache hit
+                text_tokens=9,
+            ),
+        )
+
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="claude-sonnet-4",
+            object="chat.completion",
+            usage=usage,
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hello!", role="assistant"),
+                )
+            ],
+        )
+
+        # Execute
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=chat_completion_response
+        )
+
+        # Assert: Should still include cached_tokens=0 in input_tokens_details
+        assert response_usage.input_tokens_details is not None
+        assert response_usage.input_tokens_details.cached_tokens == 0
+        assert response_usage.input_tokens_details.text_tokens == 9
+
+    def test_transform_usage_without_details(self):
+        """Test transformation when prompt_tokens_details and completion_tokens_details are None"""
+        # Setup: Usage without details (basic usage only)
+        usage = Usage(
+            prompt_tokens=9,
+            completion_tokens=27,
+            total_tokens=36,
+        )
+
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="gpt-4o",
+            object="chat.completion",
+            usage=usage,
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hello!", role="assistant"),
+                )
+            ],
+        )
+
+        # Execute
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=chat_completion_response
+        )
+
+        # Assert: Basic usage should still be transformed, but details should be None
+        assert response_usage.input_tokens == 9
+        assert response_usage.output_tokens == 27
+        assert response_usage.total_tokens == 36
+        assert response_usage.input_tokens_details is None
+        assert response_usage.output_tokens_details is None
