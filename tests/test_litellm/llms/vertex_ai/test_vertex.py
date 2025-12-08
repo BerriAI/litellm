@@ -1092,6 +1092,7 @@ def test_logprobs_unit_test():
     print(result)
 
 
+@pytest.mark.filterwarnings("ignore::UserWarning:pydantic.*")
 def test_logprobs():
     litellm.set_verbose = True
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
