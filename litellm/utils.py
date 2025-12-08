@@ -7362,12 +7362,19 @@ class ProviderConfigManager:
 
             return BedrockModelInfo.get_bedrock_provider_config_for_messages_api(model)
         elif litellm.LlmProviders.VERTEX_AI == provider:
-            if "claude" in model:
+            if "claude" in model.lower():
                 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
                     VertexAIPartnerModelsAnthropicMessagesConfig,
                 )
 
                 return VertexAIPartnerModelsAnthropicMessagesConfig()
+        elif litellm.LlmProviders.AZURE_AI == provider:
+            if "claude" in model.lower():
+                from litellm.llms.azure_ai.anthropic.messages_transformation import (
+                    AzureAnthropicMessagesConfig,
+                )
+
+                return AzureAnthropicMessagesConfig()
         return None
 
     @staticmethod

@@ -55,11 +55,6 @@ class AzureAnthropicConfig(AnthropicConfig):
         headers = BaseAzureLLM._base_validate_azure_environment(
             headers=headers, litellm_params=litellm_params_obj
         )
-        
-        # Azure Anthropic uses x-api-key header (not api-key)
-        # Convert api-key to x-api-key if present
-        if "api-key" in headers and "x-api-key" not in headers:
-            headers["x-api-key"] = headers.pop("api-key")
 
         # Get tools and other anthropic-specific setup
         tools = optional_params.get("tools")
