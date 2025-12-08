@@ -1,11 +1,11 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# SumoLogic
+# Sumo Logic
 
-Send LiteLLM logs to SumoLogic for observability, monitoring, and analysis.
+Send LiteLLM logs to Sumo Logic for observability, monitoring, and analysis.
 
-SumoLogic is a cloud-native machine data analytics platform that provides real-time insights into your applications and infrastructure.
+Sumo Logic is a cloud-native machine data analytics platform that provides real-time insights into your applications and infrastructure.
 https://www.sumologic.com/
 
 :::info
@@ -15,8 +15,8 @@ join our [discord](https://discord.gg/wuPM9dRgDw)
 
 ## Pre-Requisites
 
-1. Create a SumoLogic account at https://www.sumologic.com/
-2. Set up an HTTP Logs and Metrics Source in SumoLogic:
+1. Create a Sumo Logic account at https://www.sumologic.com/
+2. Set up an HTTP Logs and Metrics Source in Sumo Logic:
    - Go to **Manage Data** > **Collection** > **Collection**
    - Click **Add Source** next to a Hosted Collector
    - Select **HTTP Logs & Metrics**
@@ -30,9 +30,9 @@ pip install litellm
 
 ## Quick Start
 
-Use just 2 lines of code to instantly log your LLM responses to SumoLogic.
+Use just 2 lines of code to instantly log your LLM responses to Sumo Logic.
 
-The SumoLogic HTTP Source URL includes the authentication token, so no separate API key is required.
+The Sumo Logic HTTP Source URL includes the authentication token, so no separate API key is required.
 
 <Tabs>
 <TabItem value="python" label="SDK">
@@ -45,7 +45,7 @@ litellm.callbacks = ["sumologic"]
 import litellm
 import os
 
-# SumoLogic HTTP Source URL (includes auth token)
+# Sumo Logic HTTP Source URL (includes auth token)
 os.environ["SUMOLOGIC_WEBHOOK_URL"] = "https://collectors.sumologic.com/receiver/v1/http/your-token-here"
 
 # LLM API Keys
@@ -58,7 +58,7 @@ litellm.callbacks = ["sumologic"]
 response = litellm.completion(
   model="gpt-3.5-turbo",
   messages=[
-    {"role": "user", "content": "Hi 👋 - I'm testing SumoLogic integration"}
+    {"role": "user", "content": "Hi 👋 - I'm testing Sumo Logic integration"}
   ]
 )
 ```
@@ -110,7 +110,7 @@ curl -L -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 ## What Data is Logged?
 
-LiteLLM sends the [Standard Logging Payload](https://docs.litellm.ai/docs/proxy/logging_spec) to SumoLogic, which includes:
+LiteLLM sends the [Standard Logging Payload](https://docs.litellm.ai/docs/proxy/logging_spec) to Sumo Logic, which includes:
 
 - **Request details**: Model, messages, parameters
 - **Response details**: Completion text, token usage, latency
@@ -150,7 +150,7 @@ Example payload:
 
 ### Batching Settings
 
-Control how LiteLLM batches logs before sending to SumoLogic:
+Control how LiteLLM batches logs before sending to Sumo Logic:
 
 <Tabs>
 <TabItem value="python" label="SDK">
@@ -184,16 +184,16 @@ environment_variables:
 
 ### Compressed Data
 
-SumoLogic supports compressed data (gzip or deflate). LiteLLM automatically handles compression when beneficial.
+Sumo Logic supports compressed data (gzip or deflate). LiteLLM automatically handles compression when beneficial.
 
 Benefits:
 - Reduced network usage
 - Faster message delivery
 - Lower data transfer costs
 
-### Query Logs in SumoLogic
+### Query Logs in Sumo Logic
 
-Once logs are flowing to SumoLogic, you can query them using the Sumo Logic Query Language:
+Once logs are flowing to Sumo Logic, you can query them using the Sumo Logic Query Language:
 
 ```sql
 _sourceCategory=litellm
@@ -230,17 +230,17 @@ _sourceCategory=litellm
 
 ## Authentication
 
-The SumoLogic HTTP Source URL includes the authentication token, so you only need to set the `SUMOLOGIC_WEBHOOK_URL` environment variable.
+The Sumo Logic HTTP Source URL includes the authentication token, so you only need to set the `SUMOLOGIC_WEBHOOK_URL` environment variable.
 
 **Security Best Practices:**
 - Keep your HTTP Source URL private (it contains the auth token)
 - Store it in environment variables or secrets management
-- Regenerate the URL if it's compromised (in SumoLogic UI)
+- Regenerate the URL if it's compromised (in Sumo Logic UI)
 - Use separate HTTP Sources for different environments (dev, staging, prod)
 
-## Getting Your SumoLogic URL
+## Getting Your Sumo Logic URL
 
-1. Log in to [SumoLogic](https://www.sumologic.com/)
+1. Log in to [Sumo Logic](https://www.sumologic.com/)
 2. Go to **Manage Data** > **Collection** > **Collection**
 3. Click **Add Source** next to a Hosted Collector
 4. Select **HTTP Logs & Metrics**
@@ -255,10 +255,10 @@ The SumoLogic HTTP Source URL includes the authentication token, so you only nee
 
 ## Troubleshooting
 
-### Logs not appearing in SumoLogic
+### Logs not appearing in Sumo Logic
 
 1. **Verify the URL**: Make sure `SUMOLOGIC_WEBHOOK_URL` is set correctly
-2. **Check the HTTP Source**: Ensure it's active in SumoLogic UI
+2. **Check the HTTP Source**: Ensure it's active in Sumo Logic UI
 3. **Wait for batching**: Logs are sent in batches, wait 60 seconds
 4. **Check for errors**: Enable debug logging in LiteLLM:
    ```python
@@ -267,13 +267,13 @@ The SumoLogic HTTP Source URL includes the authentication token, so you only nee
 
 ### URL Format
 
-The URL must be the complete HTTP Source URL from SumoLogic:
+The URL must be the complete HTTP Source URL from Sumo Logic:
 - ✅ Correct: `https://collectors.sumologic.com/receiver/v1/http/ZaVnC4dhaV39Tn37...`
 
 ### No authentication errors
 
-If you get authentication errors, regenerate the HTTP Source URL in SumoLogic:
-1. Go to your HTTP Source in SumoLogic
+If you get authentication errors, regenerate the HTTP Source URL in Sumo Logic:
+1. Go to your HTTP Source in Sumo Logic
 2. Click the settings icon
 3. Click **Show URL**
 4. Click **Regenerate URL**
