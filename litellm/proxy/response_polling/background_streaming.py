@@ -9,6 +9,7 @@ https://platform.openai.com/docs/api-reference/responses-streaming
 """
 import asyncio
 import json
+from typing import Any
 
 from fastapi import Request, Response
 
@@ -85,7 +86,7 @@ async def background_streaming_task(  # noqa: PLR0915
         
         # Process streaming response following OpenAI events format
         # https://platform.openai.com/docs/api-reference/responses-streaming
-        output_items = {}  # Track output items by ID
+        output_items: dict[str, dict[str, Any]] = {}  # Track output items by ID
         accumulated_text = {}  # Track accumulated text deltas by (item_id, content_index)
         
         # ResponsesAPIResponse fields to extract from response.completed

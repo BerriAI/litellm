@@ -2,8 +2,8 @@
 Response Polling Handler for Background Responses with Cache
 """
 import json
-from typing import Any, Dict, Optional
 from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid4
@@ -246,13 +246,9 @@ class ResponsePollingHandler:
             return False
         
         cache_key = self.get_cache_key(polling_id)
-        # Redis client's delete method
-        if hasattr(self.redis_cache, 'redis_async_client'):
-            async_client = self.redis_cache.init_async_client()
-            await async_client.delete(cache_key)
-            return True
-        
-        return False
+        # Use RedisCache's async_delete_cache method which handles Redis/RedisCluster
+        await self.redis_cache.async_delete_cache(cache_key)
+        return True
 
 
 def should_use_polling_for_request(
