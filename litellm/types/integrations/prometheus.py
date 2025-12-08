@@ -272,8 +272,6 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
-        UserAPIKeyLabelNames.API_PROVIDER.value,
-        UserAPIKeyLabelNames.API_BASE.value,
     ]
 
     litellm_remaining_requests_metric = [
