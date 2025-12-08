@@ -89,10 +89,25 @@ async def get_agent_card(
     The URL in the agent card is rewritten to point to the LiteLLM proxy,
     so all subsequent A2A calls go through LiteLLM for logging and cost tracking.
     """
+    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+        AgentRequestHandler,
+    )
+
     try:
         agent = _get_agent(agent_id)
         if agent is None:
             raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
+
+        # Check agent permission (skip for admin users)
+        is_allowed = await AgentRequestHandler.is_agent_allowed(
+            agent_id=agent.agent_id,
+            user_api_key_auth=user_api_key_dict,
+        )
+        if not is_allowed:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Agent '{agent_id}' is not allowed for your key/team. Contact proxy admin for access.",
+            )
 
         # Copy and rewrite URL to point to LiteLLM proxy
         agent_card = dict(agent.agent_card_params)
@@ -139,6 +154,9 @@ async def invoke_agent_a2a(
     - message/stream: Send a message and stream the response
     """
     from litellm.a2a_protocol import asend_message, create_a2a_client
+    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+        AgentRequestHandler,
+    )
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -163,6 +181,16 @@ async def invoke_agent_a2a(
         agent = _get_agent(agent_id)
         if agent is None:
             return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' not found", 404)
+
+        is_allowed = await AgentRequestHandler.is_agent_allowed(
+            agent_id=agent.agent_id,
+            user_api_key_auth=user_api_key_dict,
+        )
+        if not is_allowed:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Agent '{agent_id}' is not allowed for your key/team. Contact proxy admin for access.",
+            )
 
         # Get backend URL and agent name
         agent_url = agent.agent_card_params.get("url")

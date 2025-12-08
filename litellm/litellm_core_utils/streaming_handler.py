@@ -737,6 +737,7 @@ class CustomStreamWrapper:
             or (
                 "tool_calls" in model_response.choices[0].delta
                 and model_response.choices[0].delta["tool_calls"] is not None
+                and len(model_response.choices[0].delta["tool_calls"]) > 0
             )
             or (
                 "function_call" in model_response.choices[0].delta

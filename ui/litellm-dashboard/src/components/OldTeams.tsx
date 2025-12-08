@@ -3,7 +3,7 @@ import TeamInfoView from "@/components/team/team_info";
 import TeamSSOSettings from "@/components/TeamSSOSettings";
 import { isProxyAdminRole } from "@/utils/roles";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { ChevronDownIcon, ChevronRightIcon, PencilAltIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
+import { ChevronDownIcon, ChevronRightIcon, RefreshIcon } from "@heroicons/react/outline";
 import {
   Accordion,
   AccordionBody,
@@ -33,6 +33,7 @@ import {
 import { Button as Button2, Form, Input, Modal, Select as Select2, Switch, Tooltip, Typography } from "antd";
 import React, { useEffect, useState } from "react";
 import { formatNumberWithCommas } from "../utils/dataUtils";
+import AgentSelector from "./agent_management/AgentSelector";
 import { fetchTeams } from "./common_components/fetch_teams";
 import ModelAliasManager from "./common_components/ModelAliasManager";
 import PremiumLoggingSettings from "./common_components/PremiumLoggingSettings";
@@ -77,6 +78,7 @@ interface EditTeamModalProps {
 
 import { updateExistingKeys } from "@/utils/dataUtils";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
+import TableIconActionButton from "./common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import { Member, teamCreateCall, v2TeamListCall } from "./networking";
 
 interface TeamInfo {
@@ -446,6 +448,21 @@ const Teams: React.FC<TeamProps> = ({
           }
           formValues.object_permission.mcp_access_groups = formValues.allowed_mcp_access_groups;
           delete formValues.allowed_mcp_access_groups;
+        }
+
+        // Handle agent permissions
+        if (formValues.allowed_agents_and_groups) {
+          const { agents, accessGroups } = formValues.allowed_agents_and_groups;
+          if (!formValues.object_permission) {
+            formValues.object_permission = {};
+          }
+          if (agents && agents.length > 0) {
+            formValues.object_permission.agents = agents;
+          }
+          if (accessGroups && accessGroups.length > 0) {
+            formValues.object_permission.agent_access_groups = accessGroups;
+          }
+          delete formValues.allowed_agents_and_groups;
         }
 
         // Add model_aliases if any are defined
@@ -931,28 +948,21 @@ const Teams: React.FC<TeamProps> = ({
                                     <TableCell>
                                       {userRole == "Admin" ? (
                                         <>
-                                          <Tooltip title="Edit team">
-                                            {" "}
-                                            <Icon
-                                              icon={PencilAltIcon}
-                                              size="sm"
-                                              className="cursor-pointer hover:text-blue-600"
-                                              onClick={() => {
-                                                setSelectedTeamId(team.team_id);
-                                                setEditTeam(true);
-                                              }}
-                                            />
-                                          </Tooltip>
-                                          <Tooltip title="Delete team">
-                                            {" "}
-                                            <Icon
-                                              onClick={() => handleDelete(team)}
-                                              icon={TrashIcon}
-                                              size="sm"
-                                              className="cursor-pointer hover:text-red-600"
-                                              data-testid="delete-team-button"
-                                            />
-                                          </Tooltip>
+                                          <TableIconActionButton
+                                            variant="Edit"
+                                            onClick={() => {
+                                              setSelectedTeamId(team.team_id);
+                                              setEditTeam(true);
+                                            }}
+                                            dataTestId="edit-team-button"
+                                            tooltipText="Edit team"
+                                          />
+                                          <TableIconActionButton
+                                            variant="Delete"
+                                            onClick={() => handleDelete(team)}
+                                            dataTestId="delete-team-button"
+                                            tooltipText="Delete team"
+                                          />
                                         </>
                                       ) : null}
                                     </TableCell>
@@ -1366,6 +1376,34 @@ const Teams: React.FC<TeamProps> = ({
                             />
                           </div>
                         )}
+                      </Form.Item>
+                    </AccordionBody>
+                  </Accordion>
+
+                  <Accordion className="mt-8 mb-8">
+                    <AccordionHeader>
+                      <b>Agent Settings</b>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <Form.Item
+                        label={
+                          <span>
+                            Allowed Agents{" "}
+                            <Tooltip title="Select which agents or access groups this team can access">
+                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                            </Tooltip>
+                          </span>
+                        }
+                        name="allowed_agents_and_groups"
+                        className="mt-4"
+                        help="Select agents or access groups this team can access"
+                      >
+                        <AgentSelector
+                          onChange={(val: any) => form.setFieldValue("allowed_agents_and_groups", val)}
+                          value={form.getFieldValue("allowed_agents_and_groups")}
+                          accessToken={accessToken || ""}
+                          placeholder="Select agents or access groups (optional)"
+                        />
                       </Form.Item>
                     </AccordionBody>
                   </Accordion>

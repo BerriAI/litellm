@@ -416,15 +416,34 @@ class OCIChatConfig(BaseConfig):
                 "Please install it with: pip install cryptography"
             ) from e
 
+        # Handle oci_key - it should be a string (PEM content)
+        oci_key_content = None
+        if oci_key:
+            if isinstance(oci_key, str):
+                oci_key_content = oci_key
+                # Fix common issues with PEM content
+                # Replace escaped newlines with actual newlines
+                oci_key_content = oci_key_content.replace("\\n", "\n")
+                # Ensure proper line endings
+                if "\r\n" in oci_key_content:
+                    oci_key_content = oci_key_content.replace("\r\n", "\n")
+            else:
+                raise OCIError(
+                    status_code=400,
+                    message=f"oci_key must be a string containing the PEM private key content. "
+                    f"Got type: {type(oci_key).__name__}",
+                )
+
         private_key = (
-            load_private_key_from_str(oci_key)
-            if oci_key
+            load_private_key_from_str(oci_key_content)
+            if oci_key_content
             else load_private_key_from_file(oci_key_file) if oci_key_file else None
         )
 
         if private_key is None:
-            raise Exception(
-                "Private key is required for OCI authentication. Please provide either oci_key or oci_key_file."
+            raise OCIError(
+                status_code=400,
+                message="Private key is required for OCI authentication. Please provide either oci_key or oci_key_file.",
             )
 
         signature = private_key.sign(

@@ -6,7 +6,7 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -127,7 +127,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         for field_name in GenericGuardrailAPIMetadata.__annotations__.keys():
             value = metadata_dict.get(field_name)
             if value is not None:
-                result_metadata[field_name] = value
+                result_metadata[field_name] = value  # type: ignore[literal-required]
 
         # handle user_api_key_token = user_api_key_hash
         if metadata_dict.get("user_api_key_token") is not None:
@@ -175,6 +175,8 @@ class GenericGuardrailAPI(CustomGuardrail):
         texts = inputs.get("texts", [])
         images = inputs.get("images")
         tools = inputs.get("tools")
+        structured_messages = inputs.get("structured_messages")
+        tool_calls = inputs.get("tool_calls")
 
         # Use provided request_data or create an empty dict
         if request_data is None:
@@ -201,6 +203,8 @@ class GenericGuardrailAPI(CustomGuardrail):
             request_data=user_metadata,
             images=images,
             tools=tools,
+            structured_messages=structured_messages,
+            tool_calls=tool_calls,
             additional_provider_specific_params=additional_params,
             input_type=input_type,
         )
@@ -214,7 +218,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             # Make the API request
             response = await self.async_handler.post(
                 url=self.api_base,
-                json=guardrail_request.to_dict(),
+                json=guardrail_request.model_dump(),
                 headers=headers,
             )
 

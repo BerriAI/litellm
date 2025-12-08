@@ -105,6 +105,7 @@ const sidebars = {
       items: [
         "tutorials/claude_responses_api",
         "tutorials/cost_tracking_coding",
+        "tutorials/cursor_integration",
         "tutorials/github_copilot_integration",
         "tutorials/litellm_gemini_cli",
         "tutorials/litellm_qwen_code_cli",
@@ -129,6 +130,16 @@ const sidebars = {
       },
       items: [
         "proxy/docker_quick_start",
+        {
+          type: "link",
+          label: "A2A Agent Gateway",
+          href: "https://docs.litellm.ai/docs/a2a",
+        },
+        {
+          type: "link",
+          label: "MCP Gateway",
+          href: "https://docs.litellm.ai/docs/mcp",
+        },
         {
           "type": "category",
           "label": "Config.yaml",
@@ -185,6 +196,7 @@ const sidebars = {
           label: "Architecture",
           items: [
             "proxy/architecture",
+            "proxy/multi_tenant_architecture",
             "proxy/control_plane_and_data_plane",
             "proxy/db_deadlocks",
             "proxy/db_info",
@@ -223,6 +235,7 @@ const sidebars = {
             "proxy/team_budgets",
             "proxy/tag_budgets",
             "proxy/customers",
+            "proxy/customer_usage",
             "proxy/dynamic_rate_limit",
             "proxy/rate_limit_tiers",
             "proxy/temporary_budget_increase",
@@ -316,7 +329,14 @@ const sidebars = {
         slug: "/supported_endpoints",
       },
       items: [
-        "a2a",
+        {
+          type: "category",
+          label: "/a2a - A2A Agent Gateway",
+          items: [
+            "a2a",
+            "a2a_agent_permissions",
+          ],
+        },
         "assistants",
         {
           type: "category",
@@ -474,6 +494,11 @@ const sidebars = {
         },
         {
           type: "doc",
+          id: "contributing/adding_openai_compatible_providers",
+          label: "Add OpenAI-Compatible Provider (JSON)",
+        },
+        {
+          type: "doc",
           id: "provider_registration/add_model_pricing",
           label: "Add Model Pricing & Context Window",
         },
@@ -521,6 +546,7 @@ const sidebars = {
             "providers/vertex_ai/videos",
             "providers/vertex_partner",
             "providers/vertex_self_deployed",
+            "providers/vertex_embedding",
             "providers/vertex_image",
             "providers/vertex_speech",
             "providers/vertex_batch",
@@ -796,6 +822,7 @@ const sidebars = {
           type: "category",
           label: "Adding Providers",
           items: [
+            "contributing/adding_openai_compatible_providers",
             "adding_provider/directory_structure",
             "adding_provider/new_rerank_provider",
           ]
@@ -822,13 +849,14 @@ const sidebars = {
               "Learn how to deploy + call models from different providers on LiteLLM",
             slug: "/project",
           },
-          items: [
+          items: [            
             "projects/smolagents",
             "projects/mini-swe-agent",
             "projects/openai-agents",
             "projects/Google ADK",
             "projects/Agent Lightning",
             "projects/Harbor",
+            "projects/GraphRAG",
             "projects/Docq.AI",
             "projects/PDL",
             "projects/OpenInterpreter",
