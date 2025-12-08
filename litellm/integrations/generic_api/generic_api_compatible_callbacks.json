@@ -16,5 +16,12 @@
             "Authorization": "Bearer {{environment_variables.RUBRIK_API_KEY}}"
         },
         "environment_variables": ["RUBRIK_API_KEY", "RUBRIK_WEBHOOK_URL"]
+    },
+    "sumologic": {
+        "endpoint": "{{environment_variables.SUMOLOGIC_WEBHOOK_URL}}",
+        "headers": {
+            "Content-Type": "application/json"
+        },
+        "environment_variables": ["SUMOLOGIC_WEBHOOK_URL"]
     }
 }

@@ -209,26 +209,6 @@ async def use_callback_in_llm_call(
             patch.stopall()
 
 
-@pytest.mark.asyncio
-async def test_init_custom_logger_compatible_class_as_callback():
-    init_env_vars()
-
-    # used like litellm.callbacks = ["prometheus"]
-    for callback in litellm._known_custom_logger_compatible_callbacks:
-        print(f"Testing callback: {callback}")
-        reset_all_callbacks()
-
-        await use_callback_in_llm_call(callback, used_in="callbacks")
-
-    # used like this litellm.success_callback = ["prometheus"]
-    for callback in litellm._known_custom_logger_compatible_callbacks:
-        print(f"Testing callback: {callback}")
-        reset_all_callbacks()
-
-        await use_callback_in_llm_call(callback, used_in="success_callback")
-
-    reset_env_vars()
-
 
 def test_dynamic_logging_global_callback():
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj

@@ -146,3 +146,24 @@ async def get_provider_fields() -> List[ProviderCreateInfo]:
         provider_create_fields = json.load(f)
 
     return provider_create_fields
+
+
+@router.get(
+    "/public/litellm_model_cost_map",
+    tags=["public", "model management"],
+)
+async def get_litellm_model_cost_map():
+    """
+    Public endpoint to get the LiteLLM model cost map.
+    Returns pricing information for all supported models.
+    """
+    import litellm
+
+    try:
+        _model_cost_map = litellm.model_cost
+        return _model_cost_map
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal Server Error ({str(e)})",
+        )

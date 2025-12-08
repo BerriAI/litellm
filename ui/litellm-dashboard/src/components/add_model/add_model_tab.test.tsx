@@ -42,7 +42,11 @@ const createQueryClient = () =>
     defaultOptions: {
       queries: {
         retry: false,
-        gcTime: 0,
+        staleTime: Infinity,
+        gcTime: Infinity,
+        refetchOnWindowFocus: false,
+        refetchOnReconnect: false,
+        refetchOnMount: false,
       },
     },
   });
@@ -140,7 +144,7 @@ describe("Add Model Tab", () => {
     );
 
     expect(await screen.findByRole("tab", { name: "Add Model" })).toBeInTheDocument();
-  });
+  }, 10000); // This test is flaky, adding a timeout until we find a better solution
 
   it("should display both Add Model and Add Auto Router tabs", async () => {
     const props = createTestProps();

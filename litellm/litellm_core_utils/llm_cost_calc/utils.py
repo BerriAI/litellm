@@ -583,9 +583,11 @@ def generic_cost_per_token(
         reasoning_tokens = completion_tokens_details["reasoning_tokens"]
         image_tokens = completion_tokens_details["image_tokens"]
 
-    if text_tokens == 0:
+    # Only assume all tokens are text if there's NO breakdown at all
+    # If image_tokens, audio_tokens, or reasoning_tokens exist, respect text_tokens=0
+    has_token_breakdown = image_tokens > 0 or audio_tokens > 0 or reasoning_tokens > 0
+    if text_tokens == 0 and not has_token_breakdown:
         text_tokens = usage.completion_tokens
-    if text_tokens == usage.completion_tokens:
         is_text_tokens_total = True
     ## TEXT COST
     completion_cost = float(text_tokens) * completion_base_cost

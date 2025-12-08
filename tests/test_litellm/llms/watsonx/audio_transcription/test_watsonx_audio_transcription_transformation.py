@@ -4,6 +4,7 @@ Tests for IBM WatsonX Audio Transcription.
 Validates that litellm.transcription transforms requests correctly for WatsonX.
 """
 
+import json
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -29,6 +30,7 @@ class TestWatsonXAudioTranscription:
             captured_request["url"] = str(kwargs.get("url", args[0] if args else None))
             captured_request["headers"] = kwargs.get("headers", {})
             captured_request["data"] = kwargs.get("data", {})
+            captured_request["files"] = kwargs.get("files", {})
             
             mock_response = MagicMock()
             mock_response.json.return_value = {
@@ -54,16 +56,33 @@ class TestWatsonXAudioTranscription:
         # Validate URL contains WatsonX audio transcription endpoint
         assert "/ml/v1/audio/transcriptions" in captured_request["url"]
         assert "version=" in captured_request["url"]
-        assert "project_id=test-project-123" in captured_request["url"]
+        # project_id should NOT be in URL (it should be in form data instead)
+        assert "project_id=test-project-123" not in captured_request["url"]
 
         # Validate headers contain WatsonX auth
         assert "Authorization" in captured_request["headers"]
         assert "Bearer test-bearer-token" in captured_request["headers"]["Authorization"]
+        
+        # Validate Content-Type is NOT set (httpx sets multipart/form-data automatically)
+        assert "Content-Type" not in captured_request["headers"]
+        
+        # Validate project_id is in form data, not URL
+        assert captured_request["data"].get("project_id") == "test-project-123"
+        
+        # Validate file is in files dict
+        assert "file" in captured_request["files"]
 
     @pytest.mark.asyncio
     async def test_watsonx_transcription_request_body(self):
         """
         Test that litellm.transcription sends correct request body for WatsonX.
+        
+        Validates that:
+        - Request uses multipart/form-data (data + files)
+        - Model name has watsonx/ prefix removed
+        - project_id is in form data, not URL
+        - Audio file is in files dict
+        - OpenAI params are included in form data
         """
         captured_request = {}
 
@@ -94,9 +113,24 @@ class TestWatsonXAudioTranscription:
             except Exception:
                 pass  # We just want to capture the request
 
-        # Validate request body contains expected fields
+        # Validate form data contains expected fields
         data = captured_request.get("data", {})
+
+        print("JSON DUMPS captured_request:")
+        print(json.dumps(captured_request, indent=4, default=str))
+        
+        # Model name should NOT have watsonx/ prefix
         assert data.get("model") == "whisper-large-v3-turbo"
+        
+        # project_id should be in form data
+        assert data.get("project_id") == "test-project-123"
+        
+        # OpenAI params should be in form data
         assert data.get("language") == "en"
         assert data.get("temperature") == 0.5
         assert data.get("response_format") == "verbose_json"  # Default for cost calculation
+        
+        # Validate file is in files dict (multipart/form-data)
+        files = captured_request.get("files", {})
+        assert "file" in files
+        assert isinstance(files["file"], tuple)  # Should be (filename, content, content_type)
