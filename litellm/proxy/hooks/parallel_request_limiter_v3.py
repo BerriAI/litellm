@@ -65,6 +65,12 @@ for i = 1, #KEYS, 2 do
         table.insert(results, increment_value) -- counter
     else
         local counter = redis.call('INCR', counter_key)
+        -- This happens when window_key exists but counter_key doesn't (e.g., tokens key
+        -- created after requests key when both share the same window_key)
+        local current_ttl = redis.call('TTL', counter_key)
+        if current_ttl == -1 then
+            redis.call('EXPIRE', counter_key, window_size)
+        end
         table.insert(results, window_start) -- window_start
         table.insert(results, counter) -- counter
     end
@@ -1327,7 +1333,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             _get_parent_otel_span_from_kwargs,
         )
         from litellm.proxy.common_utils.callback_utils import (
-            get_metadata_variable_name_from_kwargs,
             get_model_group_from_litellm_kwargs,
         )
         from litellm.types.caching import RedisPipelineIncrementOperation

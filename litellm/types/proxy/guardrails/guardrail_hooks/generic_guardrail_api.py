@@ -3,7 +3,11 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
-from litellm.types.llms.openai import ChatCompletionToolParam
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+from litellm.types.llms.openai import (
+    ChatCompletionToolCallChunk,
+    ChatCompletionToolParam,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
@@ -42,7 +46,7 @@ class GenericGuardrailAPIConfigModel(
         return "Generic Guardrail API"
 
 
-class GenericGuardrailAPIRequest:
+class GenericGuardrailAPIRequest(BaseModel):
     """Request model for the Generic Guardrail API"""
 
     input_type: Literal["request", "response"]
@@ -50,40 +54,13 @@ class GenericGuardrailAPIRequest:
     litellm_trace_id: Optional[
         str
     ]  # the trace id of the LLM call - useful if there are multiple LLM calls for the same conversation
-
-    def __init__(
-        self,
-        texts: List[str],
-        request_data: GenericGuardrailAPIMetadata,
-        input_type: Literal["request", "response"],
-        litellm_call_id: Optional[str],
-        litellm_trace_id: Optional[str],
-        additional_provider_specific_params: Optional[Dict[str, Any]] = None,
-        images: Optional[List[str]] = None,
-        tools: Optional[List[ChatCompletionToolParam]] = None,
-    ):
-        self.texts = texts
-        self.request_data = request_data
-        self.additional_provider_specific_params = (
-            additional_provider_specific_params or {}
-        )
-        self.images = images
-        self.input_type = input_type
-        self.litellm_call_id = litellm_call_id
-        self.litellm_trace_id = litellm_trace_id
-        self.tools = tools
-
-    def to_dict(self) -> dict:
-        return {
-            "texts": self.texts,
-            "request_data": self.request_data,
-            "images": self.images,
-            "tools": self.tools,
-            "additional_provider_specific_params": self.additional_provider_specific_params,
-            "input_type": self.input_type,
-            "litellm_call_id": self.litellm_call_id,
-            "litellm_trace_id": self.litellm_trace_id,
-        }
+    structured_messages: Optional[List[AllMessageValues]]
+    images: Optional[List[str]]
+    tools: Optional[List[ChatCompletionToolParam]]
+    texts: Optional[List[str]]
+    request_data: GenericGuardrailAPIMetadata
+    additional_provider_specific_params: Optional[Dict[str, Any]]
+    tool_calls: Optional[List[ChatCompletionToolCallChunk]]
 
 
 class GenericGuardrailAPIResponse:
@@ -116,4 +93,5 @@ class GenericGuardrailAPIResponse:
             blocked_reason=data.get("blocked_reason"),
             texts=data.get("texts"),
             images=data.get("images"),
+            tools=data.get("tools"),
         )

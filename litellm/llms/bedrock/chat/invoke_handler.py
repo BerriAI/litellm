@@ -674,33 +674,39 @@ class BedrockLLM(BaseAWSLLM):
             )
 
         ## CALCULATING USAGE - bedrock returns usage in the headers
-        bedrock_input_tokens = response.headers.get(
-            "x-amzn-bedrock-input-token-count", None
-        )
-        bedrock_output_tokens = response.headers.get(
-            "x-amzn-bedrock-output-token-count", None
-        )
-
-        prompt_tokens = int(
-            bedrock_input_tokens or litellm.token_counter(messages=messages)
-        )
-
-        completion_tokens = int(
-            bedrock_output_tokens
-            or litellm.token_counter(
-                text=model_response.choices[0].message.content,  # type: ignore
-                count_response_tokens=True,
+        # Skip if usage was already set (e.g., from JSON response for OpenAI provider)
+        if not hasattr(model_response, "usage") or getattr(model_response, "usage", None) is None:
+            bedrock_input_tokens = response.headers.get(
+                "x-amzn-bedrock-input-token-count", None
             )
-        )
+            bedrock_output_tokens = response.headers.get(
+                "x-amzn-bedrock-output-token-count", None
+            )
 
-        model_response.created = int(time.time())
-        model_response.model = model
-        usage = Usage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=prompt_tokens + completion_tokens,
-        )
-        setattr(model_response, "usage", usage)
+            prompt_tokens = int(
+                bedrock_input_tokens or litellm.token_counter(messages=messages)
+            )
+
+            completion_tokens = int(
+                bedrock_output_tokens
+                or litellm.token_counter(
+                    text=model_response.choices[0].message.content,  # type: ignore
+                    count_response_tokens=True,
+                )
+            )
+
+            model_response.created = int(time.time())
+            model_response.model = model
+            usage = Usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens + completion_tokens,
+            )
+            setattr(model_response, "usage", usage)
+        else:
+            # Ensure created and model are set even if usage was already set
+            model_response.created = int(time.time())
+            model_response.model = model
 
         return model_response
 

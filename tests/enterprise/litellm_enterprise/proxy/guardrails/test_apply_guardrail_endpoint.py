@@ -28,9 +28,9 @@ async def test_apply_guardrail_endpoint_returns_correct_response():
     ) as mock_registry:
         # Create a mock guardrail
         mock_guardrail = Mock(spec=CustomGuardrail)
-        # Apply guardrail now returns a tuple (List[str], Optional[List[str]])
+        # Apply guardrail returns GenericGuardrailAPIInputs (dict with texts key)
         mock_guardrail.apply_guardrail = AsyncMock(
-            return_value=(["Redacted text: [REDACTED] and [REDACTED]"], None)
+            return_value={"texts": ["Redacted text: [REDACTED] and [REDACTED]"]}
         )
 
         # Configure the registry to return our mock guardrail
@@ -56,12 +56,11 @@ async def test_apply_guardrail_endpoint_returns_correct_response():
         assert isinstance(response, ApplyGuardrailResponse)
         assert response.response_text == "Redacted text: [REDACTED] and [REDACTED]"
 
-        # Verify the guardrail was called with correct parameters (new signature)
+        # Verify the guardrail was called with correct parameters
         mock_guardrail.apply_guardrail.assert_called_once_with(
-            texts=["Test text with PII"],
+            inputs={"texts": ["Test text with PII"]},
             request_data={},
             input_type="request",
-            images=None,
         )
 
 
@@ -104,9 +103,9 @@ async def test_apply_guardrail_endpoint_with_presidio_guardrail():
     ) as mock_registry:
         # Create a mock guardrail that simulates Presidio behavior
         mock_guardrail = Mock(spec=CustomGuardrail)
-        # Simulate masking PII entities - returns tuple (List[str], Optional[List[str]])
+        # Simulate masking PII entities - returns GenericGuardrailAPIInputs (dict with texts key)
         mock_guardrail.apply_guardrail = AsyncMock(
-            return_value=(["My name is [PERSON] and my email is [EMAIL_ADDRESS]"], None)
+            return_value={"texts": ["My name is [PERSON] and my email is [EMAIL_ADDRESS]"]}
         )
 
         # Configure the registry to return our mock guardrail
@@ -149,9 +148,9 @@ async def test_apply_guardrail_endpoint_without_optional_params():
     ) as mock_registry:
         # Create a mock guardrail
         mock_guardrail = Mock(spec=CustomGuardrail)
-        # Returns tuple (List[str], Optional[List[str]])
+        # Returns GenericGuardrailAPIInputs (dict with texts key)
         mock_guardrail.apply_guardrail = AsyncMock(
-            return_value=(["Processed text"], None)
+            return_value={"texts": ["Processed text"]}
         )
 
         # Configure the registry to return our mock guardrail
@@ -174,7 +173,7 @@ async def test_apply_guardrail_endpoint_without_optional_params():
         assert isinstance(response, ApplyGuardrailResponse)
         assert response.response_text == "Processed text"
 
-        # Verify the guardrail was called with new signature
+        # Verify the guardrail was called with correct parameters
         mock_guardrail.apply_guardrail.assert_called_once_with(
-            texts=["Test text"], request_data={}, input_type="request", images=None
+            inputs={"texts": ["Test text"]}, request_data={}, input_type="request"
         )

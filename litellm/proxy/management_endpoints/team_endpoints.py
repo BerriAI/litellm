@@ -31,6 +31,7 @@ from litellm.proxy._types import (
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
     LiteLLM_ModelTable,
     LiteLLM_OrganizationTable,
+    LiteLLM_OrganizationTableWithMembers,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_TeamTableCachedObj,
@@ -68,7 +69,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _set_object_metadata_field,
-    _update_metadata_field,
+    _update_metadata_fields,
     _upsert_budget_and_membership,
     _user_has_admin_view,
 )
@@ -678,7 +679,7 @@ async def new_team(  # noqa: PLR0915
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
     - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
-    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "mcp_tool_permissions": {"server_id_1": ["tool1", "tool2"]}}. IF null or {} then no object permission.
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
@@ -1051,7 +1052,7 @@ async def fetch_and_validate_organization(
 
     organization_row = await prisma_client.db.litellm_organizationtable.find_unique(
         where={"organization_id": organization_id},
-        include={"litellm_budget_table": True, "users": True},
+        include={"litellm_budget_table": True, "members": True},
     )
 
     if organization_row is None:
@@ -1064,7 +1065,7 @@ async def fetch_and_validate_organization(
 
     validate_team_org_change(
         team=LiteLLM_TeamTable(**existing_team_row.model_dump()),
-        organization=LiteLLM_OrganizationTable(**organization_row.model_dump()),
+        organization=LiteLLM_OrganizationTableWithMembers(**organization_row.model_dump()),
         llm_router=llm_router,
     )
 
@@ -1072,7 +1073,7 @@ async def fetch_and_validate_organization(
 
 
 def validate_team_org_change(
-    team: LiteLLM_TeamTable, organization: LiteLLM_OrganizationTable, llm_router: Router
+    team: LiteLLM_TeamTable, organization: LiteLLM_OrganizationTableWithMembers, llm_router: Router
 ) -> bool:
     """
     Validate that a team can be moved to an organization.
@@ -1123,7 +1124,7 @@ def validate_team_org_change(
 
     # Check if the team's user_id is a member of the org
     team_members = [m.user_id for m in team.members_with_roles]
-    org_members = [m.user_id for m in organization.users] if organization.users else []
+    org_members = [m.user_id for m in organization.members] if organization.members else []
     not_in_org = [
         m
         for m in team_members
@@ -1201,7 +1202,7 @@ async def update_team(
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
     - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
-    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "mcp_tool_permissions": {"server_id_1": ["tool1", "tool2"]}}. IF null or {} then no object permission.
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
@@ -1319,13 +1320,7 @@ async def update_team(
         updated_kv = data.json(exclude_unset=True)
 
         # Check budget_duration and budget_reset_at
-        if data.budget_duration is not None:
-            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
-            reset_at = get_budget_reset_time(budget_duration=data.budget_duration)
-
-            # set the budget_reset_at in DB
-            updated_kv["budget_reset_at"] = reset_at
+        _set_budget_reset_at(data, updated_kv)
 
         if TeamMemberBudgetHandler.should_create_budget(
             team_member_budget=data.team_member_budget,
@@ -1351,20 +1346,7 @@ async def update_team(
             )
 
         # update team metadata fields
-        _team_metadata_fields = LiteLLM_ManagementEndpoint_MetadataFields_Premium
-        for field in _team_metadata_fields:
-            if field in updated_kv and updated_kv[field] is not None:
-                _update_metadata_field(
-                    updated_kv=updated_kv,
-                    field_name=field,
-                )
-
-        for field in LiteLLM_ManagementEndpoint_MetadataFields:
-            if field in updated_kv and updated_kv[field] is not None:
-                _update_metadata_field(
-                    updated_kv=updated_kv,
-                    field_name=field,
-                )
+        _update_metadata_fields(updated_kv=updated_kv)
 
         if "model_aliases" in updated_kv:
             updated_kv.pop("model_aliases")
@@ -1415,6 +1397,15 @@ async def update_team(
         return {"team_id": team_row.team_id, "data": team_row}
     except Exception as e:
         raise handle_exception_on_proxy(e)
+
+
+def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict) -> None:
+    """Set budget_reset_at in updated_kv if budget_duration is provided."""
+    if data.budget_duration is not None:
+        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+        reset_at = get_budget_reset_time(budget_duration=data.budget_duration)
+        updated_kv["budget_reset_at"] = reset_at
 
 
 async def handle_update_object_permission(
