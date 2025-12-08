@@ -96,6 +96,51 @@ class UnifiedLLMGuardrails(CustomLogger):
         )
         return data
 
+    async def async_moderation_hook(
+        self, data: dict, user_api_key_dict: UserAPIKeyAuth, call_type: CallTypesLiteral
+    ) -> Any:
+        """
+        Runs in parallel to LLM API call
+        Runs on only Input
+
+        This can NOT modify the input, only used to reject or accept a call before going to LLM API
+        """
+        global endpoint_guardrail_translation_mappings
+
+        verbose_proxy_logger.debug("Running UnifiedLLMGuardrails moderation hook")
+
+        guardrail_to_apply: CustomGuardrail = data.pop("guardrail_to_apply", None)
+        if guardrail_to_apply is None:
+            return data
+
+        event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
+        if (
+            guardrail_to_apply.should_run_guardrail(data=data, event_type=event_type)
+            is not True
+        ):
+            verbose_proxy_logger.debug(
+                "UnifiedLLMGuardrails: Pre-call scanning disabled for %s",
+                guardrail_to_apply.guardrail_name,
+            )
+            return data
+
+        if endpoint_guardrail_translation_mappings is None:
+            endpoint_guardrail_translation_mappings = (
+                load_guardrail_translation_mappings()
+            )
+        if CallTypes(call_type) not in endpoint_guardrail_translation_mappings:
+            return data
+
+        endpoint_translation = endpoint_guardrail_translation_mappings[
+            CallTypes(call_type)
+        ]()
+
+        return await endpoint_translation.process_input_messages(
+            data=data,
+            guardrail_to_apply=guardrail_to_apply,
+            litellm_logging_obj=data.get("litellm_logging_obj"),
+        )
+
     async def async_post_call_success_hook(
         self,
         data: dict,
@@ -192,7 +237,6 @@ class UnifiedLLMGuardrails(CustomLogger):
         guardrail_to_apply: CustomGuardrail = request_data.pop(
             "guardrail_to_apply", None
         )
-
 
         # Get sampling rate from guardrail config or optional_params, default to 5
         sampling_rate = 5

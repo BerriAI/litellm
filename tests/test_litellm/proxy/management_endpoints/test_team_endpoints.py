@@ -16,7 +16,9 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 from litellm.proxy._types import UserAPIKeyAuth  # Import UserAPIKeyAuth
 from litellm.proxy._types import (
+    LiteLLM_OrganizationMembershipTable,
     LiteLLM_OrganizationTable,
+    LiteLLM_OrganizationTableWithMembers,
     LiteLLM_TeamTable,
     LitellmUserRoles,
     Member,
@@ -95,7 +97,7 @@ async def test_validate_team_org_change_same_org_id():
     team.members_with_roles = []
 
     # Mock organization
-    organization = MagicMock(spec=LiteLLM_OrganizationTable)
+    organization = MagicMock(spec=LiteLLM_OrganizationTableWithMembers)
     organization.organization_id = org_id
     organization.models = []
     organization.litellm_budget_table = MagicMock()
@@ -108,7 +110,7 @@ async def test_validate_team_org_change_same_org_id():
     organization.litellm_budget_table.rpm_limit = (
         50  # This would normally fail validation
     )
-    organization.users = []
+    organization.members = []
 
     # Mock Router
     mock_router = MagicMock(spec=Router)
@@ -124,6 +126,114 @@ async def test_validate_team_org_change_same_org_id():
         # Assert the function returns True without checking anything
         assert result is True
         mock_access_check.assert_not_called()  # Ensure access check wasn't called
+
+
+@pytest.mark.asyncio
+async def test_validate_team_org_change_members_in_org():
+    """
+    Test that validate_team_org_change passes when team members are in organization.members.
+
+    This tests the fix for issue #17552 where membership was incorrectly checked against
+    organization.users (deprecated) instead of organization.members (correct).
+    """
+    team_org_id = "team-org-123"
+    new_org_id = "new-org-456"
+    user_id_1 = "user-123"
+    user_id_2 = "user-456"
+
+    # Mock team with members
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.organization_id = team_org_id
+    team.models = []
+    team.max_budget = None
+    team.tpm_limit = None
+    team.rpm_limit = None
+
+    # Create mock team members
+    team_member_1 = MagicMock()
+    team_member_1.user_id = user_id_1
+    team_member_2 = MagicMock()
+    team_member_2.user_id = user_id_2
+    team.members_with_roles = [team_member_1, team_member_2]
+
+    # Mock organization with members (using LiteLLM_OrganizationMembershipTable structure)
+    organization = MagicMock(spec=LiteLLM_OrganizationTableWithMembers)
+    organization.organization_id = new_org_id
+    organization.models = []
+    organization.litellm_budget_table = None
+
+    # Create mock organization members - these should match team members
+    org_member_1 = MagicMock(spec=LiteLLM_OrganizationMembershipTable)
+    org_member_1.user_id = user_id_1
+    org_member_2 = MagicMock(spec=LiteLLM_OrganizationMembershipTable)
+    org_member_2.user_id = user_id_2
+    organization.members = [org_member_1, org_member_2]
+
+    # Mock Router
+    mock_router = MagicMock(spec=Router)
+
+    # Test should pass - all team members are in org members
+    result = validate_team_org_change(
+        team=team, organization=organization, llm_router=mock_router
+    )
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_validate_team_org_change_member_not_in_org():
+    """
+    Test that validate_team_org_change raises HTTPException when team members
+    are NOT in organization.members.
+
+    This tests the fix for issue #17552 where membership was incorrectly checked against
+    organization.users (deprecated) instead of organization.members (correct).
+    """
+    team_org_id = "team-org-123"
+    new_org_id = "new-org-456"
+    user_id_1 = "user-123"
+    user_id_2 = "user-456"
+    user_id_not_in_org = "user-not-in-org-789"
+
+    # Mock team with members (including one not in org)
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.organization_id = team_org_id
+    team.models = []
+    team.max_budget = None
+    team.tpm_limit = None
+    team.rpm_limit = None
+
+    # Create mock team members - user_id_not_in_org is not in the org
+    team_member_1 = MagicMock()
+    team_member_1.user_id = user_id_1
+    team_member_2 = MagicMock()
+    team_member_2.user_id = user_id_not_in_org
+    team.members_with_roles = [team_member_1, team_member_2]
+
+    # Mock organization with members (missing user_id_not_in_org)
+    organization = MagicMock(spec=LiteLLM_OrganizationTableWithMembers)
+    organization.organization_id = new_org_id
+    organization.models = []
+    organization.litellm_budget_table = None
+
+    # Create mock organization members - only user_id_1 and user_id_2 are members
+    org_member_1 = MagicMock(spec=LiteLLM_OrganizationMembershipTable)
+    org_member_1.user_id = user_id_1
+    org_member_2 = MagicMock(spec=LiteLLM_OrganizationMembershipTable)
+    org_member_2.user_id = user_id_2
+    organization.members = [org_member_1, org_member_2]
+
+    # Mock Router
+    mock_router = MagicMock(spec=Router)
+
+    # Test should fail - user_id_not_in_org is not in org members
+    with pytest.raises(HTTPException) as exc_info:
+        validate_team_org_change(
+            team=team, organization=organization, llm_router=mock_router
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "not a member of the organization" in str(exc_info.value.detail)
+    assert user_id_not_in_org in str(exc_info.value.detail)
 
 
 # Test for /team/permissions_list endpoint (GET)

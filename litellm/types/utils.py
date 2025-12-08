@@ -3002,6 +3002,7 @@ class LlmProviders(str, Enum):
     WANDB = "wandb"
     OVHCLOUD = "ovhcloud"
     LEMONADE = "lemonade"
+    AMAZON_NOVA = "amazon_nova"
     A2A_AGENT = "a2a_agent"
 
 
