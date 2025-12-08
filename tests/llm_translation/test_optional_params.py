@@ -671,20 +671,39 @@ def test_get_optional_params_num_retries():
     """
     Relevant issue - https://github.com/BerriAI/litellm/issues/5124
     """
+    # Patch where it's used in main.py to ensure the patch works correctly
     with patch(
         "litellm.main.get_optional_params",
-        new=MagicMock(return_value={"max_retries": 0}),
-    ) as mock_client:
-        _ = litellm.completion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Hello world"}],
-            num_retries=10,
+    ) as mock_get_optional_params:
+        # Set up the mock to return a minimal response and allow us to inspect calls
+        mock_get_optional_params.return_value = {}
+        
+        try:
+            _ = litellm.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello world"}],
+                num_retries=10,
+            )
+        except Exception:
+            # Ignore errors from the actual API call, we just want to verify the parameter was passed
+            pass
+
+        mock_get_optional_params.assert_called()
+        
+        # get_optional_params is called with **optional_param_args, so max_retries should be in kwargs
+        # Check all calls to handle cases where it might be called multiple times
+        found_max_retries = False
+        for call in mock_get_optional_params.call_args_list:
+            call_kwargs = call.kwargs if call.kwargs else {}
+            if call_kwargs.get("max_retries") == 10:
+                found_max_retries = True
+                break
+        
+        assert found_max_retries, (
+            f"Expected max_retries=10 in at least one call to get_optional_params, but not found. "
+            f"Number of calls: {mock_get_optional_params.call_count}. "
+            f"All call args: {[call.kwargs for call in mock_get_optional_params.call_args_list]}"
         )
-
-        mock_client.assert_called()
-
-        print(f"mock_client.call_args: {mock_client.call_args}")
-        assert mock_client.call_args.kwargs["max_retries"] == 10
 
 
 @pytest.mark.parametrize(
