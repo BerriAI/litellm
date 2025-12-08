@@ -874,7 +874,7 @@ class ModelResponseIterator:
 
     def _handle_accumulated_json_chunk(
         self, data_str: str
-    ) -> Optional[GenericStreamingChunk]:
+    ) -> Optional[ModelResponseStream]:
         """
         Handle partial JSON chunks by accumulating them until valid JSON is received.
 
@@ -885,7 +885,7 @@ class ModelResponseIterator:
             data_str: The JSON string to parse (without "data:" prefix)
 
         Returns:
-            GenericStreamingChunk if JSON is complete, None if still accumulating
+            ModelResponseStream if JSON is complete, None if still accumulating
         """
         # Accumulate JSON data
         self.accumulated_json += data_str
@@ -899,7 +899,7 @@ class ModelResponseIterator:
             # If it's not valid JSON yet, continue to the next chunk
             return None
 
-    def _parse_sse_data(self, str_line: str) -> Optional[GenericStreamingChunk]:
+    def _parse_sse_data(self, str_line: str) -> Optional[ModelResponseStream]:
         """
         Parse SSE data line, handling both complete and partial JSON chunks.
 
@@ -907,7 +907,7 @@ class ModelResponseIterator:
             str_line: The SSE line starting with "data:"
 
         Returns:
-            GenericStreamingChunk if parsing succeeded, None if accumulating partial JSON
+            ModelResponseStream if parsing succeeded, None if accumulating partial JSON
         """
         data_str = str_line[5:]  # Remove "data:" prefix
 
