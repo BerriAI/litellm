@@ -1584,13 +1584,17 @@ async def _base_vertex_proxy_route(
             from litellm.proxy.proxy_server import llm_router
 
             if llm_router:
-                deployments = llm_router.get_model_list(model_name=model_id)
-                if deployments:
-                    deployment = deployments[0]
-                    litellm_params = deployment.get("litellm_params", {})
-                    if litellm_params.get("use_in_pass_through"):
-                        vertex_project = litellm_params.get("vertex_project")
-                        vertex_location = litellm_params.get("vertex_location")
+                try:
+                    deployment = llm_router.get_available_deployment(model=model_id)
+                    if deployment:
+                        litellm_params = deployment.get("litellm_params", {})
+                        if litellm_params.get("use_in_pass_through"):
+                            vertex_project = litellm_params.get("vertex_project")
+                            vertex_location = litellm_params.get("vertex_location")
+                except Exception as e:
+                    verbose_proxy_logger.debug(
+                        f"Error getting available deployment for model {model_id}: {e}"
+                    )
 
     vertex_credentials = passthrough_endpoint_router.get_vertex_credentials(
         project_id=vertex_project,
