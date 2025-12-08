@@ -6,7 +6,12 @@
             "Content-Type": "application/json",
             "Authorization": "Bearer {{environment_variables.SAMPLE_CALLBACK_API_KEY}}"
         },
-        "environment_variables": ["SAMPLE_CALLBACK_URL", "SAMPLE_CALLBACK_API_KEY"]
+        "environment_variables": ["SAMPLE_CALLBACK_URL", "SAMPLE_CALLBACK_API_KEY"],
+        "docs": {
+            "show_in_docs": false,
+            "display_name": "Sample Callback",
+            "description": "Sample callback for testing purposes"
+        }
     },
     "rubrik": {
         "event_types": ["llm_api_success"],
@@ -15,6 +20,28 @@
             "Content-Type": "application/json",
             "Authorization": "Bearer {{environment_variables.RUBRIK_API_KEY}}"
         },
-        "environment_variables": ["RUBRIK_API_KEY", "RUBRIK_WEBHOOK_URL"]
+        "environment_variables": ["RUBRIK_API_KEY", "RUBRIK_WEBHOOK_URL"],
+        "docs": {
+            "show_in_docs": true,
+            "display_name": "Rubrik",
+            "description": "Rubrik is a data security platform. Send LLM logs to Rubrik for data governance and compliance monitoring.",
+            "website": "https://www.rubrik.com/",
+            "additional_notes": "Configure your Rubrik webhook URL in the Rubrik console to receive LLM usage data."
+        }
+    },
+    "sumologic": {
+        "event_types": ["llm_api_success", "llm_api_failure"],
+        "endpoint": "{{environment_variables.SUMOLOGIC_WEBHOOK_URL}}",
+        "headers": {
+            "Content-Type": "application/json"
+        },
+        "environment_variables": ["SUMOLOGIC_WEBHOOK_URL"],
+        "docs": {
+            "show_in_docs": true,
+            "display_name": "Sumo Logic",
+            "description": "Sumo Logic is a cloud-native machine data analytics platform. Send LLM logs to Sumo Logic for centralized logging and analysis.",
+            "website": "https://www.sumologic.com/",
+            "additional_notes": "Create an HTTP Source in Sumo Logic and use the provided URL as `SUMOLOGIC_WEBHOOK_URL`. No additional API key is required as authentication is embedded in the URL."
+        }
     }
 }

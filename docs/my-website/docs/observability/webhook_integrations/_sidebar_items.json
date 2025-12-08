@@ -1,0 +1,4 @@
+[
+  "observability/webhook_integrations/rubrik",
+  "observability/webhook_integrations/sumologic"
+]

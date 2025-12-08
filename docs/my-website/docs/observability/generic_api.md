@@ -2,6 +2,12 @@
 
 Send LiteLLM logs to any HTTP endpoint.
 
+:::tip Pre-configured Webhook Integrations
+
+Looking for a specific service? Check out our **[Webhook Integrations](./webhook_integrations/index.md)** for pre-configured options like Sumo Logic, Rubrik, and more!
+
+:::
+
 ## Quick Start
 
 ```yaml
@@ -50,19 +56,21 @@ callback_settings:
 
 ## Pre-configured Callbacks
 
-Use built-in configurations from `generic_api_compatible_callbacks.json`:
+Use built-in configurations from `generic_api_compatible_callbacks.json`. See [Webhook Integrations](./webhook_integrations/index.md) for the full list.
 
 ```yaml
 litellm_settings:
   callbacks: ["rubrik"]  # loads pre-configured settings
 
-callback_settings:
-  rubrik:
-    callback_type: generic_api
-    endpoint: https://your-endpoint.com  # override defaults
-    headers:
-      Authorization: Bearer ${RUBRIK_API_KEY}
+environment_variables:
+  RUBRIK_API_KEY: sk-1234
+  RUBRIK_WEBHOOK_URL: https://your-rubrik-webhook.com
 ```
+
+**Available pre-configured callbacks:**
+- `rubrik` - Rubrik data security platform
+- `sumologic` - Sumo Logic logging platform
+- [Add your own!](../contribute_integration/custom_webhook_api)
 
 ## Payload Format
 

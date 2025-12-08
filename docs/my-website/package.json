@@ -4,6 +4,9 @@
   "private": true,
   "scripts": {
     "docusaurus": "docusaurus",
+    "generate-webhook-docs": "python3 scripts/generate_webhook_docs.py",
+    "prebuild": "npm run generate-webhook-docs",
+    "prestart": "npm run generate-webhook-docs",
     "start": "docusaurus start",
     "build": "docusaurus build",
     "swizzle": "docusaurus swizzle",
