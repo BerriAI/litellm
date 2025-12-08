@@ -23,7 +23,12 @@ from typing import (
 )
 
 from litellm import _custom_logger_compatible_callbacks_literal
-from litellm.constants import DEFAULT_MODEL_CREATED_AT_TIME, MAX_TEAM_LIST_LIMIT
+from litellm.constants import (
+    DEFAULT_MODEL_CREATED_AT_TIME,
+    MAX_LOGS_PER_INTERVAL,
+    MAX_TEAM_LIST_LIMIT,
+    SPEND_LOG_BATCH_SIZE,
+)
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
     CommonProxyErrors,
@@ -3345,10 +3350,6 @@ class ProxyUpdateSpend:
         db_writer_client: Optional[HTTPHandler],
         proxy_logging_obj: ProxyLogging,
     ):
-        BATCH_SIZE = 100  # Preferred size of each batch to write to the database
-        MAX_LOGS_PER_INTERVAL = (
-            1000  # Maximum number of logs to flush in a single interval
-        )
         # Get initial logs to process
         logs_to_process = prisma_client.spend_log_transactions[:MAX_LOGS_PER_INTERVAL]
         start_time = time.time()
@@ -3376,8 +3377,8 @@ class ProxyUpdateSpend:
                                 ]
                             )
                     else:
-                        for j in range(0, len(logs_to_process), BATCH_SIZE):
-                            batch = logs_to_process[j : j + BATCH_SIZE]
+                        for j in range(0, len(logs_to_process), SPEND_LOG_BATCH_SIZE):
+                            batch = logs_to_process[j : j + SPEND_LOG_BATCH_SIZE]
                             batch_with_dates = [
                                 prisma_client.jsonify_object({**entry})
                                 for entry in batch
@@ -3471,6 +3472,48 @@ async def update_spend(  # noqa: PLR0915
             verbose_proxy_logger.error(
                 f"Error in update_spend_logs: {type(e).__name__}: {str(e)}"
             )
+
+
+async def monitor_spend_log_queue(prisma_client: PrismaClient):
+    """
+    Monitor the spend_log_transactions queue and log usage at different levels.
+    
+    Log levels based on queue size:
+    - DEBUG: 0-1000 (low usage, <10%)
+    - INFO: 1001-5000 (medium usage, 10-50%)
+    - WARNING: 5001-8000 (high usage, 50-80%)
+    - ERROR: 8001+ (critical, >80% of MAX_LOGS_PER_INTERVAL)
+    
+    Args:
+        prisma_client: The Prisma client instance containing the queue
+    """
+    queue_size = len(prisma_client.spend_log_transactions)
+    
+    percentage = (queue_size * 100) // SPEND_LOG_BATCH_SIZE if SPEND_LOG_BATCH_SIZE > 0 else 0
+    threshold_10_percent = SPEND_LOG_BATCH_SIZE // 10
+    threshold_50_percent = SPEND_LOG_BATCH_SIZE // 2
+    threshold_80_percent = int(SPEND_LOG_BATCH_SIZE * 0.8)
+    
+    if queue_size == 0:
+        verbose_proxy_logger.debug(
+            f"Spend log queue usage: {queue_size}/{SPEND_LOG_BATCH_SIZE} (0%)"
+        )
+    elif queue_size <= threshold_10_percent:  # <10%
+        verbose_proxy_logger.debug(
+            f"Spend log queue usage: {queue_size}/{SPEND_LOG_BATCH_SIZE} ({percentage}%)"
+        )
+    elif queue_size <= threshold_50_percent:  # 10-50%
+        verbose_proxy_logger.info(
+            f"Spend log queue usage: {queue_size}/{SPEND_LOG_BATCH_SIZE} ({percentage}%)"
+        )
+    elif queue_size <= threshold_80_percent:  # 50-80%
+        verbose_proxy_logger.warning(
+            f"Spend log queue usage: {queue_size}/{SPEND_LOG_BATCH_SIZE} ({percentage}%) - High usage detected"
+        )
+    else:  # >80%
+        verbose_proxy_logger.error(
+            f"Spend log queue usage: {queue_size}/{SPEND_LOG_BATCH_SIZE} ({percentage}%) - CRITICAL: Queue approaching or exceeding maximum capacity"
+        )
 
 
 def _raise_failed_update_spend_exception(

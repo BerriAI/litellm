@@ -152,7 +152,7 @@ REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_org_spend_update_buffer
 REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_end_user_spend_update_buffer"
 REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_tag_spend_update_buffer"
 MAX_REDIS_BUFFER_DEQUEUE_COUNT = int(os.getenv("MAX_REDIS_BUFFER_DEQUEUE_COUNT", 100))
-MAX_SIZE_IN_MEMORY_QUEUE = int(os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", 10000))
+MAX_SIZE_IN_MEMORY_QUEUE = int(os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", 1000))
 MAX_IN_MEMORY_QUEUE_FLUSH_COUNT = int(
     os.getenv("MAX_IN_MEMORY_QUEUE_FLUSH_COUNT", 1000)
 )
@@ -1047,6 +1047,15 @@ LITELLM_TRUNCATED_PAYLOAD_FIELD = "litellm_truncated"
 MAX_SPENDLOG_ROWS_TO_QUERY = int(
     os.getenv("MAX_SPENDLOG_ROWS_TO_QUERY", 1_000_000)
 )  # if spendLogs has more than 1M rows, do not query the DB
+MAX_LOGS_PER_INTERVAL = int(
+    os.getenv("MAX_LOGS_PER_INTERVAL", 10_000)
+)  # Maximum number of logs to flush in a single interval
+SPEND_LOG_BATCH_SIZE = int(
+    os.getenv("SPEND_LOG_BATCH_SIZE", MAX_LOGS_PER_INTERVAL // 2)
+)  # Preferred size of each batch to write to the database
+SPEND_LOG_QUEUE_MONITOR_INTERVAL = int(
+    os.getenv("SPEND_LOG_QUEUE_MONITOR_INTERVAL", 10)
+)  # Interval in seconds to monitor the spend log queue
 DEFAULT_SOFT_BUDGET = float(
     os.getenv("DEFAULT_SOFT_BUDGET", 50.0)
 )  # by default all litellm proxy keys have a soft budget of 50.0
@@ -1118,8 +1127,8 @@ PROXY_BUDGET_RESCHEDULER_MAX_TIME = int(
     os.getenv("PROXY_BUDGET_RESCHEDULER_MAX_TIME", 605)
 )
 PROXY_BATCH_WRITE_AT = int(
-    os.getenv("PROXY_BATCH_WRITE_AT", 10)
-)  # in seconds, increased from 10
+    os.getenv("PROXY_BATCH_WRITE_AT", 5)
+)  # in seconds, increased from 5
 
 # APScheduler Configuration - MEMORY LEAK FIX
 # These settings prevent memory leaks in APScheduler's normalize() and _apply_jitter() functions

@@ -43,6 +43,7 @@ from litellm.constants import (
     DEFAULT_SLACK_ALERTING_THRESHOLD,
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
+    SPEND_LOG_QUEUE_MONITOR_INTERVAL,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.common_utils.callback_utils import (
@@ -404,6 +405,7 @@ from litellm.proxy.utils import (
     handle_exception_on_proxy,
     hash_token,
     model_dump_with_preserved_fields,
+    monitor_spend_log_queue,
     update_spend,
 )
 from litellm.proxy.vector_store_endpoints.endpoints import router as vector_store_router
@@ -4424,6 +4426,17 @@ class ProxyStartupEvent:
             # REMOVED jitter parameter - major cause of memory leak
             args=[prisma_client, db_writer_client, proxy_logging_obj],
             id="update_spend_job",
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
+        ### MONITOR SPEND LOG QUEUE ###
+        scheduler.add_job(
+            monitor_spend_log_queue,
+            "interval",
+            seconds=SPEND_LOG_QUEUE_MONITOR_INTERVAL,
+            # REMOVED jitter parameter - major cause of memory leak
+            args=[prisma_client],
+            id="monitor_spend_log_queue_job",
             replace_existing=True,
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
         )
