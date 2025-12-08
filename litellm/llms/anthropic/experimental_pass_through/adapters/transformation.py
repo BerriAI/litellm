@@ -130,16 +130,17 @@ class LiteLLMAnthropicMessagesAdapter:
 
     ### FOR [BETA] `/v1/messages` endpoint support
 
-    def _extract_signature_from_tool_call(
-        self, tool_call: Any
-    ) -> Optional[str]:
+    def _extract_signature_from_tool_call(self, tool_call: Any) -> Optional[str]:
         """
         Extract signature from a tool call's provider_specific_fields.
         Only checks provider_specific_fields, not thinking blocks.
         """
         signature = None
-        
-        if hasattr(tool_call, "provider_specific_fields") and tool_call.provider_specific_fields:
+
+        if (
+            hasattr(tool_call, "provider_specific_fields")
+            and tool_call.provider_specific_fields
+        ):
             if "thought_signature" in tool_call.provider_specific_fields:
                 signature = tool_call.provider_specific_fields["thought_signature"]
         elif (
@@ -147,8 +148,10 @@ class LiteLLMAnthropicMessagesAdapter:
             and tool_call.function.provider_specific_fields
         ):
             if "thought_signature" in tool_call.function.provider_specific_fields:
-                signature = tool_call.function.provider_specific_fields["thought_signature"]
-        
+                signature = tool_call.function.provider_specific_fields[
+                    "thought_signature"
+                ]
+
         return signature
 
     def _extract_signature_from_tool_use_content(
@@ -161,7 +164,6 @@ class LiteLLMAnthropicMessagesAdapter:
         if provider_specific_fields:
             return provider_specific_fields.get("signature")
         return None
-
 
     def translatable_anthropic_params(self) -> List:
         """
@@ -231,7 +233,14 @@ class LiteLLMAnthropicMessagesAdapter:
                                 )
                                 tool_message_list.append(tool_result)
                             elif isinstance(content.get("content"), list):
-                                for c in content.get("content", []):
+                                # Combine all content items into a single tool message
+                                # to avoid creating multiple tool_result blocks with the same ID
+                                # (each tool_use must have exactly one tool_result)
+                                content_items = content.get("content", [])
+
+                                # For single-item content, maintain backward compatibility with string/url format
+                                if len(content_items) == 1:
+                                    c = content_items[0]
                                     if isinstance(c, str):
                                         tool_result = ChatCompletionToolMessage(
                                             role="tool",
@@ -250,7 +259,6 @@ class LiteLLMAnthropicMessagesAdapter:
                                             )
                                             tool_message_list.append(tool_result)
                                         elif c.get("type") == "image":
-                                            # Convert Anthropic image format to OpenAI format for tool results
                                             source = c.get("source", {})
                                             openai_image_url = (
                                                 self._translate_anthropic_image_to_openai(
@@ -258,7 +266,6 @@ class LiteLLMAnthropicMessagesAdapter:
                                                 )
                                                 or ""
                                             )
-
                                             tool_result = ChatCompletionToolMessage(
                                                 role="tool",
                                                 tool_call_id=content.get(
@@ -267,6 +274,55 @@ class LiteLLMAnthropicMessagesAdapter:
                                                 content=openai_image_url,
                                             )
                                             tool_message_list.append(tool_result)
+                                else:
+                                    # For multiple content items, combine into a single tool message
+                                    # with list content to preserve all items while having one tool_use_id
+                                    combined_content_parts: List[
+                                        Union[
+                                            ChatCompletionTextObject,
+                                            ChatCompletionImageObject,
+                                        ]
+                                    ] = []
+                                    for c in content_items:
+                                        if isinstance(c, str):
+                                            combined_content_parts.append(
+                                                ChatCompletionTextObject(
+                                                    type="text", text=c
+                                                )
+                                            )
+                                        elif isinstance(c, dict):
+                                            if c.get("type") == "text":
+                                                combined_content_parts.append(
+                                                    ChatCompletionTextObject(
+                                                        type="text",
+                                                        text=c.get("text", ""),
+                                                    )
+                                                )
+                                            elif c.get("type") == "image":
+                                                source = c.get("source", {})
+                                                openai_image_url = (
+                                                    self._translate_anthropic_image_to_openai(
+                                                        source
+                                                    )
+                                                    or ""
+                                                )
+                                                if openai_image_url:
+                                                    combined_content_parts.append(
+                                                        ChatCompletionImageObject(
+                                                            type="image_url",
+                                                            image_url=ChatCompletionImageUrlObject(
+                                                                url=openai_image_url
+                                                            ),
+                                                        )
+                                                    )
+                                    # Create a single tool message with combined content
+                                    if combined_content_parts:
+                                        tool_result = ChatCompletionToolMessage(
+                                            role="tool",
+                                            tool_call_id=content.get("tool_use_id", ""),
+                                            content=combined_content_parts,  # type: ignore
+                                        )
+                                        tool_message_list.append(tool_result)
 
             if len(tool_message_list) > 0:
                 new_messages.extend(tool_message_list)
@@ -301,14 +357,23 @@ class LiteLLMAnthropicMessagesAdapter:
                                     "name": content.get("name", ""),
                                     "arguments": json.dumps(content.get("input", {})),
                                 }
-                                signature = self._extract_signature_from_tool_use_content(content)
-                                
+                                signature = (
+                                    self._extract_signature_from_tool_use_content(
+                                        content
+                                    )
+                                )
+
                                 if signature:
                                     provider_specific_fields: Dict[str, Any] = (
-                                        function_chunk.get("provider_specific_fields") or {}
+                                        function_chunk.get("provider_specific_fields")
+                                        or {}
                                     )
-                                    provider_specific_fields["thought_signature"] = signature
-                                    function_chunk["provider_specific_fields"] = provider_specific_fields
+                                    provider_specific_fields["thought_signature"] = (
+                                        signature
+                                    )
+                                    function_chunk["provider_specific_fields"] = (
+                                        provider_specific_fields
+                                    )
 
                                 tool_calls.append(
                                     ChatCompletionAssistantToolCall(
@@ -556,11 +621,11 @@ class LiteLLMAnthropicMessagesAdapter:
                 for tool_call in choice.message.tool_calls:
                     # Extract signature from provider_specific_fields only
                     signature = self._extract_signature_from_tool_call(tool_call)
-                    
+
                     provider_specific_fields = {}
                     if signature:
                         provider_specific_fields["signature"] = signature
-                    
+
                     tool_use_block = AnthropicResponseContentBlockToolUse(
                         type="tool_use",
                         id=tool_call.id,
@@ -573,7 +638,9 @@ class LiteLLMAnthropicMessagesAdapter:
                     )
                     # Add provider_specific_fields if signature is present
                     if provider_specific_fields:
-                        tool_use_block.provider_specific_fields = provider_specific_fields
+                        tool_use_block.provider_specific_fields = (
+                            provider_specific_fields
+                        )
                     new_content.append(tool_use_block)
             # Handle text content
             elif choice.message.content is not None:
