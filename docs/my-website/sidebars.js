@@ -118,11 +118,83 @@ const sidebars = {
   ],
   // But you can create a sidebar manually
   tutorialSidebar: [
-    { type: "doc", id: "index" }, // NEW
+    { type: "doc", id: "index", label: "Getting Started" },
 
     {
       type: "category",
-      label: "LiteLLM AI Gateway",
+      label: "LiteLLM Python SDK",
+      items: [
+        {
+          type: "link",
+          label: "Quick Start",
+          href: "/docs/#litellm-python-sdk",
+        },
+        {
+          type: "category",
+          label: "SDK Functions",
+          items: [
+            {
+              type: "doc",
+              id: "completion/input",
+              label: "completion()",
+            },
+            {
+              type: "doc",
+              id: "embedding/supported_embedding",
+              label: "embedding()",
+            },
+            {
+              type: "doc",
+              id: "response_api",
+              label: "responses()",
+            },
+            {
+              type: "doc",
+              id: "text_completion",
+              label: "text_completion()",
+            },
+            {
+              type: "doc",
+              id: "image_generation",
+              label: "image_generation()",
+            },
+            {
+              type: "doc",
+              id: "audio_transcription",
+              label: "transcription()",
+            },
+            {
+              type: "doc",
+              id: "text_to_speech",
+              label: "speech()",
+            },
+            {
+              type: "link",
+              label: "All Supported Endpoints →",
+              href: "/docs/supported_endpoints",
+            },
+          ],
+        },
+        {
+          type: "category",
+          label: "Configuration",
+          items: [
+            "set_keys",
+            "caching/all_caches",
+          ],
+        },
+        "completion/token_usage",
+        "exception_mapping",
+        {
+          type: "category",
+          label: "LangChain, LlamaIndex, Instructor",
+          items: ["langchain/langchain", "tutorials/instructor"],
+        }
+      ],
+    },
+    {
+      type: "category",
+      label: "LiteLLM AI Gateway (Proxy)",
       link: {
         type: "generated-index",
         title: "LiteLLM AI Gateway (LLM Proxy)",
@@ -696,6 +768,7 @@ const sidebars = {
       type: "category",
       label: "Guides",
       items: [
+        "budget_manager",
         "completion/computer_use",
         "completion/web_search",
         "completion/web_fetch",
@@ -748,27 +821,6 @@ const sidebars = {
         "wildcard_routing"
       ],
     },
-    {
-      type: "category",
-      label: "LiteLLM Python SDK",
-      items: [
-        "set_keys",
-        "budget_manager",
-        "caching/all_caches",
-        "completion/token_usage",
-        "sdk_custom_pricing",
-        "embedding/async_embedding",
-        "embedding/moderation",
-        "migration",
-        "sdk_custom_pricing",
-        {
-          type: "category",
-          label: "LangChain, LlamaIndex, Instructor Integration",
-          items: ["langchain/langchain", "tutorials/instructor"],
-        }
-      ],
-    },
-
     {
       type: "category",
       label: "Load Testing",
@@ -838,6 +890,8 @@ const sidebars = {
       type: "category",
       label: "Extras",
       items: [
+        "sdk_custom_pricing",
+        "migration",
         "data_security",
         "data_retention",
         "proxy/security_encryption_faq",
