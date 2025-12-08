@@ -149,7 +149,7 @@ Use the `ranking/` prefix to force requests to the `/v1/ranking` endpoint:
 
 ### LiteLLM Python SDK
 
-```python
+```python showLineNumbers title="Force /v1/ranking endpoint with ranking/ prefix"
 import litellm
 import os
 
@@ -173,9 +173,7 @@ print(response)
 
 ### LiteLLM Proxy
 
-**Config:**
-
-```yaml
+```yaml showLineNumbers title="config.yaml"
 model_list:
   - model_name: nvidia-ranking
     litellm_params:
@@ -183,9 +181,7 @@ model_list:
       api_key: os.environ/NVIDIA_NIM_API_KEY
 ```
 
-**Request:**
-
-```bash
+```bash title="Request to LiteLLM Proxy"
 curl -X POST http://0.0.0.0:4000/rerank \
   -H "Authorization: Bearer sk-1234" \
   -H "Content-Type: application/json" \
