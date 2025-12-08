@@ -2,6 +2,8 @@ from litellm.llms.vertex_ai.gemini.transformation import (
     check_if_part_exists_in_parts,
     _transform_request_body,
     _gemini_convert_messages_with_history,
+    _get_highest_media_resolution,
+    _extract_max_media_resolution_from_messages,
 )
 
 
@@ -538,3 +540,215 @@ def test_dummy_signature_with_function_call_mode():
     # Verify it's the expected dummy signature
     expected_dummy = base64.b64encode(b"skip_thought_signature_validator").decode("utf-8")
     assert gemini_parts[0]["thoughtSignature"] == expected_dummy
+
+
+# Tests for media_resolution (detail parameter) handling - Issue #17084
+class TestMediaResolution:
+    """Tests for media_resolution handling in Gemini 2.x models"""
+
+    def test_get_highest_media_resolution_high_wins(self):
+        """Test that 'high' resolution takes precedence over 'low'"""
+        assert _get_highest_media_resolution("low", "high") == "high"
+        assert _get_highest_media_resolution("high", "low") == "high"
+        assert _get_highest_media_resolution(None, "high") == "high"
+        assert _get_highest_media_resolution("high", None) == "high"
+
+    def test_get_highest_media_resolution_low_over_none(self):
+        """Test that 'low' resolution takes precedence over None"""
+        assert _get_highest_media_resolution(None, "low") == "low"
+        assert _get_highest_media_resolution("low", None) == "low"
+
+    def test_get_highest_media_resolution_same_values(self):
+        """Test handling of same resolution values"""
+        assert _get_highest_media_resolution("high", "high") == "high"
+        assert _get_highest_media_resolution("low", "low") == "low"
+        assert _get_highest_media_resolution(None, None) is None
+
+    def test_extract_max_media_resolution_single_image_high(self):
+        """Test extraction of media resolution from single image with detail=high"""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is this?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,abc123", "detail": "high"},
+                    },
+                ],
+            }
+        ]
+        assert _extract_max_media_resolution_from_messages(messages) == "high"
+
+    def test_extract_max_media_resolution_single_image_low(self):
+        """Test extraction of media resolution from single image with detail=low"""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is this?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,abc123", "detail": "low"},
+                    },
+                ],
+            }
+        ]
+        assert _extract_max_media_resolution_from_messages(messages) == "low"
+
+    def test_extract_max_media_resolution_no_detail(self):
+        """Test extraction when no detail parameter is provided"""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is this?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,abc123"},
+                    },
+                ],
+            }
+        ]
+        assert _extract_max_media_resolution_from_messages(messages) is None
+
+    def test_extract_max_media_resolution_multiple_images_mixed(self):
+        """Test that highest resolution is returned when multiple images have different details"""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Compare these images"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,abc123", "detail": "low"},
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,def456", "detail": "high"},
+                    },
+                ],
+            }
+        ]
+        assert _extract_max_media_resolution_from_messages(messages) == "high"
+
+    def test_extract_max_media_resolution_text_only(self):
+        """Test extraction from messages with no images"""
+        messages = [
+            {"role": "user", "content": "Hello, how are you?"},
+            {"role": "assistant", "content": "I'm doing well!"},
+        ]
+        assert _extract_max_media_resolution_from_messages(messages) is None
+
+    def test_transform_request_body_gemini_2x_adds_media_resolution(self):
+        """Test that media_resolution is added to generationConfig for Gemini 2.x models"""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is this?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,iVBORw0KGgo=", "detail": "high"},
+                    },
+                ],
+            }
+        ]
+
+        result = _transform_request_body(
+            messages=messages,
+            model="gemini-2.5-flash",
+            optional_params={},
+            custom_llm_provider="gemini",
+            litellm_params={},
+            cached_content=None,
+        )
+
+        assert "generationConfig" in result
+        assert "mediaResolution" in result["generationConfig"]
+        assert result["generationConfig"]["mediaResolution"] == "MEDIA_RESOLUTION_HIGH"
+
+    def test_transform_request_body_gemini_2x_low_resolution(self):
+        """Test that low media_resolution is correctly added for Gemini 2.x"""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is this?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,iVBORw0KGgo=", "detail": "low"},
+                    },
+                ],
+            }
+        ]
+
+        result = _transform_request_body(
+            messages=messages,
+            model="gemini-2.5-flash",
+            optional_params={},
+            custom_llm_provider="gemini",
+            litellm_params={},
+            cached_content=None,
+        )
+
+        assert "generationConfig" in result
+        assert "mediaResolution" in result["generationConfig"]
+        assert result["generationConfig"]["mediaResolution"] == "MEDIA_RESOLUTION_LOW"
+
+    def test_transform_request_body_gemini_3_no_global_media_resolution(self):
+        """Test that Gemini 3 models don't add media_resolution to generationConfig (they use per-part)"""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is this?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,iVBORw0KGgo=", "detail": "high"},
+                    },
+                ],
+            }
+        ]
+
+        result = _transform_request_body(
+            messages=messages,
+            model="gemini-3-pro-preview",
+            optional_params={},
+            custom_llm_provider="gemini",
+            litellm_params={},
+            cached_content=None,
+        )
+
+        # Gemini 3 should NOT have mediaResolution in generationConfig
+        # (it's handled per-part in the content transformation)
+        if "generationConfig" in result:
+            assert "mediaResolution" not in result["generationConfig"]
+
+    def test_transform_request_body_no_detail_no_media_resolution(self):
+        """Test that no mediaResolution is added when detail is not specified"""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is this?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
+                    },
+                ],
+            }
+        ]
+
+        result = _transform_request_body(
+            messages=messages,
+            model="gemini-2.5-flash",
+            optional_params={},
+            custom_llm_provider="gemini",
+            litellm_params={},
+            cached_content=None,
+        )
+
+        # When no detail is specified, mediaResolution should not be in generationConfig
+        if "generationConfig" in result:
+            assert "mediaResolution" not in result["generationConfig"]

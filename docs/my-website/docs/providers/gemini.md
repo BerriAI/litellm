@@ -1385,14 +1385,19 @@ LiteLLM Supports the following image types passed in `url`
 - Images with direct links - https://storage.googleapis.com/github-repo/img/gemini/intro/landmark3.jpg
 - Image in local storage - ./localimage.jpeg
 
-## Image Resolution Control (Gemini 3+)
+## Image Resolution
 
-For Gemini 3+ models, LiteLLM supports per-part media resolution control using OpenAI's `detail` parameter. This allows you to specify different resolution levels for individual images in your request.
+LiteLLM supports OpenAI's `detail` parameter for specifying the image resolution when using Gemini models. The behavior differs between Gemini versions:
+
+| Gemini Version | Resolution Control | Behavior |
+|----------------|-------------------|----------|
+| Gemini 3+ | Per-part | Each image can have its own `detail` setting |
+| Gemini 2.x (2.0, 2.5) | Global | The highest `detail` from all images is applied globally |
 
 **Supported `detail` values:**
-- `"low"` - Maps to `media_resolution: "low"` (280 tokens for images, 70 tokens per frame for videos)
-- `"high"` - Maps to `media_resolution: "high"` (1120 tokens for images)
-- `"auto"` or `None` - Model decides optimal resolution (no `media_resolution` set)
+- `"low"` - Maps to `MEDIA_RESOLUTION_LOW` (~70-280 tokens)
+- `"high"` - Maps to `MEDIA_RESOLUTION_HIGH` (~1120 tokens)
+- `"auto"` or `None` - Uses Gemini's default resolution
 
 **Usage Example:**
 
@@ -1425,14 +1430,17 @@ messages = [
     }
 ]
 
+# Works with both Gemini 2.x and 3+
 response = completion(
-    model="gemini/gemini-3-pro-preview",
+    model="gemini/gemini-2.5-flash",  # or gemini-3-pro-preview
     messages=messages,
 )
 ```
 
 :::info
-**Per-Part Resolution:** Each image in your request can have its own `detail` setting, allowing mixed-resolution requests (e.g., a high-res chart alongside a low-res icon). This feature is only available for Gemini 3+ models.
+**Gemini 3+ Per-Part Resolution:** Each image can have its own `detail` setting, allowing mixed-resolution requests (e.g., a high-res chart alongside a low-res icon).
+
+**Gemini 2.x Global Resolution:** When multiple images have different `detail` values, LiteLLM uses the highest resolution found (e.g., if one image has `"low"` and another has `"high"`, all images will use `"high"`).
 :::
 
 ## Sample Usage
