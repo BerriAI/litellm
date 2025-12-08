@@ -32,6 +32,10 @@ class BaseSearchTest(ABC):
             pytest.skip("Rate limit exceeded")
         except litellm.InternalServerError:
             pytest.skip("Model is overloaded")
+        except litellm.APIConnectionError as e:
+            # Skip on network/DNS errors - these are infrastructure issues, not code bugs
+            # Common causes: DNS resolution failures, network connectivity, service unreachable
+            pytest.skip(f"Network/connection error (infrastructure issue): {e}")
 
     @pytest.mark.asyncio
     async def test_basic_search(self):
