@@ -151,4 +151,132 @@ class TestAnthropicLoggingHandlerModelFallback:
         if not model and hasattr(logging_obj, 'model_call_details') and logging_obj.model_call_details.get('model'):
             model = logging_obj.model_call_details.get('model')
             
-        assert model == ""  # Should remain empty 
+        assert model == ""  # Should remain empty
+
+
+class TestAzureAnthropicCostCalculation:
+    """Test the custom_llm_provider cost calculation logic for Azure AI Anthropic."""
+
+    def _create_mock_logging_obj(
+        self, model: str = None, custom_llm_provider: str = None
+    ) -> LiteLLMLoggingObj:
+        """Create a mock logging object with optional model and custom_llm_provider"""
+        mock_logging_obj = MagicMock()
+        mock_model_call_details = {}
+        if model:
+            mock_model_call_details["model"] = model
+        if custom_llm_provider:
+            mock_model_call_details["custom_llm_provider"] = custom_llm_provider
+        mock_logging_obj.model_call_details = mock_model_call_details
+        mock_logging_obj.litellm_call_id = "test-call-id"
+        return mock_logging_obj
+
+    @patch("litellm.completion_cost")
+    def test_cost_calculation_with_azure_ai_custom_llm_provider(
+        self, mock_completion_cost
+    ):
+        """Test that custom_llm_provider is passed to completion_cost for Azure AI Anthropic"""
+        from litellm.types.utils import ModelResponse
+        from datetime import datetime
+
+        mock_completion_cost.return_value = 0.001
+
+        logging_obj = self._create_mock_logging_obj(
+            model="claude-sonnet-4-5_gb_20250929", custom_llm_provider="azure_ai"
+        )
+
+        mock_response = MagicMock(spec=ModelResponse)
+        mock_response.id = "test-id"
+        mock_response.model = "claude-sonnet-4-5_gb_20250929"
+
+        kwargs = {}
+        start_time = datetime.now()
+        end_time = datetime.now()
+
+        AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=mock_response,
+            model="claude-sonnet-4-5_gb_20250929",
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+            logging_obj=logging_obj,
+        )
+
+        # Verify completion_cost was called with the correct parameters
+        mock_completion_cost.assert_called_once()
+        call_kwargs = mock_completion_cost.call_args[1]
+        assert call_kwargs["model"] == "azure_ai/claude-sonnet-4-5_gb_20250929"
+        assert call_kwargs["custom_llm_provider"] == "azure_ai"
+
+    @patch("litellm.completion_cost")
+    def test_cost_calculation_without_custom_llm_provider(self, mock_completion_cost):
+        """Test that cost calculation works without custom_llm_provider (standard Anthropic)"""
+        from litellm.types.utils import ModelResponse
+        from datetime import datetime
+
+        mock_completion_cost.return_value = 0.001
+
+        # No custom_llm_provider in model_call_details
+        logging_obj = self._create_mock_logging_obj(model="claude-3-sonnet-20240229")
+
+        mock_response = MagicMock(spec=ModelResponse)
+        mock_response.id = "test-id"
+        mock_response.model = "claude-3-sonnet-20240229"
+
+        kwargs = {}
+        start_time = datetime.now()
+        end_time = datetime.now()
+
+        AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=mock_response,
+            model="claude-3-sonnet-20240229",
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+            logging_obj=logging_obj,
+        )
+
+        # Verify completion_cost was called without provider prefix
+        mock_completion_cost.assert_called_once()
+        call_kwargs = mock_completion_cost.call_args[1]
+        assert call_kwargs["model"] == "claude-3-sonnet-20240229"
+        assert call_kwargs["custom_llm_provider"] is None
+
+    @patch("litellm.completion_cost")
+    def test_cost_calculation_does_not_duplicate_provider_prefix(
+        self, mock_completion_cost
+    ):
+        """Test that provider prefix is not duplicated if already present in model name"""
+        from litellm.types.utils import ModelResponse
+        from datetime import datetime
+
+        mock_completion_cost.return_value = 0.001
+
+        logging_obj = self._create_mock_logging_obj(
+            model="azure_ai/claude-sonnet-4-5_gb_20250929",
+            custom_llm_provider="azure_ai",
+        )
+
+        mock_response = MagicMock(spec=ModelResponse)
+        mock_response.id = "test-id"
+        mock_response.model = "azure_ai/claude-sonnet-4-5_gb_20250929"
+
+        kwargs = {}
+        start_time = datetime.now()
+        end_time = datetime.now()
+
+        # Model already has the provider prefix
+        AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=mock_response,
+            model="azure_ai/claude-sonnet-4-5_gb_20250929",
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+            logging_obj=logging_obj,
+        )
+
+        # Verify provider prefix was not duplicated
+        mock_completion_cost.assert_called_once()
+        call_kwargs = mock_completion_cost.call_args[1]
+        assert call_kwargs["model"] == "azure_ai/claude-sonnet-4-5_gb_20250929"
+        assert call_kwargs["custom_llm_provider"] == "azure_ai" 
