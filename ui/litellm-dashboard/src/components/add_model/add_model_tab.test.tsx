@@ -257,5 +257,5 @@ describe("Add Model Tab", () => {
       },
       { timeout: 10000 },
     );
-  });
+  }, 15000); // 15 second timeout to allow waitFor to complete
 });
