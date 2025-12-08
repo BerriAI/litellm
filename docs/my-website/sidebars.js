@@ -668,6 +668,7 @@ const sidebars = {
           ]
         },
         "providers/sambanova",
+        "providers/sap",
         "providers/snowflake",
         "providers/togetherai",
         "providers/topaz",
