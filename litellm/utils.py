@@ -790,7 +790,7 @@ def function_setup(  # noqa: PLR0915
         ):
             _file_obj: FileTypes = args[1] if len(args) > 1 else kwargs["file"]
             file_checksum = (
-                litellm.litellm_core_utils.audio_utils.utils.get_audio_file_name(
+                litellm.litellm_core_utils.audio_utils.utils.get_audio_file_content_hash(
                     file_obj=_file_obj
                 )
             )
@@ -7346,6 +7346,8 @@ class ProviderConfigManager:
             return litellm.NvidiaNimRerankConfig()
         elif litellm.LlmProviders.VERTEX_AI == provider:
             return litellm.VertexAIRerankConfig()
+        elif litellm.LlmProviders.FIREWORKS_AI == provider:
+            return litellm.FireworksAIRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod
