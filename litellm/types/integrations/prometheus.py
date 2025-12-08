@@ -198,6 +198,8 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.END_USER.value,
         UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.API_BASE.value,
     ]
 
     litellm_llm_api_time_to_first_token_metric = [
@@ -232,6 +234,8 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.STATUS_CODE.value,
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.ROUTE.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.API_BASE.value,
     ]
 
     litellm_proxy_failed_requests_metric = [
@@ -246,6 +250,8 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
         UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
         UserAPIKeyLabelNames.ROUTE.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.API_BASE.value,
     ]
 
     litellm_deployment_latency_per_output_token = [
@@ -266,6 +272,8 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.API_BASE.value,
     ]
 
     litellm_remaining_requests_metric = [
@@ -284,6 +292,8 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.API_BASE.value,
     ]
 
     litellm_requests_metric = [
@@ -336,6 +346,8 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.API_BASE.value,
     ]
 
     litellm_output_tokens_metric = [
@@ -375,6 +387,8 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
         UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.API_BASE.value,
     ]
 
     litellm_deployment_failed_fallbacks = litellm_deployment_successful_fallbacks
