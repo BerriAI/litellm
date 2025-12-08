@@ -3310,4 +3310,9 @@ class PriorityReservationSettings(BaseModel):
         description="Saturation threshold (0.0-1.0) at which strict priority enforcement begins. Below this threshold, generous mode allows priority borrowing. Above this threshold, strict mode enforces normalized priority limits.",
     )
 
+    saturation_check_cache_ttl: int = Field(
+        default=60,
+        description="TTL in seconds for local cache when reading saturation check values from Redis.",
+    )
+
     model_config = ConfigDict(protected_namespaces=())
