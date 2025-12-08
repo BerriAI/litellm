@@ -22865,6 +22865,13 @@
         "mode": "rerank",
         "output_cost_per_token": 0.0
     },
+    "nvidia_nim/ranking/nvidia/llama-3.2-nv-rerankqa-1b-v2": {
+        "input_cost_per_query": 0.0,
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "nvidia_nim",
+        "mode": "rerank",
+        "output_cost_per_token": 0.0
+    },
     "sagemaker/meta-textgeneration-llama-2-13b": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "sagemaker",
