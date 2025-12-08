@@ -127,14 +127,29 @@ async def test_ssl_verification_with_aiohttp_transport():
         transport_connector = transport._get_valid_client_session().connector
         assert isinstance(transport_connector, TCPConnector)
 
+        # Create reference aiohttp session with ssl=False (not deprecated verify_ssl=False)
         aiohttp_session = aiohttp.ClientSession(
-            connector=aiohttp.TCPConnector(verify_ssl=False)
+            connector=aiohttp.TCPConnector(ssl=False)
         )
         aiohttp_connector = aiohttp_session.connector
         assert isinstance(aiohttp_connector, aiohttp.TCPConnector)
 
-        # assert both litellm transport and aiohttp session have ssl_verify=False
-        assert transport_connector._ssl == aiohttp_connector._ssl
+        # Both connectors should have ssl=False, which means _ssl should be False
+        # Compare the SSL configuration - both should be False when ssl_verify=False
+        transport_ssl = transport_connector._ssl
+        aiohttp_ssl = aiohttp_connector._ssl
+        
+        # When ssl=False, both should be False (not None or an SSLContext)
+        assert transport_ssl is False, f"Expected transport_connector._ssl to be False, got {transport_ssl}"
+        assert aiohttp_ssl is False, f"Expected aiohttp_connector._ssl to be False, got {aiohttp_ssl}"
+        assert transport_ssl == aiohttp_ssl, (
+            f"SSL configurations should match. "
+            f"Transport: {transport_ssl} (type: {type(transport_ssl)}), "
+            f"Aiohttp: {aiohttp_ssl} (type: {type(aiohttp_ssl)})"
+        )
+        
+        # Clean up the aiohttp session
+        await aiohttp_session.close()
     finally:
         # Restore original setting
         litellm.disable_aiohttp_transport = original_disable
