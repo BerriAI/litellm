@@ -1111,6 +1111,7 @@ from .llms.jina_ai.rerank.transformation import JinaAIRerankConfig
 from .llms.deepinfra.rerank.transformation import DeepinfraRerankConfig
 from .llms.hosted_vllm.rerank.transformation import HostedVLLMRerankConfig
 from .llms.nvidia_nim.rerank.transformation import NvidiaNimRerankConfig
+from .llms.nvidia_nim.rerank.ranking_transformation import NvidiaNimRankingConfig
 from .llms.vertex_ai.rerank.transformation import VertexAIRerankConfig
 from .llms.fireworks_ai.rerank.transformation import FireworksAIRerankConfig
 from .llms.clarifai.chat.transformation import ClarifaiConfig
