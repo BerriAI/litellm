@@ -15,18 +15,40 @@ class TestLangfusePromptManagement:
             langfuse_prompt_management, "_get_prompt_from_id"
         ) as mock_get_prompt_from_id:
             mock_should_run_prompt_management.return_value = True
-            chat_completion_prompt = (
-                langfuse_prompt_management.get_chat_completion_prompt(
-                    model="langfuse/langfuse-model",
-                    messages=[{"role": "user", "content": "Hello, how are you?"}],
-                    non_default_params={},
-                    prompt_id="test-chat-prompt",
-                    prompt_variables={},
-                    dynamic_callback_params={},
-                    prompt_version=4,
-                )
+            langfuse_prompt_management.get_chat_completion_prompt(
+                model="langfuse/langfuse-model",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                non_default_params={},
+                prompt_id="test-chat-prompt",
+                prompt_variables={},
+                dynamic_callback_params={},
+                prompt_version=4,
             )
 
             mock_get_prompt_from_id.assert_called_once()
-            print(mock_get_prompt_from_id.call_args.kwargs)
             assert mock_get_prompt_from_id.call_args.kwargs["prompt_version"] == 4
+
+    def test_trace_id_propagation_flag_from_env(self):
+        with patch.dict(
+            os.environ,
+            {
+                "LANGFUSE_SECRET_KEY": "secret",
+                "LANGFUSE_PUBLIC_KEY": "public",
+                "LANGFUSE_PROPAGATE_TRACE_ID": "True",
+            },
+            clear=True,
+        ):
+            pm = LangfusePromptManagement()
+            assert pm.langfuse_propagate_trace_id is True
+
+        with patch.dict(
+            os.environ,
+            {
+                "LANGFUSE_SECRET_KEY": "secret",
+                "LANGFUSE_PUBLIC_KEY": "public",
+                "LANGFUSE_PROPAGATE_TRACE_ID": "False",
+            },
+            clear=True,
+        ):
+            pm2 = LangfusePromptManagement()
+            assert pm2.langfuse_propagate_trace_id is False

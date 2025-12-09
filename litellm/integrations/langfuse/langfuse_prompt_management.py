@@ -12,6 +12,7 @@ from typing_extensions import TypeAlias
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prompt_management_base import PromptManagementClient
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.secret_managers.main import str_to_bool
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionSystemMessage
 from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayload
 
@@ -124,6 +125,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             langfuse_host=langfuse_host,
             flush_interval=flush_interval,
         )
+        self.langfuse_propagate_trace_id  = str_to_bool(os.getenv("LANGFUSE_PROPAGATE_TRACE_ID", "False")) is True
 
     @property
     def integration_name(self):
