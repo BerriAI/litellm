@@ -1313,11 +1313,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     def get_rate_limit_type(self) -> Literal["output", "input", "total"]:
         from litellm.proxy.proxy_server import general_settings
-
         specified_rate_limit_type = general_settings.get(
-            "token_rate_limit_type", "output"
+            "token_rate_limit_type", "total"
         )
-        if not specified_rate_limit_type or specified_rate_limit_type not in [
+        if specified_rate_limit_type not in [
             "output",
             "input",
             "total",
@@ -1372,13 +1371,22 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 response_obj, BaseLiteLLMOpenAIResponseObject
             ):
                 _usage = getattr(response_obj, "usage", None)
-                if _usage and isinstance(_usage, Usage):
-                    if rate_limit_type == "output":
-                        total_tokens = _usage.completion_tokens
-                    elif rate_limit_type == "input":
-                        total_tokens = _usage.prompt_tokens
-                    elif rate_limit_type == "total":
-                        total_tokens = _usage.total_tokens
+                if _usage:
+                    if isinstance(_usage, Usage):
+                        if rate_limit_type == "output":
+                            total_tokens = _usage.completion_tokens
+                        elif rate_limit_type == "input":
+                            total_tokens = _usage.prompt_tokens
+                        elif rate_limit_type == "total":
+                            total_tokens = _usage.total_tokens
+                    elif isinstance(_usage, dict):
+                        # Responses API usage comes as a dict in ResponsesAPIResponse
+                        if rate_limit_type == "output":
+                            total_tokens = _usage.get("completion_tokens", 0)
+                        elif rate_limit_type == "input":
+                            total_tokens = _usage.get("prompt_tokens", 0)
+                        elif rate_limit_type == "total":
+                            total_tokens = _usage.get("total_tokens", 0)
 
             # Create pipeline operations for TPM increments
             pipeline_operations: List[RedisPipelineIncrementOperation] = []
