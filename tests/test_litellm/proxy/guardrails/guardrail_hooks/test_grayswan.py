@@ -81,7 +81,7 @@ def test_process_response_blocks_when_threshold_exceeded() -> None:
 
     assert exc.value.status_code == 400
     assert exc.value.detail["violation"] == 0.5
-    assert exc.value.detail["detected_in"] == "input"
+    assert exc.value.detail["violation_location"] == "input"
 
     # Test block mode with output violation (post_call)
     with pytest.raises(HTTPException) as exc:
@@ -92,7 +92,7 @@ def test_process_response_blocks_when_threshold_exceeded() -> None:
 
     assert exc.value.status_code == 400
     assert exc.value.detail["violation"] == 0.5
-    assert exc.value.detail["detected_in"] == "output"
+    assert exc.value.detail["violation_location"] == "output"
 
 
 class _DummyResponse:
