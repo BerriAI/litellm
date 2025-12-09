@@ -23,7 +23,7 @@ SAP Generative AI Hub uses service key authentication. You can provide credentia
 import os
 os.environ["AICORE_SERVICE_KEY"] = '{"clientid": "...", "clientsecret": "...", ...}'
 ```
-Also it is possible to add credentials into .env file or through os.environ["Key"] = "Value" the following credentials
+3. **Environment variables** - Set the following list of credentials in .env file
 <pre>
 AICORE_AUTH_URL = "https://* * * .authentication.sap.hana.ondemand.com/oauth/token",
 AICORE_CLIENT_ID  = " *** ",
