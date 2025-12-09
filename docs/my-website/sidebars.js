@@ -137,9 +137,10 @@ const sidebars = {
         },
         {
           type: "category",
-          label: "Core Functions",
+          label: "SDK Functions",
           items: [
-            "api-reference/completion",
+            "completion/input",    
+            "completion/output",
             "text_completion",
             "embedding/supported_embedding",
             "response_api",
