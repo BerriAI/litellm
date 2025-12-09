@@ -380,6 +380,7 @@ from litellm.proxy.search_endpoints.search_tool_management import (
     router as search_tool_management_router,
 )
 from litellm.proxy.spend_tracking.cloudzero_endpoints import router as cloudzero_router
+from litellm.proxy.spend_tracking.focus_endpoints import router as focus_router
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
@@ -10036,6 +10037,7 @@ app.include_router(organization_router)
 app.include_router(customer_router)
 app.include_router(spend_management_router)
 app.include_router(cloudzero_router)
+app.include_router(focus_router)
 app.include_router(caching_router)
 app.include_router(analytics_router)
 app.include_router(guardrails_router)
