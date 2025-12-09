@@ -651,6 +651,7 @@ const sidebars = {
             "providers/bedrock_rerank",
             "providers/bedrock_agentcore",
             "providers/bedrock_agents",
+            "providers/bedrock_writer",
             "providers/bedrock_batches",
             "providers/bedrock_vector_store",
           ]
