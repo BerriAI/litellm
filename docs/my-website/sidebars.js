@@ -123,68 +123,92 @@ const sidebars = {
     {
       type: "category",
       label: "LiteLLM Python SDK",
+      link: {
+        type: "generated-index",
+        title: "LiteLLM Python SDK",
+        description: "Unified Python SDK for 100+ LLM providers with consistent interface and return types",
+        slug: "/sdk",
+      },
       items: [
-        {
-          type: "link",
-          label: "Quick Start",
-          href: "/docs/#litellm-python-sdk",
-        },
+        "set_keys",
         {
           type: "category",
           label: "SDK Functions",
           items: [
-            {
-              type: "doc",
-              id: "completion/input",
-              label: "completion()",
-            },
-            {
-              type: "doc",
-              id: "embedding/supported_embedding",
-              label: "embedding()",
-            },
-            {
-              type: "doc",
-              id: "response_api",
-              label: "responses()",
-            },
-            {
-              type: "doc",
-              id: "text_completion",
-              label: "text_completion()",
-            },
-            {
-              type: "doc",
-              id: "image_generation",
-              label: "image_generation()",
-            },
-            {
-              type: "doc",
-              id: "audio_transcription",
-              label: "transcription()",
-            },
-            {
-              type: "doc",
-              id: "text_to_speech",
-              label: "speech()",
-            },
-            {
-              type: "link",
-              label: "All Supported Endpoints →",
-              href: "/docs/supported_endpoints",
-            },
+            "completion/input",
+            "completion/output",
+            "text_completion",
+            "embedding/supported_embedding",
+            "response_api",
+          ],
+        },
+        {
+          type: "category",
+          label: "Images & Video",
+          items: [
+            "image_generation",
+            "videos",
+          ],
+        },
+        {
+          type: "category",
+          label: "Audio",
+          items: [
+            "audio_transcription",
+            "text_to_speech",
+          ],
+        },
+        {
+          type: "category",
+          label: "Files",
+          items: [
+            "files_endpoints",
+          ],
+        },
+        {
+          type: "category",
+          label: "Batches",
+          items: [
+            "batches",
+          ],
+        },
+        {
+          type: "category",
+          label: "Fine-tuning",
+          items: [
+            "fine_tuning",
+          ],
+        },
+        {
+          type: "category",
+          label: "Vector Stores",
+          items: [
+            "vector_stores/create",
+            "vector_stores/search",
+            "vector_store_files",
+          ],
+        },
+        {
+          type: "category",
+          label: "Utilities",
+          items: [
+            "moderation",
+            "rerank",
+            "ocr",
           ],
         },
         {
           type: "category",
           label: "Configuration",
           items: [
-            "set_keys",
+            "budget_manager",
             "caching/all_caches",
+            "completion/token_usage",
+            "sdk_custom_pricing",
           ],
         },
-        "completion/token_usage",
         "exception_mapping",
+        "migration",
         {
           type: "category",
           label: "LangChain, LlamaIndex, Instructor",
