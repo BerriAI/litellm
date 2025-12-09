@@ -8031,3 +8031,43 @@ export const loginCall = async (username: string, password: string): Promise<Log
   const data = await response.json();
   return data;
 };
+
+export const getRequestedPublicAccessModels = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/model/public_requests` : `/model/public_requests`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to get requested public access models: ${response.statusText}`);
+    }
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to get requested public access models:", error);
+    throw error;
+  }
+};
+
+export const grantRequestedPublicAccess = async (accessToken: string, modelId: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/model/public_requests/${modelId}` : `/model/public_requests/${modelId}`;
+    const response = await fetch(url, {
+      method: "PUT",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to grant requested public access: ${response.statusText}`);
+    }
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to grant requested public access:", error);
+    throw error;
+  }
+};
