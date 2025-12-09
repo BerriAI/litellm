@@ -3,9 +3,8 @@ Azure Anthropic messages transformation config - extends AnthropicMessagesConfig
 """
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
-import httpx
-
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
@@ -16,7 +15,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 from litellm.types.router import GenericLiteLLMParams
 
 if TYPE_CHECKING:
-    pass
+    from httpx import Response
 
 
 class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
@@ -38,7 +37,6 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
     ) -> Tuple[dict, Optional[str]]:
         """
         Validate environment and set up Azure authentication headers for /v1/messages endpoint.
-        Azure Anthropic uses x-api-key header (not api-key).
         """
         # Convert dict to GenericLiteLLMParams if needed
         if isinstance(litellm_params, dict):
@@ -119,7 +117,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
     def transform_anthropic_messages_response(
         self,
         model: str,
-        raw_response: httpx.Response,
+        raw_response: "Response",
         logging_obj: LiteLLMLoggingObj,
     ) -> AnthropicMessagesResponse:
         """
@@ -128,7 +126,6 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
         Azure AI Anthropic returns usage without total_tokens, but the logging
         utilities expect it for ResponseAPIUsage. This adds total_tokens if missing.
         """
-        from litellm.llms.anthropic.common_utils import AnthropicError
 
         try:
             raw_response_json = raw_response.json()
