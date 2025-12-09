@@ -130,7 +130,11 @@ const sidebars = {
         slug: "/sdk",
       },
       items: [
-        "set_keys",
+        {
+          type: "link",
+          label: "Quick Start",
+          href: "/docs/#litellm-python-sdk",
+        },
         {
           type: "category",
           label: "SDK Functions",
@@ -146,7 +150,7 @@ const sidebars = {
           type: "category",
           label: "Images & Video",
           items: [
-            "image_generation",
+            "api-reference/image_generation",
             "videos",
           ],
         },
