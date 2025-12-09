@@ -3567,12 +3567,6 @@ async def _monitor_spend_logs_queue(
             await asyncio.sleep(current_interval)
 
 
-def _cleanup_memory(*objects: Any) -> None:
-    """Delete heavy data structures and run garbage collection."""
-    for obj in objects:
-        del obj
-    gc.collect()
-
 
 def _raise_failed_update_spend_exception(
     e: Exception, start_time: float, proxy_logging_obj: ProxyLogging
