@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import gc
 import hashlib
 import json
 import os
@@ -3365,11 +3366,13 @@ class ProxyUpdateSpend:
                         if not base_url.endswith("/"):
                             base_url += "/"
                         verbose_proxy_logger.debug("base_url: {}".format(base_url))
+                        json_data = json.dumps(logs_to_process)
                         response = await db_writer_client.post(
                             url=base_url + "spend/update",
-                            data=json.dumps(logs_to_process),
+                            data=json_data,
                             headers={"Content-Type": "application/json"},
                         )
+                        _cleanup_memory(json_data)
                         if response.status_code == 200:
                             prisma_client.spend_log_transactions = (
                                 prisma_client.spend_log_transactions[
@@ -3389,6 +3392,7 @@ class ProxyUpdateSpend:
                             verbose_proxy_logger.debug(
                                 f"Flushed {len(batch)} logs to the DB."
                             )
+                            _cleanup_memory(batch, batch_with_dates)
 
                         prisma_client.spend_log_transactions = (
                             prisma_client.spend_log_transactions[len(logs_to_process) :]
@@ -3396,6 +3400,7 @@ class ProxyUpdateSpend:
                         verbose_proxy_logger.debug(
                             f"{len(logs_to_process)} logs processed. Remaining in queue: {len(prisma_client.spend_log_transactions)}"
                         )
+                    _cleanup_memory(logs_to_process)
                     break
                 except DB_CONNECTION_ERROR_TYPES:
                     if i is None:
@@ -3407,6 +3412,7 @@ class ProxyUpdateSpend:
             prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[
                 len(logs_to_process) :
             ]
+            _cleanup_memory(logs_to_process)
             _raise_failed_update_spend_exception(
                 e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
             )
@@ -3510,19 +3516,27 @@ async def _monitor_spend_logs_queue(
         try:
             queue_size = len(prisma_client.spend_log_transactions)
             
-            if queue_size >= threshold:
-                verbose_proxy_logger.debug(
-                    f"Spend logs queue size ({queue_size}) reached threshold ({threshold}), triggering processing"
-                )
+            if queue_size > 0:
+                if queue_size >= threshold:
+                    verbose_proxy_logger.debug(
+                        f"Spend logs queue size ({queue_size}) reached threshold ({threshold}), triggering processing"
+                    )
+                    # Reset to base interval when threshold is reached
+                    current_interval = base_interval
+                else:
+                    verbose_proxy_logger.debug(
+                        f"Spend logs queue size ({queue_size}) below threshold ({threshold}), processing with backoff"
+                    )
+                    # Exponential backoff when below threshold but still processing
+                    current_interval = min(current_interval * backoff_multiplier, max_backoff)
+                
                 await update_spend_logs_job(
                     prisma_client=prisma_client,
                     db_writer_client=db_writer_client,
                     proxy_logging_obj=proxy_logging_obj,
                 )
-                # Reset to base interval when active
-                current_interval = base_interval
             else:
-                # Exponential backoff when idle to reduce CPU usage
+                # Exponential backoff when no logs to process
                 current_interval = min(current_interval * backoff_multiplier, max_backoff)
             
             await asyncio.sleep(current_interval)
@@ -3533,6 +3547,13 @@ async def _monitor_spend_logs_queue(
             # Continue monitoring even if there's an error, with exponential backoff
             current_interval = min(current_interval * backoff_multiplier, max_backoff)
             await asyncio.sleep(current_interval)
+
+
+def _cleanup_memory(*objects: Any) -> None:
+    """Delete heavy data structures and run garbage collection."""
+    for obj in objects:
+        del obj
+    gc.collect()
 
 
 def _raise_failed_update_spend_exception(
