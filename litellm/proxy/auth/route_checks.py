@@ -10,6 +10,7 @@ from litellm.proxy._types import (
     LiteLLMRoutes,
     LitellmUserRoles,
     UserAPIKeyAuth,
+    ProxyException
 )
 
 from .auth_checks_organization import _user_is_org_admin
@@ -92,9 +93,12 @@ class RouteChecks:
             ):
                 return True
 
-        raise Exception(
-            f"Virtual key is not allowed to call this route. Only allowed to call routes: {valid_token.allowed_routes}. Tried to call route: {route}"
-        )
+        raise ProxyException(
+                message=f"Virtual key is not allowed to call this route. Only allowed to call routes: {valid_token.allowed_routes}. Tried to call route: {route}",
+                type="auth_error",
+                param="api_key",
+                code=403,
+            )
 
     @staticmethod
     def _mask_user_id(user_id: str) -> str:
