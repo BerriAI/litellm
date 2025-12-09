@@ -24,10 +24,16 @@ class CredentialHelperUtils:
     def encrypt_credential_values(credential: CredentialItem) -> CredentialItem:
         """Encrypt values in credential.credential_values and add to DB"""
         encrypted_credential_values = {}
-        for key, value in credential.credential_values.items():
+        for key, value in (credential.credential_values or {}).items():
             encrypted_credential_values[key] = encrypt_value_helper(value)
-        credential.credential_values = encrypted_credential_values
-        return credential
+
+        # Return a new object to avoid mutating the caller's credential, which
+        # is kept in memory and should remain unencrypted.
+        return CredentialItem(
+            credential_name=credential.credential_name,
+            credential_values=encrypted_credential_values,
+            credential_info=credential.credential_info or {},
+        )
 
 
 @router.post(
