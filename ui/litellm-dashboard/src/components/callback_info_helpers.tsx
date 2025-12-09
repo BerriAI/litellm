@@ -17,7 +17,7 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
     supports_key_team_logging: true,
     dynamic_params: {
       arize_api_key: "password",
-      arize_space_key: "password",
+      arize_space_id: "password",
     },
     description: "Arize Logging Integration",
   },

@@ -94,6 +94,208 @@ async def test_form_data_parsing():
 
 
 @pytest.mark.asyncio
+async def test_form_data_with_json_metadata():
+    """
+    Test that form data with a JSON-encoded metadata field is correctly parsed.
+    
+    When form data includes a 'metadata' field, it comes as a JSON string that needs
+    to be parsed into a Python dictionary (lines 42-43 of http_parsing_utils.py).
+    """
+    # Create a mock request with form data containing JSON metadata
+    mock_request = MagicMock()
+    
+    # Metadata is sent as a JSON string in form data
+    metadata_json_string = json.dumps({
+        "user_id": "12345",
+        "request_type": "audio_transcription",
+        "tags": ["urgent", "production"],
+        "custom_field": {"nested": "value"}
+    })
+    
+    test_data = {
+        "model": "whisper-1",
+        "file": "audio.mp3",
+        "metadata": metadata_json_string  # This is a JSON string, not a dict
+    }
+
+    # Mock the form method to return the test data as an awaitable
+    mock_request.form = AsyncMock(return_value=test_data)
+    mock_request.headers = {"content-type": "multipart/form-data"}
+    mock_request.scope = {}
+
+    # Parse the form data
+    result = await _read_request_body(mock_request)
+
+    # Verify the metadata was parsed from JSON string to dict
+    assert "metadata" in result
+    assert isinstance(result["metadata"], dict)
+    assert result["metadata"]["user_id"] == "12345"
+    assert result["metadata"]["request_type"] == "audio_transcription"
+    assert result["metadata"]["tags"] == ["urgent", "production"]
+    assert result["metadata"]["custom_field"] == {"nested": "value"}
+    
+    # Verify other fields remain unchanged
+    assert result["model"] == "whisper-1"
+    assert result["file"] == "audio.mp3"
+    
+    # Verify form() was called
+    mock_request.form.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_form_data_with_invalid_json_metadata():
+    """
+    Test that form data with invalid JSON in metadata field raises an exception.
+    
+    This tests error handling when the metadata field contains malformed JSON.
+    """
+    # Create a mock request with form data containing invalid JSON metadata
+    mock_request = MagicMock()
+    
+    test_data = {
+        "model": "whisper-1",
+        "file": "audio.mp3",
+        "metadata": '{"invalid": json}'  # Invalid JSON - unquoted value
+    }
+
+    # Mock the form method to return the test data
+    mock_request.form = AsyncMock(return_value=test_data)
+    mock_request.headers = {"content-type": "multipart/form-data"}
+    mock_request.scope = {}
+
+    # Should raise JSONDecodeError when trying to parse invalid JSON metadata
+    with pytest.raises(json.JSONDecodeError):
+        await _read_request_body(mock_request)
+
+
+@pytest.mark.asyncio
+async def test_form_data_without_metadata():
+    """
+    Test that form data without metadata field works correctly.
+    
+    Ensures the metadata parsing logic doesn't break when metadata is absent.
+    """
+    # Create a mock request with form data without metadata
+    mock_request = MagicMock()
+    
+    test_data = {
+        "model": "whisper-1",
+        "file": "audio.mp3",
+        "language": "en"
+    }
+
+    # Mock the form method to return the test data
+    mock_request.form = AsyncMock(return_value=test_data)
+    mock_request.headers = {"content-type": "application/x-www-form-urlencoded"}
+    mock_request.scope = {}
+
+    # Parse the form data
+    result = await _read_request_body(mock_request)
+
+    # Verify all fields are preserved as-is
+    assert result == test_data
+    assert "metadata" not in result
+    assert result["model"] == "whisper-1"
+    assert result["file"] == "audio.mp3"
+    assert result["language"] == "en"
+
+
+@pytest.mark.asyncio
+async def test_form_data_with_empty_metadata():
+    """
+    Test that form data with empty JSON object in metadata field is parsed correctly.
+    """
+    # Create a mock request with form data containing empty metadata
+    mock_request = MagicMock()
+    
+    test_data = {
+        "model": "whisper-1",
+        "file": "audio.mp3",
+        "metadata": "{}"  # Empty JSON object as string
+    }
+
+    # Mock the form method to return the test data
+    mock_request.form = AsyncMock(return_value=test_data)
+    mock_request.headers = {"content-type": "multipart/form-data"}
+    mock_request.scope = {}
+
+    # Parse the form data
+    result = await _read_request_body(mock_request)
+
+    # Verify the metadata was parsed to an empty dict
+    assert "metadata" in result
+    assert isinstance(result["metadata"], dict)
+    assert result["metadata"] == {}
+    assert result["model"] == "whisper-1"
+
+
+@pytest.mark.asyncio
+async def test_form_data_with_dict_metadata():
+    """
+    Test that form data with metadata already as a dict is not parsed again.
+    
+    This handles edge cases where metadata might already be a dictionary
+    (shouldn't happen in normal form data, but defensive coding).
+    """
+    # Create a mock request with form data where metadata is already a dict
+    mock_request = MagicMock()
+    
+    metadata_dict = {
+        "user_id": "12345",
+        "tags": ["test"]
+    }
+    
+    test_data = {
+        "model": "whisper-1",
+        "file": "audio.mp3",
+        "metadata": metadata_dict  # Already a dict, not a string
+    }
+
+    # Mock the form method to return the test data
+    mock_request.form = AsyncMock(return_value=test_data)
+    mock_request.headers = {"content-type": "multipart/form-data"}
+    mock_request.scope = {}
+
+    # Parse the form data
+    result = await _read_request_body(mock_request)
+
+    # Verify the metadata remains as a dict and is not parsed
+    assert "metadata" in result
+    assert isinstance(result["metadata"], dict)
+    assert result["metadata"] == metadata_dict
+    assert result["metadata"]["user_id"] == "12345"
+    assert result["model"] == "whisper-1"
+
+
+@pytest.mark.asyncio
+async def test_form_data_with_none_metadata():
+    """
+    Test that form data with None metadata value is handled gracefully.
+    """
+    # Create a mock request with form data where metadata is None
+    mock_request = MagicMock()
+    
+    test_data = {
+        "model": "whisper-1",
+        "file": "audio.mp3",
+        "metadata": None  # None value
+    }
+
+    # Mock the form method to return the test data
+    mock_request.form = AsyncMock(return_value=test_data)
+    mock_request.headers = {"content-type": "multipart/form-data"}
+    mock_request.scope = {}
+
+    # Parse the form data
+    result = await _read_request_body(mock_request)
+
+    # Verify the metadata remains None (not parsed)
+    assert "metadata" in result
+    assert result["metadata"] is None
+    assert result["model"] == "whisper-1"
+
+
+@pytest.mark.asyncio
 async def test_empty_request_body():
     """
     Test handling of empty request bodies.
@@ -404,8 +606,27 @@ def test_get_tags_from_request_body_with_dict_tags():
             }
         }
     }
-    
+
     result = get_tags_from_request_body(request_body=request_body)
-    
+
+    assert result == []
+    assert isinstance(result, list)
+
+
+def test_get_tags_from_request_body_with_null_metadata():
+    """
+    Test that function handles null metadata gracefully without crashing.
+
+    This is a regression test for https://github.com/BerriAI/litellm/issues/17263
+    When metadata is explicitly set to null/None, the function should return
+    an empty list instead of raising AttributeError.
+    """
+    request_body = {
+        "model": "gpt-4",
+        "metadata": None  # OpenAI API accepts metadata: null
+    }
+
+    result = get_tags_from_request_body(request_body=request_body)
+
     assert result == []
     assert isinstance(result, list)

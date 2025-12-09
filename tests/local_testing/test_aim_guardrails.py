@@ -185,7 +185,7 @@ async def test_anonymize_callback__it_returns_redacted_content(mode: str):
 
 
 @pytest.mark.asyncio
-async def test_post_call__with_anonymized_entities__it_deanonymizes_output():
+async def test_post_call__with_anonymized_entities__it_doesnt_deanonymize_output():
     init_guardrails_v2(
         all_guardrails=[
             {
@@ -261,7 +261,7 @@ async def test_post_call__with_anonymized_entities__it_deanonymizes_output():
             response=llm_response(),
             user_api_key_dict=UserAPIKeyAuth(key_alias="test-key"),
         )
-        assert result["choices"][0]["message"]["content"] == "Hello Brian! How are you?"
+        assert result["choices"][0]["message"]["content"] == "Hello [NAME_1]! How are you?"
 
 
 @pytest.mark.asyncio
@@ -443,23 +443,23 @@ response_with_detections = Response(
         "required_action": {
             "action_type": "anonymize_action",
             "policy_name": "PII",
-            "chat_redaction_result": {
-                "all_redacted_messages": [
-                    {
-                        "content": "Hi my name is [NAME_1]",
-                        "role": "user",
-                        "additional_contents": [],
-                        "received_message_id": "0",
-                        "extra_fields": {},
-                    }
-                ],
-                "redacted_new_message": {
+        },
+        "redacted_chat": {
+            "all_redacted_messages": [
+                {
                     "content": "Hi my name is [NAME_1]",
                     "role": "user",
                     "additional_contents": [],
                     "received_message_id": "0",
                     "extra_fields": {},
-                },
+                }
+            ],
+            "redacted_new_message": {
+                "content": "Hi my name is [NAME_1]",
+                "role": "user",
+                "additional_contents": [],
+                "received_message_id": "0",
+                "extra_fields": {},
             },
         },
     },

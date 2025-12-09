@@ -1,10 +1,10 @@
+import { getSpendString } from "@/utils/dataUtils";
 import type { ColumnDef } from "@tanstack/react-table";
+import { Badge, Button } from "@tremor/react";
+import { Tooltip } from "antd";
 import React, { useState } from "react";
 import { getProviderLogoAndName } from "../provider_info_helpers";
-import { Tooltip } from "antd";
 import { TimeCell } from "./time_cell";
-import { Button, Badge } from "@tremor/react";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 // Helper to get the appropriate logo URL
 const getLogoUrl = (row: LogEntry, provider: string) => {
@@ -145,7 +145,11 @@ export const columns: ColumnDef<LogEntry>[] = [
   {
     header: "Cost",
     accessorKey: "spend",
-    cell: (info: any) => <span>${formatNumberWithCommas(info.getValue() || 0, 6)}</span>,
+    cell: (info: any) => (
+      <Tooltip title={`$${String(info.getValue() || 0)} `}>
+        <span>{getSpendString(info.getValue() || 0)}</span>
+      </Tooltip>
+    ),
   },
   {
     header: "Duration (s)",

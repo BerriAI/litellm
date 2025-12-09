@@ -14,6 +14,7 @@ from litellm.types.llms.bedrock import (
     AmazonNovaCanvasTextToImageRequest,
     AmazonNovaCanvasTextToImageResponse,
 )
+from litellm.llms.bedrock.common_utils import get_cached_model_info
 from litellm.types.utils import ImageResponse
 
 
@@ -197,3 +198,23 @@ class AmazonNovaCanvasConfig:
 
         model_response.data = openai_images
         return model_response
+
+    @classmethod
+    def cost_calculator(
+        cls,
+        model: str,
+        image_response: ImageResponse,
+        size: Optional[str] = None,
+        optional_params: Optional[dict] = None,
+    ) -> float:
+        get_model_info = get_cached_model_info()
+        model_info = get_model_info(
+            model=model,
+            custom_llm_provider="bedrock",
+        )
+
+        output_cost_per_image: float = model_info.get("output_cost_per_image") or 0.0
+        num_images: int = 0
+        if image_response.data:
+            num_images = len(image_response.data)
+        return output_cost_per_image * num_images

@@ -46,6 +46,7 @@ export const guardrail_provider_map: Record<string, string> = {
   Bedrock: "bedrock",
   Lakera: "lakera_v2",
   LitellmContentFilter: "litellm_content_filter",
+  ToolPermission: "tool_permission",
 };
 
 // Function to populate provider map from API response - updates the original map
@@ -120,6 +121,7 @@ export const guardrailLogoMap: Record<string, string> = {
   "AIM Guardrail": `${asset_logos_folder}aim_security.jpeg`,
   "OpenAI Moderation": `${asset_logos_folder}openai_small.svg`,
   EnkryptAI: `${asset_logos_folder}enkrypt_ai.avif`,
+  "Prompt Security": `${asset_logos_folder}prompt_security.png`,
   "LiteLLM Content Filter": `${asset_logos_folder}litellm_logo.jpg`,
 };
 

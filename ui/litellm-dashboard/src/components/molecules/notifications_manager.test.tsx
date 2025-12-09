@@ -1,6 +1,14 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
 import { notification } from "antd";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import NotificationManager from "./notifications_manager";
+
+vi.mock("@/components/molecules/notifications_manager", async () => {
+  const actual = await vi.importActual<typeof import("@/components/molecules/notifications_manager")>(
+    "@/components/molecules/notifications_manager",
+  );
+
+  return actual;
+});
 
 // Mock the antd notification module
 vi.mock("antd", () => ({

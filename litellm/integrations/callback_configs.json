@@ -11,10 +11,10 @@
         "description": "Arize API key for authentication",
         "required": true
       },
-      "arize_space_key": {
+      "arize_space_id": {
         "type": "password",
-        "ui_name": "Space Key",
-        "description": "Arize Space key to identify your workspace",
+        "ui_name": "Space ID",
+        "description": "Arize Space ID to identify your workspace",
         "required": true
       }
     },
@@ -42,21 +42,21 @@
     "description": "Braintrust Logging Integration"
   },
   {
-    "id": "custom_callback_api",
+    "id": "generic_api",
     "displayName": "Custom Callback API",
     "logo": "custom.svg",
     "supports_key_team_logging": true,
     "dynamic_params": {
-      "custom_callback_api_url": {
+      "GENERIC_LOGGER_ENDPOINT": {
         "type": "text",
         "ui_name": "Callback URL",
         "description": "Your custom webhook/API endpoint URL to receive logs",
         "required": true
       },
-      "custom_callback_api_headers": {
+      "GENERIC_LOGGER_HEADERS": {
         "type": "text",
-        "ui_name": "Headers (JSON)",
-        "description": "Custom HTTP headers as JSON string (e.g., {\"Authorization\": \"Bearer token\"})",
+        "ui_name": "Headers",
+        "description": "Custom HTTP headers as a comma-separated string (e.g., Authorization: Bearer token, Content-Type: application/json)",
         "required": false
       }
     },

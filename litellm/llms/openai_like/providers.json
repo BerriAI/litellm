@@ -1,0 +1,18 @@
+{
+  "publicai": {
+    "base_url": "https://api.publicai.co/v1",
+    "api_key_env": "PUBLICAI_API_KEY",
+    "api_base_env": "PUBLICAI_API_BASE",
+    "base_class": "openai_gpt",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "special_handling": {
+      "convert_content_list_to_string": true
+    }
+  },
+  "helicone": {
+    "base_url": "https://ai-gateway.helicone.ai/",
+    "api_key_env": "HELICONE_API_KEY"
+  }
+}

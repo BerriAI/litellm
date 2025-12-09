@@ -29,6 +29,18 @@ response = completion(
 )
 ```
 
+:::info Metadata passthrough (preview)
+When `litellm.enable_preview_features = True`, LiteLLM forwards only the values inside `metadata` to OpenAI.
+
+```python
+completion(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "hi"}],
+    metadata= {"custom_meta_key": "value"},
+)
+```
+:::
+
 ### Usage - LiteLLM Proxy Server
 
 Here's how to call OpenAI models with the LiteLLM Proxy Server
@@ -176,6 +188,10 @@ os.environ["OPENAI_BASE_URL"] = "https://your_host/v1"     # OPTIONAL
 | gpt-5-mini-2025-08-07 | `response = completion(model="gpt-5-mini-2025-08-07", messages=messages)` |
 | gpt-5-nano-2025-08-07 | `response = completion(model="gpt-5-nano-2025-08-07", messages=messages)` |
 | gpt-5-pro | `response = completion(model="gpt-5-pro", messages=messages)` |
+| gpt-5.1 | `response = completion(model="gpt-5.1", messages=messages)` |
+| gpt-5.1-codex | `response = completion(model="gpt-5.1-codex", messages=messages)` |
+| gpt-5.1-codex-mini | `response = completion(model="gpt-5.1-codex-mini", messages=messages)` |
+| gpt-5.1-codex-max | `response = completion(model="gpt-5.1-codex-max", messages=messages)` |
 | gpt-4.1 | `response = completion(model="gpt-4.1", messages=messages)` |
 | gpt-4.1-mini | `response = completion(model="gpt-4.1-mini", messages=messages)` |
 | gpt-4.1-nano | `response = completion(model="gpt-4.1-nano", messages=messages)` |
@@ -237,7 +253,7 @@ response = completion(
                             {
                                 "type": "image_url",
                                 "image_url": {
-                                "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                                "url": "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png"
                                 }
                             }
                         ]
@@ -412,7 +428,7 @@ Expected Response:
 
 ### Advanced: Using `reasoning_effort` with `summary` field
 
-By default, `reasoning_effort` accepts a string value (`"none"`, `"minimal"`, `"low"`, `"medium"`, `"high"`) and only sets the effort level without including a reasoning summary.
+By default, `reasoning_effort` accepts a string value (`"none"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`—`"xhigh"` is only supported on `gpt-5.1-codex-max`) and only sets the effort level without including a reasoning summary.
 
 To opt-in to the `summary` feature, you can pass `reasoning_effort` as a dictionary. **Note:** The `summary` field requires your OpenAI organization to have verification status. Using `summary` without verification will result in a 400 error from OpenAI.
 
@@ -477,10 +493,14 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 | `gpt-5-mini` | `medium` | `none`, `minimal`, `low`, `medium`, `high` |
 | `gpt-5-nano` | `none` | `none`, `low`, `medium`, `high` |
 | `gpt-5-codex` | `adaptive` | `low`, `medium`, `high` (no `minimal`) |
+| `gpt-5.1-codex` | `adaptive` | `low`, `medium`, `high` (no `minimal`) |
+| `gpt-5.1-codex-mini` | `adaptive` | `low`, `medium`, `high` (no `minimal`) |
+| `gpt-5.1-codex-max` | `adaptive` | `low`, `medium`, `high`, `xhigh` (no `minimal`) |
 | `gpt-5-pro` | `high` | `high` only |
 
 **Note:**
 - GPT-5.1 introduced a new `reasoning_effort="none"` setting for faster, lower-latency responses. This replaces the `"minimal"` setting from GPT-5.
+- `gpt-5.1-codex-max` is the only model that supports `reasoning_effort="xhigh"`. All other models will reject this value.
 - `gpt-5-pro` only accepts `reasoning_effort="high"`. Other values will return an error.
 - When `reasoning_effort` is not set (None), OpenAI defaults to the value shown in the "Default" column.
 
@@ -490,7 +510,9 @@ See [OpenAI Reasoning documentation](https://platform.openai.com/docs/guides/rea
 
 The `verbosity` parameter controls the length and detail of responses from GPT-5 family models. It accepts three values: `"low"`, `"medium"`, or `"high"`.
 
-**Supported models:** All GPT-5 family models (`gpt-5`, `gpt-5.1`, `gpt-5-mini`, `gpt-5-nano`, `gpt-5-codex`, `gpt-5-pro`)
+**Supported models:** `gpt-5`, `gpt-5.1`, `gpt-5-mini`, `gpt-5-nano`, `gpt-5-pro`
+
+**Note:** GPT-5-Codex models (`gpt-5-codex`, `gpt-5.1-codex`, `gpt-5.1-codex-mini`, `gpt-5.1-codex-max`) do **not** support the `verbosity` parameter.
 
 **Use cases:**
 - **`"low"`**: Best for concise answers or simple code generation (e.g., SQL queries)

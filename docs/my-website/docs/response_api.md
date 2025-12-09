@@ -43,6 +43,38 @@ response = litellm.responses(
 print(response)
 ```
 
+#### Response Format (OpenAI Responses API Format)
+
+```json
+{
+    "id": "resp_abc123",
+    "object": "response",
+    "created_at": 1734366691,
+    "status": "completed",
+    "model": "o1-pro-2025-01-30",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_abc123",
+            "status": "completed",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "Once upon a time, a little unicorn named Stardust lived in a magical meadow where flowers sang lullabies. One night, she discovered that her horn could paint dreams across the sky, and she spent the evening creating the most beautiful aurora for all the forest creatures to enjoy. As the animals drifted off to sleep beneath her shimmering lights, Stardust curled up on a cloud of moonbeams, happy to have shared her magic with her friends.",
+                    "annotations": []
+                }
+            ]
+        }
+    ],
+    "usage": {
+        "input_tokens": 18,
+        "output_tokens": 98,
+        "total_tokens": 116
+    }
+}
+```
+
 #### Streaming
 ```python showLineNumbers title="OpenAI Streaming Response"
 import litellm
@@ -80,6 +112,85 @@ for event in stream:
         with open(f"river{idx}.png", "wb") as f:
             f.write(image_bytes)
 ```
+
+#### Image Generation (Non-streaming)
+
+Image generation is supported for models that generate images. Generated images are returned in the `output` array with `type: "image_generation_call"`.
+
+**Gemini (Google AI Studio):**
+```python showLineNumbers title="Gemini Image Generation"
+import litellm
+import base64
+
+# Gemini image generation models don't require tools parameter
+response = litellm.responses(
+    model="gemini/gemini-2.5-flash-image",
+    input="Generate a cute cat playing with yarn"
+)
+
+# Access generated images from output
+for item in response.output:
+    if item.type == "image_generation_call":
+        # item.result contains pure base64 (no data: prefix)
+        image_bytes = base64.b64decode(item.result)
+
+        # Save the image
+        with open(f"generated_{item.id}.png", "wb") as f:
+            f.write(image_bytes)
+
+print(f"Image saved: generated_{response.output[0].id}.png")
+```
+
+**OpenAI:**
+```python showLineNumbers title="OpenAI Image Generation"
+import litellm
+import base64
+
+# OpenAI models require tools parameter for image generation
+response = litellm.responses(
+    model="openai/gpt-4o",
+    input="Generate a futuristic city at sunset",
+    tools=[{"type": "image_generation"}]
+)
+
+# Access generated images from output
+for item in response.output:
+    if item.type == "image_generation_call":
+        image_bytes = base64.b64decode(item.result)
+        with open(f"generated_{item.id}.png", "wb") as f:
+            f.write(image_bytes)
+```
+
+**Response Format:**
+
+When image generation is successful, the response contains:
+
+```json
+{
+  "id": "resp_abc123",
+  "status": "completed",
+  "output": [
+    {
+      "type": "image_generation_call",
+      "id": "resp_abc123_img_0",
+      "status": "completed",
+      "result": "iVBORw0KGgo..."  // Pure base64 string (no data: prefix)
+    }
+  ]
+}
+```
+
+**Supported Models:**
+
+| Provider | Models | Requires `tools` Parameter |
+|----------|--------|---------------------------|
+| Google AI Studio | `gemini/gemini-2.5-flash-image` | ❌ No |
+| Vertex AI | `vertex_ai/gemini-2.5-flash-image-preview` | ❌ No |
+| OpenAI | `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`, `o3` | ✅ Yes |
+| AWS Bedrock | Stability AI, Amazon Nova Canvas models | Model-specific |
+| Fal AI | Various image generation models | Check model docs |
+
+**Note:** The `result` field contains pure base64-encoded image data without the `data:image/png;base64,` prefix. You must decode it with `base64.b64decode()` before saving.
 
 #### GET a Response
 ```python showLineNumbers title="Get Response by ID"
