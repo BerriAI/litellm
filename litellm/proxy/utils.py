@@ -3397,8 +3397,11 @@ class ProxyUpdateSpend:
                             verbose_proxy_logger.debug(
                                 f"Flushed {len(batch)} logs to the DB."
                             )
+                            # Explicitly clear batch memory
                             del batch, batch_with_dates
-                            gc.collect()
+                            # Only run gc every 5 batches to reduce overhead
+                            if j % (BATCH_SIZE * 5) == 0:
+                                gc.collect()
 
                         async with prisma_client.spend_log_transactions_lock:
                             prisma_client.spend_log_transactions = (
