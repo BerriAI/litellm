@@ -50,19 +50,15 @@ class AzureAnthropicConfig(AnthropicConfig):
             # Set api_key if provided and not already set
             if api_key and not litellm_params_obj.api_key:
                 litellm_params_obj.api_key = api_key
-        
+
         # Use Azure authentication logic
-        headers = BaseAzureLLM._base_validate_azure_environment(
-            headers=headers, litellm_params=litellm_params_obj
-        )
+        headers = BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
 
         # Get tools and other anthropic-specific setup
         tools = optional_params.get("tools")
         prompt_caching_set = self.is_cache_control_set(messages=messages)
         computer_tool_used = self.is_computer_tool_used(tools=tools)
-        mcp_server_used = self.is_mcp_server_used(
-            mcp_servers=optional_params.get("mcp_servers")
-        )
+        mcp_server_used = self.is_mcp_server_used(mcp_servers=optional_params.get("mcp_servers"))
         pdf_used = self.is_pdf_used(messages=messages)
         file_id_used = self.is_file_id_used(messages=messages)
         user_anthropic_beta_headers = self._get_user_anthropic_beta_headers(
@@ -101,6 +97,9 @@ class AzureAnthropicConfig(AnthropicConfig):
         Transform request using parent AnthropicConfig, then remove extra_body if present.
         Azure Anthropic doesn't support extra_body parameter.
         """
+        # Remove max_retries - Azure Anthropic API doesn't accept this parameter
+        optional_params.pop("max_retries", None)
+
         # Call parent transform_request
         data = super().transform_request(
             model=model,
@@ -109,9 +108,15 @@ class AzureAnthropicConfig(AnthropicConfig):
             litellm_params=litellm_params,
             headers=headers,
         )
-        
+
         # Remove extra_body if present (Azure Anthropic doesn't support it)
         data.pop("extra_body", None)
-        
-        return data
 
+        # Azure AI Anthropic requires explicit "type": "custom" for user-defined tools
+        # Regular Anthropic API allows tools without a type field
+        if "tools" in data:
+            for tool in data["tools"]:
+                if "type" not in tool and "name" in tool and "input_schema" in tool:
+                    tool["type"] = "custom"
+
+        return data

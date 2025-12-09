@@ -182,11 +182,121 @@ class TestAzureAnthropicConfig:
     def test_inherits_anthropic_config_methods(self):
         """Test that AzureAnthropicConfig inherits methods from AnthropicConfig"""
         config = AzureAnthropicConfig()
-        
+
         # Test that it has AnthropicConfig methods
         assert hasattr(config, "get_anthropic_headers")
         assert hasattr(config, "is_cache_control_set")
         assert hasattr(config, "is_computer_tool_used")
         assert hasattr(config, "transform_request")
         assert hasattr(config, "transform_response")
+
+    def test_transform_request_removes_max_retries(self):
+        """Test that max_retries is removed from optional_params before transformation.
+
+        Azure AI Anthropic API doesn't accept max_retries parameter and returns:
+        {"type":"error","error":{"type":"invalid_request_error","message":"max_retries: Extra inputs are not permitted"}}
+        """
+        config = AzureAnthropicConfig()
+        model = "claude-haiku-4-5"
+        messages = [{"role": "user", "content": "Hello"}]
+        optional_params = {"max_tokens": 100, "max_retries": 3}
+        litellm_params = {"api_key": "test-key"}
+        headers = {"api-key": "test-key", "anthropic-version": "2023-06-01"}
+
+        data = config.transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        # max_retries should NOT be in the request data
+        assert "max_retries" not in data
+        # max_tokens should still be there
+        assert data.get("max_tokens") == 100
+
+    def test_transform_request_adds_custom_type_to_tools(self):
+        """Test that user-defined tools get type='custom' added.
+
+        Azure AI Anthropic requires explicit "type": "custom" for user-defined tools,
+        while regular Anthropic API allows tools without a type field.
+        """
+        config = AzureAnthropicConfig()
+        model = "claude-haiku-4-5"
+        messages = [{"role": "user", "content": "Hello"}]
+        # Tool in Anthropic format (after map_openai_params transformation) but without type
+        optional_params = {
+            "max_tokens": 100,
+            "tools": [
+                {
+                    "name": "get_weather",
+                    "description": "Get weather for a location",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "location": {"type": "string"}
+                        },
+                        "required": ["location"],
+                    },
+                }
+            ],
+        }
+        litellm_params = {"api_key": "test-key"}
+        headers = {"api-key": "test-key", "anthropic-version": "2023-06-01"}
+
+        data = config.transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        # Tool should now have type="custom"
+        assert len(data["tools"]) == 1
+        assert data["tools"][0]["type"] == "custom"
+        assert data["tools"][0]["name"] == "get_weather"
+
+    def test_transform_request_preserves_builtin_tool_types(self):
+        """Test that built-in tools with existing type are not modified.
+
+        Built-in tools like web_search_20250305, bash_20250124, etc. should keep
+        their original type and not be changed to 'custom'.
+        """
+        config = AzureAnthropicConfig()
+        model = "claude-haiku-4-5"
+        messages = [{"role": "user", "content": "Hello"}]
+        optional_params = {
+            "max_tokens": 100,
+            "tools": [
+                {
+                    "type": "web_search_20250305",
+                    "name": "web_search",
+                },
+                {
+                    "name": "my_custom_tool",
+                    "description": "A custom tool",
+                    "input_schema": {"type": "object", "properties": {}},
+                },
+            ],
+        }
+        litellm_params = {"api_key": "test-key"}
+        headers = {"api-key": "test-key", "anthropic-version": "2023-06-01"}
+
+        data = config.transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        # web_search tool should keep its original type
+        web_search_tool = next(t for t in data["tools"] if t["name"] == "web_search")
+        assert web_search_tool["type"] == "web_search_20250305"
+
+        # Custom tool should get type="custom" added
+        custom_tool = next(t for t in data["tools"] if t["name"] == "my_custom_tool")
+        assert custom_tool["type"] == "custom"
 
