@@ -1721,6 +1721,8 @@ class PrismaClient:
     ):
         ## init logging object
         self.proxy_logging_obj = proxy_logging_obj
+        # Lock to protect concurrent access to spend_log_transactions queue
+        self.spend_log_transactions_lock = asyncio.Lock()
         self.iam_token_db_auth: Optional[bool] = str_to_bool(
             os.getenv("IAM_TOKEN_DB_AUTH")
         )
@@ -3351,8 +3353,9 @@ class ProxyUpdateSpend:
         MAX_LOGS_PER_INTERVAL = (
             10000  # Maximum number of logs to flush in a single interval
         )
-        # Get initial logs to process
-        logs_to_process = prisma_client.spend_log_transactions[:MAX_LOGS_PER_INTERVAL]
+        # Get initial logs to process with lock to prevent race conditions
+        async with prisma_client.spend_log_transactions_lock:
+            logs_to_process = prisma_client.spend_log_transactions[:MAX_LOGS_PER_INTERVAL]
         start_time = time.time()
         try:
             for i in range(n_retry_times + 1):
@@ -3375,11 +3378,12 @@ class ProxyUpdateSpend:
                         del json_data
                         gc.collect()
                         if response.status_code == 200:
-                            prisma_client.spend_log_transactions = (
-                                prisma_client.spend_log_transactions[
-                                    len(logs_to_process) :
-                                ]
-                            )
+                            async with prisma_client.spend_log_transactions_lock:
+                                prisma_client.spend_log_transactions = (
+                                    prisma_client.spend_log_transactions[
+                                        len(logs_to_process) :
+                                    ]
+                                )
                     else:
                         for j in range(0, len(logs_to_process), BATCH_SIZE):
                             batch = logs_to_process[j : j + BATCH_SIZE]
@@ -3396,11 +3400,13 @@ class ProxyUpdateSpend:
                             del batch, batch_with_dates
                             gc.collect()
 
-                        prisma_client.spend_log_transactions = (
-                            prisma_client.spend_log_transactions[len(logs_to_process) :]
-                        )
+                        async with prisma_client.spend_log_transactions_lock:
+                            prisma_client.spend_log_transactions = (
+                                prisma_client.spend_log_transactions[len(logs_to_process) :]
+                            )
+                            remaining_count = len(prisma_client.spend_log_transactions)
                         verbose_proxy_logger.debug(
-                            f"{len(logs_to_process)} logs processed. Remaining in queue: {len(prisma_client.spend_log_transactions)}"
+                            f"{len(logs_to_process)} logs processed. Remaining in queue: {remaining_count}"
                         )
                     break
                 except DB_CONNECTION_ERROR_TYPES:
@@ -3410,9 +3416,10 @@ class ProxyUpdateSpend:
                         raise
                     await asyncio.sleep(2**i)
         except Exception as e:
-            prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[
-                len(logs_to_process) :
-            ]
+            async with prisma_client.spend_log_transactions_lock:
+                prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[
+                    len(logs_to_process) :
+                ]
             _raise_failed_update_spend_exception(
                 e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
             )
@@ -3479,7 +3486,10 @@ async def update_spend_logs_job(
     """
     n_retry_times = 3
     
-    if len(prisma_client.spend_log_transactions) == 0:
+    async with prisma_client.spend_log_transactions_lock:
+        queue_size = len(prisma_client.spend_log_transactions)
+    
+    if queue_size == 0:
         return
     
     await ProxyUpdateSpend.update_spend_logs(
@@ -3518,7 +3528,8 @@ async def _monitor_spend_logs_queue(
     
     while True:
         try:
-            queue_size = len(prisma_client.spend_log_transactions)
+            async with prisma_client.spend_log_transactions_lock:
+                queue_size = len(prisma_client.spend_log_transactions)
             
             if queue_size > 0:
                 if queue_size >= threshold:
