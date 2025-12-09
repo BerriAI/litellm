@@ -444,3 +444,130 @@ def test_transform_request_single_char_keys_not_matched():
     assert result_correct.get("previous_response_id") == "resp_abc"
 
     print("✓ Single-character keys are not incorrectly matched to metadata/previous_response_id")
+
+
+# =============================================================================
+# Tests for issue #17246: Streaming tool_calls dropped when text + tool_calls
+# =============================================================================
+
+
+def test_message_done_does_not_emit_is_finished():
+    """
+    Test that OUTPUT_ITEM_DONE for a message does NOT emit is_finished=True.
+    This is the core fix for issue #17246.
+
+    Before fix: message completion emitted is_finished=True, causing tool_calls
+    that came after to be dropped.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {
+        "type": "response.output_item.done",
+        "item": {"type": "message", "content": []}
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    # After the fix, message completion should NOT set is_finished=True
+    assert result["is_finished"] == False, "message completion should not emit is_finished=True"
+    assert result["finish_reason"] == "", "message completion should not emit finish_reason"
+
+
+def test_response_completed_emits_is_finished():
+    """
+    Test that response.completed DOES emit is_finished=True.
+    This ensures streaming ends properly after ALL output items are sent.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {"type": "response.completed"}
+
+    result = iterator.chunk_parser(chunk)
+
+    assert result["is_finished"] == True, "response.completed should emit is_finished=True"
+    assert result["finish_reason"] == "stop", "response.completed should emit finish_reason='stop'"
+
+
+def test_function_call_done_emits_is_finished():
+    """
+    Test that OUTPUT_ITEM_DONE for a function_call still emits is_finished=True.
+    This preserves existing behavior for tool_calls.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {
+        "type": "response.output_item.done",
+        "item": {
+            "type": "function_call",
+            "name": "get_weather",
+            "call_id": "call_123",
+            "arguments": '{"location": "Tokyo"}'
+        }
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    assert result["is_finished"] == True, "function_call completion should emit is_finished=True"
+    assert result["finish_reason"] == "tool_calls", "function_call should emit finish_reason='tool_calls'"
+    assert result["tool_use"] is not None, "function_call should include tool_use"
+
+
+def test_text_plus_tool_calls_sequence():
+    """
+    Test the full sequence when model returns text + tool_calls.
+    This is the main scenario for issue #17246.
+
+    Expected: is_finished=True should NOT appear until function_call is done,
+    not when message is done.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    # Simulate the sequence from OpenAI Responses API
+    chunks = [
+        {"type": "response.output_text.delta", "delta": "Hello"},
+        {"type": "response.output_text.delta", "delta": "!"},
+        {"type": "response.output_item.done", "item": {"type": "message", "content": []}},  # message done
+        {"type": "response.output_item.added", "item": {"type": "function_call", "name": "get_weather", "call_id": "call_123"}},
+        {"type": "response.function_call_arguments.delta", "delta": '{"location":"Tokyo"}'},
+        {"type": "response.output_item.done", "item": {"type": "function_call", "name": "get_weather", "call_id": "call_123", "arguments": '{"location":"Tokyo"}'}},
+        {"type": "response.completed"},
+    ]
+
+    results = [iterator.chunk_parser(chunk) for chunk in chunks]
+
+    # Check message done (index 2) does NOT have is_finished=True
+    message_done_result = results[2]
+    assert message_done_result["is_finished"] == False, "message done should not have is_finished=True"
+
+    # Check function_call done (index 5) DOES have is_finished=True
+    function_done_result = results[5]
+    assert function_done_result["is_finished"] == True, "function_call done should have is_finished=True"
+    assert function_done_result["finish_reason"] == "tool_calls"
+
+    # Check response.completed (index 6) also has is_finished=True
+    completed_result = results[6]
+    assert completed_result["is_finished"] == True, "response.completed should have is_finished=True"
