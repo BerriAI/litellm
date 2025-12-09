@@ -81,8 +81,11 @@ const PublicAccessRequests: React.FC<PublicAccessRequestsProps> = ({ accessToken
   };
 
   useEffect(() => {
-    fetchRequestedModels();
-  }, [accessToken]);
+    const isAdmin = userRole ? all_admin_roles.includes(userRole) : false;
+    if (isAdmin) {
+      fetchRequestedModels();
+    }
+  }, [accessToken, userRole]);
 
   const handleGrantAccess = async () => {
     if (!accessToken || !selectedModel) {
