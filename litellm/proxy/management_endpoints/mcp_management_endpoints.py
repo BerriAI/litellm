@@ -63,6 +63,9 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
+    from litellm.proxy._experimental.mcp_server.ui_session_utils import (
+        build_effective_auth_contexts,
+    )
     from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
     from litellm.proxy._types import (
         LiteLLM_MCPServerTable,
@@ -422,13 +425,18 @@ if MCP_AVAILABLE:
         ```
         """
 
-        # Use server manager to get all servers with health and team data
-        mcp_servers = (
-            await global_mcp_server_manager.get_all_mcp_servers_with_health_and_teams(
-                user_api_key_auth=user_api_key_dict
+        auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
+
+        aggregated_servers: Dict[str, LiteLLM_MCPServerTable] = {}
+        for auth_context in auth_contexts:
+            servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_and_teams(
+                user_api_key_auth=auth_context
             )
-        )
-        redacted_mcp_servers = _redact_mcp_credentials_list(mcp_servers)
+            for server in servers:
+                if server.server_id not in aggregated_servers:
+                    aggregated_servers[server.server_id] = server
+
+        redacted_mcp_servers = _redact_mcp_credentials_list(aggregated_servers.values())
 
         # augment the mcp servers with public status
         if litellm.public_mcp_servers is not None:

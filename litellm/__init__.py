@@ -265,6 +265,7 @@ heroku_key: Optional[str] = None
 cometapi_key: Optional[str] = None
 ovhcloud_key: Optional[str] = None
 lemonade_key: Optional[str] = None
+sap_service_key: Optional[str] = None
 amazon_nova_api_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
@@ -1069,7 +1070,7 @@ from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
 from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
 # client must be imported immediately as it's used as a decorator at function definition time
 from .utils import client
-# Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py 
+# Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py
 # (which imports tiktoken) at import time
 
 from .llms.bytez.chat.transformation import BytezChatConfig
@@ -1110,6 +1111,7 @@ from .llms.jina_ai.rerank.transformation import JinaAIRerankConfig
 from .llms.deepinfra.rerank.transformation import DeepinfraRerankConfig
 from .llms.hosted_vllm.rerank.transformation import HostedVLLMRerankConfig
 from .llms.nvidia_nim.rerank.transformation import NvidiaNimRerankConfig
+from .llms.nvidia_nim.rerank.ranking_transformation import NvidiaNimRankingConfig
 from .llms.vertex_ai.rerank.transformation import VertexAIRerankConfig
 from .llms.fireworks_ai.rerank.transformation import FireworksAIRerankConfig
 from .llms.clarifai.chat.transformation import ClarifaiConfig
@@ -1241,6 +1243,7 @@ from .llms.topaz.common_utils import TopazModelInfo
 from .llms.topaz.image_variations.transformation import TopazImageVariationConfig
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 from .llms.groq.chat.transformation import GroqChatConfig
+from .llms.sap.chat.transformation import GenAIHubOrchestrationConfig
 from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig
 from .llms.voyage.embedding.transformation_contextual import (
     VoyageContextualEmbeddingConfig,
@@ -1339,6 +1342,7 @@ from .llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
 from .llms.watsonx.completion.transformation import IBMWatsonXAIConfig
 from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
 from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
+from .llms.sap.embed.transformation import GenAIHubEmbeddingConfig
 from .llms.watsonx.audio_transcription.transformation import (
     IBMWatsonXAudioTranscriptionConfig,
 )
@@ -1511,13 +1515,13 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
 
 if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo as _ModelInfoType
-    
+
     # Cost calculator functions
     cost_per_token: Callable[..., Tuple[float, float]]
     completion_cost: Callable[..., float]
     response_cost_calculator: Any
     modify_integration: Any
-    
+
     # Utils functions - type stubs for truly lazy loaded functions only
     # (functions NOT imported via "from .main import *")
     get_response_string: Callable[..., str]
@@ -1547,7 +1551,7 @@ if TYPE_CHECKING:
     get_first_chars_messages: Callable[..., str]
     get_provider_fields: Callable[..., List]
     get_valid_models: Callable[..., list]
-    
+
     # Response types - truly lazy loaded only (not in main.py or elsewhere)
     ModelResponseListIterator: Type[Any]
 
@@ -1563,7 +1567,7 @@ def __getattr__(name: str) -> Any:
     if name in _cost_calculator_names:
         from ._lazy_imports import _lazy_import_cost_calculator
         return _lazy_import_cost_calculator(name)
-    
+
     # Lazy load litellm_logging functions
     _litellm_logging_names = (
         "Logging",
@@ -1572,7 +1576,7 @@ def __getattr__(name: str) -> Any:
     if name in _litellm_logging_names:
         from ._lazy_imports import _lazy_import_litellm_logging
         return _lazy_import_litellm_logging(name)
-    
+
     # Lazy load utils functions
     _utils_names = (
         "exception_type", "get_optional_params", "get_response_string", "token_counter",

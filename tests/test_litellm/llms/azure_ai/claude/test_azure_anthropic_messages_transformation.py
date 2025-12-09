@@ -55,12 +55,11 @@ class TestAzureAnthropicMessagesConfig:
             assert isinstance(call_args[1]["litellm_params"], GenericLiteLLMParams)
             assert call_args[1]["litellm_params"].api_key == "test-api-key"
             assert "anthropic-version" in result
-            assert "x-api-key" in result
-            assert result["x-api-key"] == "test-api-key"
-            assert "api-key" not in result
+            # api-key header is preserved as-is (no conversion to x-api-key)
+            assert "api-key" in result
 
-    def test_validate_anthropic_messages_environment_converts_api_key_to_x_api_key(self):
-        """Test that api-key header is converted to x-api-key"""
+    def test_validate_anthropic_messages_environment_preserves_api_key_header(self):
+        """Test that api-key header is preserved as-is (Azure handles the header internally)"""
         config = AzureAnthropicMessagesConfig()
         headers = {}
         model = "claude-sonnet-4-5"
@@ -80,10 +79,9 @@ class TestAzureAnthropicMessagesConfig:
                 litellm_params=litellm_params,
             )
 
-            # Verify api-key was converted to x-api-key
-            assert "x-api-key" in result
-            assert result["x-api-key"] == "test-api-key"
-            assert "api-key" not in result
+            # Verify api-key header is preserved as-is
+            assert "api-key" in result
+            assert result["api-key"] == "test-api-key"
 
     def test_validate_anthropic_messages_environment_sets_headers(self):
         """Test that required headers are set"""
@@ -110,7 +108,8 @@ class TestAzureAnthropicMessagesConfig:
             assert result["anthropic-version"] == "2023-06-01"
             assert "content-type" in result
             assert result["content-type"] == "application/json"
-            assert "x-api-key" in result
+            # api-key header is preserved as-is
+            assert "api-key" in result
 
     def test_get_complete_url_with_base_url(self):
         """Test get_complete_url with base URL"""
@@ -239,3 +238,47 @@ class TestAzureAnthropicMessagesConfig:
         assert "tools" in params
         assert "tool_choice" in params
 
+
+class TestProviderConfigManagerAzureAnthropicMessages:
+    """Test ProviderConfigManager returns correct config for Azure AI Anthropic Messages API"""
+
+    def test_get_provider_anthropic_messages_config_returns_azure_config(self):
+        """Test that ProviderConfigManager returns AzureAnthropicMessagesConfig for azure_ai provider with claude model"""
+        import litellm
+        from litellm.utils import ProviderConfigManager
+
+        config = ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="claude-sonnet-4-5_gb_20250929",
+            provider=litellm.LlmProviders.AZURE_AI,
+        )
+
+        assert config is not None
+        assert isinstance(config, AzureAnthropicMessagesConfig)
+
+    def test_get_provider_anthropic_messages_config_case_insensitive_model_name(self):
+        """Test that model name check is case insensitive"""
+        import litellm
+        from litellm.utils import ProviderConfigManager
+
+        # Test with uppercase CLAUDE
+        config = ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="CLAUDE-SONNET-4-5",
+            provider=litellm.LlmProviders.AZURE_AI,
+        )
+
+        assert config is not None
+        assert isinstance(config, AzureAnthropicMessagesConfig)
+
+    def test_get_provider_anthropic_messages_config_returns_none_for_non_claude_model(
+        self,
+    ):
+        """Test that ProviderConfigManager returns None for non-claude model on azure_ai"""
+        import litellm
+        from litellm.utils import ProviderConfigManager
+
+        config = ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="gpt-4o",
+            provider=litellm.LlmProviders.AZURE_AI,
+        )
+
+        assert config is None

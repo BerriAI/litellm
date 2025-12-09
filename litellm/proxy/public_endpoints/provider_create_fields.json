@@ -2447,6 +2447,24 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "SAP",
+    "provider_display_name": "SAP Generative AI Hub",
+    "litellm_provider": "sap",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "SAP AI Core Service Key (JSON)",
+        "placeholder": null,
+        "tooltip": "Paste your SAP AI Core service key JSON. Contains clientid, clientsecret, and service URLs.",
+        "required": true,
+        "field_type": "textarea",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "sap/gpt-4"
+  },
+  {
     "provider": "Snowflake",
     "provider_display_name": "Snowflake",
     "litellm_provider": "snowflake",

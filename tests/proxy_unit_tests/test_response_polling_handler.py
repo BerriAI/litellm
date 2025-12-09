@@ -519,6 +519,13 @@ class TestResponsePollingHandler:
         # init_async_client is a sync method that returns an async client
         mock_redis.init_async_client = Mock(return_value=mock_async_client)
         
+        # Mock async_delete_cache to actually call init_async_client and delete
+        async def mock_async_delete_cache(key):
+            client = mock_redis.init_async_client()
+            await client.delete(key)
+        
+        mock_redis.async_delete_cache = mock_async_delete_cache
+        
         handler = ResponsePollingHandler(redis_cache=mock_redis)
         
         result = await handler.delete_polling("litellm_poll_test")
