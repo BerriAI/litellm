@@ -52,13 +52,17 @@ class AzureAnthropicConfig(AnthropicConfig):
                 litellm_params_obj.api_key = api_key
 
         # Use Azure authentication logic
-        headers = BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
+        headers = BaseAzureLLM._base_validate_azure_environment(
+            headers=headers, litellm_params=litellm_params_obj
+        )
 
         # Get tools and other anthropic-specific setup
         tools = optional_params.get("tools")
         prompt_caching_set = self.is_cache_control_set(messages=messages)
         computer_tool_used = self.is_computer_tool_used(tools=tools)
-        mcp_server_used = self.is_mcp_server_used(mcp_servers=optional_params.get("mcp_servers"))
+        mcp_server_used = self.is_mcp_server_used(
+            mcp_servers=optional_params.get("mcp_servers")
+        )
         pdf_used = self.is_pdf_used(messages=messages)
         file_id_used = self.is_file_id_used(messages=messages)
         user_anthropic_beta_headers = self._get_user_anthropic_beta_headers(
