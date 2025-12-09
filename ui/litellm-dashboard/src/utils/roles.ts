@@ -15,3 +15,7 @@ export const isAdminRole = (role: string): boolean => {
 export const isProxyAdminRole = (role: string): boolean => {
   return role === "proxy_admin" || role === "Admin";
 };
+
+export const isInternalUserRole = (role: string): boolean => {
+  return role === "Internal User" || role === "Internal Viewer";
+};

@@ -27,6 +27,7 @@ import {
   credentialCreateCall,
   credentialGetCall,
   getGuardrailsList,
+  grantRequestedPublicAccess,
   modelDeleteCall,
   modelInfoV1Call,
   modelPatchUpdateCall,
@@ -78,6 +79,8 @@ export default function ModelInfoView({
   const [isAutoRouterModalOpen, setIsAutoRouterModalOpen] = useState(false);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
+  const [isPublicModalVisible, setIsPublicModalVisible] = useState(false);
+  const [grantingPublicAccess, setGrantingPublicAccess] = useState(false);
   const canEditModel =
     (userRole === "Admin" || modelData?.model_info?.created_by === userID) && modelData?.model_info?.db_model;
   const isAdmin = userRole === "Admin";
@@ -306,6 +309,40 @@ export default function ModelInfoView({
     }
   };
 
+  const handleGrantPublicAccess = async () => {
+    if (!accessToken) return;
+    try {
+      setGrantingPublicAccess(true);
+      await grantRequestedPublicAccess(accessToken, modelId);
+      NotificationsManager.success("Model is now publicly accessible!");
+      setIsPublicModalVisible(false);
+      
+      // Refresh model data to reflect the change
+      const modelInfoResponse = await modelInfoV1Call(accessToken, modelId);
+      const specificModelData = modelInfoResponse.data[0];
+      if (specificModelData && !specificModelData.litellm_model_name) {
+        specificModelData.litellm_model_name =
+          specificModelData?.litellm_params?.litellm_model_name ??
+          specificModelData?.litellm_params?.model ??
+          specificModelData?.model_info?.key ??
+          null;
+      }
+      setLocalModelData(specificModelData);
+      
+      if (onModelUpdate) {
+        onModelUpdate(specificModelData);
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        NotificationsManager.error("Error making model public: " + truncateString(error.message, 100));
+      } else {
+        NotificationsManager.error("Error making model public: " + String(error));
+      }
+    } finally {
+      setGrantingPublicAccess(false);
+    }
+  };
+
   const handleDelete = async () => {
     try {
       if (!accessToken) return;
@@ -376,6 +413,17 @@ export default function ModelInfoView({
           >
             Test Connection
           </TremorButton>
+
+          {modelData.model_info.team_id && (
+            <TremorButton
+              variant="secondary"
+              onClick={() => setIsPublicModalVisible(true)}
+              className="flex items-center gap-2"
+              data-testid="make-public-button"
+            >
+              Make Public Model
+            </TremorButton>
+          )}
 
           <TremorButton
             icon={KeyIcon}
@@ -1052,6 +1100,50 @@ export default function ModelInfoView({
         accessToken={accessToken || ""}
         userRole={userRole || ""}
       />
+
+      {/* Make Public Confirmation Modal */}
+      <Modal
+        title="Grant Public Access"
+        open={isPublicModalVisible}
+        onOk={handleGrantPublicAccess}
+        onCancel={() => {
+          setIsPublicModalVisible(false);
+        }}
+        okText="Grant Access"
+        okButtonProps={{ 
+          loading: grantingPublicAccess, 
+          type: "primary",
+          style: { backgroundColor: '#1890ff', borderColor: '#1890ff' }
+        }}
+        cancelButtonProps={{ disabled: grantingPublicAccess }}
+      >
+        <div className="space-y-4">
+          <p>
+            Are you sure you want to grant public access to this model deployment? Once granted, you will be able to grant access to user/team/key access.
+          </p>
+
+          <div className="bg-gray-50 p-4 rounded-md space-y-2">
+            <div>
+              <Text className="font-semibold">Public Name:</Text>
+              <Text className="ml-2">
+                {modelData.model_info.team_public_model_name || modelData.model_name}
+              </Text>
+            </div>
+            <div>
+              <Text className="font-semibold">Provider:</Text>
+              <Text className="ml-2">{modelData.litellm_params?.custom_llm_provider}</Text>
+            </div>
+            <div>
+              <Text className="font-semibold">Model:</Text>
+              <Text className="ml-2 font-mono text-xs">{modelData.litellm_params?.model}</Text>
+            </div>
+            <div>
+              <Text className="font-semibold">Team ID:</Text>
+              <Text className="ml-2 font-mono text-xs">{modelData.model_info.team_id}</Text>
+            </div>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

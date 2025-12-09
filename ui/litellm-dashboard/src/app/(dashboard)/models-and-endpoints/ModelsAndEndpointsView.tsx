@@ -40,6 +40,7 @@ import HealthCheckComponent from "../../../components/model_dashboard/HealthChec
 import ModelGroupAliasSettings from "../../../components/model_group_alias_settings";
 import NotificationsManager from "../../../components/molecules/notifications_manager";
 import PassThroughSettings from "../../../components/pass_through_settings";
+import PublicAccessRequests from "../../../components/public_access_requests";
 
 interface ModelDashboardProps {
   accessToken: string | null;
@@ -632,6 +633,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
                   {all_admin_roles.includes(userRole) && <Tab>Model Retry Settings</Tab>}
                   {all_admin_roles.includes(userRole) && <Tab>Model Group Alias</Tab>}
                   {all_admin_roles.includes(userRole) && <Tab>Price Data Reload</Tab>}
+                  {all_admin_roles.includes(userRole) && <Tab>Public Access Requests</Tab>}
                 </div>
 
                 <div className="flex items-center space-x-2">
@@ -750,6 +752,9 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
                   />
                 </TabPanel>
                 <PriceDataManagementTab setModelMap={setModelMap} />
+                <TabPanel>
+                  <PublicAccessRequests accessToken={accessToken} userRole={userRole} />
+                </TabPanel>
               </TabPanels>
             </TabGroup>
           )}

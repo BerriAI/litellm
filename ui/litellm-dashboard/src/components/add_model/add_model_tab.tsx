@@ -24,7 +24,7 @@ import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 import LiteLLMModelNameField from "./litellm_model_name";
 import ConnectionErrorDisplay from "./model_connection_test";
 import ProviderSpecificFields from "./provider_specific_fields";
-
+import { isInternalUserRole } from "@/utils/roles";
 interface AddModelTabProps {
   form: FormInstance; // For the Add Model tab
   handleOk: () => void;
@@ -119,6 +119,9 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
 
   // State for team-only switch
   const [isTeamOnly, setIsTeamOnly] = useState<boolean>(false);
+
+  // State for "Make Model Public" request
+  const [hasRequestedPublicAccess, setHasRequestedPublicAccess] = useState<boolean>(false);
 
   const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
 
@@ -368,6 +371,45 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                       />
                     </Tooltip>
                   </Form.Item>
+
+                  {
+                    isTeamOnly && isInternalUserRole(userRole) && (
+                      <>
+                        <Form.Item
+                          label="Make Model Public"
+                          tooltip="Request proxy admin to make this model publicly available."
+                          className="mb-4"
+                        >
+                          <Tooltip
+                            title={
+                              !premiumUser
+                                ? "This is an enterprise-only feature. Upgrade to premium to allow team admins, to make model public access."
+                                : ""
+                            }
+                            placement="top"
+                          >
+                            <Switch
+                              checked={hasRequestedPublicAccess}
+                              onChange={(checked) => {
+                                setHasRequestedPublicAccess(checked);
+                                // Set the form field value based on switch state
+                                form.setFieldValue(
+                                  "has_requested_public_access",
+                                  checked ? "requested" : undefined
+                                );
+                              }}
+                              disabled={!premiumUser}
+                            />
+                          </Tooltip>
+                        </Form.Item>
+                        {/* Hidden form field to store the value */}
+                        <Form.Item name="has_requested_public_access" hidden>
+                          <input type="hidden" />
+                        </Form.Item>
+                      </>
+                    )
+                  }
+                  
 
                   {/* Conditional Team Selection */}
                   {isTeamOnly && (
