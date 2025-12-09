@@ -22,7 +22,7 @@ Used by JWT Auth to get the user role from the token, and by
 additional_drop_params to remove nested fields from optional parameters.
 """
 
-from typing import Any, Dict, Optional, TypeVar
+from typing import Any, Dict, List, Optional, TypeVar, Union
 
 T = TypeVar("T")
 
@@ -106,7 +106,7 @@ def _parse_path_segments(path: str) -> list:
 
 
 def _delete_nested_value_custom(
-    data: Dict[str, Any],
+    data: Union[Dict[str, Any], List[Any]],
     segments: list,
     segment_index: int = 0,
 ) -> None:
@@ -134,7 +134,9 @@ def _delete_nested_value_custom(
                     # Can't delete array elements themselves, skip
                     pass
                 else:
-                    _delete_nested_value_custom(item, segments, segment_index + 1)
+                    # Only recurse if item is a dict or list (nested structure)
+                    if isinstance(item, (dict, list)):
+                        _delete_nested_value_custom(item, segments, segment_index + 1)
         return
 
     # Handle array index: [0], [1], [2], etc.
@@ -146,7 +148,10 @@ def _delete_nested_value_custom(
                     # Can't delete array elements themselves, skip
                     pass
                 else:
-                    _delete_nested_value_custom(data[index], segments, segment_index + 1)
+                    # Only recurse if element is a dict or list (nested structure)
+                    element = data[index]
+                    if isinstance(element, (dict, list)):
+                        _delete_nested_value_custom(element, segments, segment_index + 1)
         except (ValueError, IndexError):
             # Invalid index, skip
             pass
