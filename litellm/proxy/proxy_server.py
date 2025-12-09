@@ -4429,16 +4429,17 @@ class ProxyStartupEvent:
         )
 
         ### MONITOR SPEND LOGS QUEUE (queue-size-based job) ###
-        from litellm.proxy.utils import _monitor_spend_logs_queue
-        
-        # Start background task to monitor spend logs queue size
-        asyncio.create_task(
-            _monitor_spend_logs_queue(
-                prisma_client=prisma_client,
-                db_writer_client=db_writer_client,
-                proxy_logging_obj=proxy_logging_obj,
+        if general_settings.get("disable_spend_logs", False) is False:
+            from litellm.proxy.utils import _monitor_spend_logs_queue
+            
+            # Start background task to monitor spend logs queue size
+            asyncio.create_task(
+                _monitor_spend_logs_queue(
+                    prisma_client=prisma_client,
+                    db_writer_client=db_writer_client,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
             )
-        )
 
         ### ADD NEW MODELS ###
         store_model_in_db = (
