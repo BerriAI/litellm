@@ -220,7 +220,7 @@ class GenerationConfig(TypedDict, total=False):
     responseModalities: List[GeminiResponseModalities]
     imageConfig: GeminiImageConfig
     thinkingConfig: GeminiThinkingConfig
-    mediaResolution: Literal["MEDIA_RESOLUTION_LOW", "MEDIA_RESOLUTION_MEDIUM", "MEDIA_RESOLUTION_HIGH"]
+    mediaResolution: str
 
 
 class VertexToolName(str, Enum):
