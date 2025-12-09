@@ -3,10 +3,16 @@ Azure Anthropic messages transformation config - extends AnthropicMessagesConfig
 """
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
+import httpx
+
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
+from litellm.types.llms.anthropic_messages.anthropic_response import (
+    AnthropicMessagesResponse,
+)
 from litellm.types.router import GenericLiteLLMParams
 
 if TYPE_CHECKING:
@@ -109,4 +115,35 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
             api_base = api_base + "/v1/messages"
 
         return api_base
+
+    def transform_anthropic_messages_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> AnthropicMessagesResponse:
+        """
+        Transform the response from Azure AI Anthropic.
+
+        Azure AI Anthropic returns usage without total_tokens, but the logging
+        utilities expect it for ResponseAPIUsage. This adds total_tokens if missing.
+        """
+        from litellm.llms.anthropic.common_utils import AnthropicError
+
+        try:
+            raw_response_json = raw_response.json()
+        except Exception:
+            raise AnthropicError(
+                message=raw_response.text, status_code=raw_response.status_code
+            )
+
+        # Add total_tokens to usage if missing (Azure AI Anthropic doesn't include it)
+        if "usage" in raw_response_json and isinstance(raw_response_json["usage"], dict):
+            usage = raw_response_json["usage"]
+            if "total_tokens" not in usage:
+                input_tokens = usage.get("input_tokens", 0)
+                output_tokens = usage.get("output_tokens", 0)
+                usage["total_tokens"] = input_tokens + output_tokens
+
+        return AnthropicMessagesResponse(**raw_response_json)
 
