@@ -83,6 +83,7 @@ export const QuickActions: React.FC<QuickActionsProps> = ({ onSelectAll, onUnsel
         </div>
         <Button
           type="default"
+          danger
           onClick={onUnselectAll}
           disabled={!hasSelectedEntities}
           icon={<CloseOutlined />}
@@ -103,6 +104,7 @@ export const QuickActions: React.FC<QuickActionsProps> = ({ onSelectAll, onUnsel
         </Button>
         <Button
           type="default"
+          danger
           onClick={() => onSelectAll("BLOCK")}
           className="flex items-center justify-center h-10 border-red-200 hover:border-red-300 hover:text-red-700 bg-red-50 hover:bg-red-100 text-red-600"
           block

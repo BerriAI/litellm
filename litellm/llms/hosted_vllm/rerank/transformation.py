@@ -37,7 +37,12 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
     def __init__(self) -> None:
         pass
 
-    def get_complete_url(self, api_base: Optional[str], model: str) -> str:
+    def get_complete_url(
+        self, 
+        api_base: Optional[str], 
+        model: str,
+        optional_params: Optional[dict] = None,
+    ) -> str:
         if api_base:
             # Remove trailing slashes and ensure clean base URL
             api_base = api_base.rstrip("/")
@@ -91,6 +96,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        optional_params: Optional[dict] = None,
     ) -> dict:
         if api_key is None:
             api_key = get_secret_str("HOSTED_VLLM_API_KEY") or "fake-api-key"
@@ -150,7 +156,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
                 f"Error parsing response: {raw_response.text}, status_code={raw_response.status_code}"
             )
 
-        return RerankResponse(**raw_response_json)
+        return self._transform_response(raw_response_json)
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]

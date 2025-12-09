@@ -17,7 +17,7 @@ class BaseAnthropicMessagesTest(ABC):
         print("making basic completion request to anthropic passthrough")
         client = self.get_client()
         response = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
+            model="claude-sonnet-4-5-20250929",
             max_tokens=1024,
             messages=[{"role": "user", "content": "Say 'hello test' and nothing else"}],
             extra_body={
@@ -37,7 +37,7 @@ class BaseAnthropicMessagesTest(ABC):
             messages=[
                 {"role": "user", "content": "Say 'hello stream test' and nothing else"}
             ],
-            model="claude-3-5-sonnet-20241022",
+            model="claude-sonnet-4-5-20250929",
             extra_body={
                 "litellm_metadata": {
                     "tags": ["test-tag-stream-1", "test-tag-stream-2"],
@@ -110,7 +110,7 @@ class BaseAnthropicMessagesTest(ABC):
         try:
             client = self.get_client()
             response = client.messages.create(
-                model="claude-3-5-sonnet-20241022",
+                model="claude-sonnet-4-5-20250929",
                 max_tokens=10,
                 stream=True,
                 messages=["hi"],
@@ -130,7 +130,7 @@ class BaseAnthropicMessagesTest(ABC):
         try:
             client = self.get_client()
             response = client.messages.create(
-                model="claude-3-5-sonnet-20241022",
+                model="claude-sonnet-4-5-20250929",
                 max_tokens=10,
                 messages=["hi"],
             )

@@ -78,6 +78,7 @@ def _get_redis_cluster_kwargs(client=None):
     available_args.append("redis_connect_func")  # Needed for sync clusters and IAM detection
     available_args.append("gcp_service_account")
     available_args.append("gcp_ssl_ca_certs")
+    available_args.append("max_connections")
 
     return available_args
 
@@ -376,7 +377,7 @@ def get_redis_client(**env_overrides):
 
 
 def get_redis_async_client(
-    **env_overrides,
+    connection_pool: Optional[async_redis.BlockingConnectionPool] = None, **env_overrides,
 ) -> Union[async_redis.Redis, async_redis.RedisCluster]:
     redis_kwargs = _get_redis_client_logic(**env_overrides)
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
@@ -447,6 +448,10 @@ def get_redis_async_client(
     if "sentinel_nodes" in redis_kwargs and "service_name" in redis_kwargs:
         return _init_async_redis_sentinel(redis_kwargs)
     _pretty_print_redis_config(redis_kwargs=redis_kwargs)
+
+    if connection_pool is not None:
+        redis_kwargs["connection_pool"] = connection_pool
+
     return async_redis.Redis(
         **redis_kwargs,
     )

@@ -15,12 +15,179 @@ sys.path.insert(
 from unittest.mock import MagicMock, patch
 
 import litellm
-from litellm.proxy._types import SpendLogsPayload
+import litellm.proxy.proxy_server as ps
+from litellm.proxy._types import (
+    LitellmUserRoles,
+    Member,
+    SpendLogsPayload,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.proxy.proxy_server import app, prisma_client
 from litellm.proxy.spend_tracking import spend_management_endpoints
 from litellm.router import Router
 from litellm.types.utils import BudgetConfig
+
+
+@pytest.mark.asyncio
+async def test_is_admin_view_safe_true(monkeypatch):
+    # Force underlying check to return True
+    monkeypatch.setattr(
+        spend_management_endpoints, "_user_has_admin_view", lambda user_api_key_dict: True
+    )
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user")
+    assert spend_management_endpoints._is_admin_view_safe(auth) is True
+
+
+@pytest.mark.asyncio
+async def test_is_admin_view_safe_false(monkeypatch):
+    # Force underlying check to return False
+    monkeypatch.setattr(
+        spend_management_endpoints, "_user_has_admin_view", lambda user_api_key_dict: False
+    )
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
+    assert spend_management_endpoints._is_admin_view_safe(auth) is False
+
+
+@pytest.mark.asyncio
+async def test_is_admin_view_safe_exception(monkeypatch):
+    # Ensure exceptions are swallowed and return False
+    def raise_err(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(spend_management_endpoints, "_user_has_admin_view", raise_err)
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
+    assert spend_management_endpoints._is_admin_view_safe(auth) is False
+
+
+@pytest.mark.asyncio
+async def test_can_team_member_view_log_none_team_id():
+    # team_id=None should immediately return False
+    class MockPrisma:
+        class DB:
+            class TeamTable:
+                async def find_unique(self, where: dict):
+                    return None
+
+            def __init__(self):
+                self.litellm_teamtable = self.TeamTable()
+
+        def __init__(self):
+            self.db = self.DB()
+
+    prisma = MockPrisma()
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
+    allowed = await spend_management_endpoints._can_team_member_view_log(
+        prisma, auth, None
+    )
+    assert allowed is False
+
+
+@pytest.mark.asyncio
+async def test_can_team_member_view_log_team_not_found(monkeypatch):
+    # Non-existent team should return False
+    class MockPrisma:
+        class DB:
+            class TeamTable:
+                async def find_unique(self, where: dict):
+                    return None
+
+            def __init__(self):
+                self.litellm_teamtable = self.TeamTable()
+
+        def __init__(self):
+            self.db = self.DB()
+
+    prisma = MockPrisma()
+    # Even if admin check would return True, no team means False
+    monkeypatch.setattr(
+        spend_management_endpoints, "_is_user_team_admin", lambda user_api_key_dict, team_obj: True
+    )
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
+    allowed = await spend_management_endpoints._can_team_member_view_log(
+        prisma, auth, "team_x"
+    )
+    assert allowed is False
+
+
+@pytest.mark.asyncio
+async def test_can_team_member_view_log_not_admin(monkeypatch):
+    # Existing team but caller is not a team admin -> False
+    class MockTeam:
+        pass
+
+    class MockPrisma:
+        class DB:
+            class TeamTable:
+                async def find_unique(self, where: dict):
+                    return MockTeam()
+
+            def __init__(self):
+                self.litellm_teamtable = self.TeamTable()
+
+        def __init__(self):
+            self.db = self.DB()
+
+    prisma = MockPrisma()
+    monkeypatch.setattr(
+        spend_management_endpoints, "_is_user_team_admin", lambda user_api_key_dict, team_obj: False
+    )
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
+    allowed = await spend_management_endpoints._can_team_member_view_log(
+        prisma, auth, "team_x"
+    )
+    assert allowed is False
+
+
+@pytest.mark.asyncio
+async def test_can_team_member_view_log_admin(monkeypatch):
+    # Existing team and caller is team admin -> True
+    class MockTeam:
+        pass
+
+    class MockPrisma:
+        class DB:
+            class TeamTable:
+                async def find_unique(self, where: dict):
+                    return MockTeam()
+
+            def __init__(self):
+                self.litellm_teamtable = self.TeamTable()
+
+        def __init__(self):
+            self.db = self.DB()
+
+    prisma = MockPrisma()
+    monkeypatch.setattr(
+        spend_management_endpoints, "_is_user_team_admin", lambda user_api_key_dict, team_obj: True
+    )
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
+    allowed = await spend_management_endpoints._can_team_member_view_log(
+        prisma, auth, "team_x"
+    )
+    assert allowed is True
+
+
+def test_can_user_view_spend_log_true_for_internal_user():
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="u1")
+    assert spend_management_endpoints._can_user_view_spend_log(auth) is True
+
+
+def test_can_user_view_spend_log_true_for_internal_view_only():
+    auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, user_id="u1"
+    )
+    assert spend_management_endpoints._can_user_view_spend_log(auth) is True
+
+
+def test_can_user_view_spend_log_false_without_user_id():
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id=None)
+    assert spend_management_endpoints._can_user_view_spend_log(auth) is False
+
+
+def test_can_user_view_spend_log_false_for_other_roles():
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+    assert spend_management_endpoints._can_user_view_spend_log(auth) is False
 
 ignored_keys = [
     "request_id",
@@ -69,6 +236,14 @@ def disable_budget_sync(monkeypatch):
         "litellm.router_strategy.budget_limiter.RouterBudgetLimiting.periodic_sync_in_memory_spend_with_redis",
         noop,
     )
+
+
+@pytest.fixture(autouse=True)
+def reset_router_callbacks():
+    """Ensure router budget callbacks from previous tests do not leak state."""
+    litellm.logging_callback_manager._reset_all_callbacks()
+    yield
+    litellm.logging_callback_manager._reset_all_callbacks()
 
 
 @pytest.mark.asyncio
@@ -215,37 +390,179 @@ async def test_ui_view_spend_logs_with_team_id(client, monkeypatch):
         def __init__(self):
             self.db = MockDB()
             self.db.litellm_spendlogs = self.db
-
+ 
     # Apply the monkeypatch
     mock_prisma_client = MockPrismaClient()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-
-    # Set up test dates
-    start_date = (
-        datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)
-    ).strftime("%Y-%m-%d %H:%M:%S")
-    end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-
-    # Make the request with team_id filter
-    response = client.get(
-        "/spend/logs/ui",
-        params={
-            "team_id": "team1",
-            "start_date": start_date,
-            "end_date": end_date,
-        },
-        headers={"Authorization": "Bearer sk-test"},
+    
+    # Mock _is_admin_view_safe to return True to bypass permission checks
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True
     )
 
-    # Assert response
-    assert response.status_code == 200
-    data = response.json()
+    # Override auth dependency to return PROXY_ADMIN
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
 
-    # Verify the filtered data
-    assert data["total"] == 1
-    assert len(data["data"]) == 1
-    assert data["data"][0]["team_id"] == "team1"
+    try:
+        # Set up test dates
+        start_date = (
+            datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)
+        ).strftime("%Y-%m-%d %H:%M:%S")
+        end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
+        # Make the request with team_id filter
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "team_id": "team1",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        # Assert response
+        assert response.status_code == 200
+        data = response.json()
+
+        # Verify the filtered data
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["team_id"] == "team1"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_internal_user_scoped_without_user_id(client, monkeypatch):
+    """
+    Internal users should only be able to view their own spend even if user_id is not provided.
+    """
+    # Mock spend logs for 2 users
+    mock_spend_logs = [
+        {"id": "log1", "request_id": "req1", "api_key": "sk-test-key", "user": "internal_user_1", "team_id": "team1", "spend": 0.05, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-3.5-turbo"},
+        {"id": "log2", "request_id": "req2", "api_key": "sk-test-key", "user": "internal_user_2", "team_id": "team1", "spend": 0.10, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-4"},
+    ]
+
+    # Prisma client mock that filters by "user" where condition
+    class MockDB:
+        async def find_many(self, *args, **kwargs):
+            where = kwargs.get("where", {})
+            if "user" in where and where["user"] == "internal_user_1":
+                return [mock_spend_logs[0]]
+            return mock_spend_logs
+
+        async def count(self, *args, **kwargs):
+            where = kwargs.get("where", {})
+            if "user" in where and where["user"] == "internal_user_1":
+                return 1
+            return len(mock_spend_logs)
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+            self.db.litellm_spendlogs = self.db
+
+    mock_prisma_client = MockPrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Override auth dependency to return INTERNAL_USER with specific user_id
+    # Override using the function reference attached to the running app module
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="internal_user_1"
+    )
+
+    try:
+        start_date = (datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+        end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+        # No user_id provided; should auto-scope to authenticated internal user's own id
+        response = client.get(
+            "/spend/logs/ui",
+            params={"start_date": start_date, "end_date": end_date},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["user"] == "internal_user_1"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_team_admin_can_view_team_spend(client, monkeypatch):
+    """
+    Team admins should be able to view team-wide spend when team_id is provided.
+    """
+    # Mock spend logs for two teams
+    mock_spend_logs = [
+        {"id": "log1", "request_id": "req1", "api_key": "sk-test-key", "user": "member1", "team_id": "team_admin_team", "spend": 0.05, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-3.5-turbo"},
+        {"id": "log2", "request_id": "req2", "api_key": "sk-test-key", "user": "member2", "team_id": "team_other", "spend": 0.10, "startTime": datetime.datetime.now(timezone.utc).isoformat(), "model": "gpt-4"},
+    ]
+
+    class MockDB:
+        async def find_many(self, *args, **kwargs):
+            where = kwargs.get("where", {})
+            if "team_id" in where and where["team_id"] == "team_admin_team":
+                return [mock_spend_logs[0]]
+            return mock_spend_logs
+
+        async def count(self, *args, **kwargs):
+            where = kwargs.get("where", {})
+            if "team_id" in where and where["team_id"] == "team_admin_team":
+                return 1
+            return len(mock_spend_logs)
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+            self.db.litellm_spendlogs = self.db
+            # Team lookup for RBAC check
+            class TeamTable:
+                def __init__(self):
+                    # user "admin_user" is team admin
+                    self.members_with_roles = [Member(user_id="admin_user", role="admin")]
+
+            async def find_unique(where: dict):
+                if where == {"team_id": "team_admin_team"}:
+                    return TeamTable()
+                return None
+
+            self.db.litellm_teamtable = self
+            self.litellm_teamtable = self
+            self.find_unique = find_unique
+
+    mock_prisma_client = MockPrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Override auth dependency to return INTERNAL_USER (who is a team admin via team.members_with_roles)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="admin_user"
+    )
+
+    try:
+        start_date = (datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+        end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+        response = client.get(
+            "/spend/logs/ui",
+            params={"team_id": "team_admin_team", "start_date": start_date, "end_date": end_date},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["team_id"] == "team_admin_team"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_pagination(client, monkeypatch):
@@ -327,6 +644,59 @@ async def test_ui_view_spend_logs_pagination(client, monkeypatch):
     assert data["total"] == 25
     assert len(data["data"]) == 10
     assert data["page"] == 2
+
+
+@pytest.mark.asyncio
+async def test_ui_view_session_spend_logs_pagination(client, monkeypatch):
+    mock_spend_logs = [
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "session_id": "session-123",
+            "startTime": "2024-01-01T00:00:00Z",
+        },
+        {
+            "id": "log2",
+            "request_id": "req2",
+            "session_id": "session-123",
+            "startTime": "2024-01-02T00:00:00Z",
+        },
+    ]
+
+    class MockDB:
+        async def count(self, *args, **kwargs):
+            assert kwargs.get("where") == {"session_id": "session-123"}
+            return len(mock_spend_logs)
+
+        async def find_many(self, *args, **kwargs):
+            assert kwargs.get("where") == {"session_id": "session-123"}
+            assert kwargs.get("order") == {"startTime": "asc"}
+            assert kwargs.get("skip") == 1  # page=2, page_size=1
+            assert kwargs.get("take") == 1
+            return [mock_spend_logs[1]]
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+            self.db.litellm_spendlogs = self.db
+
+    mock_prisma_client = MockPrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    response = client.get(
+        "/spend/logs/session/ui",
+        params={"session_id": "session-123", "page": 2, "page_size": 1},
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 2
+    assert data["page"] == 2
+    assert data["page_size"] == 1
+    assert data["total_pages"] == 2
+    assert len(data["data"]) == 1
+    assert data["data"][0]["request_id"] == "req2"
 
 
 @pytest.mark.asyncio
@@ -1268,40 +1638,32 @@ async def test_view_spend_logs_summarize_parameter(client, monkeypatch):
 @pytest.mark.asyncio
 async def test_view_spend_tags(client, monkeypatch):
     """Test the /spend/tags endpoint"""
-    
+
     # Mock the prisma client and get_spend_by_tags function
     mock_prisma_client = MagicMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-    
+
     # Mock response data
     mock_response = [
-        {
-            "individual_request_tag": "tag1",
-            "log_count": 10,
-            "total_spend": 0.15
-        },
-        {
-            "individual_request_tag": "tag2", 
-            "log_count": 5,
-            "total_spend": 0.08
-        }
+        {"individual_request_tag": "tag1", "log_count": 10, "total_spend": 0.15},
+        {"individual_request_tag": "tag2", "log_count": 5, "total_spend": 0.08},
     ]
-    
+
     # Mock the get_spend_by_tags function
     async def mock_get_spend_by_tags(prisma_client, start_date=None, end_date=None):
         return mock_response
-    
+
     monkeypatch.setattr(
         "litellm.proxy.spend_tracking.spend_management_endpoints.get_spend_by_tags",
-        mock_get_spend_by_tags
+        mock_get_spend_by_tags,
     )
-    
+
     # Test without date filters
     response = client.get(
         "/spend/tags",
         headers={"Authorization": "Bearer sk-test"},
     )
-    
+
     assert response.status_code == 200
     data = response.json()
     assert isinstance(data, list)
@@ -1309,11 +1671,11 @@ async def test_view_spend_tags(client, monkeypatch):
     assert data[0]["individual_request_tag"] == "tag1"
     assert data[0]["log_count"] == 10
     assert data[0]["total_spend"] == 0.15
-    
+
     # Test with date filters
     start_date = "2024-01-01"
     end_date = "2024-01-31"
-    
+
     response = client.get(
         "/spend/tags",
         params={
@@ -1322,25 +1684,25 @@ async def test_view_spend_tags(client, monkeypatch):
         },
         headers={"Authorization": "Bearer sk-test"},
     )
-    
+
     assert response.status_code == 200
     data = response.json()
     assert isinstance(data, list)
     assert len(data) == 2
 
 
-@pytest.mark.asyncio 
+@pytest.mark.asyncio
 async def test_view_spend_tags_no_database(client, monkeypatch):
     """Test /spend/tags endpoint when database is not connected"""
-    
+
     # Mock prisma_client as None
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
-    
+
     response = client.get(
         "/spend/tags",
         headers={"Authorization": "Bearer sk-test"},
     )
-    
+
     assert response.status_code == 500
     data = response.json()
     # Check the actual error message structure
@@ -1413,3 +1775,80 @@ async def test_provider_budget_provider_budgets(disable_budget_sync):
         provider_budget_response = response.providers[provider]
         assert provider_budget_response.budget_limit == max_budget
         assert provider_budget_response.time_period == budget_duration
+
+
+@pytest.mark.asyncio
+async def test_view_spend_logs_with_date_range_summarized(client, monkeypatch):
+    """
+    Tests the /spend/logs endpoint with both start_date and end_date,
+    ensuring it returns summarized data and not an empty list.
+    This test specifically validates the fix for dates being passed as ISO strings.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    # This simulates the summarized data that Prisma's `group_by` would return.
+    mock_summarized_response = [
+        {
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "model": "gpt-4",
+            "startTime": (datetime.now(timezone.utc) - timedelta(days=1)).strftime(
+                "%Y-%m-%dT%H:%M:%S.%fZ"
+            ),
+            "_sum": {"spend": 0.15},
+        }
+    ]
+
+    # This mock class will replace the real Prisma client.
+    class MockDB:
+        def __init__(self):
+            self.litellm_spendlogs = self
+
+        async def group_by(self, *args, **kwargs):
+            # We assert that the `gte` and `lte` values are strings in ISO format.
+            # If they were datetime objects, this test would fail.
+            where_clause = kwargs.get("where", {})
+            start_time_filter = where_clause.get("startTime", {})
+
+            assert "gte" in start_time_filter
+            assert "lte" in start_time_filter
+            assert isinstance(start_time_filter["gte"], str)
+            assert isinstance(start_time_filter["lte"], str)
+            assert "T" in start_time_filter["gte"]  # Check for ISO format 'T' separator
+
+            # If the assertions pass, return the mock response.
+            return mock_summarized_response
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+
+    # Apply the monkeypatch to replace the real prisma_client with our mock.
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+
+    # Define a date range for the test.
+    start_date = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+    end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    # Call the endpoint with both start and end dates.
+    # We don't need `summarize=true` as it's the default.
+    response = client.get(
+        "/spend/logs",
+        params={
+            "start_date": start_date,
+            "end_date": end_date,
+        },
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    # ASSERTIONS
+    assert response.status_code == 200
+    data = response.json()
+
+    # Check that the response is not empty and has the summarized structure.
+    assert isinstance(data, list)
+    assert len(data) > 0
+    assert "startTime" in data[0]
+    assert "spend" in data[0]
+    assert "users" in data[0]
+    assert "models" in data[0]

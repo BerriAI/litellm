@@ -1,6 +1,10 @@
 from typing import Dict, Optional
 
+import litellm
 from litellm._logging import verbose_router_logger
+from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
+    LiteLLM_ManagedVectorStore,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
@@ -130,9 +134,9 @@ class PassthroughEndpointRouter:
             vertex_location=location,
             vertex_credentials=vertex_credentials,
         )
-        self.deployment_key_to_vertex_credentials[
-            deployment_key
-        ] = vertex_pass_through_credentials
+        self.deployment_key_to_vertex_credentials[deployment_key] = (
+            vertex_pass_through_credentials
+        )
 
     def _get_deployment_key(
         self, project_id: Optional[str], location: Optional[str]
@@ -143,6 +147,21 @@ class PassthroughEndpointRouter:
         if project_id is None or location is None:
             return None
         return f"{project_id}-{location}"
+
+    def get_vector_store_credentials(
+        self, vector_store_id: str
+    ) -> Optional[LiteLLM_ManagedVectorStore]:
+        """
+        Get the vector store credentials for the given vector store id
+        """
+        if litellm.vector_store_registry is None:
+            return None
+        vector_store_to_run: Optional[LiteLLM_ManagedVectorStore] = (
+            litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry(
+                vector_store_id=vector_store_id
+            )
+        )
+        return vector_store_to_run
 
     def get_vertex_credentials(
         self, project_id: Optional[str], location: Optional[str]

@@ -1,46 +1,46 @@
-import React, { useState, useEffect } from "react";
+import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
+import { ArrowLeftIcon, PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import {
-  Card,
-  Title,
-  Text,
-  TextInput,
-  Tab,
-  TabList,
-  TabGroup,
-  TabPanel,
-  TabPanels,
-  Grid,
   Badge,
+  Card,
+  Grid,
+  Icon,
+  Tab,
+  TabGroup,
   Table,
-  TableHead,
-  TableRow,
-  TableHeaderCell,
   TableBody,
   TableCell,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
+  TabList,
+  TabPanel,
+  TabPanels,
+  Text,
+  TextInput,
+  Title,
   Button as TremorButton,
-  Icon,
 } from "@tremor/react";
-import NumericalInput from "../shared/numerical_input";
 import { Button, Form, Input, Select } from "antd";
-import { ArrowLeftIcon, PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
+import { CheckIcon, CopyIcon } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import UserSearchModal from "../common_components/user_search_modal";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
+import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
+import NotificationsManager from "../molecules/notifications_manager";
 import {
   Member,
   Organization,
   organizationInfoCall,
   organizationMemberAddCall,
-  organizationMemberUpdateCall,
   organizationMemberDeleteCall,
+  organizationMemberUpdateCall,
   organizationUpdateCall,
 } from "../networking";
-import UserSearchModal from "../common_components/user_search_modal";
-import MemberModal from "../team/edit_membership";
 import ObjectPermissionsView from "../object_permissions_view";
+import NumericalInput from "../shared/numerical_input";
+import MemberModal from "../team/edit_membership";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
-import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
-import { copyToClipboard as utilCopyToClipboard, formatNumberWithCommas } from "@/utils/dataUtils";
-import { CheckIcon, CopyIcon } from "lucide-react";
-import NotificationsManager from "../molecules/notifications_manager";
 
 interface OrganizationInfoProps {
   organizationId: string;
@@ -492,7 +492,9 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
 
                   <div className="sticky z-10 bg-white p-4 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
                     <div className="flex justify-end items-center gap-2">
-                      <Button onClick={() => setIsEditing(false)}>Cancel</Button>
+                      <TremorButton variant="secondary" onClick={() => setIsEditing(false)}>
+                        Cancel
+                      </TremorButton>
                       <TremorButton type="submit">Save Changes</TremorButton>
                     </div>
                   </div>

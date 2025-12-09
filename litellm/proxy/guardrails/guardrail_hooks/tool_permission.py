@@ -120,13 +120,27 @@ class ToolPermissionGuardrail(CustomGuardrail):
         for rule in self.rules:
             if self._matches_pattern(tool_name, rule.tool_name):
                 is_allowed = rule.decision == "allow"
-                message = f"Tool '{tool_name}' {'allowed' if is_allowed else 'denied'} by rule '{rule.id}'"
+                default_message = f"Tool '{tool_name}' {'allowed' if is_allowed else 'denied'} by rule '{rule.id}'"
+                message = self.render_violation_message(
+                    default=default_message,
+                    context={
+                        "tool_name": tool_name,
+                        "rule_id": rule.id,
+                    },
+                )
                 verbose_proxy_logger.debug(message)
                 return is_allowed, rule.id, message
 
         # No rule matched, use default action
         is_allowed = self.default_action == "allow"
-        message = f"Tool '{tool_name}' {'allowed' if is_allowed else 'denied'} by default action"
+        default_message = f"Tool '{tool_name}' {'allowed' if is_allowed else 'denied'} by default action"
+        message = self.render_violation_message(
+            default=default_message,
+            context={
+                "tool_name": tool_name,
+                "rule_id": None,
+            },
+        )
         verbose_proxy_logger.debug(message)
         return is_allowed, None, message
 
@@ -449,7 +463,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("Tool Permission Guardrail: Checking response")
 
             # Extract tool_calls from the response
-            tool_calls = self._extract_tool_calls_from_response(assembled_model_response)
+            tool_calls = self._extract_tool_calls_from_response(
+                assembled_model_response
+            )
 
             if not tool_calls:
                 verbose_proxy_logger.debug(

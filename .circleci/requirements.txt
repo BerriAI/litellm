@@ -16,3 +16,4 @@ uvloop==0.21.0
 mcp==1.10.1    # for MCP server  
 semantic_router==0.1.10 # for auto-routing with litellm
 fastuuid==0.12.0
+responses==0.25.7  # for proxy client tests

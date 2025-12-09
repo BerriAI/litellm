@@ -290,10 +290,17 @@ def test_gemini_image_generation():
     )
 
 
-def test_gemini_2_5_flash_image_preview():
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "gemini/gemini-2.5-flash-image-preview",
+        "gemini/gemini-2.0-flash-preview-image-generation",
+    ],
+)
+def test_gemini_flash_image_preview_models(model_name: str):
     """
-    Test for GitHub issue #14120 - gemini-2.5-flash-image-preview model routing fix
-    Validates that the model correctly routes to image generation instead of chat completion
+    Validate Gemini Flash image preview models route through image_generation()
+    and invoke the generateContent endpoint returning inline image data.
     """
     from unittest.mock import patch, MagicMock
     from litellm.types.utils import ImageResponse, ImageObject
@@ -321,7 +328,7 @@ def test_gemini_2_5_flash_image_preview():
 
         # Test that the function works without throwing the original 400 error
         response = litellm.image_generation(
-            model="gemini/gemini-2.5-flash-image-preview",
+            model=model_name,
             prompt="Generate a simple test image",
             api_key="test_api_key",
         )
@@ -339,9 +346,9 @@ def test_gemini_2_5_flash_image_preview():
             call_args[0][0] if call_args[0] else call_args.kwargs.get("url", "")
         )
 
-        # Verify it uses generateContent endpoint for gemini-2.5-flash-image-preview (not predict)
+        # Verify it uses generateContent endpoint for Gemini Flash image preview models (not predict)
         assert ":generateContent" in called_url
-        assert "gemini-2.5-flash-image-preview" in called_url
+        assert model_name.split("/", 1)[1] in called_url
 
         # Verify request format is Gemini format (not Imagen)
         request_data = call_args.kwargs.get("json", {})
@@ -355,7 +362,6 @@ def test_gemini_2_5_flash_image_preview():
             "IMAGE",
             "TEXT",
         ]
-
 
 def test_gemini_imagen_models_use_predict_endpoint():
     """
@@ -1129,3 +1135,91 @@ def test_gemini_embedding():
     )
     print("response: ", response)
     assert response is not None
+
+
+def test_reasoning_effort_none_mapping():
+    """
+    Test that reasoning_effort='none' correctly maps to thinkingConfig.
+    Related issue: https://github.com/BerriAI/litellm/issues/16420
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    # Test reasoning_effort="none" mapping
+    result = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
+        reasoning_effort="none",
+        model="gemini-2.0-flash-thinking-exp-01-21",
+    )
+
+    assert result is not None
+    assert result["thinkingBudget"] == 0
+    assert result["includeThoughts"] is False
+    
+def test_gemini_function_args_preserve_unicode():
+    """
+    Test for Issue #16533: Gemini function call arguments should preserve non-ASCII characters
+    https://github.com/BerriAI/litellm/issues/16533
+
+    Before fix: "や" becomes "\u3084"
+    After fix: "や" stays as "や"
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    # Test Japanese characters
+    parts = [
+        {
+            "functionCall": {
+                "name": "send_message",
+                "args": {
+                    "message": "やあ",  # Japanese "hello"
+                    "recipient": "たけし"  # Japanese name
+                }
+            }
+        }
+    ]
+
+    function, tools, _ = VertexGeminiConfig._transform_parts(
+        parts=parts,
+        cumulative_tool_call_idx=0,
+        is_function_call=False
+    )
+
+    arguments_str = tools[0]['function']['arguments']
+    parsed_args = json.loads(arguments_str)
+
+    # Verify characters are preserved
+    assert parsed_args["message"] == "やあ", "Japanese characters should be preserved"
+    assert parsed_args["recipient"] == "たけし", "Japanese characters should be preserved"
+
+    # Verify no Unicode escape sequences in raw string
+    assert "\\u" not in arguments_str, "Should not contain Unicode escape sequences"
+    assert "やあ" in arguments_str, "Original Japanese characters should be in the string"
+    assert "たけし" in arguments_str, "Original Japanese characters should be in the string"
+
+    # Test Spanish characters
+    parts_spanish = [
+        {
+            "functionCall": {
+                "name": "send_message",
+                "args": {
+                    "message": "¡Hola! ¿Cómo estás?",
+                    "recipient": "José"
+                }
+            }
+        }
+    ]
+
+    function, tools, _ = VertexGeminiConfig._transform_parts(
+        parts=parts_spanish,
+        cumulative_tool_call_idx=0,
+        is_function_call=False
+    )
+
+    arguments_str = tools[0]['function']['arguments']
+    parsed_args = json.loads(arguments_str)
+
+    assert parsed_args["message"] == "¡Hola! ¿Cómo estás?"
+    assert parsed_args["recipient"] == "José"
+    assert "\\u" not in arguments_str
+    assert "José" in arguments_str

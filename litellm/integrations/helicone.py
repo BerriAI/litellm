@@ -100,6 +100,11 @@ class HeliconeLogger:
         for header_key in proxy_headers:
             if header_key.startswith("helicone_"):
                 metadata[header_key] = proxy_headers.get(header_key)
+        
+        # Remove OpenTelemetry span from metadata as it's not JSON serializable
+        # The span is used internally for tracing but shouldn't be logged to external services
+        if "litellm_parent_otel_span" in metadata:
+            metadata.pop("litellm_parent_otel_span")
 
         return metadata
 

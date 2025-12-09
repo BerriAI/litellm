@@ -1,20 +1,18 @@
 import ast
-import base64
-import binascii
 import os
 import traceback
-from typing import Any, Optional, Union
+from typing import Optional, Union
 
 import httpx
 
 import litellm
-from litellm._logging import print_verbose, verbose_logger
+from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
 )
-from litellm.types.secret_managers.main import KeyManagementSystem
+from litellm.secret_managers.secret_manager_handler import get_secret_from_manager
 
 oidc_cache = DualCache()
 
@@ -22,13 +20,6 @@ oidc_cache = DualCache()
 ######### Secret Manager ############################
 # checks if user has passed in a secret manager client
 # if passed in then checks the secret there
-def _is_base64(s):
-    try:
-        return base64.b64encode(base64.b64decode(s)).decode() == s
-    except binascii.Error:
-        return False
-
-
 def str_to_bool(value: Optional[str]) -> Optional[bool]:
     """
     Converts a string to a boolean if it's a recognized boolean string.
@@ -222,86 +213,13 @@ def get_secret(  # noqa: PLR0915
                     ):  # allow user to specify which keys to check in hosted key manager
                         key_manager = "local"
 
-                if (
-                    key_manager == KeyManagementSystem.AZURE_KEY_VAULT.value
-                    or type(client).__module__ + "." + type(client).__name__
-                    == "azure.keyvault.secrets._client.SecretClient"
-                ):  # support Azure Secret Client - from azure.keyvault.secrets import SecretClient
-                    secret = client.get_secret(secret_name).value
-                elif (
-                    key_manager == KeyManagementSystem.GOOGLE_KMS.value
-                    or client.__class__.__name__ == "KeyManagementServiceClient"
-                ):
-                    encrypted_secret: Any = os.getenv(secret_name)
-                    if encrypted_secret is None:
-                        raise ValueError("Google KMS requires the encrypted secret to be in the environment!")
-                    b64_flag = _is_base64(encrypted_secret)
-                    if b64_flag is True:  # if passed in as encoded b64 string
-                        encrypted_secret = base64.b64decode(encrypted_secret)
-                        ciphertext = encrypted_secret
-                    else:
-                        raise ValueError(
-                            "Google KMS requires the encrypted secret to be encoded in base64"
-                        )  # fix for this vulnerability https://huntr.com/bounties/ae623c2f-b64b-4245-9ed4-f13a0a5824ce
-                    response = client.decrypt(
-                        request={
-                            "name": litellm._google_kms_resource_name,
-                            "ciphertext": ciphertext,
-                        }
-                    )
-                    secret = response.plaintext.decode("utf-8")  # assumes the original value was encoded with utf-8
-                elif key_manager == KeyManagementSystem.AWS_KMS.value:
-                    """
-                    Only check the tokens which start with 'aws_kms/'. This prevents latency impact caused by checking all keys.
-                    """
-                    encrypted_value = os.getenv(secret_name, None)
-                    if encrypted_value is None:
-                        raise Exception("AWS KMS - Encrypted Value of Key={} is None".format(secret_name))
-                    # Decode the base64 encoded ciphertext
-                    ciphertext_blob = base64.b64decode(encrypted_value)
-
-                    # Set up the parameters for the decrypt call
-                    params = {"CiphertextBlob": ciphertext_blob}
-                    # Perform the decryption
-                    response = client.decrypt(**params)
-
-                    # Extract and decode the plaintext
-                    plaintext = response["Plaintext"]
-                    secret = plaintext.decode("utf-8")
-                    if isinstance(secret, str):
-                        secret = secret.strip()
-                elif key_manager == KeyManagementSystem.AWS_SECRET_MANAGER.value:
-                    from litellm.secret_managers.aws_secret_manager_v2 import (
-                        AWSSecretsManagerV2,
-                    )
-
-                    if isinstance(client, AWSSecretsManagerV2):
-                        secret = client.sync_read_secret(
-                            secret_name=secret_name,
-                            primary_secret_name=key_management_settings.primary_secret_name,
-                        )
-                        print_verbose(f"get_secret_value_response: {secret}")
-                elif key_manager == KeyManagementSystem.GOOGLE_SECRET_MANAGER.value:
-                    try:
-                        secret = client.get_secret_from_google_secret_manager(secret_name)
-                        print_verbose(f"secret from google secret manager:  {secret}")
-                        if secret is None:
-                            raise ValueError(f"No secret found in Google Secret Manager for {secret_name}")
-                    except Exception as e:
-                        print_verbose(f"An error occurred - {str(e)}")
-                        raise e
-                elif key_manager == KeyManagementSystem.HASHICORP_VAULT.value:
-                    try:
-                        secret = client.sync_read_secret(secret_name=secret_name)
-                        if secret is None:
-                            raise ValueError(f"No secret found in Hashicorp Secret Manager for {secret_name}")
-                    except Exception as e:
-                        print_verbose(f"An error occurred - {str(e)}")
-                        raise e
-                elif key_manager == "local":
-                    secret = os.getenv(secret_name)
-                else:  # assume the default is infisicial client
-                    secret = client.get_secret(secret_name).secret_value
+                # Delegate to the secret manager handler
+                secret = get_secret_from_manager(
+                    client=client,
+                    key_manager=key_manager,
+                    secret_name=secret_name,
+                    key_management_settings=key_management_settings,
+                )
             except Exception as e:  # check if it's in os.environ
                 verbose_logger.error(
                     f"Defaulting to os.environ value for key={secret_name}. An exception occurred - {str(e)}.\n\n{traceback.format_exc()}"

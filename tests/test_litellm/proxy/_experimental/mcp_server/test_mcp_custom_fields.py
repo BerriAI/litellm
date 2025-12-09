@@ -22,7 +22,7 @@ from litellm.proxy._types import LiteLLM_MCPServerTable
 class TestMCPCustomFields:
     """Test custom fields functionality in MCP server configuration."""
 
-    def test_custom_fields_preserved_from_config(self):
+    async def test_custom_fields_preserved_from_config(self):
         """Test that custom fields in mcp_info are preserved when loading from config."""
         manager = MCPServerManager()
 
@@ -46,7 +46,7 @@ class TestMCPCustomFields:
         }
 
         # Load servers from config
-        manager.load_servers_from_config(mock_config)
+        await manager.load_servers_from_config(mock_config)
 
         # Get the loaded server
         servers = list(manager.config_mcp_servers.values())
@@ -109,7 +109,7 @@ class TestMCPCustomFields:
         assert mcp_info["metadata"] == {"source": "database"}
         assert mcp_info["version"] == "1.0.0"
 
-    def test_empty_mcp_info_handled_gracefully(self):
+    async def test_empty_mcp_info_handled_gracefully(self):
         """Test that empty or missing mcp_info is handled gracefully."""
         manager = MCPServerManager()
 
@@ -122,7 +122,7 @@ class TestMCPCustomFields:
             }
         }
 
-        manager.load_servers_from_config(mock_config)
+        await manager.load_servers_from_config(mock_config)
 
         servers = list(manager.config_mcp_servers.values())
         assert len(servers) == 1
@@ -133,7 +133,7 @@ class TestMCPCustomFields:
         # Should have default server_name
         assert mcp_info["server_name"] == "test_server"
 
-    def test_missing_mcp_info_creates_defaults(self):
+    async def test_missing_mcp_info_creates_defaults(self):
         """Test that missing mcp_info creates appropriate defaults."""
         manager = MCPServerManager()
 
@@ -146,7 +146,7 @@ class TestMCPCustomFields:
             }
         }
 
-        manager.load_servers_from_config(mock_config)
+        await manager.load_servers_from_config(mock_config)
 
         servers = list(manager.config_mcp_servers.values())
         assert len(servers) == 1
@@ -158,7 +158,7 @@ class TestMCPCustomFields:
         assert mcp_info["server_name"] == "test_server"
         assert mcp_info["description"] == "Server description"
 
-    def test_config_description_fallback(self):
+    async def test_config_description_fallback(self):
         """Test that description from config level is used as fallback."""
         manager = MCPServerManager()
 
@@ -174,7 +174,7 @@ class TestMCPCustomFields:
             }
         }
 
-        manager.load_servers_from_config(mock_config)
+        await manager.load_servers_from_config(mock_config)
 
         servers = list(manager.config_mcp_servers.values())
         server = servers[0]
@@ -184,7 +184,7 @@ class TestMCPCustomFields:
         assert mcp_info["description"] == "Config level description"
         assert mcp_info["custom_field"] == "custom_value"
 
-    def test_mcp_info_description_takes_precedence(self):
+    async def test_mcp_info_description_takes_precedence(self):
         """Test that description in mcp_info takes precedence over config level."""
         manager = MCPServerManager()
 
@@ -201,7 +201,7 @@ class TestMCPCustomFields:
             }
         }
 
-        manager.load_servers_from_config(mock_config)
+        await manager.load_servers_from_config(mock_config)
 
         servers = list(manager.config_mcp_servers.values())
         server = servers[0]

@@ -58,7 +58,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     ) -> AudioTranscriptionRequestData:
         """
         Processes the audio file input based on its type and returns AudioTranscriptionRequestData.
-        
+
         For Deepgram, the binary audio data is sent directly as the request body.
 
         Args:
@@ -69,12 +69,11 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         """
         # Use common utility to process the audio file
         processed_audio = process_audio_file(audio_file)
-        
+
         # Return structured data with binary content and no files
         # For Deepgram, we send binary data directly as request body
         return AudioTranscriptionRequestData(
-            data=processed_audio.file_content,
-            files=None
+            data=processed_audio.file_content, files=None
         )
 
     def transform_audio_transcription_response(
@@ -91,17 +90,32 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             first_channel = response_json["results"]["channels"][0]
             first_alternative = first_channel["alternatives"][0]
 
-            # Extract the full transcript
-            text = first_alternative["transcript"]
+            # Detect if diarization is active by checking if words have 'speaker' field
+            has_diarization = False
+            if "words" in first_alternative and len(first_alternative["words"]) > 0:
+                has_diarization = "speaker" in first_alternative["words"][0]
+
+            # Extract the transcript based on diarization mode
+            if not has_diarization:
+                # No diarization: use the standard transcript
+                text = first_alternative["transcript"]
+            elif "paragraphs" in first_alternative:
+                # Diarization with paragraphs: use the pre-formatted diarized transcript
+                text = first_alternative["paragraphs"]["transcript"]
+            else:
+                # Diarization without paragraphs: reconstruct from words
+                text = self._reconstruct_diarized_transcript(first_alternative["words"])
 
             # Create TranscriptionResponse object
             response = TranscriptionResponse(text=text)
 
             # Add additional metadata matching OpenAI format
             response["task"] = "transcribe"
-            response["language"] = (
-                "english"  # Deepgram auto-detects but doesn't return language
-            )
+
+            # Use detected_language if available, otherwise default to "en"
+            detected_language = first_channel.get("detected_language")
+            response["language"] = detected_language if detected_language else "en"
+
             response["duration"] = response_json["metadata"]["duration"]
 
             # Transform words to match OpenAI format
@@ -120,6 +134,46 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             raise ValueError(
                 f"Error transforming Deepgram response: {str(e)}\nResponse: {raw_response.text}"
             )
+
+    def _reconstruct_diarized_transcript(self, words: list) -> str:
+        """
+        Reconstructs a diarized transcript from words with speaker information.
+
+        Args:
+            words: List of word objects with speaker, word, and optionally punctuated_word
+
+        Returns:
+            Formatted transcript with speaker labels
+        """
+        if not words:
+            return ""
+
+        segments = []
+        current_speaker = None
+        current_words: list[str] = []
+
+        for word_obj in words:
+            speaker = word_obj.get("speaker")
+            # Use punctuated_word if available, otherwise fall back to word
+            word_text = word_obj.get("punctuated_word", word_obj.get("word", ""))
+
+            if speaker != current_speaker:
+                # New speaker: save previous segment and start new one
+                if current_words:
+                    segments.append(
+                        f"Speaker {current_speaker}: {' '.join(current_words)}"
+                    )
+                current_speaker = speaker
+                current_words = [word_text]
+            else:
+                # Same speaker: add word to current segment
+                current_words.append(word_text)
+
+        # Add the last segment
+        if current_words:
+            segments.append(f"\nSpeaker {current_speaker}: {' '.join(current_words)}\n")
+
+        return "\n".join(segments)
 
     def get_complete_url(
         self,
@@ -150,7 +204,6 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         return url
 
-
     def _format_param_value(self, value) -> str:
         """
         Formats a parameter value for use in query string.
@@ -180,7 +233,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         provider_specific_params = self.get_provider_specific_params(
             optional_params=optional_params,
             model=model,
-            openai_params=self.get_supported_openai_params(model)
+            openai_params=self.get_supported_openai_params(model),
         )
 
         for key, value in provider_specific_params.items():

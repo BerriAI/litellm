@@ -84,8 +84,8 @@ class TestMCPClientUnitTests:
     @pytest.mark.asyncio
     @patch("litellm.experimental_mcp_client.client.streamablehttp_client")
     @patch("litellm.experimental_mcp_client.client.ClientSession")
-    async def test_connect(self, mock_session_class, mock_transport):
-        """Test connecting to MCP server with authentication."""
+    async def test_run_with_session(self, mock_session_class, mock_transport):
+        """Test run_with_session establishes session with auth headers."""
         # Setup mocks
         mock_transport_ctx = AsyncMock()
         mock_transport.return_value = mock_transport_ctx
@@ -102,7 +102,11 @@ class TestMCPClientUnitTests:
             auth_type=MCPAuth.bearer_token,
             auth_value="test_token",
         )
-        await client.connect()
+
+        async def _operation(session):
+            return "ok"
+
+        await client.run_with_session(_operation)
 
         # Verify transport was created with auth headers
         call_args = mock_transport.call_args
@@ -112,7 +116,6 @@ class TestMCPClientUnitTests:
 
         # Verify session was initialized
         mock_session_instance.initialize.assert_called_once()
-        assert client._session == mock_session_instance
 
     @pytest.mark.asyncio
     @patch("litellm.experimental_mcp_client.client.streamablehttp_client")

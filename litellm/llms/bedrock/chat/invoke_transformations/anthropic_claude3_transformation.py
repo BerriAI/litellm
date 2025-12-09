@@ -69,11 +69,19 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
+        # Filter out AWS authentication parameters before passing to Anthropic transformation
+        # AWS params should only be used for signing requests, not included in request body
+        filtered_params = {
+            k: v
+            for k, v in optional_params.items()
+            if k not in self.aws_authentication_params
+        }
+        
         _anthropic_request = AnthropicConfig.transform_request(
             self,
             model=model,
             messages=messages,
-            optional_params=optional_params,
+            optional_params=filtered_params, 
             litellm_params=litellm_params,
             headers=headers,
         )

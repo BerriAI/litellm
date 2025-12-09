@@ -37,6 +37,8 @@ from litellm.types.utils import (
     TextChoices,
     TextCompletionResponse,
     TranscriptionResponse,
+    TranscriptionUsageDurationObject,
+    TranscriptionUsageTokensObject,
     Usage,
 )
 
@@ -683,6 +685,24 @@ def convert_to_model_response_object(  # noqa: PLR0915
             for key in optional_keys:  # not guaranteed to be in response
                 if key in response_object:
                     setattr(model_response_object, key, response_object[key])
+
+            if "usage" in response_object and response_object["usage"] is not None:
+                tr_usage_object: Optional[
+                    Union[
+                        TranscriptionUsageDurationObject, TranscriptionUsageTokensObject
+                    ]
+                ] = None
+
+                if response_object["usage"].get("type", None) == "duration":
+                    tr_usage_object = TranscriptionUsageDurationObject(
+                        **response_object["usage"]
+                    )
+                elif response_object["usage"].get("type", None) == "tokens":
+                    tr_usage_object = TranscriptionUsageTokensObject(
+                        **response_object["usage"]
+                    )
+                if tr_usage_object is not None:
+                    setattr(model_response_object, "usage", tr_usage_object)
 
             if hidden_params is not None:
                 model_response_object._hidden_params = hidden_params

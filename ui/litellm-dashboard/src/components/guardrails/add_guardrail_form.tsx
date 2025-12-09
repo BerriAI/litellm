@@ -4,6 +4,7 @@ import { Button, TextInput } from "@tremor/react";
 import {
   guardrail_provider_map,
   shouldRenderPIIConfigSettings,
+  shouldRenderContentFilterConfigSettings,
   guardrailLogoMap,
   populateGuardrailProviders,
   populateGuardrailProviderMap,
@@ -14,6 +15,7 @@ import PiiConfiguration from "./pii_configuration";
 import GuardrailProviderFields from "./guardrail_provider_fields";
 import GuardrailOptionalParams from "./guardrail_optional_params";
 import NotificationsManager from "../molecules/notifications_manager";
+import ContentFilterConfiguration from "./content_filter/ContentFilterConfiguration";
 
 const { Title, Text, Link } = Typography;
 const { Option } = Select;
@@ -44,6 +46,16 @@ interface GuardrailSettings {
     category: string;
     entities: string[];
   }>;
+  content_filter_settings?: {
+    prebuilt_patterns: Array<{
+      name: string;
+      display_name: string;
+      category: string;
+      description: string;
+    }>;
+    pattern_categories: string[];
+    supported_actions: string[];
+  };
 }
 
 interface LiteLLMParams {
@@ -84,6 +96,10 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [globalSeverityThreshold, setGlobalSeverityThreshold] = useState<number>(2);
   const [categorySpecificThresholds, setCategorySpecificThresholds] = useState<{ [key: string]: number }>({});
+
+  // Content Filter state
+  const [selectedPatterns, setSelectedPatterns] = useState<any[]>([]);
+  const [blockedWords, setBlockedWords] = useState<any[]>([]);
 
   // Fetch guardrail UI settings + provider params on mount / accessToken change
   useEffect(() => {
@@ -264,6 +280,26 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         }
         if (values.presidio_anonymizer_api_base) {
           guardrailData.litellm_params.presidio_anonymizer_api_base = values.presidio_anonymizer_api_base;
+        }
+      }
+
+      // For Content Filter, add patterns and blocked words
+      if (shouldRenderContentFilterConfigSettings(values.provider)) {
+        if (selectedPatterns.length > 0) {
+          guardrailData.litellm_params.patterns = selectedPatterns.map((p) => ({
+            pattern_type: p.type === "prebuilt" ? "prebuilt" : "regex",
+            pattern_name: p.type === "prebuilt" ? p.name : undefined,
+            pattern: p.type === "custom" ? p.pattern : undefined,
+            name: p.name,
+            action: p.action,
+          }));
+        }
+        if (blockedWords.length > 0) {
+          guardrailData.litellm_params.blocked_words = blockedWords.map((w) => ({
+            keyword: w.keyword,
+            action: w.action,
+            description: w.description,
+          }));
         }
       }
       // Add config values to the guardrail_info if provided
@@ -524,6 +560,38 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     );
   };
 
+  const renderContentFilterConfiguration = (step: "patterns" | "keywords") => {
+    if (!guardrailSettings || !shouldRenderContentFilterConfigSettings(selectedProvider)) return null;
+
+    const contentFilterSettings = guardrailSettings.content_filter_settings;
+    if (!contentFilterSettings) return null;
+
+    return (
+      <ContentFilterConfiguration
+        prebuiltPatterns={contentFilterSettings.prebuilt_patterns || []}
+        categories={contentFilterSettings.pattern_categories || []}
+        selectedPatterns={selectedPatterns}
+        blockedWords={blockedWords}
+        onPatternAdd={(pattern) => setSelectedPatterns([...selectedPatterns, pattern])}
+        onPatternRemove={(id) => setSelectedPatterns(selectedPatterns.filter((p) => p.id !== id))}
+        onPatternActionChange={(id, action) => {
+          setSelectedPatterns(
+            selectedPatterns.map((p) => (p.id === id ? { ...p, action } : p))
+          );
+        }}
+        onBlockedWordAdd={(word) => setBlockedWords([...blockedWords, word])}
+        onBlockedWordRemove={(id) => setBlockedWords(blockedWords.filter((w) => w.id !== id))}
+        onBlockedWordUpdate={(id, field, value) => {
+          setBlockedWords(
+            blockedWords.map((w) => (w.id === id ? { ...w, [field]: value } : w))
+          );
+        }}
+        accessToken={accessToken}
+        showStep={step}
+      />
+    );
+  };
+
   const renderOptionalParams = () => {
     if (!selectedProvider || !providerParams) return null;
 
@@ -545,13 +613,24 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         if (shouldRenderPIIConfigSettings(selectedProvider)) {
           return renderPiiConfiguration();
         }
+        if (shouldRenderContentFilterConfigSettings(selectedProvider)) {
+          return renderContentFilterConfiguration("patterns");
+        }
         return renderOptionalParams();
+      case 2:
+        if (shouldRenderContentFilterConfigSettings(selectedProvider)) {
+          return renderContentFilterConfiguration("keywords");
+        }
+        return null;
       default:
         return null;
     }
   };
 
   const renderStepButtons = () => {
+    const totalSteps = shouldRenderContentFilterConfigSettings(selectedProvider) ? 3 : 2;
+    const isLastStep = currentStep === totalSteps - 1;
+    
     return (
       <div className="flex justify-end space-x-2 mt-4">
         {currentStep > 0 && (
@@ -559,8 +638,8 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
             Previous
           </Button>
         )}
-        {currentStep < 2 && <Button onClick={nextStep}>Next</Button>}
-        {currentStep === 2 && (
+        {!isLastStep && <Button onClick={nextStep}>Next</Button>}
+        {isLastStep && (
           <Button onClick={handleSubmit} loading={loading}>
             Create Guardrail
           </Button>
@@ -585,8 +664,17 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         <Steps current={currentStep} className="mb-6">
           <Step title="Basic Info" />
           <Step
-            title={shouldRenderPIIConfigSettings(selectedProvider) ? "PII Configuration" : "Provider Configuration"}
+            title={
+              shouldRenderPIIConfigSettings(selectedProvider)
+                ? "PII Configuration"
+                : shouldRenderContentFilterConfigSettings(selectedProvider)
+                  ? "Pattern Detection"
+                  : "Provider Configuration"
+            }
           />
+          {shouldRenderContentFilterConfigSettings(selectedProvider) && (
+            <Step title="Blocked Keywords" />
+          )}
         </Steps>
 
         {renderStepContent()}

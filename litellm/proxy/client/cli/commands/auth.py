@@ -97,24 +97,6 @@ def display_teams_table(teams: List[Dict[str, Any]]) -> None:
     console.print(table)
 
 
-def get_user_teams(base_url: str, api_key: str, user_id: str) -> List[Dict[str, Any]]:
-    """Fetch teams for the current user"""
-    from litellm.proxy.client import Client
-    
-    client = Client(base_url=base_url, api_key=api_key)
-    try:
-        response = client.teams.list_v2(user_id=user_id)
-        # Extract just the teams array from the paginated response
-        if isinstance(response, dict) and 'teams' in response:
-            return response['teams']
-        else:
-            # Fallback in case the response structure is different
-            return response if isinstance(response, list) else []
-    except Exception as e:
-        click.echo(f"❌ Error fetching teams: {e}")
-        return []
-
-
 def get_key_input():
     """Get a single key input from the user (cross-platform)"""
     try:
@@ -279,57 +261,172 @@ def prompt_team_selection_fallback(teams: List[Dict[str, Any]]) -> Optional[Dict
             return None
 
 
-def update_key_with_team(base_url: str, api_key: str, team_id: str) -> bool:
-    """Update the API key to be associated with the selected team"""
-    from litellm.proxy._types import SpecialModelNames
-    from litellm.proxy.client import Client
-    
-    client = Client(base_url=base_url, api_key=api_key)
-    try:
-        client.keys.update(key=api_key, team_id=team_id, models=[SpecialModelNames.all_team_models.value])
-        click.echo(f"✅ Successfully assigned key to team: {team_id}")
-        return True
-    except requests.exceptions.HTTPError as e:
-        # Bubble up the response text for detailed error info
-        error_msg = e.response.text if e.response else str(e)
-        click.echo(f"❌ Error updating key with team: {error_msg}")
-        return False
-    except Exception as e:
-        click.echo(f"❌ Error updating key with team: {e}")
-        return False
-
-
 # Polling-based authentication - no local server needed
 
-def _handle_team_assignment(base_url: str, api_key: str, user_id: str) -> None:
-    """Handle team fetching and assignment for the authenticated user."""
-    click.echo("\n" + "="*60)
-    click.echo("📋 Fetching your teams...")
+def _poll_for_authentication(
+    base_url: str, key_id: str
+) -> Optional[dict]:
+    """
+    Poll the server for authentication completion and handle team selection.
     
-    teams = get_user_teams(
-        base_url=base_url,
-        api_key=api_key,
-        user_id=user_id,
-    )
+    Returns:
+        Dictionary with authentication data if successful, None otherwise
+    """
+    poll_url = f"{base_url}/sso/cli/poll/{key_id}"
+    timeout = 300  # 5 minute timeout
+    poll_interval = 2  # Poll every 2 seconds
     
-    if teams:
-        # Prompt for team selection (will display teams interactively)
-        selected_team = prompt_team_selection(teams)
-        
-        if selected_team:
-            team_id = selected_team.get('team_id')
-            if team_id:
-                click.echo(f"\n🔄 Assigning your key to team: {selected_team.get('team_alias', team_id)}")
-                success = update_key_with_team(base_url, api_key, team_id)
-                if success:
-                    click.echo(f"✅ Your CLI key is now associated with team: {selected_team.get('team_alias', team_id)}")
-                    click.echo(f"🎯 You can now access models: {', '.join(selected_team.get('models', ['All models']))}")
-                else:
-                    click.echo("⚠️ Key assignment failed, but you can still use the CLI")
+    for attempt in range(timeout // poll_interval):
+        try:
+            response = requests.get(poll_url, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("status") == "ready":
+                    # Check if we need team selection first
+                    if data.get("requires_team_selection"):
+                        # Server returned teams list without JWT - need to select team
+                        teams = data.get("teams", [])
+                        user_id = data.get("user_id")
+                        
+                        if teams and len(teams) > 1:
+                            # User has multiple teams - let them select
+                            jwt_with_team = _handle_team_selection_during_polling(
+                                base_url=base_url,
+                                key_id=key_id,
+                                teams=teams
+                            )
+                            
+                            # Use the team-specific JWT if selection succeeded
+                            if jwt_with_team:
+                                return {
+                                    "api_key": jwt_with_team,
+                                    "user_id": user_id,
+                                    "teams": teams,
+                                    "team_id": None  # Set by server in JWT
+                                }
+                            else:
+                                # Selection failed or was skipped - poll again without team_id
+                                click.echo("⚠️ Team selection skipped, retrying...")
+                                continue
+                        else:
+                            # Shouldn't happen, but fallback
+                            click.echo("⚠️ No teams available, retrying...")
+                            continue
+                    else:
+                        # JWT is ready (single team or team already selected)
+                        api_key = data.get("key")
+                        user_id = data.get("user_id")
+                        teams = data.get("teams", [])
+                        team_id = data.get("team_id")
+                        
+                        # Show which team was assigned
+                        if team_id and len(teams) == 1:
+                            click.echo(f"\n✅ Automatically assigned to team: {team_id}")
+                        
+                        if api_key:
+                            return {
+                                "api_key": api_key,
+                                "user_id": user_id,
+                                "teams": teams,
+                                "team_id": team_id
+                            }
+                elif data.get("status") == "pending":
+                    # Still pending
+                    if attempt % 10 == 0:  # Show progress every 20 seconds
+                        click.echo("Still waiting for authentication...")
             else:
-                click.echo("ℹ️ Continuing without team assignment. You can assign a team later using the CLI.")
-    else:
+                click.echo(f"Polling error: HTTP {response.status_code}")
+                
+        except requests.RequestException as e:
+            if attempt % 10 == 0:
+                click.echo(f"Connection error (will retry): {e}")
+        
+        time.sleep(poll_interval)
+    
+    # Timeout reached
+    return None
+
+
+def _handle_team_selection_during_polling(
+    base_url: str, key_id: str, teams: List[str]
+) -> Optional[str]:
+    """
+    Handle team selection and re-poll with selected team_id.
+    
+    Args:
+        teams: List of team IDs (strings)
+    
+    Returns:
+        The JWT token with the selected team, or None if selection was skipped
+    """
+    if not teams:
         click.echo("ℹ️ No teams found. You can create or join teams using the web interface.")
+        return None
+    
+    click.echo("\n" + "="*60)
+    click.echo("📋 Select a team for your CLI session...")
+    
+    # Display teams as simple list since we only have IDs
+    console = Console()
+    table = Table(title="Available Teams")
+    table.add_column("Index", style="cyan", no_wrap=True)
+    table.add_column("Team ID", style="green")
+    
+    for i, team in enumerate(teams):
+        table.add_row(str(i + 1), team)
+    
+    console.print(table)
+    
+    # Simple selection
+    team_id: Optional[str] = None
+    while True:
+        try:
+            choice = click.prompt(
+                "\nSelect a team by entering the index number (or 'skip' to use first team)",
+                type=str
+            ).strip()
+            
+            if choice.lower() == 'skip':
+                team_id = teams[0] if teams else None
+                break
+            
+            index = int(choice) - 1
+            if 0 <= index < len(teams):
+                team_id = teams[index]
+                break
+            else:
+                click.echo(f"❌ Invalid selection. Please enter a number between 1 and {len(teams)}")
+        except ValueError:
+            click.echo("❌ Invalid input. Please enter a number or 'skip'")
+        except KeyboardInterrupt:
+            click.echo("\n❌ Team selection cancelled.")
+            return None
+    
+    if not team_id:
+        click.echo("ℹ️ No team selected.")
+        return None
+    
+    click.echo(f"\n🔄 Generating JWT for team: {team_id}")
+    
+    # Re-poll with team_id to get JWT with correct team
+    try:
+        poll_url = f"{base_url}/sso/cli/poll/{key_id}?team_id={team_id}"
+        response = requests.get(poll_url, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("status") == "ready":
+                jwt_token = data.get("key")
+                if jwt_token:
+                    click.echo(f"✅ Successfully generated JWT for team: {team_id}")
+                    return jwt_token
+        
+        click.echo(f"❌ Failed to get JWT with team. Status: {response.status_code}")
+        return None
+        
+    except Exception as e:
+        click.echo(f"❌ Error getting JWT with team: {e}")
+        return None
 
 
 @click.command(name="login")
@@ -337,7 +434,6 @@ def _handle_team_assignment(base_url: str, api_key: str, user_id: str) -> None:
 def login(ctx: click.Context):
     """Login to LiteLLM proxy using SSO authentication"""
     from litellm._uuid import uuid
-
     from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
     from litellm.proxy.client.cli.interface import show_commands
     
@@ -365,59 +461,37 @@ def login(ctx: click.Context):
         # Open browser
         webbrowser.open(sso_url)
         
-        # Poll for key creation
+        # Poll for authentication completion
         click.echo("Waiting for authentication...")
         
-        poll_url = f"{base_url}/sso/cli/poll/{key_id}"
-        timeout = 300  # 5 minute timeout
-        poll_interval = 2  # Poll every 2 seconds
+        auth_result = _poll_for_authentication(base_url=base_url, key_id=key_id)
         
-        for attempt in range(timeout // poll_interval):
-            try:
-                response = requests.get(poll_url, timeout=10)
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get("status") == "ready":
-                        # Key is ready - save it
-                        api_key = data.get("key")
-                        if api_key:
-                            # Save token data (simplified for CLI - we just need the key)
-                            save_token({
-                                'key': api_key,
-                                'user_id': 'cli-user',
-                                'user_email': 'unknown',
-                                'user_role': 'cli',
-                                'auth_header_name': 'Authorization',
-                                'jwt_token': '',
-                                'timestamp': time.time()
-                            })
-                            
-                            click.echo("✅ Login successful!")
-                            click.echo(f"API Key: {api_key[:20]}...")
-                            click.echo("You can now use the CLI without specifying --api-key")
-                            
-                            # Handle team assignment
-                            _handle_team_assignment(base_url, api_key, data.get("user_id"))
-                            
-                            # Show available commands after successful login
-                            click.echo("\n" + "="*60)
-                            show_commands()
-                            return
-                elif response.status_code == 200:
-                    # Still pending
-                    if attempt % 10 == 0:  # Show progress every 20 seconds
-                        click.echo("Still waiting for authentication...")
-                else:
-                    click.echo(f"Polling error: HTTP {response.status_code}")
-                    
-            except requests.RequestException as e:
-                if attempt % 10 == 0:
-                    click.echo(f"Connection error (will retry): {e}")
+        if auth_result:
+            api_key = auth_result["api_key"]
+            user_id = auth_result["user_id"]
             
-            time.sleep(poll_interval)
-        
-        click.echo("❌ Authentication timed out. Please try again.")
-        return
+            # Save token data (simplified for CLI - we just need the key)
+            save_token({
+                'key': api_key,
+                'user_id': user_id or 'cli-user',
+                'user_email': 'unknown',
+                'user_role': 'cli',
+                'auth_header_name': 'Authorization',
+                'jwt_token': '',
+                'timestamp': time.time()
+            })
+            
+            click.echo("\n✅ Login successful!")
+            click.echo(f"JWT Token: {api_key[:20]}...")
+            click.echo("You can now use the CLI without specifying --api-key")
+            
+            # Show available commands after successful login
+            click.echo("\n" + "="*60)
+            show_commands()
+            return
+        else:
+            click.echo("❌ Authentication timed out. Please try again.")
+            return
             
     except KeyboardInterrupt:
         click.echo("\n❌ Authentication cancelled by user.")

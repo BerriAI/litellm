@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, 
 from httpx._models import Headers, Response
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
@@ -183,7 +184,7 @@ class OllamaConfig(BaseConfig):
                 if model.startswith("gpt-oss"):
                     optional_params["think"] = value
                 else:
-                    optional_params["think"] = True
+                    optional_params["think"] = value in {"low", "medium", "high"}
             elif param == "response_format" and isinstance(value, dict):
                 if value["type"] == "json_object":
                     optional_params["format"] = "json"
@@ -577,6 +578,18 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                     ]
                 )
             else:
-                raise Exception(f"Unable to parse ollama chunk - {chunk}")
+                # In this case, 'thinking' is not present in the chunk, chunk["done"] is false,
+                # and chunk["response"] is falsy (None or empty string), 
+                # but Ollama is just starting to stream, so it should be processed as a normal dict
+                return ModelResponseStream(
+                    choices=[
+                        StreamingChoices(
+                            index=0,
+                            delta=Delta(reasoning_content=""),
+                        )
+                    ]
+                )
+                # raise Exception(f"Unable to parse ollama chunk - {chunk}")
         except Exception as e:
+            verbose_proxy_logger.error(f"Unable to parse ollama chunk - {chunk}")
             raise e

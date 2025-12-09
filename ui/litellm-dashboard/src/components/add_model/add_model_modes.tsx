@@ -6,9 +6,11 @@ export const TEST_MODES = [
   { value: "audio_speech", label: "Audio Speech - /audio/speech" },
   { value: "audio_transcription", label: "Audio Transcription - /audio/transcriptions" },
   { value: "image_generation", label: "Image Generation - /images/generations" },
+  { value: "video_generation", label: "Video Generation - /videos" },
   { value: "rerank", label: "Rerank - /rerank" },
   { value: "realtime", label: "Realtime - /realtime" },
   { value: "batch", label: "Batch - /batch" },
+  { value: "ocr", label: "OCR - /ocr" },
 ];
 
 // Define the available auto router routing strategies

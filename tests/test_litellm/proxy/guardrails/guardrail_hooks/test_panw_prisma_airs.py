@@ -9,7 +9,6 @@ This test file follows LiteLLM's testing patterns and covers:
 - Configuration validation
 """
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -56,11 +55,12 @@ class TestPanwAirsInitialization:
         guardrail_config = {"guardrail_name": "test_guardrail"}
 
         with patch("litellm.logging_callback_manager.add_litellm_callback"):
-            handler = initialize_guardrail(litellm_params, guardrail_config)  
+            handler = initialize_guardrail(litellm_params, guardrail_config)
 
         assert isinstance(handler, PanwPrismaAirsHandler)
         assert handler.guardrail_name == "test_guardrail"
 
+    @patch.dict("os.environ", {}, clear=True)
     def test_missing_api_key_raises_error(self):
         """Test that missing API key raises ValueError."""
         # Test direct handler initialization without api_key or env var
@@ -70,20 +70,21 @@ class TestPanwAirsInitialization:
                 profile_name="test_profile",
                 api_key=None,  # No API key provided
                 default_on=True,
-            )  
+            )
 
-    def test_missing_profile_name_raises_error(self):
-        """Test that missing profile name raises ValueError."""
-        litellm_params = SimpleNamespace(
-            api_key="test_key",
-            api_base=None,
+    def test_api_key_with_linked_profile(self):
+        """Test initialization with API key that has a linked profile (no explicit profile_name needed)."""
+        # profile_name is optional when API key has linked profile
+        handler = PanwPrismaAirsHandler(
+            guardrail_name="test_panw_airs",
+            api_key="test_api_key_with_linked_profile",
+            profile_name=None,  # Optional when API key has linked profile
             default_on=True,
-            profile_name=None,
         )
-        guardrail_config = {"guardrail_name": "test_guardrail"}
-
-        with pytest.raises(ValueError, match="profile_name is required"):
-            initialize_guardrail(litellm_params, guardrail_config)   
+        assert handler.api_key == "test_api_key_with_linked_profile"
+        assert (
+            handler.profile_name is None
+        )  # Should be None, PANW API will use linked profile
 
 
 class TestPanwAirsPromptScanning:
@@ -391,7 +392,7 @@ class TestPanwAirsConfiguration:
         guardrail_config = {"guardrail_name": "test"}
 
         with patch("litellm.logging_callback_manager.add_litellm_callback"):
-            handler = initialize_guardrail(litellm_params, guardrail_config)  
+            handler = initialize_guardrail(litellm_params, guardrail_config)
 
         assert handler.api_base == "https://service.api.aisecurity.paloaltonetworks.com"
 
@@ -411,7 +412,7 @@ class TestPanwAirsConfiguration:
         guardrail_config = {"guardrail_name": "test"}
 
         with patch("litellm.logging_callback_manager.add_litellm_callback"):
-            handler = initialize_guardrail(litellm_params, guardrail_config)  
+            handler = initialize_guardrail(litellm_params, guardrail_config)
 
         assert handler.api_base == custom_base
 
@@ -430,7 +431,7 @@ class TestPanwAirsConfiguration:
         guardrail_config = {"guardrail_name": "test_guardrail"}
 
         with patch("litellm.logging_callback_manager.add_litellm_callback"):
-            handler = initialize_guardrail(litellm_params, guardrail_config)   
+            handler = initialize_guardrail(litellm_params, guardrail_config)
 
         assert handler.guardrail_name == "test_guardrail"
 
@@ -522,13 +523,15 @@ class TestPanwAirsMaskingFunctionality:
         user_api_key_dict = UserAPIKeyAuth()
         data = {
             "model": "gpt-3.5-turbo",
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "My SSN is 123-45-6789"},
-                    {"type": "image", "url": "data:image/jpeg;base64,abc123"}
-                ]
-            }],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "My SSN is 123-45-6789"},
+                        {"type": "image", "url": "data:image/jpeg;base64,abc123"},
+                    ],
+                }
+            ],
         }
 
         mock_response = {
@@ -552,7 +555,9 @@ class TestPanwAirsMaskingFunctionality:
         assert data["messages"][0]["content"][0]["text"] == "My SSN is XXXXXXXXXX"
         # Image should remain unchanged
         assert data["messages"][0]["content"][1]["type"] == "image"
-        assert data["messages"][0]["content"][1]["url"] == "data:image/jpeg;base64,abc123"
+        assert (
+            data["messages"][0]["content"][1]["url"] == "data:image/jpeg;base64,abc123"
+        )
 
     @pytest.mark.asyncio
     async def test_response_masking_on_block(self):
@@ -611,7 +616,9 @@ class TestPanwAirsMaskingFunctionality:
             "messages": [{"role": "user", "content": "Test content"}],
         }
 
-        with patch.object(handler, "_call_panw_api", side_effect=Exception("API Error")):
+        with patch.object(
+            handler, "_call_panw_api", side_effect=Exception("API Error")
+        ):
             with pytest.raises(HTTPException) as exc_info:
                 await handler.async_pre_call_hook(
                     user_api_key_dict=user_api_key_dict,
@@ -666,7 +673,7 @@ class TestPanwAirsAdvancedFeatures:
     async def test_tool_call_extraction(self):
         """Test extraction of text from responses with tool calls."""
         from litellm.types.utils import ChatCompletionMessageToolCall, Function
-        
+
         handler = PanwPrismaAirsHandler(
             guardrail_name="test_panw_airs",
             api_key="test_api_key",
@@ -691,10 +698,10 @@ class TestPanwAirsAdvancedFeatures:
                                 type="function",
                                 function=Function(
                                     name="get_weather",
-                                    arguments='{"location": "San Francisco", "ssn": "123-45-6789"}'
-                                )
+                                    arguments='{"location": "San Francisco", "ssn": "123-45-6789"}',
+                                ),
                             )
-                        ]
+                        ],
                     ),
                 ),
             ],
@@ -711,7 +718,7 @@ class TestPanwAirsAdvancedFeatures:
     async def test_tool_call_masking(self):
         """Test masking of tool call arguments when blocked."""
         from litellm.types.utils import ChatCompletionMessageToolCall, Function
-        
+
         handler = PanwPrismaAirsHandler(
             guardrail_name="test_panw_airs",
             api_key="test_api_key",
@@ -737,10 +744,10 @@ class TestPanwAirsAdvancedFeatures:
                                 type="function",
                                 function=Function(
                                     name="get_weather",
-                                    arguments='{"location": "San Francisco", "ssn": "123-45-6789"}'
-                                )
+                                    arguments='{"location": "San Francisco", "ssn": "123-45-6789"}',
+                                ),
                             )
-                        ]
+                        ],
                     ),
                 ),
             ],
@@ -758,18 +765,23 @@ class TestPanwAirsAdvancedFeatures:
             "category": "sensitive_data",
             "response_masked_data": {
                 "data": '{"location": "San Francisco", "ssn": "XXXXXXXXXX"}'
-            }
+            },
         }
 
-        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
             mock_api.return_value = mock_scan_result
-            
+
             result = await handler.async_post_call_success_hook(
                 user_api_key_dict=user_api_key_dict, response=response, data=data
             )
 
             # Verify arguments were masked
-            assert result.choices[0].message.tool_calls[0].function.arguments == '{"location": "San Francisco", "ssn": "XXXXXXXXXX"}'
+            assert (
+                result.choices[0].message.tool_calls[0].function.arguments
+                == '{"location": "San Francisco", "ssn": "XXXXXXXXXX"}'
+            )
 
     @pytest.mark.asyncio
     async def test_multi_choice_masking(self):
@@ -795,7 +807,9 @@ class TestPanwAirsAdvancedFeatures:
                 Choices(
                     finish_reason="stop",
                     index=1,
-                    message=Message(content="Another SSN: 987-65-4321", role="assistant"),
+                    message=Message(
+                        content="Another SSN: 987-65-4321", role="assistant"
+                    ),
                 ),
             ],
             created=1234567890,
@@ -809,12 +823,14 @@ class TestPanwAirsAdvancedFeatures:
         mock_scan_result = {
             "action": "block",
             "category": "sensitive_data",
-            "response_masked_data": {"data": "SSN is XXXXXXXXXX"}
+            "response_masked_data": {"data": "SSN is XXXXXXXXXX"},
         }
 
-        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
             mock_api.return_value = mock_scan_result
-            
+
             result = await handler.async_post_call_success_hook(
                 user_api_key_dict=user_api_key_dict, response=response, data=data
             )
@@ -837,23 +853,35 @@ class TestPanwAirsAdvancedFeatures:
         user_api_key_dict = UserAPIKeyAuth(api_key="test_key")
         request_data = {
             "messages": [{"role": "user", "content": "test"}],
-            "model": "gpt-4"
+            "model": "gpt-4",
         }
 
         # Create mock streaming chunks
         from litellm.types.utils import StreamingChoices, Delta
-        
+
         mock_chunks = [
             ModelResponse(
                 id="test_id",
-                choices=[StreamingChoices(delta=Delta(content="Hello", role="assistant"), finish_reason=None, index=0)],
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content="Hello", role="assistant"),
+                        finish_reason=None,
+                        index=0,
+                    )
+                ],
                 created=1234567890,
                 model="gpt-4",
                 object="chat.completion.chunk",
             ),
             ModelResponse(
                 id="test_id",
-                choices=[StreamingChoices(delta=Delta(content=" world", role="assistant"), finish_reason="stop", index=0)],
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content=" world", role="assistant"),
+                        finish_reason="stop",
+                        index=0,
+                    )
+                ],
                 created=1234567890,
                 model="gpt-4",
                 object="chat.completion.chunk",
@@ -866,10 +894,14 @@ class TestPanwAirsAdvancedFeatures:
 
         mock_scan_result = {"action": "allow", "category": "safe"}
 
-        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
-            with patch("litellm.proxy.common_utils.callback_utils.add_guardrail_to_applied_guardrails_header") as mock_header:
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
+            with patch(
+                "litellm.proxy.common_utils.callback_utils.add_guardrail_to_applied_guardrails_header"
+            ) as mock_header:
                 mock_api.return_value = mock_scan_result
-                
+
                 chunks_received = []
                 async for chunk in handler.async_post_call_streaming_iterator_hook(
                     user_api_key_dict=user_api_key_dict,
@@ -881,8 +913,7 @@ class TestPanwAirsAdvancedFeatures:
                 # Verify header function was called
                 assert mock_header.called
                 mock_header.assert_called_once_with(
-                    request_data=request_data, 
-                    guardrail_name="test_panw_airs"
+                    request_data=request_data, guardrail_name="test_panw_airs"
                 )
 
 
@@ -907,12 +938,14 @@ class TestTextCompletionSupport:
         data = {
             "prompt": "Complete this sentence: AI security is",
             "model": "gpt-3.5-turbo-instruct",
-            "max_tokens": 50
+            "max_tokens": 50,
         }
 
         mock_scan_result = {"action": "allow", "category": "safe"}
 
-        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
             mock_api.return_value = mock_scan_result
 
             result = await handler.async_pre_call_hook(
@@ -925,7 +958,9 @@ class TestTextCompletionSupport:
             # Verify API was called with the prompt text
             mock_api.assert_called_once()
             call_args = mock_api.call_args
-            assert call_args.kwargs["content"] == "Complete this sentence: AI security is"
+            assert (
+                call_args.kwargs["content"] == "Complete this sentence: AI security is"
+            )
             assert call_args.kwargs["is_response"] is False
 
             # Verify request was allowed through
@@ -955,10 +990,12 @@ class TestTextCompletionSupport:
         mock_scan_result = {
             "action": "block",
             "category": "dlp",
-            "prompt_masked_data": {"data": "Send money to account XXXXXXXXXX"}
+            "prompt_masked_data": {"data": "Send money to account XXXXXXXXXX"},
         }
 
-        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
             mock_api.return_value = mock_scan_result
 
             result = await handler.async_pre_call_hook(
@@ -994,7 +1031,9 @@ class TestTextCompletionSupport:
 
         mock_scan_result = {"action": "allow", "category": "safe"}
 
-        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
             mock_api.return_value = mock_scan_result
 
             await handler.async_pre_call_hook(
@@ -1009,6 +1048,325 @@ class TestTextCompletionSupport:
             call_args = mock_api.call_args
             assert "Tell me a joke" in call_args.kwargs["content"]
             assert "What is AI?" in call_args.kwargs["content"]
+
+
+class TestPanwAirsDeduplication:
+    """Test deduplication of callback invocations."""
+
+    @pytest.mark.asyncio
+    async def test_duplicate_pre_call_scan_prevented(self):
+        """Test that duplicate pre-call scans are prevented."""
+        handler = PanwPrismaAirsHandler(
+            guardrail_name="test_panw_airs",
+            api_key="test_api_key",
+            profile_name="test_profile",
+            default_on=True,
+        )
+
+        user_api_key_dict = UserAPIKeyAuth(api_key="test_key")
+        data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "Test"}],
+            "litellm_call_id": "test-call-123",
+        }
+
+        mock_response = {"action": "allow", "category": "benign"}
+
+        with patch.object(
+            handler, "_call_panw_api", return_value=mock_response
+        ) as mock_api:
+            # First call - should scan
+            await handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=None,
+                data=data,
+                call_type="completion",
+            )
+            assert mock_api.call_count == 1
+
+            # Second call with same call_id - should skip
+            await handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=None,
+                data=data,
+                call_type="completion",
+            )
+            # Still 1 - no additional scan
+            assert mock_api.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_duplicate_post_call_scan_prevented(self):
+        """Test that duplicate post-call scans are prevented."""
+        handler = PanwPrismaAirsHandler(
+            guardrail_name="test_panw_airs",
+            api_key="test_api_key",
+            profile_name="test_profile",
+            default_on=True,
+        )
+
+        user_api_key_dict = UserAPIKeyAuth(api_key="test_key")
+        data = {
+            "model": "gpt-3.5-turbo",
+            "litellm_call_id": "test-call-456",
+        }
+        response = ModelResponse(
+            id="test_id",
+            choices=[
+                Choices(
+                    index=0,
+                    message=Message(role="assistant", content="Test response"),
+                )
+            ],
+            model="gpt-3.5-turbo",
+        )
+
+        mock_response = {"action": "allow", "category": "benign"}
+
+        with patch.object(
+            handler, "_call_panw_api", return_value=mock_response
+        ) as mock_api:
+            # First call
+            await handler.async_post_call_success_hook(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+            )
+            assert mock_api.call_count == 1
+
+            # Second call - should skip
+            await handler.async_post_call_success_hook(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+            )
+            assert mock_api.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_duplicate_streaming_scan_prevented(self):
+        """Test that duplicate streaming scans are prevented."""
+        handler = PanwPrismaAirsHandler(
+            guardrail_name="test_panw_airs",
+            api_key="test_api_key",
+            profile_name="test_profile",
+            default_on=True,
+        )
+
+        user_api_key_dict = UserAPIKeyAuth(api_key="test_key")
+        request_data = {
+            "model": "gpt-3.5-turbo",
+            "litellm_call_id": "test-call-789",
+            "messages": [{"role": "user", "content": "test"}],
+        }
+
+        # Create mock streaming chunks
+        from litellm.types.utils import StreamingChoices, Delta
+
+        mock_chunks = [
+            ModelResponse(
+                id="test_id",
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content="Hello", role="assistant"),
+                        finish_reason=None,
+                        index=0,
+                    )
+                ],
+                created=1234567890,
+                model="gpt-4",
+                object="chat.completion.chunk",
+            ),
+        ]
+
+        async def mock_response_iter():
+            for chunk in mock_chunks:
+                yield chunk
+
+        mock_scan_result = {"action": "allow", "category": "safe"}
+
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
+            mock_api.return_value = mock_scan_result
+
+            # First call - should scan
+            chunks_received = []
+            async for chunk in handler.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=mock_response_iter(),
+                request_data=request_data,
+            ):
+                chunks_received.append(chunk)
+
+            assert mock_api.call_count == 1
+
+            # Second call with same call_id - should skip
+            async for chunk in handler.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=mock_response_iter(),
+                request_data=request_data,
+            ):
+                pass
+
+            # Still 1 - no additional scan
+            assert mock_api.call_count == 1
+
+
+class TestPanwAirsSessionTracking:
+    """Test session tracking with litellm_trace_id."""
+
+    @pytest.mark.asyncio
+    async def test_litellm_trace_id_used_as_transaction_id(self):
+        """Test that litellm_trace_id is used as PANW transaction ID."""
+        handler = PanwPrismaAirsHandler(
+            guardrail_name="test_panw_airs",
+            api_key="test_api_key",
+            profile_name="test_profile",
+            default_on=True,
+        )
+
+        trace_id = "abc-123-def-456"
+        metadata = {
+            "user": "test_user",
+            "model": "gpt-4",
+            "litellm_trace_id": trace_id,
+        }
+
+        with patch(
+            "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs.get_async_httpx_client"
+        ) as mock_client:
+            mock_async_client = AsyncMock()
+            mock_response = MagicMock()
+            mock_response.json.return_value = {"action": "allow", "category": "benign"}
+            mock_response.raise_for_status.return_value = None
+            mock_async_client.post = AsyncMock(return_value=mock_response)
+            mock_client.return_value = mock_async_client
+
+            await handler._call_panw_api(
+                content="Test content",
+                is_response=False,
+                metadata=metadata,
+            )
+
+            # Verify tr_id in API payload matches trace_id
+            call_args = mock_async_client.post.call_args
+            payload = call_args.kwargs["json"]
+            assert payload["tr_id"] == trace_id
+
+    @pytest.mark.asyncio
+    async def test_fallback_to_call_id_when_trace_id_missing(self):
+        """Test fallback to call_id when litellm_trace_id is missing."""
+        handler = PanwPrismaAirsHandler(
+            guardrail_name="test_panw_airs",
+            api_key="test_api_key",
+            profile_name="test_profile",
+            default_on=True,
+        )
+
+        call_id = "fallback-call-789"
+        metadata = {
+            "user": "test_user",
+            "model": "gpt-4",
+            # No litellm_trace_id
+        }
+
+        with patch(
+            "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs.get_async_httpx_client"
+        ) as mock_client:
+            mock_async_client = AsyncMock()
+            mock_response = MagicMock()
+            mock_response.json.return_value = {"action": "allow", "category": "benign"}
+            mock_response.raise_for_status.return_value = None
+            mock_async_client.post = AsyncMock(return_value=mock_response)
+            mock_client.return_value = mock_async_client
+
+            await handler._call_panw_api(
+                content="Test content",
+                is_response=False,
+                metadata=metadata,
+                call_id=call_id,
+            )
+
+            # Verify tr_id falls back to call_id
+            call_args = mock_async_client.post.call_args
+            payload = call_args.kwargs["json"]
+            assert payload["tr_id"] == call_id
+
+    @pytest.mark.asyncio
+    async def test_trace_id_extraction_from_request_data(self):
+        """Test that litellm_trace_id is extracted from request data."""
+        handler = PanwPrismaAirsHandler(
+            guardrail_name="test_panw_airs",
+            api_key="test_api_key",
+            profile_name="test_profile",
+            default_on=True,
+        )
+
+        trace_id = "session-xyz-789"
+        data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "Test"}],
+            "litellm_trace_id": trace_id,
+        }
+
+        # Extract metadata
+        metadata = handler._prepare_metadata_from_request(data)
+
+        # Verify trace_id is included in metadata
+        assert "litellm_trace_id" in metadata
+        assert metadata["litellm_trace_id"] == trace_id
+
+    @pytest.mark.asyncio
+    async def test_same_trace_id_for_prompt_and_response(self):
+        """Test that prompt and response scans use the same trace_id."""
+        handler = PanwPrismaAirsHandler(
+            guardrail_name="test_panw_airs",
+            api_key="test_api_key",
+            profile_name="test_profile",
+            default_on=True,
+        )
+
+        trace_id = "conversation-session-123"
+
+        with patch(
+            "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs.get_async_httpx_client"
+        ) as mock_client:
+            mock_async_client = AsyncMock()
+            mock_response = MagicMock()
+            mock_response.json.return_value = {"action": "allow", "category": "benign"}
+            mock_response.raise_for_status.return_value = None
+            mock_async_client.post = AsyncMock(return_value=mock_response)
+            mock_client.return_value = mock_async_client
+
+            # Prompt scan
+            await handler._call_panw_api(
+                content="User prompt",
+                is_response=False,
+                metadata={
+                    "litellm_trace_id": trace_id,
+                    "user": "test",
+                    "model": "gpt-4",
+                },
+            )
+            prompt_payload = mock_async_client.post.call_args.kwargs["json"]
+            prompt_tr_id = prompt_payload["tr_id"]
+
+            # Response scan
+            await handler._call_panw_api(
+                content="Assistant response",
+                is_response=True,
+                metadata={
+                    "litellm_trace_id": trace_id,
+                    "user": "test",
+                    "model": "gpt-4",
+                },
+            )
+            response_payload = mock_async_client.post.call_args.kwargs["json"]
+            response_tr_id = response_payload["tr_id"]
+
+            # Both should use the same trace_id
+            assert prompt_tr_id == trace_id
+            assert response_tr_id == trace_id
+            assert prompt_tr_id == response_tr_id
 
 
 if __name__ == "__main__":

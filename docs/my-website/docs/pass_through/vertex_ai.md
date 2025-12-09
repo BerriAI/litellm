@@ -18,8 +18,8 @@ Pass-through endpoints for Vertex AI - call provider-specific endpoint, in nativ
 LiteLLM supports 3 vertex ai passthrough routes:
 
 1. `/vertex_ai` → routes to `https://{vertex_location}-aiplatform.googleapis.com/`
-2. `/vertex_ai/discovery` → routes to [`https://discoveryengine.googleapis.com`](https://discoveryengine.googleapis.com/)
-3. `/vertex_ai/live` → upgrades to the Vertex AI Live API WebSocket (`google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent`)
+2. `/vertex_ai/discovery` → routes to [`https://discoveryengine.googleapis.com`](https://discoveryengine.googleapis.com/) - [See Search Datastores Guide](./vertex_ai_search_datastores.md)
+3. `/vertex_ai/live` → upgrades to the Vertex AI Live API WebSocket (`google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent`) - [See Live WebSocket Guide](./vertex_ai_live_websocket.md)
 
 ## How to use
 

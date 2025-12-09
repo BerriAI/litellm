@@ -279,6 +279,7 @@ def get_llm_provider(  # noqa: PLR0915
             or "ft:gpt-3.5-turbo" in model
             or "ft:gpt-4" in model  # catches ft:gpt-4-0613, ft:gpt-4o
             or model in litellm.openai_image_generation_models
+            or model in litellm.openai_video_generation_models
         ):
             custom_llm_provider = "openai"
         elif model in litellm.open_ai_text_completion_models:
@@ -692,12 +693,12 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("NOVITA_API_KEY")
     elif custom_llm_provider == "snowflake":
-        api_base = (
-            api_base
-            or get_secret_str("SNOWFLAKE_API_BASE")
-            or f"https://{get_secret('SNOWFLAKE_ACCOUNT_ID')}.snowflakecomputing.com/api/v2/cortex/inference:complete"
-        )  # type: ignore
-        dynamic_api_key = api_key or get_secret_str("SNOWFLAKE_JWT")
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.SnowflakeConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
     elif custom_llm_provider == "gradient_ai":
         (
             api_base,
@@ -738,6 +739,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base,
             dynamic_api_key,
         ) = litellm.MoonshotChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+    elif custom_llm_provider == "docker_model_runner":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.DockerModelRunnerChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
     elif custom_llm_provider == "v0":

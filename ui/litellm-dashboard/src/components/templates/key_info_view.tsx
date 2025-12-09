@@ -1,22 +1,22 @@
-import React, { useEffect, useState } from "react";
-import { Card, Text, Button, Grid, Tab, TabList, TabGroup, TabPanel, TabPanels, Title, Badge } from "@tremor/react";
-import { ArrowLeftIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
-import { keyDeleteCall, keyUpdateCall } from "../networking";
-import { KeyResponse } from "../key_team_helpers/key_list";
-import { Form, Tooltip, Button as AntdButton } from "antd";
-import NotificationManager from "../molecules/notifications_manager";
-import { KeyEditView } from "./key_edit_view";
-import { RegenerateKeyModal } from "../organisms/regenerate_key_modal";
-import { rolesWithWriteAccess } from "../../utils/roles";
-import ObjectPermissionsView from "../object_permissions_view";
-import LoggingSettingsView from "../logging_settings_view";
-import { copyToClipboard as utilCopyToClipboard, formatNumberWithCommas } from "@/utils/dataUtils";
-import { extractLoggingSettings, formatMetadataForDisplay } from "../key_info_utils";
-import { CopyIcon, CheckIcon } from "lucide-react";
-import { mapInternalToDisplayNames, mapDisplayToInternalNames } from "../callback_info_helpers";
-import { parseErrorMessage } from "../shared/errorUtils";
-import AutoRotationView from "../common_components/AutoRotationView";
+import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
+import { ArrowLeftIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
+import { Badge, Button, Card, Grid, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
+import { Button as AntdButton, Form, Tooltip } from "antd";
+import { CheckIcon, CopyIcon } from "lucide-react";
+import { useEffect, useState } from "react";
+import { rolesWithWriteAccess } from "../../utils/roles";
+import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "../callback_info_helpers";
+import AutoRotationView from "../common_components/AutoRotationView";
+import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
+import { KeyResponse } from "../key_team_helpers/key_list";
+import LoggingSettingsView from "../logging_settings_view";
+import NotificationManager from "../molecules/notifications_manager";
+import { keyDeleteCall, keyUpdateCall } from "../networking";
+import ObjectPermissionsView from "../object_permissions_view";
+import { RegenerateKeyModal } from "../organisms/regenerate_key_modal";
+import { parseErrorMessage } from "../shared/errorUtils";
+import { KeyEditView } from "./key_edit_view";
 
 interface KeyInfoViewProps {
   keyId: string;
@@ -144,17 +144,22 @@ export default function KeyInfoView({
         delete formValues.mcp_tool_permissions;
       }
 
-      // Handle max_budget empty string
-      if (formValues.max_budget === "") {
-        formValues.max_budget = null;
-      }
+      formValues.max_budget = mapEmptyStringToNull(formValues.max_budget);
+      formValues.tpm_limit = mapEmptyStringToNull(formValues.tpm_limit);
+      formValues.rpm_limit = mapEmptyStringToNull(formValues.rpm_limit);
+      formValues.max_parallel_requests = mapEmptyStringToNull(formValues.max_parallel_requests);
 
       // Convert metadata back to an object if it exists and is a string
       if (formValues.metadata && typeof formValues.metadata === "string") {
         try {
           const parsedMetadata = JSON.parse(formValues.metadata);
+          // Ensure tags are controlled via dedicated field, not in metadata textarea
+          if ("tags" in parsedMetadata) {
+            delete parsedMetadata["tags"];
+          }
           formValues.metadata = {
             ...parsedMetadata,
+            ...(Array.isArray(formValues.tags) && formValues.tags.length > 0 ? { tags: formValues.tags } : {}),
             ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
             ...(formValues.logging_settings ? { logging: formValues.logging_settings } : {}),
             ...(formValues.disabled_callbacks?.length > 0
@@ -169,8 +174,11 @@ export default function KeyInfoView({
           return;
         }
       } else {
+        const baseMetadata = formValues.metadata || {};
+        const { tags: _omitTags, ...rest } = baseMetadata;
         formValues.metadata = {
-          ...(formValues.metadata || {}),
+          ...rest,
+          ...(Array.isArray(formValues.tags) && formValues.tags.length > 0 ? { tags: formValues.tags } : {}),
           ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
           ...(formValues.logging_settings ? { logging: formValues.logging_settings } : {}),
           ...(formValues.disabled_callbacks?.length > 0
@@ -181,6 +189,10 @@ export default function KeyInfoView({
         };
       }
 
+      // tags are merged into metadata; do not send as top-level field
+      if ("tags" in formValues) {
+        delete formValues.tags;
+      }
       delete formValues.logging_settings;
 
       // Convert budget_duration to API format
@@ -533,9 +545,7 @@ export default function KeyInfoView({
               <div className="flex justify-between items-center mb-4">
                 <Title>Key Settings</Title>
                 {!isEditing && userRole && rolesWithWriteAccess.includes(userRole) && (
-                  <Button variant="light" onClick={() => setIsEditing(true)}>
-                    Edit Settings
-                  </Button>
+                  <Button onClick={() => setIsEditing(true)}>Edit Settings</Button>
                 )}
               </div>
 
@@ -624,6 +634,19 @@ export default function KeyInfoView({
                   </div>
 
                   <div>
+                    <Text className="font-medium">Tags</Text>
+                    <div className="flex flex-wrap gap-2 mt-1">
+                      {Array.isArray(currentKeyData.metadata?.tags) && currentKeyData.metadata.tags.length > 0
+                        ? currentKeyData.metadata.tags.map((tag, index) => (
+                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
+                              {tag}
+                            </span>
+                          ))
+                        : "No tags specified"}
+                    </div>
+                  </div>
+
+                  <div>
                     <Text className="font-medium">Prompts</Text>
                     <Text>
                       {Array.isArray(currentKeyData.metadata?.prompts) && currentKeyData.metadata.prompts.length > 0
@@ -692,7 +715,7 @@ export default function KeyInfoView({
                   <div>
                     <Text className="font-medium">Metadata</Text>
                     <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
-                      {formatMetadataForDisplay(currentKeyData.metadata)}
+                      {formatMetadataForDisplay(stripTagsFromMetadata(currentKeyData.metadata))}
                     </pre>
                   </div>
 

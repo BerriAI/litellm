@@ -21,7 +21,7 @@ async def test_anthropic_basic_completion_with_headers():
     }
 
     payload = {
-        "model": "claude-3-5-sonnet-20241022",
+        "model": "claude-sonnet-4-5-20250929",
         "max_tokens": 10,
         "messages": [{"role": "user", "content": "Say 'hello test' and nothing else"}],
         "litellm_metadata": {
@@ -149,7 +149,7 @@ async def test_anthropic_streaming_with_headers():
     }
 
     payload = {
-        "model": "claude-3-5-sonnet-20241022",
+        "model": "claude-sonnet-4-5-20250929",
         "max_tokens": 10,
         "messages": [
             {"role": "user", "content": "Say 'hello stream test' and nothing else"}

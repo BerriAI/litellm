@@ -34,15 +34,15 @@ async def test_get_chat_completion_message_history_for_previous_response_id():
             "completion_tokens": 318,
             "startTime": "2025-05-30T03:17:06.703+00:00",
             "endTime": "2025-05-30T03:17:11.894+00:00",
-            "model": "claude-3-5-sonnet-latest",
+            "model": "claude-sonnet-4-5-20250929",
             "session_id": "a96757c4-c6dc-4c76-b37e-e7dfa526b701",
             "proxy_server_request": {
                 "input": "who is Michael Jordan",
-                "model": "anthropic/claude-3-5-sonnet-latest",
+                "model": "anthropic/claude-sonnet-4-5-20250929",
             },
             "response": {
                 "id": "chatcmpl-935b8dad-fdc2-466e-a8ca-e26e5a8a21bb",
-                "model": "claude-3-5-sonnet-20241022",
+                "model": "claude-sonnet-4-5-20250929",
                 "object": "chat.completion",
                 "choices": [
                     {
@@ -75,16 +75,16 @@ async def test_get_chat_completion_message_history_for_previous_response_id():
             "completion_tokens": 628,
             "startTime": "2025-05-30T03:17:28.600+00:00",
             "endTime": "2025-05-30T03:17:39.921+00:00",
-            "model": "claude-3-5-sonnet-latest",
+            "model": "claude-sonnet-4-5-20250929",
             "session_id": "a96757c4-c6dc-4c76-b37e-e7dfa526b701",
             "proxy_server_request": {
                 "input": "can you tell me more about him",
-                "model": "anthropic/claude-3-5-sonnet-latest",
+                "model": "anthropic/claude-sonnet-4-5-20250929",
                 "previous_response_id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOmFudGhyb3BpYzttb2RlbF9pZDplMGYzMDJhMTQxMmU3ODQ3MGViYjI4Y2JlZDAxZmZmNWY4OGMwZDMzMWM2NjdlOWYyYmE0YjQxM2M2ZmJkMjgyO3Jlc3BvbnNlX2lkOmNoYXRjbXBsLTkzNWI4ZGFkLWZkYzItNDY2ZS1hOGNhLWUyNmU1YThhMjFiYg==",
             },
             "response": {
                 "id": "chatcmpl-370760c9-39fa-4db7-b034-d1f8d933c935",
-                "model": "claude-3-5-sonnet-20241022",
+                "model": "claude-sonnet-4-5-20250929",
                 "object": "chat.completion",
                 "choices": [
                     {
@@ -223,7 +223,7 @@ async def test_e2e_cold_storage_successful_retrieval():
         new_callable=AsyncMock,
     ) as mock_get_spend_logs, \
     patch.object(session_handler, "COLD_STORAGE_HANDLER") as mock_cold_storage, \
-    patch("litellm.configured_cold_storage_logger", return_value="s3"):
+    patch("litellm.cold_storage_custom_logger", return_value="s3"):
         
         # Setup mocks
         mock_get_spend_logs.return_value = mock_spend_logs
@@ -343,7 +343,7 @@ async def test_should_check_cold_storage_for_full_payload():
     # Test case 4: None request (should return True)
     proxy_request_none = None
     
-    with patch("litellm.configured_cold_storage_logger", return_value="s3"):
+    with patch("litellm.cold_storage_custom_logger", return_value="s3"):
         # Test case 1: Should return True for truncated content
         result1 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_with_truncated_pdf)
         assert result1 == True, "Should return True for proxy request with truncated PDF content"
@@ -361,7 +361,7 @@ async def test_should_check_cold_storage_for_full_payload():
         assert result4 == True, "Should return True for None proxy request"
     
     # Test case 5: Should return False when cold storage is not configured
-    with patch.object(litellm, 'configured_cold_storage_logger', None):
+    with patch.object(litellm, 'cold_storage_custom_logger', None):
         result5 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_with_truncated_pdf)
         assert result5 == False, "Should return False when cold storage is not configured, even with truncated content"
 
@@ -373,7 +373,7 @@ async def test_get_chat_completion_message_history_empty_response_dict():
     This tests the fix for response validation to check for empty dict responses.
     """
     from unittest.mock import AsyncMock, patch
-    
+
     # Mock spend logs with empty response dict
     mock_spend_logs = [
         {

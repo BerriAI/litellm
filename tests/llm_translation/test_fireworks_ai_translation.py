@@ -93,7 +93,7 @@ class TestFireworksAIAudioTranscription(BaseLLMAudioTranscriptionTest):
     def get_base_audio_transcription_call_args(self) -> dict:
         return {
             "model": "fireworks_ai/whisper-v3",
-            "api_base": "https://audio-prod.us-virginia-1.direct.fireworks.ai/v1",
+            "api_base": "https://audio-prod.api.fireworks.ai/v1",
         }
 
     def get_custom_llm_provider(self) -> litellm.LlmProviders:
@@ -218,7 +218,7 @@ def test_global_disable_flag_with_transform_messages_helper(monkeypatch):
                             {
                                 "type": "image_url",
                                 "image_url": {
-                                    "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                                    "url": "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png"
                                 },
                             },
                         ],

@@ -1,30 +1,36 @@
-import unittest
 import asyncio
-from unittest.mock import patch, MagicMock
-from typing import Optional
-import sys
-import os
 import datetime
 import json
+import os
+import sys
+import unittest
+from typing import Optional
+from unittest.mock import MagicMock, patch
+
 import pytest
+
 import litellm
 from litellm.integrations.langfuse import langfuse as langfuse_module
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
 sys.path.insert(0, os.path.abspath("../.."))
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
+
 # Import LangfuseUsageDetails directly from the module where it's defined
 from litellm.types.integrations.langfuse import *
 
-class TestLangfuseUsageDetails(unittest.TestCase):
 
+class TestLangfuseUsageDetails(unittest.TestCase):
     def setUp(self):
         # Set up environment variables for testing
-        self.env_patcher = patch.dict('os.environ', {
-            'LANGFUSE_SECRET_KEY': 'test-secret-key',
-            'LANGFUSE_PUBLIC_KEY': 'test-public-key',
-            'LANGFUSE_HOST': 'https://test.langfuse.com'
-        })
+        self.env_patcher = patch.dict(
+            "os.environ",
+            {
+                "LANGFUSE_SECRET_KEY": "test-secret-key",
+                "LANGFUSE_PUBLIC_KEY": "test-public-key",
+                "LANGFUSE_HOST": "https://test.langfuse.com",
+            },
+        )
         self.env_patcher.start()
 
         # Create mock objects
@@ -37,21 +43,25 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         self.mock_langfuse_client.trace.return_value = self.mock_langfuse_trace
 
         # Mock the langfuse module that's imported locally in methods
-        self.langfuse_module_patcher = patch.dict('sys.modules', {'langfuse': MagicMock()})
+        self.langfuse_module_patcher = patch.dict(
+            "sys.modules", {"langfuse": MagicMock()}
+        )
         self.mock_langfuse_module = self.langfuse_module_patcher.start()
 
         # Create a mock for the langfuse module with version
         self.mock_langfuse = MagicMock()
         self.mock_langfuse.version = MagicMock()
-        self.mock_langfuse.version.__version__ = "3.0.0"  # Set a version that supports all features
+        self.mock_langfuse.version.__version__ = (
+            "3.0.0"  # Set a version that supports all features
+        )
 
         # Mock the Langfuse class
         self.mock_langfuse_class = MagicMock()
         self.mock_langfuse_class.return_value = self.mock_langfuse_client
 
         # Set up the sys.modules['langfuse'] mock
-        sys.modules['langfuse'] = self.mock_langfuse
-        sys.modules['langfuse'].Langfuse = self.mock_langfuse_class
+        sys.modules["langfuse"] = self.mock_langfuse
+        sys.modules["langfuse"].Langfuse = self.mock_langfuse_class
 
         # Mock the Langfuse client
         self.mock_langfuse_client = MagicMock()
@@ -71,7 +81,16 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         self.logger = LangFuseLogger()
 
         # Add the log_event_on_langfuse method to the instance
-        def log_event_on_langfuse(self, kwargs, response_obj, start_time=None, end_time=None, user_id=None, level="DEFAULT", status_message=None):
+        def log_event_on_langfuse(
+            self,
+            kwargs,
+            response_obj,
+            start_time=None,
+            end_time=None,
+            user_id=None,
+            level="DEFAULT",
+            status_message=None,
+        ):
             # This implementation calls _log_langfuse_v2 directly
             return self._log_langfuse_v2(
                 user_id=user_id,
@@ -86,12 +105,15 @@ class TestLangfuseUsageDetails(unittest.TestCase):
                 response_obj=response_obj,
                 level=level,
                 litellm_call_id=kwargs.get("litellm_call_id", None),
-                print_verbose=True  # Add the missing parameter
+                print_verbose=True,  # Add the missing parameter
             )
 
         # Bind the method to the instance
         import types
-        self.logger.log_event_on_langfuse = types.MethodType(log_event_on_langfuse, self.logger)
+
+        self.logger.log_event_on_langfuse = types.MethodType(
+            log_event_on_langfuse, self.logger
+        )
 
         # Make sure _is_langfuse_v2 returns True
         def mock_is_langfuse_v2(self):
@@ -111,7 +133,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             "output": 20,
             "total": 30,
             "cache_creation_input_tokens": 5,
-            "cache_read_input_tokens": 3
+            "cache_read_input_tokens": 3,
         }
 
         # Verify all fields are present
@@ -127,7 +149,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             "output": 20,
             "total": 30,
             "cache_creation_input_tokens": 0,
-            "cache_read_input_tokens": 0
+            "cache_read_input_tokens": 0,
         }
 
         self.assertEqual(minimal_usage_details["input"], 10)
@@ -144,9 +166,9 @@ class TestLangfuseUsageDetails(unittest.TestCase):
 
         # Add the cache token attributes using get method
         def mock_get(key, default=None):
-            if key == 'cache_creation_input_tokens':
+            if key == "cache_creation_input_tokens":
                 return 7
-            elif key == 'cache_read_input_tokens':
+            elif key == "cache_read_input_tokens":
                 return 4
             return default
 
@@ -156,7 +178,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         kwargs = {
             "model": "gpt-4",
             "messages": [{"role": "user", "content": "Hello"}],
-            "litellm_params": {"metadata": {}}
+            "litellm_params": {"metadata": {}},
         }
 
         # Create start and end times
@@ -164,12 +186,12 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         end_time = start_time + datetime.timedelta(seconds=1)
 
         # Call the log_event method
-        with patch.object(self.logger, '_log_langfuse_v2') as mock_log_langfuse_v2:
+        with patch.object(self.logger, "_log_langfuse_v2") as mock_log_langfuse_v2:
             self.logger.log_event_on_langfuse(
                 kwargs=kwargs,
                 response_obj=response_obj,
                 start_time=start_time,
-                end_time=end_time
+                end_time=end_time,
             )
 
             # Check if _log_langfuse_v2 was called
@@ -189,7 +211,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             "output": 20,
             "total": 30,
             "cache_creation_input_tokens": None,
-            "cache_read_input_tokens": None
+            "cache_read_input_tokens": None,
         }
 
         # Verify fields can be None
@@ -210,7 +232,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             "output": 25,
             "total": 40,
             "cache_creation_input_tokens": 7,
-            "cache_read_input_tokens": 4
+            "cache_read_input_tokens": 4,
         }
 
         # Verify the structure matches what we expect
@@ -226,6 +248,81 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         self.assertEqual(usage_details["total"], 40)
         self.assertEqual(usage_details["cache_creation_input_tokens"], 7)
         self.assertEqual(usage_details["cache_read_input_tokens"], 4)
+
+    def test_log_langfuse_v2_handles_null_usage_values(self):
+        """
+        Test that _log_langfuse_v2 correctly handles None values in the usage object
+        by converting them to 0, preventing validation errors.
+        """
+        with patch(
+            "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
+            side_effect=lambda generation_params, **kwargs: generation_params,
+            create=True,
+        ) as mock_add_prompt_params:
+            # Create a mock response object with usage information containing None values
+            response_obj = MagicMock()
+            response_obj.usage = MagicMock()
+            response_obj.usage.prompt_tokens = None
+            response_obj.usage.completion_tokens = None
+            response_obj.usage.total_tokens = None
+
+            # Mock the .get() method to return None for cache-related fields
+            def mock_get(key, default=None):
+                if key in ["cache_creation_input_tokens", "cache_read_input_tokens"]:
+                    return None
+                return default
+
+            response_obj.usage.get = mock_get
+
+            # Prepare standard kwargs for the call
+            kwargs = {
+                "model": "gpt-4-null-usage",
+                "messages": [{"role": "user", "content": "Test"}],
+                "litellm_params": {"metadata": {}},
+                "optional_params": {},
+                "litellm_call_id": "test-call-id-null-usage",
+                "standard_logging_object": None,
+                "response_cost": 0.0,
+            }
+
+            # Call the method under test
+            self.logger._log_langfuse_v2(
+                user_id="test-user",
+                metadata={},
+                litellm_params=kwargs["litellm_params"],
+                output={"role": "assistant", "content": "Response"},
+                start_time=datetime.datetime.now(),
+                end_time=datetime.datetime.now(),
+                kwargs=kwargs,
+                optional_params=kwargs["optional_params"],
+                input={"messages": kwargs["messages"]},
+                response_obj=response_obj,
+                level="DEFAULT",
+                litellm_call_id=kwargs["litellm_call_id"],
+            )
+            #  Check the arguments passed to the mocked langfuse generation call
+            self.mock_langfuse_trace.generation.assert_called_once()
+            call_args, call_kwargs = self.mock_langfuse_trace.generation.call_args
+
+            #  Inspect the usage and usage_details dictionaries
+            usage_arg = call_kwargs.get("usage")
+            usage_details_arg = call_kwargs.get("usage_details")
+
+            self.assertIsNotNone(usage_arg)
+            self.assertIsNotNone(usage_details_arg)
+
+            # Verify that None values were converted to 0
+            self.assertEqual(usage_arg["prompt_tokens"], 0)
+            self.assertEqual(usage_arg["completion_tokens"], 0)
+
+            self.assertEqual(usage_details_arg["input"], 0)
+            self.assertEqual(usage_details_arg["output"], 0)
+            self.assertEqual(usage_details_arg["total"], 0)
+            self.assertEqual(usage_details_arg["cache_creation_input_tokens"], 0)
+            self.assertEqual(usage_details_arg["cache_read_input_tokens"], 0)
+
+            mock_add_prompt_params.assert_called_once()
+
 
 def test_max_langfuse_clients_limit():
     """

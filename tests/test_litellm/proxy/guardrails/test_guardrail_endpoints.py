@@ -14,25 +14,27 @@ sys.path.insert(
 from fastapi import HTTPException
 
 from litellm.proxy.guardrails.guardrail_endpoints import (
+    CreateGuardrailRequest,
+    PatchGuardrailRequest,
+    UpdateGuardrailRequest,
+    apply_guardrail,
+    create_guardrail,
+    delete_guardrail,
     get_guardrail_info,
     list_guardrails_v2,
-    CreateGuardrailRequest,
-    create_guardrail,
-    UpdateGuardrailRequest,
-    update_guardrail,
-    PatchGuardrailRequest,
     patch_guardrail,
-    delete_guardrail,
+    update_guardrail,
 )
 from litellm.proxy.guardrails.guardrail_registry import (
     IN_MEMORY_GUARDRAIL_HANDLER,
     InMemoryGuardrailHandler,
 )
 from litellm.types.guardrails import (
+    ApplyGuardrailRequest,
     BaseLitellmParams,
+    Guardrail,
     GuardrailInfoResponse,
     LitellmParams,
-    Guardrail,
 )
 
 # Mock data for testing
@@ -343,8 +345,11 @@ def test_optional_params_returned_when_properly_overridden():
 async def test_bedrock_guardrail_prepare_request_with_api_key():
     """Test _prepare_request method uses Bearer token when api_key is provided in data"""
     from unittest.mock import Mock, patch
-    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
-    
+
+    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
+        BedrockGuardrail,
+    )
+
     # Setup guardrail hook
     guardrail_hook = BedrockGuardrail(
         guardrailIdentifier="test-guardrail-id",
@@ -377,8 +382,11 @@ async def test_bedrock_guardrail_prepare_request_with_api_key():
 async def test_bedrock_guardrail_prepare_request_without_api_key():
     """Test _prepare_request method falls back to SigV4 when no api_key is provided"""
     from unittest.mock import Mock, patch
-    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
-    
+
+    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
+        BedrockGuardrail,
+    )
+
     # Setup guardrail hook
     guardrail_hook = BedrockGuardrail(
         guardrailIdentifier="test-guardrail-id",
@@ -427,8 +435,11 @@ async def test_bedrock_guardrail_prepare_request_without_api_key():
 async def test_bedrock_guardrail_prepare_request_with_bearer_token_env():
     """Test _prepare_request method uses Bearer token from environment when available"""
     from unittest.mock import Mock, patch
-    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
-    
+
+    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
+        BedrockGuardrail,
+    )
+
     # Setup guardrail hook
     guardrail_hook = BedrockGuardrail(
         guardrailIdentifier="test-guardrail-id",
@@ -469,8 +480,11 @@ async def test_bedrock_guardrail_prepare_request_with_bearer_token_env():
 @pytest.mark.asyncio
 async def test_bedrock_guardrail_make_api_request_passes_api_key():
     """Test make_bedrock_api_request method correctly passes api_key from request_data"""
-    from unittest.mock import Mock, patch, AsyncMock
-    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
+    from unittest.mock import AsyncMock, Mock, patch
+
+    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
+        BedrockGuardrail,
+    )
     
     guardrail_hook = BedrockGuardrail(
         guardrailIdentifier="test-guardrail-id",
@@ -737,13 +751,14 @@ async def test_patch_guardrail_endpoint(
     mock_logger = None
     if scenario == "success_with_sync":
         mock_prisma_client = mocker.Mock()
+        mock_in_memory_handler.sync_guardrail_from_db = mocker.Mock()
         mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
         mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_guardrail_registry)
         mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", mock_in_memory_handler)
         
     elif scenario == "success_sync_fails":
         mock_prisma_client = mocker.Mock()
-        mock_in_memory_handler.update_in_memory_guardrail.side_effect = Exception("Sync failed")
+        mock_in_memory_handler.sync_guardrail_from_db = mocker.Mock(side_effect=Exception("Sync failed"))
         mock_logger = mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.verbose_proxy_logger")
         
         mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -778,8 +793,7 @@ async def test_patch_guardrail_endpoint(
         
         mock_guardrail_registry.update_guardrail_in_db.assert_called_once()
         
-        mock_in_memory_handler.update_in_memory_guardrail.assert_called_once_with(
-            guardrail_id="test-guardrail-id",
+        mock_in_memory_handler.sync_guardrail_from_db.assert_called_once_with(
             guardrail=mocker.ANY
         )
         
@@ -851,3 +865,134 @@ async def test_delete_guardrail_endpoint(
             assert mock_logger is not None
             mock_logger.warning.assert_called_once()
             assert "Failed to remove guardrail" in str(mock_logger.warning.call_args)
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_not_found(mocker):
+    """
+    Test apply_guardrail endpoint returns proper error when guardrail is not found.
+    """
+    from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+    # Mock the GUARDRAIL_REGISTRY to return None (guardrail not found)
+    mock_registry = mocker.Mock()
+    mock_registry.get_initialized_guardrail_callback.return_value = None
+    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry)
+    
+    # Create request
+    request = ApplyGuardrailRequest(
+        guardrail_name="non-existent-guardrail",
+        text="Test input text"
+    )
+    
+    # Mock user auth
+    mock_user_auth = UserAPIKeyAuth()
+    
+    # Call endpoint and expect ProxyException
+    with pytest.raises(ProxyException) as exc_info:
+        await apply_guardrail(request=request, user_api_key_dict=mock_user_auth)
+    
+    # Verify error details
+    assert str(exc_info.value.code) == "404"
+    assert "not found" in str(exc_info.value.message).lower()
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_execution_error(mocker):
+    """
+    Test apply_guardrail endpoint handles exceptions from guardrail execution properly.
+    """
+    from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+    # Mock guardrail that raises an exception
+    mock_guardrail = mocker.Mock()
+    mock_guardrail.apply_guardrail = AsyncMock(
+        side_effect=Exception("Bedrock guardrail failed: Violated guardrail policy")
+    )
+    
+    # Mock the GUARDRAIL_REGISTRY
+    mock_registry = mocker.Mock()
+    mock_registry.get_initialized_guardrail_callback.return_value = mock_guardrail
+    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry)
+    
+    # Create request
+    request = ApplyGuardrailRequest(
+        guardrail_name="test-guardrail",
+        text="Test input text with forbidden content"
+    )
+    
+    # Mock user auth
+    mock_user_auth = UserAPIKeyAuth()
+    
+    # Call endpoint and expect ProxyException
+    with pytest.raises(ProxyException) as exc_info:
+        await apply_guardrail(request=request, user_api_key_dict=mock_user_auth)
+    
+    # Verify error is properly handled
+    assert "Bedrock guardrail failed" in str(exc_info.value.message)
+
+@pytest.mark.asyncio
+async def test_get_guardrail_info_endpoint_config_guardrail(mocker):
+    """
+    Test get_guardrail_info endpoint returns proper response when guardrail is found in config.
+    """
+    from litellm.proxy.guardrails.guardrail_endpoints import get_guardrail_info
+
+    # Mock prisma_client to not be None (patch at the source where it's imported from)
+    mock_prisma = mocker.Mock()
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    # Mock the GUARDRAIL_REGISTRY to return None from DB (so it checks config)
+    mock_registry = mocker.Mock()
+    mock_registry.get_guardrail_by_id_from_db = AsyncMock(return_value=None)
+    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry)
+
+    # Mock IN_MEMORY_GUARDRAIL_HANDLER at its source to return config guardrail
+    mock_in_memory_handler = mocker.Mock()
+    mock_in_memory_handler.get_guardrail_by_id.return_value = MOCK_CONFIG_GUARDRAIL
+    mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", mock_in_memory_handler)
+
+    # Mock _get_masked_values to return values as-is
+    mocker.patch(
+        "litellm.litellm_core_utils.litellm_logging._get_masked_values",
+        side_effect=lambda x, **kwargs: x
+    )
+
+    # Call endpoint and expect GuardrailInfoResponse
+    result = await get_guardrail_info(guardrail_id="test-config-guardrail")
+
+    # Verify the response is of the correct type
+    assert isinstance(result, GuardrailInfoResponse)
+    assert result.guardrail_id == "test-config-guardrail"
+    assert result.guardrail_name == "Test Config Guardrail"
+    assert result.guardrail_definition_location == "config"
+
+@pytest.mark.asyncio
+async def test_get_guardrail_info_endpoint_db_guardrail(mocker):
+    """
+    Test get_guardrail_info endpoint returns proper response when guardrail is found in DB.
+    """
+    from litellm.proxy.guardrails.guardrail_endpoints import get_guardrail_info
+
+    # Mock prisma_client to not be None (patch at the source where it's imported from)
+    mock_prisma = mocker.Mock()
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    # Mock the GUARDRAIL_REGISTRY to return a guardrail from DB
+    mock_registry = mocker.Mock()
+    mock_registry.get_guardrail_by_id_from_db = AsyncMock(return_value=MOCK_DB_GUARDRAIL)
+    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry)
+
+    # Mock IN_MEMORY_GUARDRAIL_HANDLER to return None
+    mock_in_memory_handler = mocker.Mock()
+    mock_in_memory_handler.get_guardrail_by_id.return_value = None
+    mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", mock_in_memory_handler)
+
+    # Call endpoint and expect GuardrailInfoResponse
+    result = await get_guardrail_info(guardrail_id="test-db-guardrail")
+
+    # Verify the response is of the correct type
+    assert isinstance(result, GuardrailInfoResponse)
+    assert result.guardrail_id == "test-db-guardrail"
+    assert result.guardrail_name == "Test DB Guardrail"
+    assert result.guardrail_definition_location == "db"

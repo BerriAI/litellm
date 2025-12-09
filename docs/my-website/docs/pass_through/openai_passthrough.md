@@ -19,6 +19,9 @@ Simply replace `https://api.openai.com` with `LITELLM_PROXY_BASE_URL/openai`
 
 ## Usage Examples
 
+Requirements:
+Set `OPENAI_API_KEY` in your environment variables.
+
 ### Assistants API
 
 #### Create OpenAI Client

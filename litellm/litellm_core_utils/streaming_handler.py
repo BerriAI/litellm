@@ -735,6 +735,14 @@ class CustomStreamWrapper:
                 and completion_obj["function_call"] is not None
             )
             or (
+                 "tool_calls" in model_response.choices[0].delta
+                and model_response.choices[0].delta["tool_calls"] is not None
+            )
+            or (
+                "function_call" in model_response.choices[0].delta
+                and model_response.choices[0].delta["function_call"] is not None
+            )
+            or (
                 "reasoning_content" in model_response.choices[0].delta
                 and model_response.choices[0].delta.reasoning_content is not None
             )
@@ -1297,7 +1305,7 @@ class CustomStreamWrapper:
             else:  # openai / azure chat model
                 if self.custom_llm_provider == "azure":
                     if isinstance(chunk, BaseModel) and hasattr(chunk, "model"):
-                        # for azure, we need to pass the model from the orignal chunk
+                        # for azure, we need to pass the model from the original chunk
                         self.model = getattr(chunk, "model", self.model)
                 response_obj = self.handle_openai_chat_completion_chunk(chunk)
                 if response_obj is None:

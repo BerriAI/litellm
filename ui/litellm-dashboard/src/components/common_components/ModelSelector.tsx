@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { TextInput, Text } from "@tremor/react";
 import { Select } from "antd";
 import { RobotOutlined } from "@ant-design/icons";
-import { fetchAvailableModels, ModelGroup } from "../chat_ui/llm_calls/fetch_models";
+import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_models";
 
 interface ModelSelectorProps {
   accessToken: string;

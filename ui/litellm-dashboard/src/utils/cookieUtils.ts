@@ -14,7 +14,18 @@ export function clearTokenCookies() {
   const domain = window.location.hostname;
 
   // Clear with various combinations of path and SameSite
+  // Include current path in case of custom server root path
+  const currentPath = window.location.pathname;
   const paths = ["/", "/ui"];
+
+  // Add the current path directory if it's different from root and /ui
+  if (currentPath && currentPath !== "/" && !currentPath.startsWith("/ui")) {
+    const dirPath = currentPath.substring(0, currentPath.lastIndexOf("/") + 1);
+    if (dirPath && !paths.includes(dirPath)) {
+      paths.push(dirPath);
+    }
+  }
+
   const sameSiteValues = ["Lax", "Strict", "None"];
 
   paths.forEach((path) => {

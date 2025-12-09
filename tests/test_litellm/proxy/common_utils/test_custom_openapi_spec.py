@@ -89,3 +89,65 @@ class TestCustomOpenAPISpec:
                 operation_name="responses API"
             )
             assert result == base_openapi_schema 
+
+
+def test_move_defs_to_components():
+    """
+    Test that $defs from Pydantic v2 schemas are moved to components/schemas.
+    """
+    openapi_schema = {}
+    
+    defs = {
+        "UserMessage": {
+            "type": "object",
+            "properties": {
+                "role": {"type": "string"},
+                "content": {"type": "string"}
+            }
+        },
+        "AssistantMessage": {
+            "type": "object",
+            "properties": {
+                "role": {"type": "string"},
+                "content": {"type": "string"}
+            }
+        }
+    }
+    
+    CustomOpenAPISpec._move_defs_to_components(openapi_schema=openapi_schema, defs=defs)
+    
+    assert "components" in openapi_schema
+    assert "schemas" in openapi_schema["components"]
+    assert "UserMessage" in openapi_schema["components"]["schemas"]
+    assert "AssistantMessage" in openapi_schema["components"]["schemas"]
+    assert openapi_schema["components"]["schemas"]["UserMessage"]["type"] == "object"
+
+
+def test_rewrite_defs_refs():
+    """
+    Test that $ref values are rewritten from #/$defs/ to #/components/schemas/.
+    """
+    schema = {
+        "type": "object",
+        "properties": {
+            "messages": {
+                "type": "array",
+                "items": {
+                    "anyOf": [
+                        {"$ref": "#/$defs/UserMessage"},
+                        {"$ref": "#/$defs/AssistantMessage"}
+                    ]
+                }
+            }
+        },
+        "$defs": {
+            "UserMessage": {"type": "object"},
+            "AssistantMessage": {"type": "object"}
+        }
+    }
+    
+    rewritten = CustomOpenAPISpec._rewrite_defs_refs(schema=schema)
+    
+    assert "$defs" not in rewritten
+    assert rewritten["properties"]["messages"]["items"]["anyOf"][0]["$ref"] == "#/components/schemas/UserMessage"
+    assert rewritten["properties"]["messages"]["items"]["anyOf"][1]["$ref"] == "#/components/schemas/AssistantMessage"

@@ -391,7 +391,7 @@ class BedrockEmbedding(BaseAWSLLM):
         )  # default to model if not passed
         modelId = urllib.parse.quote(unencoded_model_id, safe="")
         aws_region_name = self._get_aws_region_name(
-            optional_params=optional_params,
+            optional_params={"aws_region_name": aws_region_name},
             model=model,
             model_id=unencoded_model_id,
         )

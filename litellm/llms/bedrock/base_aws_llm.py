@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import urllib.parse
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
@@ -332,15 +333,60 @@ class BaseAWSLLM:
         return None
 
     @staticmethod
+    def get_bedrock_model_id(
+        optional_params: dict,
+        provider: Optional[BEDROCK_INVOKE_PROVIDERS_LITERAL],
+        model: str,
+    ) -> str:
+        model_id = optional_params.pop("model_id", None)
+        if model_id is not None:
+            model_id = BaseAWSLLM.encode_model_id(model_id=model_id)
+        else:
+            model_id = model
+
+        model_id = model_id.replace("invoke/", "", 1)
+        if provider == "llama" and "llama/" in model_id:
+            model_id = BaseAWSLLM._get_model_id_from_model_with_spec(
+                model_id, spec="llama"
+            )
+        elif provider == "deepseek_r1" and "deepseek_r1/" in model_id:
+            model_id = BaseAWSLLM._get_model_id_from_model_with_spec(
+                model_id, spec="deepseek_r1"
+            )
+        return model_id
+
+    @staticmethod
+    def _get_model_id_from_model_with_spec(
+        model: str,
+        spec: str,
+    ) -> str:
+        """
+        Remove `llama` from modelID since `llama` is simply a spec to follow for custom bedrock models
+        """
+        model_id = model.replace(spec + "/", "")
+        return BaseAWSLLM.encode_model_id(model_id=model_id)
+
+    @staticmethod
+    def encode_model_id(model_id: str) -> str:
+        """
+        Double encode the model ID to ensure it matches the expected double-encoded format.
+        Args:
+            model_id (str): The model ID to encode.
+        Returns:
+            str: The double-encoded model ID.
+        """
+        return urllib.parse.quote(model_id, safe="")
+
+    @staticmethod
     def get_bedrock_embedding_provider(
         model: str,
     ) -> Optional[BEDROCK_EMBEDDING_PROVIDERS_LITERAL]:
         """
         Helper function to get the bedrock embedding provider from the model
-        
+
         Handles scenarios like:
         1. model=cohere.embed-english-v3:0 -> Returns `cohere`
-        2. model=amazon.titan-embed-text-v1 -> Returns `amazon`  
+        2. model=amazon.titan-embed-text-v1 -> Returns `amazon`
         3. model=us.twelvelabs.marengo-embed-2-7-v1:0 -> Returns `twelvelabs`
         4. model=twelvelabs.marengo-embed-2-7-v1:0 -> Returns `twelvelabs`
         """
@@ -349,20 +395,24 @@ class BaseAWSLLM:
             parts = model.split(".")
             # Check if the second part (after potential region) is a known provider
             if len(parts) >= 2:
-                potential_provider = parts[1]  # e.g., "twelvelabs" from "us.twelvelabs.marengo-embed-2-7-v1:0"
+                potential_provider = parts[
+                    1
+                ]  # e.g., "twelvelabs" from "us.twelvelabs.marengo-embed-2-7-v1:0"
                 if potential_provider in get_args(BEDROCK_EMBEDDING_PROVIDERS_LITERAL):
                     return cast(BEDROCK_EMBEDDING_PROVIDERS_LITERAL, potential_provider)
-            
+
             # Check if the first part is a known provider (standard format)
-            potential_provider = parts[0]  # e.g., "cohere" from "cohere.embed-english-v3:0"
+            potential_provider = parts[
+                0
+            ]  # e.g., "cohere" from "cohere.embed-english-v3:0"
             if potential_provider in get_args(BEDROCK_EMBEDDING_PROVIDERS_LITERAL):
                 return cast(BEDROCK_EMBEDDING_PROVIDERS_LITERAL, potential_provider)
-        
+
         # Fallback: check if any provider name appears in the model string
         for provider in get_args(BEDROCK_EMBEDDING_PROVIDERS_LITERAL):
             if provider in model:
                 return cast(BEDROCK_EMBEDDING_PROVIDERS_LITERAL, provider)
-        
+
         return None
 
     def _get_aws_region_name(
@@ -851,7 +901,7 @@ class BaseAWSLLM:
         api_base: Optional[str],
         aws_bedrock_runtime_endpoint: Optional[str],
         aws_region_name: str,
-        endpoint_type: Optional[Literal["runtime", "agent"]] = "runtime",
+        endpoint_type: Optional[Literal["runtime", "agent", "agentcore"]] = "runtime",
     ) -> Tuple[str, str]:
         env_aws_bedrock_runtime_endpoint = get_secret("AWS_BEDROCK_RUNTIME_ENDPOINT")
         if api_base is not None:
@@ -885,7 +935,7 @@ class BaseAWSLLM:
         return endpoint_url, proxy_endpoint_url
 
     def _select_default_endpoint_url(
-        self, endpoint_type: Optional[Literal["runtime", "agent"]], aws_region_name: str
+        self, endpoint_type: Optional[Literal["runtime", "agent", "agentcore"]], aws_region_name: str
     ) -> str:
         """
         Select the default endpoint url based on the endpoint type
@@ -894,6 +944,8 @@ class BaseAWSLLM:
         """
         if endpoint_type == "agent":
             return f"https://bedrock-agent-runtime.{aws_region_name}.amazonaws.com"
+        elif endpoint_type == "agentcore":
+            return f"https://bedrock-agentcore.{aws_region_name}.amazonaws.com"
         else:
             return f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
 
@@ -984,20 +1036,23 @@ class BaseAWSLLM:
                 raise ImportError(
                     "Missing boto3 to call bedrock. Run 'pip install boto3'."
                 )
-            
+
             # Filter headers for AWS signature calculation
             # AWS SigV4 only includes specific headers in signature calculation
             aws_signature_headers = self._filter_headers_for_aws_signature(headers)
             sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
             request = AWSRequest(
-                method="POST", url=endpoint_url, data=data, headers=aws_signature_headers
+                method="POST",
+                url=endpoint_url,
+                data=data,
+                headers=aws_signature_headers,
             )
             sigv4.add_auth(request)
-            
+
             # Add back all original headers (including forwarded ones) after signature calculation
             for header_name, header_value in headers.items():
                 request.headers[header_name] = header_value
-            
+
             if (
                 extra_headers is not None and "Authorization" in extra_headers
             ):  # prevent sigv4 from overwriting the auth header
@@ -1013,21 +1068,32 @@ class BaseAWSLLM:
         """
         aws_signature_headers = {}
         aws_headers = {
-            'host', 'content-type', 'date', 'x-amz-date', 'x-amz-security-token',
-            'x-amz-content-sha256', 'x-amz-algorithm', 'x-amz-credential',
-            'x-amz-signedheaders', 'x-amz-signature'
+            "host",
+            "content-type",
+            "date",
+            "x-amz-date",
+            "x-amz-security-token",
+            "x-amz-content-sha256",
+            "x-amz-algorithm",
+            "x-amz-credential",
+            "x-amz-signedheaders",
+            "x-amz-signature",
         }
-        
+
         for header_name, header_value in headers.items():
             header_lower = header_name.lower()
-            if header_lower in aws_headers or header_lower.startswith('x-amz-') or header_lower.startswith('x-amzn-'):
+            if (
+                header_lower in aws_headers
+                or header_lower.startswith("x-amz-")
+                or header_lower.startswith("x-amzn-")
+            ):
                 aws_signature_headers[header_name] = header_value
-        
+
         return aws_signature_headers
 
     def _sign_request(
         self,
-        service_name: Literal["bedrock", "sagemaker"],
+        service_name: Literal["bedrock", "sagemaker", "bedrock-agentcore"],
         headers: dict,
         optional_params: dict,
         request_data: dict,

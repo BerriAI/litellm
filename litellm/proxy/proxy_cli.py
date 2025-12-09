@@ -13,6 +13,7 @@ import httpx
 from dotenv import load_dotenv
 
 from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
+from litellm.secret_managers.main import get_secret_bool
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -615,7 +616,7 @@ def run_server(  # noqa: PLR0915
         general_settings = {}
         ### GET DB TOKEN FOR IAM AUTH ###
 
-        if iam_token_db_auth:
+        if iam_token_db_auth or get_secret_bool("IAM_TOKEN_DB_AUTH"):
             from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
 
             db_host = os.getenv("DATABASE_HOST")
@@ -683,12 +684,7 @@ def run_server(  # noqa: PLR0915
             general_settings = _config.get("general_settings", {})
             if general_settings is None:
                 general_settings = {}
-            if general_settings:
-                ### LOAD SECRET MANAGER ###
-                key_management_system = general_settings.get(
-                    "key_management_system", None
-                )
-                proxy_config.initialize_secret_manager(key_management_system)
+            ### LOAD KEY MANAGEMENT SETTINGS FIRST (needed for custom secret manager) ###
             key_management_settings = general_settings.get(
                 "key_management_settings", None
             )
@@ -697,6 +693,15 @@ def run_server(  # noqa: PLR0915
 
                 litellm._key_management_settings = KeyManagementSettings(
                     **key_management_settings
+                )
+
+            if general_settings:
+                ### LOAD SECRET MANAGER ###
+                key_management_system = general_settings.get(
+                    "key_management_system", None
+                )
+                proxy_config.initialize_secret_manager(
+                    key_management_system=key_management_system, config_file_path=config
                 )
             database_url = general_settings.get("database_url", None)
             if database_url is None and os.getenv("DATABASE_URL") is None:

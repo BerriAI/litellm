@@ -57,7 +57,6 @@ class CheckBatchCost:
                 "file_purpose": "batch",
             }
         )
-
         completed_jobs = []
 
         for job in jobs:
@@ -139,7 +138,7 @@ class CheckBatchCost:
                 custom_llm_provider = deployment_info.litellm_params.custom_llm_provider
                 litellm_model_name = deployment_info.litellm_params.model
 
-                _, llm_provider, _, _ = get_llm_provider(
+                model_name, llm_provider, _, _ = get_llm_provider(
                     model=litellm_model_name,
                     custom_llm_provider=custom_llm_provider,
                 )
@@ -148,9 +147,9 @@ class CheckBatchCost:
                     await calculate_batch_cost_and_usage(
                         file_content_dictionary=file_content_as_dict,
                         custom_llm_provider=llm_provider,  # type: ignore
+                        model_name=model_name,
                     )
                 )
-
                 logging_obj = LiteLLMLogging(
                     model=batch_models[0],
                     messages=[{"role": "user", "content": "<retrieve_batch>"}],

@@ -7,8 +7,6 @@ import NotificationsManager from "../molecules/notifications_manager";
 
 export function ToolTestPanel({
   tool,
-  needsAuth,
-  authValue,
   onSubmit,
   isLoading,
   result,
@@ -16,8 +14,6 @@ export function ToolTestPanel({
   onClose,
 }: {
   tool: MCPTool;
-  needsAuth: boolean;
-  authValue?: string | null;
   onSubmit: (args: Record<string, any>) => void;
   isLoading: boolean;
   result: any | null;

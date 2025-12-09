@@ -11,7 +11,10 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
-from litellm.llms.mistral.chat.transformation import MistralConfig
+from litellm.llms.mistral.chat.transformation import (
+    MistralChatResponseIterator,
+    MistralConfig,
+)
 from litellm.types.utils import ModelResponse
 
 
@@ -359,6 +362,45 @@ class TestMistralReasoningSupport:
         assert result["messages"][1]["content"] == "Solve for x: 2x + 5 = 13"
         assert result.get("temperature") == 0.7
         assert "_add_reasoning_prompt" not in result
+
+
+def test_mistral_streaming_chunk_preserves_thinking_blocks():
+    """Ensure streaming chunks keep magistral reasoning content."""
+    iterator = MistralChatResponseIterator(
+        streaming_response=iter([]), sync_stream=True, json_mode=False
+    )
+
+    streamed_chunk = {
+        "id": "chunk-1",
+        "object": "chat.completion.chunk",
+        "created": 123456,
+        "model": "magistral-medium-2509",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "thinking",
+                            "thinking": [{"type": "text", "text": "Working it out."}],
+                        },
+                        {"type": "text", "text": " Hello"},
+                    ],
+                },
+                "finish_reason": None,
+            }
+        ],
+    }
+
+    parsed_chunk = iterator.chunk_parser(streamed_chunk)
+
+    delta = parsed_chunk.choices[0].delta
+    assert delta.thinking_blocks is not None
+    assert delta.thinking_blocks[0]["thinking"] == "Working it out."
+    assert delta.thinking_blocks[0]["signature"] == "mistral"
+    assert delta.reasoning_content == "Working it out."
+    assert delta.content == " Hello"
 
 
 class TestMistralNameHandling:

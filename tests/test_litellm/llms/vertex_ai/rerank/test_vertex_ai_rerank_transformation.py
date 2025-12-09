@@ -18,8 +18,12 @@ class TestVertexAIRerankTransform:
         self.config = VertexAIRerankConfig()
         self.model = "semantic-ranker-default@latest"
 
-    def test_get_complete_url(self):
+    @patch('litellm.llms.vertex_ai.rerank.transformation.VertexAIRerankConfig._ensure_access_token')
+    def test_get_complete_url(self, mock_ensure_access_token):
         """Test URL generation for Vertex AI Discovery Engine rerank API."""
+        # Mock _ensure_access_token to return (token, project_id)
+        mock_ensure_access_token.return_value = ("mock-token", None)
+        
         # Test with project ID from environment
         with patch.dict(os.environ, {"VERTEXAI_PROJECT": "test-project-123"}):
             url = self.config.get_complete_url(api_base=None, model=self.model)
@@ -29,6 +33,7 @@ class TestVertexAIRerankTransform:
         # Test with litellm.vertex_project
         with patch.dict(os.environ, {}, clear=True):
             import litellm
+
             # Set vertex_project attribute if it doesn't exist
             if not hasattr(litellm, 'vertex_project'):
                 litellm.vertex_project = None
@@ -44,6 +49,7 @@ class TestVertexAIRerankTransform:
         # Test error when no project ID is available
         with patch.dict(os.environ, {}, clear=True):
             import litellm
+
             # Set vertex_project to None to ensure no project ID is available
             if not hasattr(litellm, 'vertex_project'):
                 litellm.vertex_project = None
@@ -351,3 +357,144 @@ class TestVertexAIRerankTransform:
         # Verify 0-based indexing
         for i, record in enumerate(request_data["records"]):
             assert record["id"] == str(i)
+
+    def test_map_cohere_rerank_params_preserves_vertex_credentials(self):
+        """Test that map_cohere_rerank_params preserves vertex-specific parameters."""
+        # Test with vertex_credentials
+        non_default_params = {
+            "documents": ["doc1", "doc2"],
+            "vertex_credentials": "path/to/credentials.json",
+            "vertex_project": "my-project-id",
+            "vertex_location": "us-central1"
+        }
+        
+        params = self.config.map_cohere_rerank_params(
+            non_default_params=non_default_params,
+            model=self.model,
+            drop_params=False,
+            query="test query",
+            documents=["doc1", "doc2"],
+            top_n=2,
+            return_documents=True
+        )
+        
+        # Verify vertex-specific parameters are preserved
+        assert params["vertex_credentials"] == "path/to/credentials.json"
+        assert params["vertex_project"] == "my-project-id"
+        assert params["vertex_location"] == "us-central1"
+        
+        # Verify standard params are still present
+        assert params["query"] == "test query"
+        assert params["documents"] == ["doc1", "doc2"]
+        assert params["top_n"] == 2
+        assert params["return_documents"] == True
+
+    def test_map_cohere_rerank_params_without_vertex_credentials(self):
+        """Test that map_cohere_rerank_params works when vertex credentials are not provided."""
+        non_default_params = {
+            "documents": ["doc1", "doc2"]
+        }
+        
+        params = self.config.map_cohere_rerank_params(
+            non_default_params=non_default_params,
+            model=self.model,
+            drop_params=False,
+            query="test query",
+            documents=["doc1", "doc2"],
+            top_n=2,
+            return_documents=True
+        )
+        
+        # Verify no vertex-specific parameters are added when not provided
+        assert "vertex_credentials" not in params
+        assert "vertex_project" not in params
+        assert "vertex_location" not in params
+        
+        # Verify standard params are still present
+        assert params["query"] == "test query"
+        assert params["documents"] == ["doc1", "doc2"]
+        assert params["top_n"] == 2
+        assert params["return_documents"] == True
+
+    @patch('litellm.llms.vertex_ai.rerank.transformation.VertexAIRerankConfig._ensure_access_token')
+    def test_validate_environment_with_optional_params(self, mock_ensure_access_token):
+        """Test that validate_environment accepts and uses optional_params for credentials."""
+        # Mock the authentication
+        mock_ensure_access_token.return_value = ("test-access-token", "test-project-123")
+        
+        optional_params = {
+            "vertex_credentials": "path/to/credentials.json",
+            "vertex_project": "custom-project-id",
+            "query": "test query",
+            "documents": ["doc1"]
+        }
+        
+        headers = self.config.validate_environment(
+            headers={},
+            model=self.model,
+            api_key=None,
+            optional_params=optional_params
+        )
+        
+        # Verify that _ensure_access_token was called with the credentials from optional_params
+        mock_ensure_access_token.assert_called_once()
+        call_args = mock_ensure_access_token.call_args
+        # The first call argument should be credentials (which will be the value from optional_params)
+        # We can't check the exact value easily due to how get_vertex_ai_credentials pops values,
+        # but we can verify the headers were set correctly
+        
+        expected_headers = {
+            "Authorization": "Bearer test-access-token",
+            "Content-Type": "application/json",
+            "X-Goog-User-Project": "test-project-123"
+        }
+        assert headers == expected_headers
+
+    @patch('litellm.llms.vertex_ai.rerank.transformation.VertexAIRerankConfig._ensure_access_token')
+    def test_validate_environment_preserves_optional_params_for_get_complete_url(
+        self,
+        mock_ensure_access_token,
+    ):
+        """
+        Validate that calling validate_environment does not remove vertex-specific
+        parameters needed later by get_complete_url.
+        """
+        mock_ensure_access_token.return_value = ("test-access-token", "project-from-token")
+
+        optional_params = {
+            "vertex_credentials": "path/to/credentials.json",
+            "vertex_project": "custom-project-id",
+        }
+
+        # Call validate_environment first – this previously popped the values in-place
+        self.config.validate_environment(
+            headers={},
+            model=self.model,
+            api_key=None,
+            optional_params=optional_params,
+        )
+
+        # Ensure the original optional_params dict still retains the vertex keys
+        assert optional_params["vertex_credentials"] == "path/to/credentials.json"
+        assert optional_params["vertex_project"] == "custom-project-id"
+
+        # get_complete_url should still be able to access the vertex params
+        with patch('litellm.llms.vertex_ai.rerank.transformation.get_secret_str', return_value=None):
+            url = self.config.get_complete_url(
+                api_base=None,
+                model=self.model,
+                optional_params=optional_params,
+            )
+
+        expected_url = (
+            "https://discoveryengine.googleapis.com/v1/projects/project-from-token/"
+            "locations/global/rankingConfigs/default_ranking_config:rank"
+        )
+        assert url == expected_url
+
+        # _ensure_access_token should have been called twice with the same credentials
+        assert mock_ensure_access_token.call_count == 2
+        first_call = mock_ensure_access_token.call_args_list[0]
+        second_call = mock_ensure_access_token.call_args_list[1]
+        assert first_call.kwargs["credentials"] == "path/to/credentials.json"
+        assert second_call.kwargs["credentials"] == "path/to/credentials.json"

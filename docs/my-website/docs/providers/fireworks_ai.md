@@ -204,7 +204,7 @@ from litellm import completion
 import os
 
 os.environ["FIREWORKS_AI_API_KEY"] = "YOUR_API_KEY"
-os.environ["FIREWORKS_AI_API_BASE"] = "https://audio-prod.us-virginia-1.direct.fireworks.ai/v1"
+os.environ["FIREWORKS_AI_API_BASE"] = "https://audio-prod.api.fireworks.ai/v1"
 
 completion = litellm.completion(
     model="fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct",
@@ -343,7 +343,7 @@ from litellm import transcription
 import os
 
 os.environ["FIREWORKS_AI_API_KEY"] = "YOUR_API_KEY"
-os.environ["FIREWORKS_AI_API_BASE"] = "https://audio-prod.us-virginia-1.direct.fireworks.ai/v1"
+os.environ["FIREWORKS_AI_API_BASE"] = "https://audio-prod.api.fireworks.ai/v1"
 
 response = transcription(
     model="fireworks_ai/whisper-v3",
@@ -363,7 +363,7 @@ model_list:
   - model_name: whisper-v3
     litellm_params:
       model: fireworks_ai/whisper-v3
-      api_base: https://audio-prod.us-virginia-1.direct.fireworks.ai/v1
+      api_base: https://audio-prod.api.fireworks.ai/v1
       api_key: os.environ/FIREWORKS_API_KEY
     model_info:
       mode: audio_transcription

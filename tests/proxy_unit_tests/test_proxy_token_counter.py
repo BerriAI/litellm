@@ -694,7 +694,7 @@ async def test_vertex_ai_gemini_token_counting_with_contents(model_name):
 
     print("Vertex AI Gemini token counting response:", response)
 
-    # validate we have orignal response
+    # validate we have original response
     assert response.original_response is not None
     assert response.original_response.get("totalTokens") is not None
     assert response.original_response.get("promptTokensDetails") is not None
@@ -743,3 +743,79 @@ async def test_bedrock_count_tokens_endpoint():
     await mock_count_tokens_handler(
         request_data, {}, "anthropic.claude-3-sonnet-20240229-v1:0"
     )
+
+
+@pytest.mark.asyncio
+async def test_vertex_ai_anthropic_token_counting():
+    """
+    Unit test for Vertex AI Anthropic token counting with mocked API calls.
+
+    This tests the token counting implementation for Vertex AI partner models
+    without making actual API calls. Mocks at the handler level to test the full flow.
+    """
+    from unittest.mock import AsyncMock, patch, MagicMock
+
+    # Mock the Vertex AI partner models token counter response
+    mock_token_response = {
+        "input_tokens": 15,
+        "tokenizer_used": "vertex_ai_partner_models",
+    }
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "vertex_ai/claude-3-5-sonnet-20241022",
+                "litellm_params": {
+                    "model": "vertex_ai/claude-3-5-sonnet-20241022",
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-east5",
+                },
+            }
+        ]
+    )
+
+    setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
+
+    # Mock the lower level handler method
+    with patch(
+        "litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler.VertexAIPartnerModelsTokenCounter.handle_count_tokens_request"
+    ) as mock_handle_count_tokens:
+        mock_handle_count_tokens.return_value = mock_token_response
+
+        # Test with messages format and call_endpoint=True
+        response = await token_counter(
+            request=TokenCountRequest(
+                model="vertex_ai/claude-3-5-sonnet-20241022",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "Hello Claude on Vertex AI! How are you?",
+                    }
+                ],
+            ),
+            call_endpoint=True,
+        )
+
+        # Validate that handle_count_tokens_request was called
+        assert mock_handle_count_tokens.called
+
+        # Verify the call arguments
+        call_args = mock_handle_count_tokens.call_args
+        assert call_args is not None
+        assert call_args.kwargs["model"] == "claude-3-5-sonnet-20241022"
+        assert "messages" in call_args.kwargs["request_data"]
+        assert (
+            call_args.kwargs["request_data"]["messages"][0]["content"]
+            == "Hello Claude on Vertex AI! How are you?"
+        )
+
+        # Validate response structure
+        assert response.model_used == "claude-3-5-sonnet-20241022"
+        assert response.request_model == "vertex_ai/claude-3-5-sonnet-20241022"
+        assert response.total_tokens == 15
+        assert response.tokenizer_type == "vertex_ai_partner_models"
+
+        # Validate original response contains input_tokens
+        assert response.original_response is not None
+        assert "input_tokens" in response.original_response
+        assert response.original_response["input_tokens"] == 15

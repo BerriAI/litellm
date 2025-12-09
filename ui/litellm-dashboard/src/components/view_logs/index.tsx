@@ -26,6 +26,7 @@ import { Tab, TabGroup, TabList, TabPanels, TabPanel, Switch } from "@tremor/rea
 import AuditLogs from "./audit_logs";
 import { getTimeRangeDisplay } from "./logs_utils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { truncateString } from "@/utils/textUtils";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -790,20 +791,30 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
     metadata.vector_store_request_metadata.length > 0;
 
   // Extract guardrail information from metadata if available
-  const hasGuardrailData = row.original.metadata && row.original.metadata.guardrail_information;
+  const guardrailInfo = row.original.metadata?.guardrail_information;
+  const guardrailEntries = Array.isArray(guardrailInfo) ? guardrailInfo : guardrailInfo ? [guardrailInfo] : [];
+  const hasGuardrailData = guardrailEntries.length > 0;
 
   // Calculate total masked entities if guardrail data exists
-  const getTotalMaskedEntities = (): number => {
-    if (!hasGuardrailData || !row.original.metadata?.guardrail_information.masked_entity_count) {
-      return 0;
+  const totalMaskedEntities = guardrailEntries.reduce((sum, entry) => {
+    const maskedCounts = entry?.masked_entity_count;
+    if (!maskedCounts) {
+      return sum;
     }
-    return Object.values(row.original.metadata.guardrail_information.masked_entity_count).reduce(
-      (sum: number, count: any) => sum + (typeof count === "number" ? count : 0),
-      0,
+    return (
+      sum +
+      Object.values(maskedCounts).reduce<number>((acc, count) => (typeof count === "number" ? acc + count : acc), 0)
     );
-  };
+  }, 0);
 
-  const totalMaskedEntities = getTotalMaskedEntities();
+  const primaryGuardrailLabel =
+    guardrailEntries.length === 1
+      ? guardrailEntries[0]?.guardrail_name ?? "-"
+      : guardrailEntries.length > 1
+        ? `${guardrailEntries.length} guardrails`
+        : "-";
+
+  const truncatedRequestId = truncateString(row.original.request_id, 64);
 
   return (
     <div className="p-6 bg-gray-50 space-y-6 w-full max-w-full overflow-hidden box-border">
@@ -816,7 +827,13 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
           <div className="space-y-2">
             <div className="flex">
               <span className="font-medium w-1/3">Request ID:</span>
-              <span className="font-mono text-sm">{row.original.request_id}</span>
+              {row.original.request_id.length > 64 ? (
+                <Tooltip title={row.original.request_id}>
+                  <span className="font-mono text-sm">{truncatedRequestId}</span>
+                </Tooltip>
+              ) : (
+                <span className="font-mono text-sm">{row.original.request_id}</span>
+              )}
             </div>
             <div className="flex">
               <span className="font-medium w-1/3">Model:</span>
@@ -850,7 +867,7 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
               <div className="flex">
                 <span className="font-medium w-1/3">Guardrail:</span>
                 <div>
-                  <span className="font-mono">{row.original.metadata!.guardrail_information.guardrail_name}</span>
+                  <span className="font-mono">{primaryGuardrailLabel}</span>
                   {totalMaskedEntities > 0 && (
                     <span className="ml-2 px-2 py-0.5 bg-blue-50 text-blue-700 rounded-md text-xs font-medium">
                       {totalMaskedEntities} masked
@@ -934,7 +951,7 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
       </div>
 
       {/* Guardrail Data - Show only if present */}
-      {hasGuardrailData && <GuardrailViewer data={row.original.metadata!.guardrail_information} />}
+      {hasGuardrailData && <GuardrailViewer data={guardrailInfo} />}
 
       {/* Vector Store Request Data - Show only if present */}
       {hasVectorStoreData && <VectorStoreViewer data={metadata.vector_store_request_metadata} />}

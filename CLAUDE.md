@@ -25,6 +25,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `poetry run pytest tests/path/to/test_file.py -v` - Run specific test file
 - `poetry run pytest tests/path/to/test_file.py::test_function -v` - Run specific test
 
+### Running Scripts
+- `poetry run python script.py` - Run Python scripts (use for non-test files)
+
 ## Architecture Overview
 
 LiteLLM is a unified interface for 100+ LLM providers with two main components:

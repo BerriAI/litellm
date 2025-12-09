@@ -31,6 +31,14 @@ class PillarGuardrailConfigModelOptionalParams(BaseModel):
         default=True,
         description="Include detailed evidence objects in response payloads (sets `plr_evidence` header).",
     )
+    fallback_on_error: Optional[str] = Field(
+        default=None,
+        description="Action to take when Pillar API is unavailable or errors: 'allow' (proceed without scanning) or 'block' (reject request with 503 error). If not provided, the `PILLAR_FALLBACK_ON_ERROR` environment variable is checked, defaults to 'allow'.",
+    )
+    timeout: Optional[float] = Field(
+        default=None,
+        description="Timeout in seconds for Pillar API calls. If not provided, the `PILLAR_TIMEOUT` environment variable is checked, defaults to 5.0 seconds.",
+    )
 
 
 class PillarGuardrailConfigModel(

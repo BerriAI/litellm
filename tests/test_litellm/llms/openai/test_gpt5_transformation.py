@@ -153,3 +153,59 @@ def test_gpt5_codex_supports_function_calling(config: OpenAIConfig):
     assert "functions" in supported_params
     assert "function_call" in supported_params
     assert "tools" in supported_params
+
+
+def test_gpt5_verbosity_parameter(config: OpenAIConfig):
+    """Test that verbosity parameter passes through correctly for GPT-5 models.
+
+    The verbosity parameter controls output length and detail for GPT-5 family models.
+    Supported values: 'low', 'medium', 'high'
+    Supported models: gpt-5, gpt-5.1, gpt-5-mini, gpt-5-nano, gpt-5-codex, gpt-5-pro
+    """
+    # Test all valid verbosity values
+    for verbosity_level in ["low", "medium", "high"]:
+        params = config.map_openai_params(
+            non_default_params={"verbosity": verbosity_level},
+            optional_params={},
+            model="gpt-5.1",
+            drop_params=False,
+        )
+        assert params["verbosity"] == verbosity_level
+
+    # Test with different GPT-5 models
+    for model in ["gpt-5", "gpt-5.1", "gpt-5-mini", "gpt-5-nano", "gpt-5-codex"]:
+        params = config.map_openai_params(
+            non_default_params={"verbosity": "low"},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+        assert params["verbosity"] == "low"
+def test_gpt5_1_reasoning_effort_none(config: OpenAIConfig):
+    """Test that GPT-5.1 supports reasoning_effort='none' parameter.
+
+    Related issue: https://github.com/BerriAI/litellm/issues/16633
+    GPT-5.1 introduced 'none' as the new default reasoning effort setting
+    for faster, lower-latency responses.
+    """
+    # Test that reasoning_effort is a supported parameter
+    assert "reasoning_effort" in config.get_supported_openai_params(model="gpt-5.1")
+
+    # Test that reasoning_effort="none" passes through correctly
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "none"},
+        optional_params={},
+        model="gpt-5.1",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "none"
+
+    # Test with other valid values for GPT-5.1
+    for effort in ["low", "medium", "high"]:
+        params = config.map_openai_params(
+            non_default_params={"reasoning_effort": effort},
+            optional_params={},
+            model="gpt-5.1",
+            drop_params=False,
+        )
+        assert params["reasoning_effort"] == effort

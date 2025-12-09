@@ -18,7 +18,12 @@ class AzureAIRerankConfig(CohereRerankConfig):
     Azure AI Rerank - Follows the same Spec as Cohere Rerank
     """
 
-    def get_complete_url(self, api_base: Optional[str], model: str) -> str:
+    def get_complete_url(
+        self, 
+        api_base: Optional[str], 
+        model: str,
+        optional_params: Optional[dict] = None,
+    ) -> str:
         if api_base is None:
             raise ValueError(
                 "Azure AI API Base is required. api_base=None. Set in call or via `AZURE_AI_API_BASE` env var."
@@ -32,6 +37,7 @@ class AzureAIRerankConfig(CohereRerankConfig):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        optional_params: Optional[dict] = None,
     ) -> dict:
         if api_key is None:
             api_key = get_secret_str("AZURE_AI_API_KEY") or litellm.azure_key

@@ -7,7 +7,7 @@ client = openai.OpenAI(
 
 
 response = client.chat.completions.create(
-    model="anthropic/claude-3-5-sonnet-20240620",
+    model="anthropic/claude-sonnet-4-5-20250929",
     messages=[
         {  # type: ignore
             "role": "system",

@@ -76,8 +76,6 @@ Set `SPEND_LOG_CLEANUP_BATCH_SIZE` to control how many logs are deleted per batc
 For detailed architecture and how it works, see [Spend Logs Deletion](../proxy/spend_logs_deletion).
 
 
+## What gets logged? 
 
-
-
-
-
+[Here's a schema](https://github.com/BerriAI/litellm/blob/1cdd4065a645021aea931afb9494e7694b4ec64b/schema.prisma#L285) breakdown of what gets logged.

@@ -34,13 +34,13 @@ install-proxy-dev:
 
 # CI-compatible installations (matches GitHub workflows exactly)
 install-dev-ci:
-	pip install openai==1.99.5
+	pip install openai==2.8.0
 	poetry install --with dev
-	pip install openai==1.99.5
+	pip install openai==2.8.0
 
 install-proxy-dev-ci:
 	poetry install --with dev,proxy-dev --extras proxy
-	pip install openai==1.99.5
+	pip install openai==2.8.0
 
 install-test-deps: install-proxy-dev
 	poetry run pip install "pytest-retry==1.6.3"

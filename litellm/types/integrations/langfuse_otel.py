@@ -24,6 +24,10 @@ class LangfuseSpanAttributes(str, Enum):
     MASK_INPUT = "langfuse.generation.mask_input"
     MASK_OUTPUT = "langfuse.generation.mask_output"
 
+    # ---- Observation input/output ----
+    OBSERVATION_INPUT = "langfuse.observation.input"
+    OBSERVATION_OUTPUT = "langfuse.observation.output"
+
     # ---- Trace-level metadata ----
     TRACE_USER_ID = "user.id"
     SESSION_ID = "session.id"

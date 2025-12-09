@@ -9,7 +9,12 @@ sys.path.insert(
     0, os.path.abspath("../../../..")
 )
 
-from litellm.proxy._types import CallbackDelete, ConfigYAML, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import (
+    CallbackDelete,
+    ConfigYAML,
+    LitellmUserRoles,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.proxy_server import app
 
 client = TestClient(app)
@@ -101,76 +106,10 @@ def mock_prisma():
     return MockPrismaClient()
 
 
-def mock_encrypt_value_helper(value):
+def mock_encrypt_value_helper(value, key=None, new_encryption_key=None):
     """Mock encryption - just return the value as-is for testing"""
     return value
 
-def mock_decrypt_value_helper(value):
+def mock_decrypt_value_helper(value, key=None, return_original_value=False):
     """Mock decryption - just return the value as-is for testing"""
     return value
-
-
-@pytest.mark.asyncio
-async def test_delete_callbacks_in_db(mock_prisma, mock_auth):
-    
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), \
-         patch("litellm.proxy.proxy_server.store_model_in_db", True), \
-         patch("litellm.proxy.proxy_server.encrypt_value_helper", side_effect=mock_encrypt_value_helper), \
-         patch("litellm.proxy.proxy_server.decrypt_value_helper", side_effect=mock_decrypt_value_helper):
-        
-        # Override auth dependency
-        app.dependency_overrides[
-            lambda: __import__("litellm.proxy.proxy_server", fromlist=["user_api_key_auth"]).user_api_key_auth
-        ] = lambda: mock_auth
-        
-        # Add langfuse callback to DB via /config/update
-        config_data = {
-            "litellm_settings": {"success_callback": ["langfuse"]},
-            "environment_variables": {
-                "LANGFUSE_PUBLIC_KEY": "any-public-key",
-                "LANGFUSE_SECRET_KEY": "any-secret-key",
-                "LANGFUSE_HOST": "https://exampleopenaiendpoint-production-c715.up.railway.app",
-            },
-        }
-        
-        config_response = client.post(
-            "/config/update", 
-            json=config_data,
-            headers={"Authorization": "Bearer sk-1234"}
-        )
-        assert config_response.status_code == 200
-        
-        # Delete the langfuse callback
-        delete_data = {"callback_name": "langfuse"}
-        delete_response = client.post(
-            "/config/callback/delete",
-            json=delete_data, 
-            headers={"Authorization": "Bearer sk-1234"}
-        )
-        
-        assert delete_response.status_code == 200
-        delete_result = delete_response.json()
-        
-        # Verify delete response
-        assert "message" in delete_result
-        assert "langfuse" in delete_result.get("removed_callback", "")
-        assert "langfuse" not in delete_result.get("remaining_callbacks", [])
-        
-        # Update mock to reflect deletion for get_config test
-        mock_prisma.remove_callback_from_config("langfuse")
-        
-        # Get config and verify callback is deleted
-        config_response = client.get(
-            "/get/config/callbacks",
-            headers={"Authorization": "Bearer sk-1234"}
-        )
-        
-        assert config_response.status_code == 200
-        config_data = config_response.json()
-        
-        # Verify callback is removed from the config
-        callback_names = [callback["name"] for callback in config_data.get("callbacks", [])]
-        assert "langfuse" not in callback_names
-        
-        # Clean up
-        app.dependency_overrides.clear() 

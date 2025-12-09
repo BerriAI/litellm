@@ -36,30 +36,151 @@ interface GuardrailInformation {
 }
 
 interface GuardrailViewerProps {
-  data: GuardrailInformation;
+  data: GuardrailInformation | GuardrailInformation[];
 }
 
+interface GuardrailDetailsProps {
+  entry: GuardrailInformation;
+  index: number;
+  total: number;
+}
+
+const formatTime = (timestamp: number) => {
+  const date = new Date(timestamp * 1000);
+  return date.toLocaleString();
+};
+
+const GuardrailDetails = ({ entry, index, total }: GuardrailDetailsProps) => {
+  const guardrailProvider = entry.guardrail_provider ?? "presidio";
+  const statusLabel = entry.guardrail_status ?? "unknown";
+  const isSuccess = statusLabel.toLowerCase() === "success";
+  const maskedEntityCount = entry.masked_entity_count || {};
+  const totalMaskedEntities = Object.values(maskedEntityCount).reduce(
+    (sum, count) => sum + (typeof count === "number" ? count : 0),
+    0,
+  );
+
+  const guardrailResponse = entry.guardrail_response;
+  const presidioEntities = Array.isArray(guardrailResponse) ? guardrailResponse : [];
+  const bedrockResponse =
+    guardrailProvider === "bedrock" &&
+    guardrailResponse !== null &&
+    typeof guardrailResponse === "object" &&
+    !Array.isArray(guardrailResponse)
+      ? (guardrailResponse as BedrockGuardrailResponse)
+      : undefined;
+
+  return (
+    <div className="bg-white rounded-lg border border-gray-200 p-4">
+      {total > 1 && (
+        <div className="flex items-center justify-between mb-4">
+          <h4 className="text-base font-semibold">
+            Guardrail #{index + 1}
+            <span className="ml-2 font-mono text-sm text-gray-600">{entry.guardrail_name}</span>
+          </h4>
+          <span className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded-md text-xs capitalize">
+            {guardrailProvider}
+          </span>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <div className="flex">
+            <span className="font-medium w-1/3">Guardrail Name:</span>
+            <span className="font-mono break-words">{entry.guardrail_name}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Mode:</span>
+            <span className="font-mono break-words">{entry.guardrail_mode}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Status:</span>
+            <Tooltip title={isSuccess ? null : "Guardrail failed to run."} placement="top" arrow destroyTooltipOnHide>
+              <span
+                className={`px-2 py-1 rounded-md text-xs font-medium inline-block ${
+                  isSuccess ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800 cursor-help"
+                }`}
+              >
+                {statusLabel}
+              </span>
+            </Tooltip>
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <div className="flex">
+            <span className="font-medium w-1/3">Start Time:</span>
+            <span>{formatTime(entry.start_time)}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">End Time:</span>
+            <span>{formatTime(entry.end_time)}</span>
+          </div>
+          <div className="flex">
+            <span className="font-medium w-1/3">Duration:</span>
+            <span>{entry.duration.toFixed(4)}s</span>
+          </div>
+        </div>
+      </div>
+
+      {totalMaskedEntities > 0 && (
+        <div className="mt-4 pt-4 border-t">
+          <h5 className="font-medium mb-2">Masked Entity Summary</h5>
+          <div className="flex flex-wrap gap-2">
+            {Object.entries(maskedEntityCount).map(([entityType, count]) => (
+              <span key={entityType} className="px-3 py-1.5 bg-blue-50 text-blue-700 rounded-md text-xs font-medium">
+                {entityType}: {count}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {guardrailProvider === "presidio" && presidioEntities.length > 0 && (
+        <div className="mt-4">
+          <PresidioDetectedEntities entities={presidioEntities} />
+        </div>
+      )}
+
+      {guardrailProvider === "bedrock" && bedrockResponse && (
+        <div className="mt-4">
+          <BedrockGuardrailDetails response={bedrockResponse} />
+        </div>
+      )}
+    </div>
+  );
+};
+
 const GuardrailViewer = ({ data }: GuardrailViewerProps) => {
+  const guardrailEntries = Array.isArray(data)
+    ? data.filter((entry): entry is GuardrailInformation => Boolean(entry))
+    : data
+      ? [data]
+      : [];
+
   const [sectionExpanded, setSectionExpanded] = useState(true);
 
-  // Default to presidio for backwards compatibility
-  const guardrailProvider = data.guardrail_provider ?? "presidio";
+  const primaryName =
+    guardrailEntries.length === 1 ? guardrailEntries[0].guardrail_name : `${guardrailEntries.length} guardrails`;
+  const statuses = Array.from(new Set(guardrailEntries.map((entry) => entry.guardrail_status)));
+  const allSucceeded = statuses.every((status) => (status ?? "").toLowerCase() === "success");
+  const aggregatedStatus = allSucceeded ? "success" : "failure";
+  const totalMaskedEntities = guardrailEntries.reduce((sum, entry) => {
+    return (
+      sum +
+      Object.values(entry.masked_entity_count || {}).reduce(
+        (acc, count) => acc + (typeof count === "number" ? count : 0),
+        0,
+      )
+    );
+  }, 0);
 
-  if (!data) return null;
+  const tooltipTitle = allSucceeded ? null : "Guardrail failed to run.";
 
-  const isSuccess = typeof data.guardrail_status === "string" && data.guardrail_status.toLowerCase() === "success";
-
-  const tooltipTitle = isSuccess ? null : "Guardrail failed to run.";
-
-  // Calculate total masked entities
-  const totalMaskedEntities = data.masked_entity_count
-    ? Object.values(data.masked_entity_count).reduce((sum, count) => sum + count, 0)
-    : 0;
-
-  const formatTime = (timestamp: number): string => {
-    const date = new Date(timestamp * 1000);
-    return date.toLocaleString();
-  };
+  if (guardrailEntries.length === 0) {
+    return null;
+  }
 
   return (
     <div className="bg-white rounded-lg shadow mb-6">
@@ -67,9 +188,9 @@ const GuardrailViewer = ({ data }: GuardrailViewerProps) => {
         className="flex justify-between items-center p-4 border-b cursor-pointer hover:bg-gray-50"
         onClick={() => setSectionExpanded(!sectionExpanded)}
       >
-        <div className="flex items-center">
+        <div className="flex items-center gap-2">
           <svg
-            className={`w-5 h-5 mr-2 text-gray-600 transition-transform ${sectionExpanded ? "transform rotate-90" : ""}`}
+            className={`w-5 h-5 text-gray-600 transition-transform ${sectionExpanded ? "transform rotate-90" : ""}`}
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -78,19 +199,20 @@ const GuardrailViewer = ({ data }: GuardrailViewerProps) => {
           </svg>
           <h3 className="text-lg font-medium">Guardrail Information</h3>
 
-          {/* Header status chip with tooltip */}
           <Tooltip title={tooltipTitle} placement="top" arrow destroyTooltipOnHide>
             <span
-              className={`ml-3 px-2 py-1 rounded-md text-xs font-medium inline-block ${
-                isSuccess ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800 cursor-help"
+              className={`ml-2 px-2 py-1 rounded-md text-xs font-medium inline-block ${
+                allSucceeded ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800 cursor-help"
               }`}
             >
-              {data.guardrail_status}
+              {aggregatedStatus}
             </span>
           </Tooltip>
 
+          <span className="ml-2 font-mono text-sm text-gray-600">{primaryName}</span>
+
           {totalMaskedEntities > 0 && (
-            <span className="ml-3 px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium">
+            <span className="ml-2 px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium">
               {totalMaskedEntities} masked {totalMaskedEntities === 1 ? "entity" : "entities"}
             </span>
           )}
@@ -99,76 +221,15 @@ const GuardrailViewer = ({ data }: GuardrailViewerProps) => {
       </div>
 
       {sectionExpanded && (
-        <div className="p-4">
-          <div className="bg-white rounded-lg border p-4 mb-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <div className="flex">
-                  <span className="font-medium w-1/3">Guardrail Name:</span>
-                  <span className="font-mono">{data.guardrail_name}</span>
-                </div>
-                <div className="flex">
-                  <span className="font-medium w-1/3">Mode:</span>
-                  <span className="font-mono">{data.guardrail_mode}</span>
-                </div>
-                <div className="flex">
-                  <span className="font-medium w-1/3">Status:</span>
-                  <Tooltip title={tooltipTitle} placement="top" arrow destroyTooltipOnHide>
-                    <span
-                      className={`px-2 py-1 rounded-md text-xs font-medium inline-block ${
-                        isSuccess ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800 cursor-help"
-                      }`}
-                    >
-                      {data.guardrail_status}
-                    </span>
-                  </Tooltip>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <div className="flex">
-                  <span className="font-medium w-1/3">Start Time:</span>
-                  <span>{formatTime(data.start_time)}</span>
-                </div>
-                <div className="flex">
-                  <span className="font-medium w-1/3">End Time:</span>
-                  <span>{formatTime(data.end_time)}</span>
-                </div>
-                <div className="flex">
-                  <span className="font-medium w-1/3">Duration:</span>
-                  <span>{data.duration.toFixed(4)}s</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Masked Entity Summary */}
-            {data.masked_entity_count && Object.keys(data.masked_entity_count).length > 0 && (
-              <div className="mt-4 pt-4 border-t">
-                <h4 className="font-medium mb-2">Masked Entity Summary</h4>
-                <div className="flex flex-wrap gap-2">
-                  {Object.entries(data.masked_entity_count).map(([entityType, count]) => (
-                    <span
-                      key={entityType}
-                      className="px-3 py-1.5 bg-blue-50 text-blue-700 rounded-md text-xs font-medium"
-                    >
-                      {entityType}: {count}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Provider-specific Detected Entities */}
-          {guardrailProvider === "presidio" && (data.guardrail_response as GuardrailEntity[])?.length > 0 && (
-            <PresidioDetectedEntities entities={data.guardrail_response as GuardrailEntity[]} />
-          )}
-
-          {guardrailProvider === "bedrock" && data.guardrail_response && (
-            <div className="mt-4">
-              <BedrockGuardrailDetails response={data.guardrail_response as BedrockGuardrailResponse} />
-            </div>
-          )}
+        <div className="p-4 space-y-6">
+          {guardrailEntries.map((entry, index) => (
+            <GuardrailDetails
+              key={`${entry.guardrail_name ?? "guardrail"}-${index}`}
+              entry={entry}
+              index={index}
+              total={guardrailEntries.length}
+            />
+          ))}
         </div>
       )}
     </div>

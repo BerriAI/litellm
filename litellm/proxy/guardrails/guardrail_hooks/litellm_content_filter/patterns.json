@@ -1,0 +1,124 @@
+{
+  "patterns": [
+    {
+      "name": "us_ssn",
+      "display_name": "SSN (Social Security Number)",
+      "pattern": "\\b\\d{3}-\\d{2}-\\d{4}\\b",
+      "category": "PII Patterns",
+      "description": "Detects US Social Security Numbers (XXX-XX-XXXX format)"
+    },
+    {
+      "name": "us_ssn_no_dash",
+      "display_name": "SSN (No Dashes)",
+      "pattern": "\\b(?!000|666|9\\d{2})\\d{3}(?!00)\\d{2}(?!0000)\\d{4}\\b",
+      "category": "PII Patterns",
+      "description": "Detects US SSN without dashes (XXXXXXXXX format)"
+    },
+    {
+      "name": "email",
+      "display_name": "Email Address",
+      "pattern": "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b",
+      "category": "PII Patterns",
+      "description": "Detects email addresses"
+    },
+    {
+      "name": "us_phone",
+      "display_name": "Phone Number (US)",
+      "pattern": "\\b(?:\\+?1[\\s.-]?)?\\(?([0-9]{3})\\)?[\\s.-]?([0-9]{3})[\\s.-]?([0-9]{4})\\b",
+      "category": "PII Patterns",
+      "description": "Detects US phone numbers in various formats"
+    },
+    {
+      "name": "visa",
+      "display_name": "Credit Card (Visa)",
+      "pattern": "\\b4\\d{3}[\\s\\-]?\\d{4}[\\s\\-]?\\d{4}[\\s\\-]?\\d{4}\\b",
+      "category": "Payment Card Patterns",
+      "description": "Detects Visa credit card numbers"
+    },
+    {
+      "name": "mastercard",
+      "display_name": "Credit Card (Mastercard)",
+      "pattern": "\\b5[1-5]\\d{2}[\\s\\-]?\\d{4}[\\s\\-]?\\d{4}[\\s\\-]?\\d{4}\\b",
+      "category": "Payment Card Patterns",
+      "description": "Detects Mastercard credit card numbers"
+    },
+    {
+      "name": "amex",
+      "display_name": "Credit Card (American Express)",
+      "pattern": "\\b3[47]\\d{2}[\\s\\-]?\\d{6}[\\s\\-]?\\d{5}\\b",
+      "category": "Payment Card Patterns",
+      "description": "Detects American Express credit card numbers"
+    },
+    {
+      "name": "discover",
+      "display_name": "Credit Card (Discover)",
+      "pattern": "\\b6(?:011|5\\d{2})[\\s\\-]?\\d{4}[\\s\\-]?\\d{4}[\\s\\-]?\\d{4}\\b",
+      "category": "Payment Card Patterns",
+      "description": "Detects Discover credit card numbers"
+    },
+    {
+      "name": "credit_card",
+      "display_name": "Credit Card (Any)",
+      "pattern": "(?:\\b4\\d{3}[\\s\\-]?\\d{4}[\\s\\-]?\\d{4}[\\s\\-]?\\d{4}\\b|\\b5[1-5]\\d{2}[\\s\\-]?\\d{4}[\\s\\-]?\\d{4}[\\s\\-]?\\d{4}\\b|\\b3[47]\\d{2}[\\s\\-]?\\d{6}[\\s\\-]?\\d{5}\\b|\\b6(?:011|5\\d{2})[\\s\\-]?\\d{4}[\\s\\-]?\\d{4}[\\s\\-]?\\d{4}\\b)",
+      "category": "Payment Card Patterns",
+      "description": "Detects any major credit card number"
+    },
+    {
+      "name": "aws_access_key",
+      "display_name": "AWS Access Key",
+      "pattern": "\\b(AKIA[0-9A-Z]{16})\\b",
+      "category": "Credential Patterns",
+      "description": "Detects AWS access keys (AKIA...)"
+    },
+    {
+      "name": "aws_secret_key",
+      "display_name": "AWS Secret Key",
+      "pattern": "\\b([A-Za-z0-9/+=]{40})\\b",
+      "category": "Credential Patterns",
+      "description": "Detects AWS secret keys (40 characters)"
+    },
+    {
+      "name": "github_token",
+      "display_name": "GitHub Token",
+      "pattern": "\\b(gh[ps]_[a-zA-Z0-9]{36})\\b",
+      "category": "Credential Patterns",
+      "description": "Detects GitHub personal access tokens"
+    },
+    {
+      "name": "slack_token",
+      "display_name": "Slack Token",
+      "pattern": "\\b(xox[pboa]-[0-9]{10,13}-[0-9]{10,13}-[a-zA-Z0-9]{24,32})\\b",
+      "category": "Credential Patterns",
+      "description": "Detects Slack API tokens"
+    },
+    {
+      "name": "generic_api_key",
+      "display_name": "API Key (Generic)",
+      "pattern": "\\b([Aa][Pp][Ii][-_]?[Kk][Ee][Yy][\\s:=]+['\"]?[A-Za-z0-9_\\-]{20,}['\"]?)\\b",
+      "category": "Credential Patterns",
+      "description": "Detects generic API key patterns"
+    },
+    {
+      "name": "ipv4",
+      "display_name": "IP Address (IPv4)",
+      "pattern": "\\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\b",
+      "category": "Network Patterns",
+      "description": "Detects IPv4 addresses"
+    },
+    {
+      "name": "ipv6",
+      "display_name": "IP Address (IPv6)",
+      "pattern": "\\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\\b",
+      "category": "Network Patterns",
+      "description": "Detects IPv6 addresses"
+    },
+    {
+      "name": "url",
+      "display_name": "URL",
+      "pattern": "\\b(?:https?://|www\\.)[^\\s/$.?#].[^\\s]*\\b",
+      "category": "Network Patterns",
+      "description": "Detects URLs (http/https)"
+    }
+  ]
+}
+

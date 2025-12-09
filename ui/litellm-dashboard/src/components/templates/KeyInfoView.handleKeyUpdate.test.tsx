@@ -43,6 +43,7 @@ vi.mock("@/utils/dataUtils", () => ({
 vi.mock("../key_info_utils", () => ({
   extractLoggingSettings: () => ({}),
   formatMetadataForDisplay: (m: any) => JSON.stringify(m, null, 2),
+  stripTagsFromMetadata: (m: any) => m,
 }));
 vi.mock("../callback_info_helpers", () => ({
   callback_map: {},
@@ -330,5 +331,27 @@ describe("KeyInfoView handleKeyUpdate premium guard", () => {
     expect(sentPayload.prompts).toEqual(["fast"]);
     expect(sentPayload.metadata?.guardrails).toEqual(["gr-1"]);
     expect(sentPayload.key).toBe("tok_123");
+  });
+});
+
+describe("KeyInfoView handleKeyUpdate empty strings", () => {
+  ["tpm_limit", "rpm_limit", "max_parallel_requests", "max_budget"].forEach((limit) => {
+    it(`maps empty strings to null for ${limit}`, async () => {
+      renderView(true); // premiumUser = true
+
+      fireEvent.click(screen.getByText("Edit Settings"));
+      (globalThis as any).__TEST_FORM_VALUES = {
+        token: "tok_123",
+        [limit]: "",
+      };
+
+      fireEvent.click(screen.getByText("Mock Submit"));
+
+      await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+      const [sentAccessToken, sentPayload] = keyUpdateCallMock.mock.calls[0];
+      expect(sentAccessToken).toBe("access_abc");
+      expect(sentPayload[limit]).toBeNull();
+    });
   });
 });

@@ -41,6 +41,6 @@ def _usage_format_tests(usage: litellm.Usage):
 def test_supports_prompt_caching():
     from litellm.utils import supports_prompt_caching
 
-    supports_pc = supports_prompt_caching(model="anthropic/claude-3-5-sonnet-20240620")
+    supports_pc = supports_prompt_caching(model="anthropic/claude-sonnet-4-5-20250929")
 
     assert supports_pc

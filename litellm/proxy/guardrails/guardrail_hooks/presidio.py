@@ -11,16 +11,7 @@
 import asyncio
 import json
 from datetime import datetime
-from typing import (
-    Any,
-    AsyncGenerator,
-    Dict,
-    List,
-    Optional,
-    Tuple,
-    Union,
-    cast,
-)
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Union, cast
 
 import aiohttp
 
@@ -403,9 +394,15 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             content_safety = data.get("content_safety", None)
             verbose_proxy_logger.debug("content_safety: %s", content_safety)
             presidio_config = self.get_presidio_settings_from_request_data(data)
-            messages = data["messages"]
+            messages = data.get("messages", None)
+            if messages is None:
+                return data
             tasks = []
-            for m in messages:
+            task_mappings: List[Tuple[int, Optional[int]]] = (
+                []
+            )  # Track (message_index, content_index) for each task
+
+            for msg_idx, m in enumerate(messages):
                 content = m.get("content", None)
                 if content is None:
                     continue
@@ -418,15 +415,41 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             request_data=data,
                         )
                     )
+                    task_mappings.append(
+                        (msg_idx, None)
+                    )  # None indicates string content
+                elif isinstance(content, list):
+                    for content_idx, c in enumerate(content):
+                        text_str = c.get("text", None)
+                        if text_str is None:
+                            continue
+                        tasks.append(
+                            self.check_pii(
+                                text=text_str,
+                                output_parse_pii=self.output_parse_pii,
+                                presidio_config=presidio_config,
+                                request_data=data,
+                            )
+                        )
+                        task_mappings.append((msg_idx, int(content_idx)))
+
             responses = await asyncio.gather(*tasks)
-            for index, r in enumerate(responses):
-                content = messages[index].get("content", None)
+
+            # Map responses back to the correct message and content item
+            for task_idx, r in enumerate(responses):
+                mapping = task_mappings[task_idx]
+                msg_idx = cast(int, mapping[0])
+                content_idx_optional = cast(Optional[int], mapping[1])
+                content = messages[msg_idx].get("content", None)
                 if content is None:
                     continue
-                if isinstance(content, str):
-                    messages[index][
+                if isinstance(content, str) and content_idx_optional is None:
+                    messages[msg_idx][
                         "content"
                     ] = r  # replace content with redacted string
+                elif isinstance(content, list) and content_idx_optional is not None:
+                    messages[msg_idx]["content"][content_idx_optional]["text"] = r
+
             verbose_proxy_logger.debug(
                 f"Presidio PII Masking: Redacted pii message: {data['messages']}"
             )
@@ -478,36 +501,63 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         ):  # /chat/completions requests
             messages: Optional[List] = kwargs.get("messages", None)
             tasks = []
+            task_mappings: List[Tuple[int, Optional[int]]] = (
+                []
+            )  # Track (message_index, content_index) for each task
 
             if messages is None:
                 return kwargs, result
 
             presidio_config = self.get_presidio_settings_from_request_data(kwargs)
 
-            for m in messages:
-                text_str = ""
+            for msg_idx, m in enumerate(messages):
                 content = m.get("content", None)
                 if content is None:
                     continue
                 if isinstance(content, str):
-                    text_str = content
                     tasks.append(
                         self.check_pii(
-                            text=text_str,
+                            text=content,
                             output_parse_pii=False,
                             presidio_config=presidio_config,
                             request_data=kwargs,
                         )
                     )  # need to pass separately b/c presidio has context window limits
+                    task_mappings.append(
+                        (msg_idx, None)
+                    )  # None indicates string content
+                elif isinstance(content, list):
+                    for content_idx, c in enumerate(content):
+                        text_str = c.get("text", None)
+                        if text_str is None:
+                            continue
+                        tasks.append(
+                            self.check_pii(
+                                text=text_str,
+                                output_parse_pii=False,
+                                presidio_config=presidio_config,
+                                request_data=kwargs,
+                            )
+                        )
+                        task_mappings.append((msg_idx, int(content_idx)))
+
             responses = await asyncio.gather(*tasks)
-            for index, r in enumerate(responses):
-                content = messages[index].get("content", None)
+
+            # Map responses back to the correct message and content item
+            for task_idx, r in enumerate(responses):
+                mapping = task_mappings[task_idx]
+                msg_idx = cast(int, mapping[0])
+                content_idx_optional = cast(Optional[int], mapping[1])
+                content = messages[msg_idx].get("content", None)
                 if content is None:
                     continue
-                if isinstance(content, str):
-                    messages[index][
+                if isinstance(content, str) and content_idx_optional is None:
+                    messages[msg_idx][
                         "content"
                     ] = r  # replace content with redacted string
+                elif isinstance(content, list) and content_idx_optional is not None:
+                    messages[msg_idx]["content"][content_idx_optional]["text"] = r
+
             verbose_proxy_logger.debug(
                 f"Presidio PII Masking: Redacted pii message: {messages}"
             )
@@ -652,6 +702,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         text: str,
         language: Optional[str] = None,
         entities: Optional[List[PiiEntityType]] = None,
+        request_data: Optional[dict] = None,
     ) -> str:
         """
         UI will call this function to check:
@@ -662,7 +713,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             text=text,
             output_parse_pii=self.output_parse_pii,
             presidio_config=None,
-            request_data={},
+            request_data=request_data or {},
         )
         return text
 

@@ -1018,6 +1018,21 @@ cache_params:
 
 ```
 
+## Provider-Specific Optional Parameters Caching
+
+By default, LiteLLM only includes standard OpenAI parameters in cache keys. However, some providers (like Vertex AI) use additional parameters that affect the output but aren't included in the standard cache key generation.
+
+### Enable Provider-Specific Parameter Caching
+
+Add this setting to your `config.yaml` to include provider-specific optional parameters in cache keys:
+
+```yaml
+litellm_settings:
+  cache: True
+  cache_params:
+    type: "redis"
+  enable_caching_on_provider_specific_optional_params: True  # Include provider-specific params in cache keys
+```
 ## Advanced - user api key cache ttl 
 
 Configure how long the in-memory cache stores the key object (prevents db requests)

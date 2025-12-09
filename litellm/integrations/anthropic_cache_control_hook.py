@@ -120,17 +120,18 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             - list of objects
 
         This method handles inserting cache control in both cases.
+        Per Anthropic's API specification, when using multiple content blocks,
+        only the last content block can have cache_control.
         """
         message_content = message.get("content", None)
 
         # 1. if string, insert cache control in the message
         if isinstance(message_content, str):
             message["cache_control"] = control  # type: ignore
-        # 2. list of objects
+        # 2. list of objects - only apply to last item per Anthropic spec
         elif isinstance(message_content, list):
-            for content_item in message_content:
-                if isinstance(content_item, dict):
-                    content_item["cache_control"] = control  # type: ignore
+            if len(message_content) > 0 and isinstance(message_content[-1], dict):
+                message_content[-1]["cache_control"] = control  # type: ignore
         return message
 
     @property

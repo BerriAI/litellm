@@ -5,13 +5,14 @@ import os
 import sys
 
 import pytest
-import responses
 from click.testing import CliRunner
 
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
+
+import responses
 
 from litellm.proxy.client.cli.commands.http import http
 

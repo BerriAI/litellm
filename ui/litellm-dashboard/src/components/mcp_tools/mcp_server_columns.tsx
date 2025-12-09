@@ -154,13 +154,22 @@ export const mcpServerColumns = (
     header: "Actions",
     cell: ({ row }) => (
       <div className="flex items-center gap-2">
-        <Icon
-          icon={PencilAltIcon}
-          size="sm"
-          onClick={() => onEdit(row.original.server_id)}
-          className="cursor-pointer"
-        />
-        <Icon icon={TrashIcon} size="sm" onClick={() => onDelete(row.original.server_id)} className="cursor-pointer" />
+        <Tooltip title="Edit MCP Server">
+          <Icon
+            icon={PencilAltIcon}
+            size="sm"
+            onClick={() => onEdit(row.original.server_id)}
+            className="cursor-pointer hover:text-blue-600"
+          />
+        </Tooltip>
+        <Tooltip title="Delete MCP Server">
+          <Icon
+            icon={TrashIcon}
+            size="sm"
+            onClick={() => onDelete(row.original.server_id)}
+            className="cursor-pointer hover:text-red-600"
+          />
+        </Tooltip>
       </div>
     ),
   },

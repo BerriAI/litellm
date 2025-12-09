@@ -188,6 +188,8 @@ async def test_handle_async_request_uses_env_proxy(monkeypatch):
     monkeypatch.setenv("HTTPS_PROXY", proxy_url)
     monkeypatch.setenv("https_proxy", proxy_url)
     monkeypatch.delenv("DISABLE_AIOHTTP_TRUST_ENV", raising=False)
+    monkeypatch.setattr("urllib.request.getproxies", lambda: {"http": proxy_url, "https": proxy_url})
+    monkeypatch.setattr("urllib.request.proxy_bypass", lambda host: False)
 
     captured = {}
 
@@ -253,6 +255,48 @@ def _make_mock_response(should_fail=False, fail_count={"count": 0}):
     
     return MockResp()
 
+@pytest.mark.asyncio
+async def test_handle_async_request_total_timeout_triggers():
+    """
+    Ensure that LiteLLMAiohttpTransport raises httpx.TimeoutException
+    when the total timeout duration elapses.
+    """
+    import asyncio
+    from aiohttp import web
+
+    async def slow_handler(request):
+        await asyncio.sleep(0.3)
+        return web.Response(text="ok")
+
+    app = web.Application()
+    app.router.add_get("/", slow_handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+
+    port = site._server.sockets[0].getsockname()[1]
+
+    def factory():
+        return aiohttp.ClientSession()
+
+    transport = LiteLLMAiohttpTransport(client=factory)  # type: ignore
+
+    request = httpx.Request("GET", f"http://127.0.0.1:{port}/")
+
+    request.extensions["timeout"] = {
+        "connect": 0.1,
+        "read": 0.1,
+        "pool": 0.1,
+        "total": 0.1,
+    }
+
+    try:
+        with pytest.raises(httpx.TimeoutException):
+            await transport.handle_async_request(request)
+    finally:
+        await transport.aclose()
+        await runner.cleanup()
 
 def _make_mock_session(closed=False):
     """Helper to create a mock aiohttp session"""

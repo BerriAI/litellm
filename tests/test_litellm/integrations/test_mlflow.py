@@ -57,7 +57,7 @@ async def test_mlflow_logging_functionality():
             messages=[{"role": "user", "content": "test message"}],
             prediction=test_prediction,
             mock_response="test response",
-            metadata={"tags": ["tag1", "tag2", "production"]},
+            metadata={"tags": ["tag1", "tag2", "production", "jobID:214590dsff09fds", "taskName:run_page_classification"]},
         )
 
         # Allow time for async processing
@@ -72,7 +72,13 @@ async def test_mlflow_logging_functionality():
 
         # Check that tags parameter was included and properly transformed
         tags_param = call_args.kwargs.get("tags", {})
-        expected_tags = {"tag1": "", "tag2": "", "production": ""}
+        expected_tags = {
+            "tag1": "",
+            "tag2": "",
+            "production": "",
+            "jobID": "214590dsff09fds",
+            "taskName": "run_page_classification",
+        }
         assert tags_param == expected_tags, f"Expected tags {expected_tags}, got {tags_param}"
 
         # Check that prediction parameter was included in inputs

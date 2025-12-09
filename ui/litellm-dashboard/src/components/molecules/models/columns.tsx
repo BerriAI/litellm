@@ -67,14 +67,20 @@ export const columns = (
                   alt={`${model.provider} logo`}
                   className="w-4 h-4"
                   onError={(e) => {
-                    const target = e.target as HTMLImageElement;
+                    const target = e.currentTarget as HTMLImageElement;
                     const parent = target.parentElement;
-                    if (parent) {
+                    if (!parent || !parent.contains(target)) {
+                      return;
+                    }
+
+                    try {
                       const fallbackDiv = document.createElement("div");
                       fallbackDiv.className =
                         "w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs";
                       fallbackDiv.textContent = model.provider?.charAt(0) || "-";
                       parent.replaceChild(fallbackDiv, target);
+                    } catch (error) {
+                      console.error("Failed to replace provider logo fallback:", error);
                     }
                   }}
                 />
@@ -290,23 +296,32 @@ export const columns = (
   },
   {
     id: "actions",
-    header: "",
+    header: () => <span className="text-sm font-semibold">Actions</span>,
     cell: ({ row }) => {
       const model = row.original;
       const canEditModel = userRole === "Admin" || model.model_info?.created_by === userID;
+      const isConfigModel = !model.model_info?.db_model;
       return (
         <div className="flex items-center justify-end gap-2 pr-4">
-          <Icon
-            icon={TrashIcon}
-            size="sm"
-            onClick={() => {
-              if (canEditModel) {
-                setSelectedModelId(model.model_info.id);
-                setEditModel(false);
-              }
-            }}
-            className={!canEditModel ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}
-          />
+          {isConfigModel ? (
+            <Tooltip title="Config model cannot be deleted on the dashboard. Please delete it from the config file.">
+              <Icon icon={TrashIcon} size="sm" className="opacity-50 cursor-not-allowed" />
+            </Tooltip>
+          ) : (
+            <Tooltip title="Delete model">
+              <Icon
+                icon={TrashIcon}
+                size="sm"
+                onClick={() => {
+                  if (canEditModel) {
+                    setSelectedModelId(model.model_info.id);
+                    setEditModel(false);
+                  }
+                }}
+                className={!canEditModel ? "opacity-50 cursor-not-allowed" : "cursor-pointer hover:text-red-600"}
+              />
+            </Tooltip>
+          )}
         </div>
       );
     },

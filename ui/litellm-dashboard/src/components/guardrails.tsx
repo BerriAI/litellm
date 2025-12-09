@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from "react";
-import { Button } from "@tremor/react";
+import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import { Modal } from "antd";
 import { getGuardrailsList, deleteGuardrailCall } from "./networking";
 import AddGuardrailForm from "./guardrails/add_guardrail_form";
 import GuardrailTable from "./guardrails/guardrail_table";
 import { isAdminRole } from "@/utils/roles";
 import GuardrailInfoView from "./guardrails/guardrail_info";
+import GuardrailTestPlayground from "./guardrails/GuardrailTestPlayground";
 import NotificationsManager from "./molecules/notifications_manager";
+import { Guardrail, GuardrailDefinitionLocation } from "./guardrails/types";
 
 interface GuardrailsPanelProps {
   accessToken: string | null;
@@ -24,19 +26,21 @@ interface GuardrailItem {
   guardrail_info: Record<string, any> | null;
   created_at?: string;
   updated_at?: string;
+  guardrail_definition_location: GuardrailDefinitionLocation;
 }
 
 interface GuardrailsResponse {
-  guardrails: GuardrailItem[];
+  guardrails: Guardrail[];
 }
 
 const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole }) => {
-  const [guardrailsList, setGuardrailsList] = useState<GuardrailItem[]>([]);
+  const [guardrailsList, setGuardrailsList] = useState<Guardrail[]>([]);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [guardrailToDelete, setGuardrailToDelete] = useState<{ id: string; name: string } | null>(null);
   const [selectedGuardrailId, setSelectedGuardrailId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<number>(0);
 
   const isAdmin = userRole ? isAdminRole(userRole) : false;
 
@@ -104,52 +108,72 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
 
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
-      <div className="flex justify-between items-center mb-4">
-        <Button onClick={handleAddGuardrail} disabled={!accessToken}>
-          + Add New Guardrail
-        </Button>
-      </div>
+      <TabGroup index={activeTab} onIndexChange={setActiveTab}>
+        <TabList className="mb-4">
+          <Tab>Guardrails</Tab>
+          <Tab disabled={!accessToken || guardrailsList.length === 0}>Test Playground</Tab>
+        </TabList>
 
-      {selectedGuardrailId ? (
-        <GuardrailInfoView
-          guardrailId={selectedGuardrailId}
-          onClose={() => setSelectedGuardrailId(null)}
-          accessToken={accessToken}
-          isAdmin={isAdmin}
-        />
-      ) : (
-        <GuardrailTable
-          guardrailsList={guardrailsList}
-          isLoading={isLoading}
-          onDeleteClick={handleDeleteClick}
-          accessToken={accessToken}
-          onGuardrailUpdated={fetchGuardrails}
-          isAdmin={isAdmin}
-          onGuardrailClick={(id) => setSelectedGuardrailId(id)}
-        />
-      )}
+        <TabPanels>
+          <TabPanel>
+            <div className="flex justify-between items-center mb-4">
+              <Button onClick={handleAddGuardrail} disabled={!accessToken}>
+                + Add New Guardrail
+              </Button>
+            </div>
 
-      <AddGuardrailForm
-        visible={isAddModalVisible}
-        onClose={handleCloseModal}
-        accessToken={accessToken}
-        onSuccess={handleSuccess}
-      />
+            {selectedGuardrailId ? (
+              <GuardrailInfoView
+                guardrailId={selectedGuardrailId}
+                onClose={() => setSelectedGuardrailId(null)}
+                accessToken={accessToken}
+                isAdmin={isAdmin}
+              />
+            ) : (
+              <GuardrailTable
+                guardrailsList={guardrailsList}
+                isLoading={isLoading}
+                onDeleteClick={handleDeleteClick}
+                accessToken={accessToken}
+                onGuardrailUpdated={fetchGuardrails}
+                isAdmin={isAdmin}
+                onGuardrailClick={(id) => setSelectedGuardrailId(id)}
+              />
+            )}
 
-      {guardrailToDelete && (
-        <Modal
-          title="Delete Guardrail"
-          open={guardrailToDelete !== null}
-          onOk={handleDeleteConfirm}
-          onCancel={handleDeleteCancel}
-          confirmLoading={isDeleting}
-          okText="Delete"
-          okButtonProps={{ danger: true }}
-        >
-          <p>Are you sure you want to delete guardrail: {guardrailToDelete.name} ?</p>
-          <p>This action cannot be undone.</p>
-        </Modal>
-      )}
+            <AddGuardrailForm
+              visible={isAddModalVisible}
+              onClose={handleCloseModal}
+              accessToken={accessToken}
+              onSuccess={handleSuccess}
+            />
+
+            {guardrailToDelete && (
+              <Modal
+                title="Delete Guardrail"
+                open={guardrailToDelete !== null}
+                onOk={handleDeleteConfirm}
+                onCancel={handleDeleteCancel}
+                confirmLoading={isDeleting}
+                okText="Delete"
+                okButtonProps={{ danger: true }}
+              >
+                <p>Are you sure you want to delete guardrail: {guardrailToDelete.name} ?</p>
+                <p>This action cannot be undone.</p>
+              </Modal>
+            )}
+          </TabPanel>
+
+          <TabPanel>
+            <GuardrailTestPlayground
+              guardrailsList={guardrailsList}
+              isLoading={isLoading}
+              accessToken={accessToken}
+              onClose={() => setActiveTab(0)}
+            />
+          </TabPanel>
+        </TabPanels>
+      </TabGroup>
     </div>
   );
 };

@@ -58,7 +58,7 @@ async def test_basic_moderations_on_proxy_with_model():
         test_text = "I want to harm someone"  # Test text that should trigger moderation
         request_data = {
             "input": test_text,
-            "model": "text-moderation-stable",
+            "model": "omni-moderation-latest",
         }
         try:
             response = await make_moderations_curl_request(

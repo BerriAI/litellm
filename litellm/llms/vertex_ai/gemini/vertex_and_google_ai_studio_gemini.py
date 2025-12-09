@@ -35,6 +35,9 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE,
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO,
 )
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    _encode_tool_call_id_with_signature,
+)
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -46,6 +49,8 @@ from litellm.types.llms.anthropic import AnthropicThinkingParam
 from litellm.types.llms.gemini import BidiGenerateContentServerMessage
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionAnnotation,
+    ChatCompletionAnnotationURLCitation,
     ChatCompletionResponseMessage,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
@@ -215,14 +220,29 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @classmethod
     def get_config(cls):
         return super().get_config()
-    
+
+    @staticmethod
+    def _is_gemini_3_or_newer(model: str) -> bool:
+        """
+        Check if the model is Gemini 3 Pro or newer.
+
+        Gemini 3 models include:
+        - gemini-3-pro-preview
+        - Any future Gemini 3.x models
+        """
+        # Check for Gemini 3 models
+        if "gemini-3" in model:
+            return True
+
+        return False
+
     def _supports_penalty_parameters(self, model: str) -> bool:
+        # Gemini 3 models do not support penalty parameters
+        if VertexGeminiConfig._is_gemini_3_or_newer(model):
+            return False
         unsupported_models = ["gemini-2.5-pro-preview-06-05"]
-
-        for pattern in unsupported_models:
-            if model in pattern:
-                return False
-
+        if model in unsupported_models:
+            return False
         return True
 
     def get_supported_openai_params(self, model: str) -> List[str]:
@@ -246,11 +266,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "parallel_tool_calls",
             "web_search_options",
         ]
-        
+
         # Add penalty parameters only for non-preview models
         if self._supports_penalty_parameters(model):
             supported_params.extend(["frequency_penalty", "presence_penalty"])
-        
+
         if supports_reasoning(model):
             supported_params.append("reasoning_effort")
             supported_params.append("thinking")
@@ -294,14 +314,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ) -> Tuple[dict, Optional[dict]]:
         """
         Extract location configuration from googleMaps tool for Vertex AI toolConfig.
-        
+
         Supports two interface styles:
         1. Nested (recommended): {"enableWidget": "...", "retrievalConfig": {"latitude": ..., "longitude": ...}}
         2. Flat (backward compat): {"enableWidget": "...", "latitude": ..., "longitude": ...}
-        
+
         Args:
             google_maps_config: The googleMaps tool configuration from LiteLLM
-        
+
         Returns:
             Tuple of (cleaned_google_maps_config, retrieval_config):
                 - cleaned_google_maps_config: googleMaps config without location fields
@@ -311,7 +331,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         latitude = google_maps_config.get("latitude")
         longitude = google_maps_config.get("longitude")
         language_code = google_maps_config.get("languageCode")
-        
+
         if latitude is not None and longitude is not None:
             retrieval_config = {
                 "latLng": {
@@ -321,21 +341,17 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             }
             if language_code is not None:
                 retrieval_config["languageCode"] = language_code
-        
+
         # Remove location fields from tool definition
         cleaned_config = {
             k: v
             for k, v in google_maps_config.items()
             if k not in ["latitude", "longitude", "languageCode"]
         }
-    
+
         return cleaned_config, retrieval_config
-    
-    def get_tool_value(
-        self,
-        tool: dict, 
-        tool_name: str
-    ) -> Optional[dict]:
+
+    def get_tool_value(self, tool: dict, tool_name: str) -> Optional[dict]:
         """
         Helper function to get tool value handling both camelCase and underscore_case variants
 
@@ -359,19 +375,19 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         else:
             return None
 
-    def _map_function( # noqa: PLR0915
+    def _map_function(  # noqa: PLR0915
         self, value: List[dict], optional_params: dict
     ) -> List[Tools]:
         """
         Map OpenAI-style tools/functions to Vertex AI format.
-        
+
         Args:
             value: List of tool definitions
             optional_params: Request-scoped parameters to store retrieval config
-        
+
         Returns:
             List of mapped tools in Vertex AI format
-            
+
         Side effects:
             May add 'toolConfig' with 'retrievalConfig' to optional_params if
             googleMaps tools contain location data
@@ -414,29 +430,47 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
             # Handle tools with 'type' field (OpenAI spec compliance) Ignore this field -> https://github.com/BerriAI/litellm/issues/14644#issuecomment-3342061838
             if "type" in tool:
-                del tool["type"]  # type: ignore
+                tool = {k: tool[k] for k in tool if k != "type"}
 
             tool_name = list(tool.keys())[0] if len(tool.keys()) == 1 else None
             if tool_name and (
-                tool_name == "codeExecution" or tool_name == VertexToolName.CODE_EXECUTION.value
+                tool_name == "codeExecution"
+                or tool_name == VertexToolName.CODE_EXECUTION.value
             ):  # code_execution maintained for backwards compatibility
                 code_execution = self.get_tool_value(tool, "codeExecution")
             elif tool_name and tool_name == VertexToolName.GOOGLE_SEARCH.value:
-                googleSearch = self.get_tool_value(tool, VertexToolName.GOOGLE_SEARCH.value)
-            elif tool_name and tool_name == VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value:
-                googleSearchRetrieval = self.get_tool_value(tool, VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value)
+                googleSearch = self.get_tool_value(
+                    tool, VertexToolName.GOOGLE_SEARCH.value
+                )
+            elif (
+                tool_name and tool_name == VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value
+            ):
+                googleSearchRetrieval = self.get_tool_value(
+                    tool, VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value
+                )
             elif tool_name and tool_name == VertexToolName.ENTERPRISE_WEB_SEARCH.value:
-                enterpriseWebSearch = self.get_tool_value(tool, VertexToolName.ENTERPRISE_WEB_SEARCH.value)
-            elif tool_name and (tool_name == VertexToolName.URL_CONTEXT.value or tool_name == "urlContext"):
+                enterpriseWebSearch = self.get_tool_value(
+                    tool, VertexToolName.ENTERPRISE_WEB_SEARCH.value
+                )
+            elif tool_name and (
+                tool_name == VertexToolName.URL_CONTEXT.value
+                or tool_name == "urlContext"
+            ):
                 urlContext = self.get_tool_value(tool, tool_name)
             elif tool_name and (
-                tool_name == VertexToolName.GOOGLE_MAPS.value or tool_name == "google_maps"
+                tool_name == VertexToolName.GOOGLE_MAPS.value
+                or tool_name == "google_maps"
             ):
-                google_maps_value = self.get_tool_value(tool, VertexToolName.GOOGLE_MAPS.value)
-                
+                google_maps_value = self.get_tool_value(
+                    tool, VertexToolName.GOOGLE_MAPS.value
+                )
+
                 # Extract and transform location configuration for toolConfig
                 if google_maps_value is not None:
-                    googleMaps, google_maps_retrieval_config = self._extract_google_maps_retrieval_config(
+                    (
+                        googleMaps,
+                        google_maps_retrieval_config,
+                    ) = self._extract_google_maps_retrieval_config(
                         google_maps_config=google_maps_value
                     )
             elif openai_function_object is not None:
@@ -476,13 +510,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             _tools[VertexToolName.URL_CONTEXT.value] = urlContext
         if googleMaps is not None:
             _tools[VertexToolName.GOOGLE_MAPS.value] = googleMaps
-        
+
         # Add retrieval config to toolConfig if googleMaps has location data
         if google_maps_retrieval_config is not None:
             if "toolConfig" not in optional_params:
                 optional_params["toolConfig"] = {}
-            optional_params["toolConfig"]["retrievalConfig"] = google_maps_retrieval_config
-        
+            optional_params["toolConfig"][
+                "retrievalConfig"
+            ] = google_maps_retrieval_config
+
         return [_tools]
 
     def _map_response_schema(self, value: dict) -> dict:
@@ -568,12 +604,90 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET,
                 "includeThoughts": False,
             }
+        elif reasoning_effort == "none":
+            return {
+                "thinkingBudget": 0,
+                "includeThoughts": False,
+            }
+        else:
+            raise ValueError(f"Invalid reasoning effort: {reasoning_effort}")
+
+    @staticmethod
+    def _map_reasoning_effort_to_thinking_level(
+        reasoning_effort: str,
+        model: Optional[str] = None,
+    ) -> GeminiThinkingConfig:
+        """
+        Map reasoning_effort to thinking_level for Gemini 3+ models.
+        Args:
+            reasoning_effort: The reasoning effort value
+            model: The model name
+
+        Returns:
+            GeminiThinkingConfig with thinkingLevel and includeThoughts
+        """
+        if reasoning_effort == "minimal":
+            return {"thinkingLevel": "low", "includeThoughts": True}
+        elif reasoning_effort == "low":
+            return {"thinkingLevel": "low", "includeThoughts": True}
+        elif reasoning_effort == "medium":
+            return {
+                "thinkingLevel": "high",
+                "includeThoughts": True,
+            }  # medium is not out yet
+        elif reasoning_effort == "high":
+            return {"thinkingLevel": "high", "includeThoughts": True}
+        elif reasoning_effort == "disable":
+            # Gemini 3 cannot fully disable thinking, so we use "low" but hide thoughts
+            return {"thinkingLevel": "low", "includeThoughts": False}
+        elif reasoning_effort == "none":
+            return {"thinkingLevel": "low", "includeThoughts": False}
         else:
             raise ValueError(f"Invalid reasoning effort: {reasoning_effort}")
 
     @staticmethod
     def _is_thinking_budget_zero(thinking_budget: Optional[int]) -> bool:
         return thinking_budget is not None and thinking_budget == 0
+
+    @staticmethod
+    def _validate_thinking_config_conflicts(
+        optional_params: Dict,
+        param_name: str,
+        param_description: str = "thinking_budget",
+    ) -> None:
+        """
+        Validate that thinking_level and thinking_budget are not both specified.
+        """
+        if "thinkingConfig" in optional_params:
+            existing_config = optional_params["thinkingConfig"]
+            if "thinkingLevel" in existing_config:
+                raise litellm.utils.UnsupportedParamsError(
+                    message=(
+                        f"Cannot specify both `{param_name}` (which maps to `{param_description}`) "
+                        "and `thinking_level` in the same request. "
+                        "For Gemini 3 models, use `thinking_level` instead."
+                    ),
+                    status_code=400,
+                )
+
+    @staticmethod
+    def _validate_thinking_level_conflicts(
+        optional_params: Dict,
+    ) -> None:
+        """
+        Validate that thinking_level and thinking_budget are not both specified.
+        Called when setting thinking_level.
+        """
+        if "thinkingConfig" in optional_params:
+            existing_config = optional_params["thinkingConfig"]
+            if "thinkingBudget" in existing_config:
+                raise litellm.utils.UnsupportedParamsError(
+                    message=(
+                        "Cannot specify both `thinking_level` and `thinking_budget` in the same request. "
+                        "For Gemini 3 models, use `thinking_level` instead of `thinking_budget`."
+                    ),
+                    status_code=400,
+                )
 
     @staticmethod
     def _map_thinking_param(
@@ -668,6 +782,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ) -> Dict:
         for param, value in non_default_params.items():
             if param == "temperature":
+                if VertexGeminiConfig._is_gemini_3_or_newer(model):
+                    if value is not None and value < 1.0:
+                        verbose_logger.info(
+                            f"Warning: Setting temperature < 1.0 for Gemini 3 models ({model}) "
+                            "can cause infinite loops, degraded reasoning performance, and failure on complex tasks. "
+                            "Strongly recommended to use temperature = 1.0 (default)."
+                        )
                 optional_params["temperature"] = value
             elif param == "top_p":
                 optional_params["top_p"] = value
@@ -730,12 +851,31 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif param == "seed":
                 optional_params["seed"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
-                optional_params[
-                    "thinkingConfig"
-                ] = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
-                    value, model
+                # Validate no conflict with thinking_level
+                VertexGeminiConfig._validate_thinking_config_conflicts(
+                    optional_params=optional_params,
+                    param_name="reasoning_effort",
+                    param_description="thinking_budget",
                 )
+                if VertexGeminiConfig._is_gemini_3_or_newer(model):
+                    optional_params[
+                        "thinkingConfig"
+                    ] = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+                        value, model
+                    )
+                else:
+                    optional_params[
+                        "thinkingConfig"
+                    ] = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
+                        value, model
+                    )
             elif param == "thinking":
+                # Validate no conflict with thinking_level
+                VertexGeminiConfig._validate_thinking_config_conflicts(
+                    optional_params=optional_params,
+                    param_name="thinking",
+                    param_description="thinking_budget",
+                )
                 optional_params[
                     "thinkingConfig"
                 ] = VertexGeminiConfig._map_thinking_param(
@@ -759,6 +899,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["responseModalities"] = ["AUDIO"]
             elif "AUDIO" not in optional_params["responseModalities"]:
                 optional_params["responseModalities"].append("AUDIO")
+
+        # Set default temperature to 1.0 for Gemini 3 models if not specified
+        if VertexGeminiConfig._is_gemini_3_or_newer(model):
+            if "temperature" not in optional_params:
+                optional_params["temperature"] = 1.0
+            thinking_config = optional_params.get("thinkingConfig", {})
+            if (
+                "thinkingLevel" not in thinking_config
+                and "thinkingBudget" not in thinking_config
+            ):
+                thinking_config["thinkingLevel"] = "low"
+                optional_params["thinkingConfig"] = thinking_config
 
         return optional_params
 
@@ -907,8 +1059,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         pass
                 _content_str += text_content
             elif "inlineData" in part:
-                mime_type = part["inlineData"]["mimeType"]
-                data = part["inlineData"]["data"]
+                inline_data = part.get("inlineData", {})
+                mime_type = inline_data.get("mimeType", "")
+                data = inline_data.get("data", "")
                 # Check if inline data is audio or image - if so, exclude from text content
                 # Images and audio are now handled separately in their respective response fields
                 if mime_type.startswith("audio/") or mime_type.startswith("image/"):
@@ -952,8 +1105,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         images: List[ImageURLListItem] = []
         for part in parts:
             if "inlineData" in part:
-                mime_type = part["inlineData"]["mimeType"]
-                data = part["inlineData"]["data"]
+                inline_data = part.get("inlineData", {})
+                mime_type = inline_data.get("mimeType", "")
+                data = inline_data.get("data", "")
                 if mime_type.startswith("image/"):
                     # Convert base64 data to data URI format
                     data_uri = f"data:{mime_type};base64,{data}"
@@ -994,8 +1148,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         pass
 
             elif "inlineData" in part:
-                mime_type = part["inlineData"]["mimeType"]
-                data = part["inlineData"]["data"]
+                inline_data = part.get("inlineData", {})
+                mime_type = inline_data.get("mimeType", "")
+                data = inline_data.get("data", "")
 
                 if mime_type.startswith("audio/"):
                     expires_at = int(time.time()) + (24 * 60 * 60)
@@ -1021,19 +1176,41 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         _tools: List[ChatCompletionToolCallChunk] = []
         for part in parts:
             if "functionCall" in part:
-                _function_chunk = ChatCompletionToolCallFunctionChunk(
-                    name=part["functionCall"]["name"],
-                    arguments=json.dumps(part["functionCall"]["args"]),
-                )
+                _function_chunk: ChatCompletionToolCallFunctionChunk = {
+                    "name": part["functionCall"]["name"],
+                    "arguments": json.dumps(
+                        part["functionCall"]["args"], ensure_ascii=False
+                    ),
+                }
+                # Extract thought signature if present
+                thought_signature = part.get("thoughtSignature")
+
                 if is_function_call is True:
-                    function = _function_chunk
+                    function_dict: Dict[str, Any] = dict(_function_chunk)
+                    if thought_signature:
+                        if "provider_specific_fields" not in function_dict:
+                            function_dict["provider_specific_fields"] = {}
+                        function_dict["provider_specific_fields"][
+                            "thought_signature"
+                        ] = thought_signature
+                    function = cast(ChatCompletionToolCallFunctionChunk, function_dict)
                 else:
-                    _tool_response_chunk = ChatCompletionToolCallChunk(
-                        id=f"call_{uuid.uuid4().hex[:28]}",
-                        type="function",
-                        function=_function_chunk,
-                        index=cumulative_tool_call_idx,
-                    )
+                    _tool_response_chunk: ChatCompletionToolCallChunk = {
+                        "id": f"call_{uuid.uuid4().hex[:28]}",
+                        "type": "function",
+                        "function": _function_chunk,
+                        "index": cumulative_tool_call_idx,
+                    }
+                    # Embed thought signature in ID for OpenAI client compatibility
+                    if thought_signature:
+                        _tool_response_chunk[
+                            "id"
+                        ] = _encode_tool_call_id_with_signature(
+                            _tool_response_chunk["id"] or "", thought_signature
+                        )
+                        _tool_response_chunk["provider_specific_fields"] = {  # type: ignore
+                            "thought_signature": thought_signature
+                        }
                     _tools.append(_tool_response_chunk)
                 cumulative_tool_call_idx += 1
         if len(_tools) == 0:
@@ -1170,7 +1347,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return False
 
     @staticmethod
-    def _calculate_usage(
+    def _calculate_usage(  # noqa: PLR0915
         completion_response: Union[
             GenerateContentResponseBody, BidiGenerateContentServerMessage
         ],
@@ -1205,6 +1382,30 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     response_tokens_details.audio_tokens = detail.get("tokenCount", 0)
         #########################################################
 
+        ## CANDIDATES TOKEN DETAILS (e.g., for image generation models) ##
+        if "candidatesTokensDetails" in usage_metadata:
+            if response_tokens_details is None:
+                response_tokens_details = CompletionTokensDetailsWrapper()
+            for detail in usage_metadata["candidatesTokensDetails"]:
+                modality = detail.get("modality")
+                token_count = detail.get("tokenCount", 0)
+                if modality == "TEXT":
+                    response_tokens_details.text_tokens = token_count
+                elif modality == "AUDIO":
+                    response_tokens_details.audio_tokens = token_count
+                elif modality == "IMAGE":
+                    response_tokens_details.image_tokens = token_count
+
+            # Calculate text_tokens if not explicitly provided in candidatesTokensDetails
+            # candidatesTokenCount includes all modalities, so: text = total - (image + audio)
+            if response_tokens_details.text_tokens is None:
+                candidates_token_count = usage_metadata.get("candidatesTokenCount", 0)
+                image_tokens = response_tokens_details.image_tokens or 0
+                audio_tokens_candidate = response_tokens_details.audio_tokens or 0
+                calculated_text_tokens = candidates_token_count - image_tokens - audio_tokens_candidate
+                response_tokens_details.text_tokens = calculated_text_tokens
+        #########################################################
+
         if "promptTokensDetails" in usage_metadata:
             for detail in usage_metadata["promptTokensDetails"]:
                 if detail["modality"] == "AUDIO":
@@ -1213,6 +1414,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     text_tokens = detail.get("tokenCount", 0)
         if "thoughtsTokenCount" in usage_metadata:
             reasoning_tokens = usage_metadata["thoughtsTokenCount"]
+            # Also add reasoning tokens to response_tokens_details
+            if response_tokens_details is None:
+                response_tokens_details = CompletionTokensDetailsWrapper()
+            response_tokens_details.reasoning_tokens = reasoning_tokens
 
         ## adjust 'text_tokens' to subtract cached tokens
         if (
@@ -1298,6 +1503,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         from litellm.types.utils import Delta, StreamingChoices
 
+        annotations = chat_completion_message.get("annotations")  # type: ignore
         # create a streaming choice object
         choice = StreamingChoices(
             finish_reason=VertexGeminiConfig._check_finish_reason(
@@ -1310,6 +1516,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 tool_calls=tools,
                 images=image_response,
                 function_call=functions,
+                annotations=annotations,  # type: ignore
             ),
             logprobs=chat_completion_logprobs,
             enhancements=None,
@@ -1358,11 +1565,67 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         )
 
     @staticmethod
-    def _process_candidates(
+    def _convert_grounding_metadata_to_annotations(
+        grounding_metadata: List[dict],
+        content_text: Optional[str],
+    ) -> List[ChatCompletionAnnotation]:
+        """
+        Convert Vertex AI grounding metadata to OpenAI-style annotations.
+        """
+
+        annotations: List[ChatCompletionAnnotation] = []
+
+        for metadata in grounding_metadata:
+            # Extract groundingSupports - these map text segments to sources
+            grounding_supports = metadata.get("groundingSupports", [])
+            grounding_chunks = metadata.get("groundingChunks", [])
+
+            # Build a map of chunk indices to web URIs
+            chunk_to_uri_map: Dict[int, Dict[str, str]] = {}
+            for idx, chunk in enumerate(grounding_chunks):
+                if "web" in chunk:
+                    web_data = chunk["web"]
+                    chunk_to_uri_map[idx] = {
+                        "url": web_data.get("uri", ""),
+                        "title": web_data.get("title", ""),
+                    }
+
+            # Process each grounding support to create annotations
+            for support in grounding_supports:
+                segment = support.get("segment", {})
+                start_index = segment.get("startIndex")
+                end_index = segment.get("endIndex")
+
+                # Get the chunk indices for this support
+                chunk_indices = support.get("groundingChunkIndices", [])
+
+                if start_index is not None and end_index is not None and chunk_indices:
+                    # Use the first chunk's URL for the annotation
+                    first_chunk_idx = chunk_indices[0]
+                    if first_chunk_idx in chunk_to_uri_map:
+                        uri_info = chunk_to_uri_map[first_chunk_idx]
+
+                        url_citation: ChatCompletionAnnotationURLCitation = {
+                            "start_index": start_index,
+                            "end_index": end_index,
+                            "url": uri_info["url"],
+                            "title": uri_info["title"],
+                        }
+
+                        annotation: ChatCompletionAnnotation = {
+                            "type": "url_citation",
+                            "url_citation": url_citation,
+                        }
+                        annotations.append(annotation)
+        return annotations
+
+    @staticmethod
+    def _process_candidates(  # noqa: PLR0915
         _candidates: List[Candidates],
         model_response: Union[ModelResponse, "ModelResponseStream"],
         standard_optional_params: dict,
-    ) -> Tuple[List[dict], List[dict], List, List]:
+        cumulative_tool_call_index: int = 0,
+    ) -> Tuple[List[dict], List[dict], List, List, int]:
         """
         Helper method to process candidates and extract metadata
 
@@ -1371,6 +1634,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             url_context_metadata: List[dict]
             safety_ratings: List
             citation_metadata: List
+            cumulative_tool_call_index: int
         """
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             is_function_call,
@@ -1386,8 +1650,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         chat_completion_logprobs: Optional[ChoiceLogprobs] = None
         tools: Optional[List[ChatCompletionToolCallChunk]] = []
         functions: Optional[ChatCompletionToolCallFunctionChunk] = None
-        cumulative_tool_call_index: int = 0
         thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
+        reasoning_content: Optional[str] = None
 
         for idx, candidate in enumerate(_candidates):
             if "content" not in candidate:
@@ -1446,6 +1710,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
                 if reasoning_content is not None:
                     chat_completion_message["reasoning_content"] = reasoning_content
+
+                if candidate_grounding_metadata:
+                    annotations = (
+                        VertexGeminiConfig._convert_grounding_metadata_to_annotations(
+                            grounding_metadata=candidate_grounding_metadata,
+                            content_text=content,
+                        )
+                    )
+                    if annotations:
+                        chat_completion_message["annotations"] = annotations  # type: ignore
                 (
                     functions,
                     tools,
@@ -1469,6 +1743,22 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
             if thinking_blocks is not None:
                 chat_completion_message["thinking_blocks"] = thinking_blocks  # type: ignore
+
+                # Convert thinking_blocks to reasoning_content for streaming
+                # This ensures reasoning_content is available in streaming responses
+                if (
+                    isinstance(model_response, ModelResponseStream)
+                    and reasoning_content is None
+                ):
+                    reasoning_content_parts = []
+                    for block in thinking_blocks:
+                        thinking_text = block.get("thinking")
+                        if thinking_text:
+                            reasoning_content_parts.append(thinking_text)
+
+                    if reasoning_content_parts:
+                        reasoning_content = "\n".join(reasoning_content_parts)
+                        chat_completion_message["reasoning_content"] = reasoning_content
 
             if isinstance(model_response, ModelResponseStream):
                 choice = VertexGeminiConfig._create_streaming_choice(
@@ -1498,6 +1788,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             url_context_metadata,
             safety_ratings,
             citation_metadata,
+            cumulative_tool_call_index,
         )
 
     def transform_response(
@@ -1598,6 +1889,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     url_context_metadata,
                     safety_ratings,
                     citation_metadata,
+                    _,  # cumulative_tool_call_index not needed in non-streaming
                 ) = VertexGeminiConfig._process_candidates(
                     _candidates, model_response, logging_obj.optional_params
                 )
@@ -1645,9 +1937,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return model_response
 
     def _transform_messages(
-        self, messages: List[AllMessageValues]
+        self, messages: List[AllMessageValues], model: Optional[str] = None
     ) -> List[ContentType]:
-        return _gemini_convert_messages_with_history(messages=messages)
+        return _gemini_convert_messages_with_history(messages=messages, model=model)
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[Dict, httpx.Headers]
@@ -1675,13 +1967,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         messages: List[AllMessageValues],
         optional_params: Dict,
         litellm_params: Dict,
-        api_key: Optional[str] = None,
+        api_key: Optional[Union[str, Dict]] = None,
         api_base: Optional[str] = None,
     ) -> Dict:
         default_headers = {
             "Content-Type": "application/json",
         }
-        if api_key is not None:
+        if isinstance(api_key, dict):
+            default_headers.update(api_key)
+        elif api_key is not None:
             default_headers["Authorization"] = f"Bearer {api_key}"
         if headers is not None:
             default_headers.update(headers)
@@ -1704,7 +1998,9 @@ async def make_call(
         )
 
     try:
-        response = await client.post(api_base, headers=headers, data=data, stream=True, logging_obj=logging_obj)
+        response = await client.post(
+            api_base, headers=headers, data=data, stream=True, logging_obj=logging_obj
+        )
         response.raise_for_status()
     except httpx.HTTPStatusError as e:
         exception_string = str(await e.response.aread())
@@ -1751,7 +2047,9 @@ def make_sync_call(
     if client is None:
         client = HTTPHandler()  # Create a new client if none provided
 
-    response = client.post(api_base, headers=headers, data=data, stream=True, logging_obj=logging_obj)
+    response = client.post(
+        api_base, headers=headers, data=data, stream=True, logging_obj=logging_obj
+    )
 
     if response.status_code != 200 and response.status_code != 201:
         raise VertexAIError(
@@ -1806,7 +2104,6 @@ class VertexLLM(VertexBase):
         gemini_api_key: Optional[str] = None,
         extra_headers: Optional[dict] = None,
     ) -> CustomStreamWrapper:
-
         should_use_v1beta1_features = self.is_using_v1beta1_features(
             optional_params=optional_params
         )
@@ -1843,8 +2140,8 @@ class VertexLLM(VertexBase):
             **data,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_auth_header=auth_header)  # type: ignore
-
+            vertex_auth_header=auth_header,
+        )  # type: ignore
 
         ## LOGGING
         logging_obj.pre_call(
@@ -1937,7 +2234,8 @@ class VertexLLM(VertexBase):
             **data,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_auth_header=auth_header)  # type: ignore
+            vertex_auth_header=auth_header,
+        )  # type: ignore
 
         _async_client_params = {}
         if timeout:
@@ -1961,7 +2259,10 @@ class VertexLLM(VertexBase):
 
         try:
             response = await client.post(
-                api_base, headers=headers, json=cast(dict, request_body), logging_obj=logging_obj
+                api_base,
+                headers=headers,
+                json=cast(dict, request_body),
+                logging_obj=logging_obj,
             )  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
@@ -2115,9 +2416,10 @@ class VertexLLM(VertexBase):
         ## TRANSFORMATION ##
         data = sync_transform_request_body(
             **transform_request_params,
-            vertex_project=vertex_project, 
+            vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_auth_header=auth_header)
+            vertex_auth_header=auth_header,
+        )
 
         ## LOGGING
         logging_obj.pre_call(
@@ -2212,6 +2514,7 @@ class ModelResponseIterator:
         self.sent_first_chunk = False
         self.logging_obj = logging_obj
         self.is_function_call = check_is_function_call(logging_obj)
+        self.cumulative_tool_call_index: int = 0
 
     def chunk_parser(self, chunk: dict) -> Optional["ModelResponseStream"]:
         try:
@@ -2233,8 +2536,12 @@ class ModelResponseIterator:
                     url_context_metadata,
                     safety_ratings,
                     citation_metadata,
+                    self.cumulative_tool_call_index,
                 ) = VertexGeminiConfig._process_candidates(
-                    _candidates, model_response, self.logging_obj.optional_params
+                    _candidates,
+                    model_response,
+                    self.logging_obj.optional_params,
+                    cumulative_tool_call_index=self.cumulative_tool_call_index,
                 )
 
                 setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)  # type: ignore

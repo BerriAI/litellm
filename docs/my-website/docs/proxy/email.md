@@ -18,7 +18,7 @@ Send LiteLLM Proxy users emails for specific events.
 
 | Category | Details |
 |----------|---------|
-| Supported Events | • User added as a user on LiteLLM Proxy<br/>• Proxy API Key created for user |
+| Supported Events | • User added as a user on LiteLLM Proxy<br/>• Proxy API Key created for user<br/>• Proxy API Key rotated for user |
 | Supported Email Integrations | • Resend API<br/>• SMTP |
 
 ## Usage
@@ -123,6 +123,35 @@ On the Create Key Modal, Select Advanced Settings > Set Send Email to True.
   style={{width: '70%', display: 'block', margin: '0 0 2rem 0'}}
 />
 
+### 3. Proxy API Key Rotated for User
+
+This email is sent when you rotate an API key for a user on LiteLLM Proxy.
+
+<Image 
+  img={require('../../img/email_regen2.png')}
+  style={{maxHeight: '600px', width: 'auto', display: 'block', margin: '0 0 2rem 0'}}
+/>
+
+**How to trigger this event**
+
+On the LiteLLM Proxy UI, go to Virtual Keys > Click on a key > Click "Regenerate Key"
+
+:::info
+
+Ensure there is a `user_id` attached to the key. This would have been set when creating the key.
+
+:::
+
+<Image 
+  img={require('../../img/email_regen.png')}
+  style={{width: '70%', display: 'block', margin: '0 0 2rem 0'}}
+/>
+
+After regenerating the key, the user will receive an email notification with:
+- Security-focused messaging about the rotation
+- The new API key (or a placeholder if `EMAIL_INCLUDE_API_KEY=false`)
+- Instructions to update their applications
+- Security best practices
 
 ## Email Customization
 
@@ -141,6 +170,8 @@ LiteLLM allows you to customize various aspects of your email notifications. Bel
 | Email Signature | `EMAIL_SIGNATURE` | string (HTML) | Standard LiteLLM footer | `"<p>Best regards,<br/>Your Team</p><p><a href='https://your-company.com'>Visit us</a></p>"` | HTML-formatted footer for all emails |
 | Invitation Subject | `EMAIL_SUBJECT_INVITATION` | string | "LiteLLM: New User Invitation" | `"Welcome to Your Company!"` | Subject line for invitation emails |
 | Key Creation Subject | `EMAIL_SUBJECT_KEY_CREATED` | string | "LiteLLM: API Key Created" | `"Your New API Key is Ready"` | Subject line for key creation emails |
+| Key Rotation Subject | `EMAIL_SUBJECT_KEY_ROTATED` | string | "LiteLLM: API Key Rotated" | `"Your API Key Has Been Rotated"` | Subject line for key rotation emails |
+| Include API Key | `EMAIL_INCLUDE_API_KEY` | boolean | true | `"false"` | Whether to include the actual API key in emails (set to false for enhanced security) |
 | Proxy Base URL | `PROXY_BASE_URL` | string | http://0.0.0.0:4000 | `"https://proxy.your-company.com"` | Base URL for the LiteLLM Proxy (used in email links) |
 
 
@@ -181,10 +212,43 @@ EMAIL_SIGNATURE="<p>Best regards,<br/>Your Company Team</p><p><a href='https://y
 # Email Subject Lines
 EMAIL_SUBJECT_INVITATION="Welcome to Your Company!"  # Subject for invitation emails
 EMAIL_SUBJECT_KEY_CREATED="Your API Key is Ready"    # Subject for key creation emails
+EMAIL_SUBJECT_KEY_ROTATED="Your API Key Has Been Rotated"  # Subject for key rotation emails
+
+# Security Settings
+EMAIL_INCLUDE_API_KEY="false"  # Set to false to hide API keys in emails (default: true)
 
 # Proxy Configuration
 PROXY_BASE_URL="https://proxy.your-company.com"      # Base URL for the LiteLLM Proxy (used in email links)
 ```
+
+## Security: Hiding API Keys in Emails
+
+For enhanced security, you can configure LiteLLM to **not** include actual API keys in email notifications. This is useful when:
+
+- You want to reduce the risk of key exposure via email interception
+- Your security policy requires keys to only be retrieved from the secure dashboard
+- You're concerned about email forwarding or storage security
+
+When disabled, emails will show: `[Key hidden for security - retrieve from dashboard]` instead of the actual API key.
+
+**Configuration:**
+
+```bash
+# Hide API keys in emails (enhanced security)
+EMAIL_INCLUDE_API_KEY="false"
+
+# Include API keys in emails (default behavior)
+EMAIL_INCLUDE_API_KEY="true"  # or omit this variable
+```
+
+**Behavior:**
+
+| Setting | Key Created Email | Key Rotated Email |
+|---------|------------------|-------------------|
+| `true` (default) | Shows actual `sk-xxxxx` key | Shows actual `sk-xxxxx` key |
+| `false` | Shows placeholder message | Shows placeholder message |
+
+Users can always retrieve their keys from the LiteLLM Proxy dashboard.
 
 ## HTML Support in Email Signature
 

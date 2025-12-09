@@ -237,6 +237,7 @@ def init_bedrock_client(
             "sts",
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
+            verify=ssl_verify
         )
 
         sts_response = sts_client.assume_role(
@@ -445,17 +446,18 @@ class BedrockModelInfo(BaseLLMModelInfo):
     @staticmethod
     def get_bedrock_route(
         model: str,
-    ) -> Literal["converse", "invoke", "converse_like", "agent", "async_invoke"]:
+    ) -> Literal["converse", "invoke", "converse_like", "agent", "agentcore", "async_invoke"]:
         """
         Get the bedrock route for the given model.
         """
         route_mappings: Dict[
-            str, Literal["invoke", "converse_like", "converse", "agent", "async_invoke"]
+            str, Literal["invoke", "converse_like", "converse", "agent", "agentcore", "async_invoke"]
         ] = {
             "invoke/": "invoke",
             "converse_like/": "converse_like",
             "converse/": "converse",
             "agent/": "agent",
+            "agentcore/": "agentcore",
             "async_invoke/": "async_invoke",
         }
 
@@ -493,6 +495,13 @@ class BedrockModelInfo(BaseLLMModelInfo):
         Check if the model is an explicit agent route.
         """
         return "agent/" in model
+
+    @staticmethod
+    def _explicit_agentcore_route(model: str) -> bool:
+        """
+        Check if the model is an explicit agentcore route.
+        """
+        return "agentcore/" in model
 
     @staticmethod
     def _explicit_converse_like_route(model: str) -> bool:
@@ -536,6 +545,65 @@ class BedrockModelInfo(BaseLLMModelInfo):
         # These routes will go through litellm.completion()
         #########################################################
         return None
+
+
+def get_bedrock_chat_config(model: str):
+    """
+    Helper function to get the appropriate Bedrock chat config based on model and route.
+    
+    Args:
+        model: The model name/identifier
+        
+    Returns:
+        The appropriate Bedrock config class instance
+    """
+    bedrock_route = BedrockModelInfo.get_bedrock_route(model)
+    bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
+        model=model
+    )
+    base_model = BedrockModelInfo.get_base_model(model)
+
+    # Handle explicit routes first
+    if bedrock_route == "converse" or bedrock_route == "converse_like":
+        return litellm.AmazonConverseConfig()
+    elif bedrock_route == "agent":
+        from litellm.llms.bedrock.chat.invoke_agent.transformation import (
+            AmazonInvokeAgentConfig,
+        )
+        return AmazonInvokeAgentConfig()
+    elif bedrock_route == "agentcore":
+        from litellm.llms.bedrock.chat.agentcore.transformation import (
+            AmazonAgentCoreConfig,
+        )
+        return AmazonAgentCoreConfig()
+
+    # Handle provider-specific configs
+    if bedrock_invoke_provider == "amazon":
+        return litellm.AmazonTitanConfig()
+    elif bedrock_invoke_provider == "anthropic":
+        if (
+            base_model
+            in litellm.AmazonAnthropicConfig.get_legacy_anthropic_model_names()
+        ):
+            return litellm.AmazonAnthropicConfig()
+        else:
+            return litellm.AmazonAnthropicClaudeConfig()
+    elif bedrock_invoke_provider == "meta" or bedrock_invoke_provider == "llama":
+        return litellm.AmazonLlamaConfig()
+    elif bedrock_invoke_provider == "ai21":
+        return litellm.AmazonAI21Config()
+    elif bedrock_invoke_provider == "cohere":
+        return litellm.AmazonCohereConfig()
+    elif bedrock_invoke_provider == "mistral":
+        return litellm.AmazonMistralConfig()
+    elif bedrock_invoke_provider == "deepseek_r1":
+        return litellm.AmazonDeepSeekR1Config()
+    elif bedrock_invoke_provider == "nova":
+        return litellm.AmazonInvokeNovaConfig()
+    elif bedrock_invoke_provider == "qwen3":
+        return litellm.AmazonQwen3Config()
+    else:
+        return litellm.AmazonInvokeConfig()
 
 
 class BedrockEventStreamDecoderBase:

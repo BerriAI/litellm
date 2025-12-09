@@ -46,3 +46,18 @@ export const formatMetadataForDisplay = (
   const filtered = filterSensitiveMetadata(metadata);
   return JSON.stringify(filtered, null, indent);
 };
+
+/**
+ * Removes the top-level "tags" property from a metadata object.
+ * This prevents duplicated tag information in UIs where tags are managed separately.
+ * @param metadata - The metadata value to process; returned as-is if not an object
+ * @returns A shallow copy of the object without the "tags" key, or the original value for non-objects
+ */
+export const stripTagsFromMetadata = (metadata: any) => {
+  if (!metadata || typeof metadata !== "object") {
+    return metadata;
+  }
+  // Remove tags key from metadata shown in textarea to avoid duplication
+  const { tags, ...rest } = metadata as Record<string, any>;
+  return rest;
+};

@@ -612,7 +612,7 @@ async def test_datadog_message_redaction():
         
         # Apply redaction using the inherited method
         redacted_details = dd_logger.redact_standard_logging_payload_from_model_call_details(model_call_details)
-        redacted_str = LiteLLMCommonStrings.redacted_by_litellm.value
+        redacted_str = "redacted-by-litellm"
         
         # Verify that messages are redacted
         redacted_standard_obj = redacted_details["standard_logging_object"]
@@ -629,3 +629,29 @@ async def test_datadog_message_redaction():
         # Clean up
         litellm.datadog_params = None
         litellm.callbacks = []
+
+
+def test_datadog_agent_configuration():
+    """
+    Test that DataDog logger correctly configures agent endpoint when DD_AGENT_HOST is set
+    """
+    test_env = {
+        "DD_AGENT_HOST": "localhost",
+        "DD_AGENT_PORT": "10518",
+    }
+    
+    # Remove DD_SITE and DD_API_KEY to verify they're not required for agent mode
+    env_to_remove = ["DD_SITE", "DD_API_KEY"]
+    
+    with patch.dict(os.environ, test_env, clear=False):
+        for key in env_to_remove:
+            os.environ.pop(key, None)
+        
+        with patch("asyncio.create_task"):
+            dd_logger = DataDogLogger()
+        
+        # Verify agent endpoint is configured correctly
+        assert dd_logger.intake_url == "http://localhost:10518/api/v2/logs", f"Expected agent URL, got {dd_logger.intake_url}"
+        
+        # Verify DD_API_KEY is optional (can be None)
+        assert dd_logger.DD_API_KEY is None or isinstance(dd_logger.DD_API_KEY, str)

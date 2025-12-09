@@ -56,11 +56,31 @@ litellm_settings:
 
 **Step 2**: Set Required env variables for datadog
 
+#### Direct API
+
+Send logs directly to Datadog API:
+
 ```shell
 DD_API_KEY="5f2d0f310***********" # your datadog API Key
 DD_SITE="us5.datadoghq.com"       # your datadog base url
 DD_SOURCE="litellm_dev"       # [OPTIONAL] your datadog source. use to differentiate dev vs. prod deployments
 ```
+
+#### Via DataDog Agent
+
+Send logs through a local DataDog agent (useful for containerized environments):
+
+```shell
+DD_AGENT_HOST="localhost"         # hostname or IP of DataDog agent
+DD_AGENT_PORT="10518"             # [OPTIONAL] port of DataDog agent (default: 10518)
+DD_API_KEY="5f2d0f310***********" # [OPTIONAL] your datadog API Key (agent handles auth)
+DD_SOURCE="litellm_dev"           # [OPTIONAL] your datadog source
+```
+
+When `DD_AGENT_HOST` is set, logs are sent to the agent instead of directly to DataDog API. This is useful for:
+- Centralized log shipping in containerized environments
+- Reducing direct API calls from multiple services
+- Leveraging agent-side processing and filtering
 
 **Step 3**: Start the proxy, make a test request
 
@@ -169,12 +189,17 @@ LiteLLM supports customizing the following Datadog environment variables
 
 | Environment Variable | Description | Default Value | Required |
 |---------------------|-------------|---------------|----------|
-| `DD_API_KEY` | Your Datadog API key for authentication | None | ✅ Yes |
-| `DD_SITE` | Your Datadog site (e.g., "us5.datadoghq.com") | None | ✅ Yes |
+| `DD_API_KEY` | Your Datadog API key for authentication (required for direct API, optional for agent) | None | Conditional* |
+| `DD_SITE` | Your Datadog site (e.g., "us5.datadoghq.com") (required for direct API) | None | Conditional* |
+| `DD_AGENT_HOST` | Hostname or IP of DataDog agent (e.g., "localhost"). When set, logs are sent to agent instead of direct API | None | ❌ No |
+| `DD_AGENT_PORT` | Port of DataDog agent for log intake | "10518" | ❌ No |
 | `DD_ENV` | Environment tag for your logs (e.g., "production", "staging") | "unknown" | ❌ No |
 | `DD_SERVICE` | Service name for your logs | "litellm-server" | ❌ No |
 | `DD_SOURCE` | Source name for your logs | "litellm" | ❌ No |
 | `DD_VERSION` | Version tag for your logs | "unknown" | ❌ No |
 | `HOSTNAME` | Hostname tag for your logs | "" | ❌ No |
 | `POD_NAME` | Pod name tag (useful for Kubernetes deployments) | "unknown" | ❌ No |
+
+\* **Required when using Direct API** (default): `DD_API_KEY` and `DD_SITE` are required  
+\* **Optional when using DataDog Agent**: Set `DD_AGENT_HOST` to use agent mode; `DD_API_KEY` and `DD_SITE` are not required
 

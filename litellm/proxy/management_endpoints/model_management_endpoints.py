@@ -287,7 +287,7 @@ async def _add_model_to_db(
 ) -> Optional[LiteLLM_ProxyModelTable]:
     # encrypt litellm params #
     _litellm_params_dict = model_params.litellm_params.dict(exclude_none=True)
-    _orignal_litellm_model_name = model_params.litellm_params.model
+    _original_litellm_model_name = model_params.litellm_params.model
     for k, v in _litellm_params_dict.items():
         encrypted_value = encrypt_value_helper(
             value=v, new_encryption_key=new_encryption_key

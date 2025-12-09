@@ -24,6 +24,7 @@ from litellm.proxy.management_endpoints.budget_management_endpoints import (
     new_budget,
     update_budget,
 )
+from litellm.proxy.management_endpoints.common_utils import _set_object_metadata_field
 from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
 )
@@ -32,29 +33,32 @@ from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,
 )
 from litellm.proxy.utils import PrismaClient
+from litellm.utils import _update_dictionary
 
 router = APIRouter()
 
 
-def handle_nested_budget_structure_in_organization_update_request(raw_data: dict) -> dict:
+def handle_nested_budget_structure_in_organization_update_request(
+    raw_data: dict,
+) -> dict:
     """
     Transform organization update request to handle UI payload format.
-    
+
     The UI sends nested budget data in 'litellm_budget_table', but our
     model expects flat budget fields at the top level.
     """
     transformed_data = raw_data.copy()
-    
+
     # Handle nested budget structure from UI
-    if 'litellm_budget_table' in transformed_data:
-        budget_data = transformed_data.pop('litellm_budget_table', {})
+    if "litellm_budget_table" in transformed_data:
+        budget_data = transformed_data.pop("litellm_budget_table", {})
         if budget_data:
             # Extract valid budget fields and merge into top level
             budget_fields = LiteLLM_BudgetTable.model_fields.keys()
             for key, value in budget_data.items():
                 if key in budget_fields and value is not None:
                     transformed_data[key] = value
-    
+
     return transformed_data
 
 
@@ -84,6 +88,8 @@ async def new_organization(
     - max_budget: *Optional[float]* - Max budget for org
     - tpm_limit: *Optional[int]* - Max tpm limit for org
     - rpm_limit: *Optional[int]* - Max rpm limit for org
+    - model_rpm_limit: *Optional[Dict[str, int]]* - The RPM (Requests Per Minute) limit per model for this organization.
+    - model_tpm_limit: *Optional[Dict[str, int]]* - The TPM (Tokens Per Minute) limit per model for this organization.
     - max_parallel_requests: *Optional[int]* - [Not Implemented Yet] Max parallel requests for org
     - soft_budget: *Optional[float]* - [Not Implemented Yet] Get a slack alert when this soft budget is reached. Don't block requests.
     - model_max_budget: *Optional[dict]* - Max budget for a specific model
@@ -224,6 +230,15 @@ async def new_organization(
         created_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
         updated_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
     )
+
+    for field in LiteLLM_ManagementEndpoint_MetadataFields:
+        if getattr(data, field, None) is not None:
+            _set_object_metadata_field(
+                object_data=organization_row,
+                field_name=field,
+                value=getattr(data, field),
+            )
+
     new_organization_row = prisma_client.jsonify_object(
         organization_row.json(exclude_none=True)
     )
@@ -233,7 +248,8 @@ async def new_organization(
     response = await prisma_client.db.litellm_organizationtable.create(
         data={
             **new_organization_row,  # type: ignore
-        }
+        },
+        include={"litellm_budget_table": True},
     )
 
     return response
@@ -294,17 +310,16 @@ async def update_organization(
 
     # Transform UI payload to expected format
     raw_data = await request.json()
-    raw_data_with_flat_budget_fields = handle_nested_budget_structure_in_organization_update_request(raw_data)
-    
+    raw_data_with_flat_budget_fields = (
+        handle_nested_budget_structure_in_organization_update_request(raw_data)
+    )
+
     # Create validated data model
     data = LiteLLM_OrganizationTableUpdate(**raw_data_with_flat_budget_fields)
-    
+
     if data.updated_by is None:
         data.updated_by = user_api_key_dict.user_id
 
-    updated_organization_row = prisma_client.jsonify_object(
-        data.model_dump(exclude_none=True)
-    )
     existing_organization_row = (
         await prisma_client.db.litellm_organizationtable.find_unique(
             where={"organization_id": data.organization_id},
@@ -316,6 +331,19 @@ async def update_organization(
             f"Organization not found for organization_id={data.organization_id}"
         )
 
+    updated_organization_row_json = data.model_dump(exclude_none=True)
+    # Merge metadata from existing organization with updated metadata
+    if updated_organization_row_json.get("metadata") is not None:
+        existing_metadata = existing_organization_row.metadata or {}
+        updated_metadata = updated_organization_row_json.get("metadata", {})
+        merged_metadata = _update_dictionary(
+            existing_dict=existing_metadata.copy(), new_dict=updated_metadata
+        )
+        updated_organization_row_json["metadata"] = merged_metadata
+
+    updated_organization_row = prisma_client.jsonify_object(
+        updated_organization_row_json
+    )
     if data.object_permission is not None:
         updated_organization_row = await handle_update_object_permission(
             data_json=updated_organization_row,
@@ -323,18 +351,20 @@ async def update_organization(
         )
 
     # Handle budget updates if budget fields are provided
-    budget_fields = {k: v for k, v in data.model_dump().items() 
-                    if k in LiteLLM_BudgetTable.model_fields.keys() and v is not None}
-    
+    budget_fields = {
+        k: v
+        for k, v in data.model_dump().items()
+        if k in LiteLLM_BudgetTable.model_fields.keys() and v is not None
+    }
+
     if budget_fields and existing_organization_row.budget_id:
         await update_budget(
             budget_obj=BudgetNewRequest(
-                budget_id=existing_organization_row.budget_id,
-                **budget_fields
+                budget_id=existing_organization_row.budget_id, **budget_fields
             ),
             user_api_key_dict=user_api_key_dict,
         )
-    
+
     # Remove budget fields from organization update data
     for field in LiteLLM_BudgetTable.model_fields.keys():
         updated_organization_row.pop(field, None)
@@ -502,16 +532,16 @@ async def info_organization(organization_id: str):
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
-    response: Optional[
-        LiteLLM_OrganizationTableWithMembers
-    ] = await prisma_client.db.litellm_organizationtable.find_unique(
-        where={"organization_id": organization_id},
-        include={
-            "litellm_budget_table": True,
-            "members": True,
-            "teams": True,
-            "object_permission": True,
-        },
+    response: Optional[LiteLLM_OrganizationTableWithMembers] = (
+        await prisma_client.db.litellm_organizationtable.find_unique(
+            where={"organization_id": organization_id},
+            include={
+                "litellm_budget_table": True,
+                "members": True,
+                "teams": True,
+                "object_permission": True,
+            },
+        )
     )
 
     if response is None:
@@ -807,16 +837,16 @@ async def organization_member_update(
                 },
                 data={"budget_id": budget_id},
             )
-        final_organization_membership: Optional[
-            BaseModel
-        ] = await prisma_client.db.litellm_organizationmembership.find_unique(
-            where={
-                "user_id_organization_id": {
-                    "user_id": data.user_id,
-                    "organization_id": data.organization_id,
-                }
-            },
-            include={"litellm_budget_table": True},
+        final_organization_membership: Optional[BaseModel] = (
+            await prisma_client.db.litellm_organizationmembership.find_unique(
+                where={
+                    "user_id_organization_id": {
+                        "user_id": data.user_id,
+                        "organization_id": data.organization_id,
+                    }
+                },
+                include={"litellm_budget_table": True},
+            )
         )
 
         if final_organization_membership is None:

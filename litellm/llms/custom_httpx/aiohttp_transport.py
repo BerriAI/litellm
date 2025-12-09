@@ -18,6 +18,7 @@ from litellm.secret_managers.main import str_to_bool
 AIOHTTP_EXC_MAP: Dict = {
     # Order matters here, most specific exception first
     # Timeout related exceptions
+    asyncio.TimeoutError: httpx.TimeoutException,
     aiohttp.ServerTimeoutError: httpx.TimeoutException,
     aiohttp.ConnectionTimeoutError: httpx.ConnectTimeout,
     aiohttp.SocketTimeoutError: httpx.ReadTimeout,
@@ -95,6 +96,15 @@ class AiohttpResponseStream(httpx.AsyncByteStream):
             # If the error is due to incomplete transfer encoding, we can still
             # return what we've received so far, similar to how httpx handles it
             return
+        except RuntimeError as e:
+            # Some providers (e.g., SSE streams) may close the connection
+            # causing aiohttp StreamReader to raise a generic RuntimeError
+            # with message "Connection closed.". Treat this as a graceful
+            # end-of-stream so downstream consumers don't error.
+            if "Connection closed" in str(e):
+                verbose_logger.debug("Upstream closed streaming connection; ending iterator gracefully")
+                return
+            raise
         except aiohttp.http_exceptions.TransferEncodingError as e:
             # Handle transfer encoding errors gracefully
             verbose_logger.debug(f"Transfer encoding error, but continuing: {e}")
@@ -244,6 +254,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             allow_redirects=False,
             auto_decompress=False,
             timeout=ClientTimeout(
+                total=timeout.get("read"),
                 sock_connect=timeout.get("connect"),
                 sock_read=timeout.get("read"),
                 connect=timeout.get("pool"),

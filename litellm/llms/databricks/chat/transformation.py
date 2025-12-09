@@ -26,7 +26,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     _should_convert_tool_call_to_json_mode,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    strip_name_from_messages,
+    strip_name_from_message
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.llms.anthropic import AllAnthropicToolsValues
@@ -43,6 +43,7 @@ from litellm.types.llms.openai import (
     ChatCompletionThinkingBlock,
     ChatCompletionToolChoiceFunctionParam,
     ChatCompletionToolChoiceObjectParam,
+    ChatCompletionToolParam,
 )
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
@@ -217,6 +218,21 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         databricks_tool = self.convert_anthropic_tool_to_databricks_tool(tool)
         return databricks_tool
 
+    def remove_cache_control_flag_from_messages_and_tools(
+        self,
+        model: str,  # allows overrides to selectively run this
+        messages: List[AllMessageValues],
+        tools: Optional[List["ChatCompletionToolParam"]] = None,
+    ) -> Tuple[List[AllMessageValues], Optional[List["ChatCompletionToolParam"]]]:
+        """
+        Override the parent class method to preserve cache_control for models on Databricks.
+        Databricks supports Anthropic-style cache control for Claude models.
+        Databricks ignores the cache_control flag with other models.
+        """
+        # TODO: Think about how to best design the request transformation so that 
+        # every request doesn't have to be transformed for to OpenAI and Anthropic request formats.
+        return messages, tools
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -316,8 +332,11 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 _message = message.model_dump(exclude_none=True)
             else:
                 _message = message
+            _message = strip_name_from_message(_message, allowed_name_roles=["user"])
+            # Move message-level cache_control into a content block when content is a string.
+            if "cache_control" in _message and isinstance(_message.get("content"), str):
+                _message = self._move_cache_control_into_string_content_block(_message)
             new_messages.append(_message)
-        new_messages = strip_name_from_messages(new_messages)
 
         if is_async:
             return super()._transform_messages(
@@ -327,6 +346,32 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             return super()._transform_messages(
                 messages=new_messages, model=model, is_async=cast(Literal[False], False)
             )
+
+    def _move_cache_control_into_string_content_block(self, message: AllMessageValues) -> AllMessageValues:
+        """
+        Moves message-level cache_control into a content block when content is a string.
+        
+        Transforms:
+            {"role": "user", "content": "text", "cache_control": {...}}
+        Into:
+            {"role": "user", "content": [{"type": "text", "text": "text", "cache_control": {...}}]}
+        
+        This is required for Anthropic's prompt caching API when cache_control is specified
+        at the message level but content is a simple string (not already an array of content blocks).
+        """
+        content = message.get("content")
+        # Create new message with cache_control moved into content block
+        transformed_message = cast(dict[str, Any], message.copy())
+        cache_control = transformed_message.pop("cache_control")
+        transformed_message["content"] = [
+            {
+                "type": "text",
+                "text": content,
+                "cache_control": cache_control,
+            }
+        ]
+        return cast(AllMessageValues, transformed_message)
+        
 
     @staticmethod
     def extract_content_str(
@@ -595,7 +640,7 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
                     for _tc in tool_calls:
                         if _tc.get("function", {}).get("arguments") == "{}":
                             _tc["function"]["arguments"] = ""  # avoid invalid json
-                if isinstance(choice["delta"]["content"], list) and (
+                if isinstance(choice["delta"].get("content"), list) and (
                     content := choice["delta"]["content"]
                 ):
                     if citations := content[0].get("citations"):

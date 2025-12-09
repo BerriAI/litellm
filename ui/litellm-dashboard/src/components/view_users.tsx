@@ -1,31 +1,34 @@
-import React, { useState, useEffect } from "react";
-import { Tab, TabGroup, TabList, TabPanels, TabPanel } from "@tremor/react";
+import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
+import React, { useEffect, useState } from "react";
 
-import {
-  userUpdateUserCall,
-  getPossibleUserRoles,
-  userListCall,
-  UserListResponse,
-  invitationCreateCall,
-  getProxyBaseUrl,
-} from "./networking";
 import { Button } from "@tremor/react";
+import BulkEditUserModal from "./bulk_edit_user";
 import CreateUser from "./create_user_button";
 import EditUserModal from "./edit_user";
-import OnboardingModal from "./onboarding_link";
-import { InvitationLink } from "./onboarding_link";
-import BulkEditUserModal from "./bulk_edit_user";
+import {
+  getPossibleUserRoles,
+  getProxyBaseUrl,
+  invitationCreateCall,
+  userListCall,
+  UserListResponse,
+  userUpdateUserCall,
+} from "./networking";
+import OnboardingModal, { InvitationLink } from "./onboarding_link";
 
-import { userDeleteCall, modelAvailableCall } from "./networking";
+import { updateExistingKeys } from "@/utils/dataUtils";
+import { isAdminRole } from "@/utils/roles";
+import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Typography } from "antd";
+import DeleteResourceModal from "./common_components/DeleteResourceModal";
+import NotificationsManager from "./molecules/notifications_manager";
+import { modelAvailableCall, userDeleteCall } from "./networking";
+import SSOSettings from "./SSOSettings";
 import { columns } from "./view_users/columns";
 import { UserDataTable } from "./view_users/table";
 import { UserInfo } from "./view_users/types";
-import SSOSettings from "./SSOSettings";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { updateExistingKeys } from "@/utils/dataUtils";
-import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
-import { isAdminRole } from "@/utils/roles";
-import NotificationsManager from "./molecules/notifications_manager";
+
+const { Text, Title } = Typography;
 
 interface ViewUserDashboardProps {
   accessToken: string | null;
@@ -71,7 +74,8 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [selectedUser, setSelectedUser] = useState<UserInfo | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [userToDelete, setUserToDelete] = useState<string | null>(null);
+  const [isDeletingUser, setIsDeletingUser] = useState(false);
+  const [userToDelete, setUserToDelete] = useState<UserInfo | null>(null);
   const [activeTab, setActiveTab] = useState("users");
   const [filters, setFilters] = useState<FilterState>(initialFilters);
   const [debouncedFilters, setDebouncedFilters, debouncer] = useDebouncedState(filters, { wait: 300 });
@@ -83,8 +87,8 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
   const [selectionMode, setSelectionMode] = useState(false);
   const [userModels, setUserModels] = useState<string[]>([]);
 
-  const handleDelete = (userId: string) => {
-    setUserToDelete(userId);
+  const handleDelete = (user: UserInfo) => {
+    setUserToDelete(user);
     setIsDeleteModalOpen(true);
   };
 
@@ -148,12 +152,13 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
   const confirmDelete = async () => {
     if (userToDelete && accessToken) {
       try {
-        await userDeleteCall(accessToken, [userToDelete]);
+        setIsDeletingUser(true);
+        await userDeleteCall(accessToken, [userToDelete.user_id]);
 
         // Update the user list after deletion
         queryClient.setQueriesData<UserListResponse>({ queryKey: ["userList"] }, (previousData) => {
           if (previousData === undefined) return previousData;
-          const updatedUsers = previousData.users.filter((user) => user.user_id !== userToDelete);
+          const updatedUsers = previousData.users.filter((user) => user.user_id !== userToDelete.user_id);
           return { ...previousData, users: updatedUsers };
         });
 
@@ -161,10 +166,12 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
       } catch (error) {
         console.error("Error deleting user:", error);
         NotificationsManager.fromBackend("Failed to delete user");
+      } finally {
+        setIsDeleteModalOpen(false);
+        setUserToDelete(null);
+        setIsDeletingUser(false);
       }
     }
-    setIsDeleteModalOpen(false);
-    setUserToDelete(null);
   };
 
   const cancelDelete = () => {
@@ -370,42 +377,25 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
         onSubmit={handleEditSubmit}
       />
 
-      {/* Delete Confirmation Modal */}
-      {isDeleteModalOpen && (
-        <div className="fixed z-10 inset-0 overflow-y-auto">
-          <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-            <div className="fixed inset-0 transition-opacity" aria-hidden="true">
-              <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
-            </div>
-
-            {/* Modal Panel */}
-            <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">
-              &#8203;
-            </span>
-
-            {/* Confirmation Modal Content */}
-            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                <div className="sm:flex sm:items-start">
-                  <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
-                    <h3 className="text-lg leading-6 font-medium text-gray-900">Delete User</h3>
-                    <div className="mt-2">
-                      <p className="text-sm text-gray-500">Are you sure you want to delete this user?</p>
-                      <p className="text-sm font-medium text-gray-900 mt-2">User ID: {userToDelete}</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                <Button onClick={confirmDelete} color="red" className="ml-2">
-                  Delete
-                </Button>
-                <Button onClick={cancelDelete}>Cancel</Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <DeleteResourceModal
+        isOpen={isDeleteModalOpen}
+        title="Delete User?"
+        message="Are you sure you want to delete this user? This action cannot be undone."
+        resourceInformationTitle="User Information"
+        resourceInformation={[
+          { label: "Email", value: userToDelete?.user_email },
+          { label: "User ID", value: userToDelete?.user_id, code: true },
+          {
+            label: "Global Proxy Role",
+            value:
+              (userToDelete && possibleUIRoles?.[userToDelete.user_role]?.ui_label) || userToDelete?.user_role || "-",
+          },
+          { label: "Total Spend (USD)", value: userToDelete?.spend?.toFixed(2) },
+        ]}
+        onCancel={cancelDelete}
+        onOk={confirmDelete}
+        confirmLoading={isDeletingUser}
+      />
 
       <OnboardingModal
         isInvitationLinkModalVisible={isInvitationLinkModalVisible}

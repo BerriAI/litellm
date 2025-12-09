@@ -193,3 +193,53 @@ async def test_bedrock_retrieve_batch():
         assert batch_response.input_file_id == "s3://test-bucket/input/test-input.jsonl"
         assert batch_response.output_file_id == "s3://test-bucket/output/"
 
+
+def test_bedrock_batch_with_encryption_key_in_post_request():
+    """
+    Test that s3_encryption_key_id is included in the AWS POST request payload.
+    """
+    import json
+    import litellm
+    
+    test_kms_key_id = "arn:aws:kms:us-west-2:123456789012:key/12345678-1234-1234-1234-123456789012"
+    
+    captured_request_body = None
+    
+    def mock_post(*args, **kwargs):
+        nonlocal captured_request_body
+        if "data" in kwargs:
+            captured_request_body = kwargs["data"]
+        
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "jobArn": "arn:aws:bedrock:us-west-2:123456789012:model-invocation-job/test-job",
+            "jobName": "test-job",
+            "status": "Submitted"
+        }
+        mock_response.status_code = 200
+        mock_response.raise_for_status.return_value = None
+        return mock_response
+    
+    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post", side_effect=mock_post):
+        response = litellm.create_batch(
+            completion_window="24h",
+            endpoint="/v1/chat/completions",
+            input_file_id="s3://test-bucket/input/test.jsonl",
+            custom_llm_provider="bedrock",
+            model="us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            s3_encryption_key_id=test_kms_key_id,
+            aws_batch_role_arn="arn:aws:iam::123456789012:role/test-role"
+        )
+    
+    assert captured_request_body is not None, "Request body was not captured"
+    
+    request_data = json.loads(captured_request_body)
+    print("REQUEST DATA to bedrock batch creation", json.dumps(request_data, indent=4))
+    
+    assert "outputDataConfig" in request_data
+    assert "s3OutputDataConfig" in request_data["outputDataConfig"]
+    assert "s3EncryptionKeyId" in request_data["outputDataConfig"]["s3OutputDataConfig"]
+    assert request_data["outputDataConfig"]["s3OutputDataConfig"]["s3EncryptionKeyId"] == test_kms_key_id
+    
+    print("SUCCESS: s3_encryption_key_id properly included in AWS POST request")
+

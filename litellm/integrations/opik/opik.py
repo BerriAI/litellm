@@ -3,10 +3,9 @@ Opik Logger that logs LLM events to an Opik server
 """
 
 import asyncio
-from datetime import timezone
-import json
 import traceback
-from typing import Dict, List
+from datetime import datetime
+from typing import Any, Dict, Optional
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
@@ -16,12 +15,22 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 
-from .utils import (
-    create_usage_object,
-    create_uuid7,
-    get_opik_config_variable,
-    get_traces_and_spans_from_payload,
-)
+from . import opik_payload_builder, utils
+
+try:
+    from opik.api_objects import opik_client
+except Exception:
+    opik_client = None
+
+
+def _should_skip_event(kwargs: Dict[str, Any]) -> bool:
+    """Check if event should be skipped due to missing standard_logging_object."""
+    if kwargs.get("standard_logging_object") is None:
+        verbose_logger.debug(
+            "OpikLogger skipping event; no standard_logging_object found"
+        )
+        return True
+    return False
 
 
 class OpikLogger(CustomBatchLogger):
@@ -29,76 +38,140 @@ class OpikLogger(CustomBatchLogger):
     Opik Logger for logging events to an Opik Server
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         self.async_httpx_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.LoggingCallback
         )
         self.sync_httpx_client = _get_httpx_client()
 
-        self.opik_project_name = get_opik_config_variable(
-            "project_name",
-            user_value=kwargs.get("project_name", None),
-            default_value="Default Project",
+        self.opik_project_name: str = (
+            utils.get_opik_config_variable(
+                "project_name",
+                user_value=kwargs.get("project_name", None),
+                default_value="Default Project",
+            )
+            or "Default Project"
         )
 
-        opik_base_url = get_opik_config_variable(
-            "url_override",
-            user_value=kwargs.get("url", None),
-            default_value="https://www.comet.com/opik/api",
+        opik_base_url: str = (
+            utils.get_opik_config_variable(
+                "url_override",
+                user_value=kwargs.get("url", None),
+                default_value="https://www.comet.com/opik/api",
+            )
+            or "https://www.comet.com/opik/api"
         )
-        opik_api_key = get_opik_config_variable(
+        opik_api_key: Optional[str] = utils.get_opik_config_variable(
             "api_key", user_value=kwargs.get("api_key", None), default_value=None
         )
-        opik_workspace = get_opik_config_variable(
+        opik_workspace: Optional[str] = utils.get_opik_config_variable(
             "workspace", user_value=kwargs.get("workspace", None), default_value=None
         )
 
-        self.trace_url = f"{opik_base_url}/v1/private/traces/batch"
-        self.span_url = f"{opik_base_url}/v1/private/spans/batch"
+        self.trace_url: str = f"{opik_base_url}/v1/private/traces/batch"
+        self.span_url: str = f"{opik_base_url}/v1/private/spans/batch"
 
-        self.headers = {}
+        self.headers: Dict[str, str] = {}
         if opik_workspace:
             self.headers["Comet-Workspace"] = opik_workspace
 
         if opik_api_key:
             self.headers["authorization"] = opik_api_key
 
-        self.opik_workspace = opik_workspace
-        self.opik_api_key = opik_api_key
+        self.opik_workspace: Optional[str] = opik_workspace
+        self.opik_api_key: Optional[str] = opik_api_key
         try:
             asyncio.create_task(self.periodic_flush())
-            self.flush_lock = asyncio.Lock()
+            self.flush_lock: Optional[asyncio.Lock] = asyncio.Lock()
         except Exception as e:
             verbose_logger.exception(
                 f"OpikLogger - Asynchronous processing not initialized as we are not running in an async context {str(e)}"
             )
             self.flush_lock = None
 
+        # Initialize _opik_client attribute
+        if opik_client is not None:
+            self._opik_client = opik_client.get_client_cached()
+        else:
+            self._opik_client = None
+
         super().__init__(**kwargs, flush_lock=self.flush_lock)
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self,
+        kwargs: Dict[str, Any],
+        response_obj: Any,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> None:
         try:
-            opik_payload = self._create_opik_payload(
+            if _should_skip_event(kwargs):
+                return
+
+            # Build payload using the payload builder
+            trace_payload, span_payload = opik_payload_builder.build_opik_payload(
                 kwargs=kwargs,
                 response_obj=response_obj,
                 start_time=start_time,
                 end_time=end_time,
+                project_name=self.opik_project_name,
             )
 
-            self.log_queue.extend(opik_payload)
-            verbose_logger.debug(
-                f"OpikLogger added event to log_queue - Will flush in {self.flush_interval} seconds..."
-            )
+            if self._opik_client is not None:
+                # Opik native client is available, use it to send data
+                if trace_payload is not None:
+                    self._opik_client.trace(
+                        id=trace_payload.id,
+                        name=trace_payload.name,
+                        start_time=datetime.fromisoformat(trace_payload.start_time),
+                        end_time=datetime.fromisoformat(trace_payload.end_time),
+                        input=trace_payload.input,
+                        output=trace_payload.output,
+                        metadata=trace_payload.metadata,
+                        tags=trace_payload.tags,
+                        thread_id=trace_payload.thread_id,
+                        project_name=trace_payload.project_name,
+                    )
 
-            if len(self.log_queue) >= self.batch_size:
-                verbose_logger.debug("OpikLogger - Flushing batch")
-                await self.flush_queue()
+                self._opik_client.span(
+                    id=span_payload.id,
+                    trace_id=span_payload.trace_id,
+                    parent_span_id=span_payload.parent_span_id,
+                    name=span_payload.name,
+                    type=span_payload.type,
+                    model=span_payload.model,
+                    start_time=datetime.fromisoformat(span_payload.start_time),
+                    end_time=datetime.fromisoformat(span_payload.end_time),
+                    input=span_payload.input,
+                    output=span_payload.output,
+                    metadata=span_payload.metadata,
+                    tags=span_payload.tags,
+                    usage=span_payload.usage,
+                    project_name=span_payload.project_name,
+                    provider=span_payload.provider,
+                    total_cost=span_payload.total_cost,
+                )
+            else:
+                # Add payloads to LiteLLM queue
+                if trace_payload is not None:
+                    self.log_queue.append(trace_payload.__dict__)
+                self.log_queue.append(span_payload.__dict__)
+
+                verbose_logger.debug(
+                    f"OpikLogger added event to log_queue - Will flush in {self.flush_interval} seconds..."
+                )
+
+                if len(self.log_queue) >= self.batch_size:
+                    verbose_logger.debug("OpikLogger - Flushing batch")
+                    await self.flush_queue()
         except Exception as e:
             verbose_logger.exception(
                 f"OpikLogger failed to log success event - {str(e)}\n{traceback.format_exc()}"
             )
 
-    def _sync_send(self, url: str, headers: Dict[str, str], batch: Dict):
+    def _sync_send(
+        self, url: str, headers: Dict[str, str], batch: Dict[str, Any]
+    ) -> None:
         try:
             response = self.sync_httpx_client.post(
                 url=url, headers=headers, json=batch  # type: ignore
@@ -113,30 +186,82 @@ class OpikLogger(CustomBatchLogger):
                 f"OpikLogger failed to send batch - {str(e)}\n{traceback.format_exc()}"
             )
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(
+        self,
+        kwargs: Dict[str, Any],
+        response_obj: Any,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> None:
         try:
-            opik_payload = self._create_opik_payload(
+            if _should_skip_event(kwargs):
+                return
+
+            # Build payload using the payload builder
+            trace_payload, span_payload = opik_payload_builder.build_opik_payload(
                 kwargs=kwargs,
                 response_obj=response_obj,
                 start_time=start_time,
                 end_time=end_time,
+                project_name=self.opik_project_name,
             )
+            if self._opik_client is not None:
+                # Opik native client is available, use it to send data
+                if trace_payload is not None:
+                    self._opik_client.trace(
+                        id=trace_payload.id,
+                        name=trace_payload.name,
+                        start_time=datetime.fromisoformat(trace_payload.start_time),
+                        end_time=datetime.fromisoformat(trace_payload.end_time),
+                        input=trace_payload.input,
+                        output=trace_payload.output,
+                        metadata=trace_payload.metadata,
+                        tags=trace_payload.tags,
+                        thread_id=trace_payload.thread_id,
+                        project_name=trace_payload.project_name,
+                    )
 
-            traces, spans = get_traces_and_spans_from_payload(opik_payload)
-            if len(traces) > 0:
-                self._sync_send(
-                    url=self.trace_url, headers=self.headers, batch={"traces": traces}
+                self._opik_client.span(
+                    id=span_payload.id,
+                    trace_id=span_payload.trace_id,
+                    parent_span_id=span_payload.parent_span_id,
+                    name=span_payload.name,
+                    type=span_payload.type,
+                    model=span_payload.model,
+                    start_time=datetime.fromisoformat(span_payload.start_time),
+                    end_time=datetime.fromisoformat(span_payload.end_time),
+                    input=span_payload.input,
+                    output=span_payload.output,
+                    metadata=span_payload.metadata,
+                    tags=span_payload.tags,
+                    usage=span_payload.usage,
+                    project_name=span_payload.project_name,
+                    provider=span_payload.provider,
+                    total_cost=span_payload.total_cost,
                 )
-            if len(spans) > 0:
+            else:
+                # Opik native client is not available, use LiteLLM queue to send data
+                if trace_payload is not None:
+                    self._sync_send(
+                        url=self.trace_url,
+                        headers=self.headers,
+                        batch={"traces": [trace_payload.__dict__]},
+                    )
+
+                # Always send span
                 self._sync_send(
-                    url=self.span_url, headers=self.headers, batch={"spans": spans}
+                    url=self.span_url,
+                    headers=self.headers,
+                    batch={"spans": [span_payload.__dict__]},
                 )
         except Exception as e:
             verbose_logger.exception(
                 f"OpikLogger failed to log success event - {str(e)}\n{traceback.format_exc()}"
             )
 
-    async def _submit_batch(self, url: str, headers: Dict[str, str], batch: Dict):
+    async def _submit_batch(
+        self, url: str, headers: Dict[str, str], batch: Dict[str, Any]
+    ) -> None:
         try:
             response = await self.async_httpx_client.post(
                 url=url, headers=headers, json=batch  # type: ignore
@@ -154,8 +279,8 @@ class OpikLogger(CustomBatchLogger):
         except Exception as e:
             verbose_logger.exception(f"OpikLogger failed to send batch - {str(e)}")
 
-    def _create_opik_headers(self):
-        headers = {}
+    def _create_opik_headers(self) -> Dict[str, str]:
+        headers: Dict[str, str] = {}
         if self.opik_workspace:
             headers["Comet-Workspace"] = self.opik_workspace
 
@@ -163,13 +288,13 @@ class OpikLogger(CustomBatchLogger):
             headers["authorization"] = self.opik_api_key
         return headers
 
-    async def async_send_batch(self):
+    async def async_send_batch(self) -> None:
         verbose_logger.info("Calling async_send_batch")
         if not self.log_queue:
             return
 
         # Split the log_queue into traces and spans
-        traces, spans = get_traces_and_spans_from_payload(self.log_queue)
+        traces, spans = utils.get_traces_and_spans_from_payload(self.log_queue)
 
         # Send trace batch
         if len(traces) > 0:
@@ -182,176 +307,3 @@ class OpikLogger(CustomBatchLogger):
                 url=self.span_url, headers=self.headers, batch={"spans": spans}
             )
             verbose_logger.info(f"Sent {len(spans)} spans")
-
-    def _create_opik_payload(  # noqa: PLR0915
-        self, kwargs, response_obj, start_time, end_time
-    ) -> List[Dict]:
-        # Get metadata
-        _litellm_params = kwargs.get("litellm_params", {}) or {}
-        litellm_params_metadata = _litellm_params.get("metadata", {}) or {}
-
-        # Extract opik metadata
-        litellm_opik_metadata = litellm_params_metadata.get("opik", {})
-        
-        # Use standard_logging_object to create metadata and input/output data
-        standard_logging_object = kwargs.get("standard_logging_object", None)
-        if standard_logging_object is None:
-            verbose_logger.debug(
-                "OpikLogger skipping event; no standard_logging_object found"
-            )
-            return []
-
-        # Update litellm_opik_metadata with opik metadata from requester
-        standard_logging_metadata = standard_logging_object.get("metadata", {}) or {}
-        requester_metadata = standard_logging_metadata.get("requester_metadata", {}) or {}
-        requester_opik_metadata = requester_metadata.get("opik", {}) or {}
-        litellm_opik_metadata.update(requester_opik_metadata)
-
-        verbose_logger.debug(
-            f"litellm_opik_metadata - {json.dumps(litellm_opik_metadata, default=str)}"
-        )
-        
-        project_name = litellm_opik_metadata.get("project_name", self.opik_project_name)
-
-        # Extract trace_id and parent_span_id
-        current_span_data = litellm_opik_metadata.get("current_span_data", None)
-        if isinstance(current_span_data, dict):
-            trace_id = current_span_data.get("trace_id", None)
-            parent_span_id = current_span_data.get("id", None)
-        elif current_span_data:
-            trace_id = current_span_data.trace_id
-            parent_span_id = current_span_data.id
-        else:
-            trace_id = None
-            parent_span_id = None
-        
-        # Create Opik tags
-        opik_tags = litellm_opik_metadata.get("tags", [])
-        if kwargs.get("custom_llm_provider"):
-            opik_tags.append(kwargs["custom_llm_provider"])
-        
-        # Get thread_id if present
-        thread_id = litellm_opik_metadata.get("thread_id", None)
-
-        # Override with any opik_ headers from proxy request
-        proxy_server_request = _litellm_params.get("proxy_server_request", {}) or {}
-        proxy_headers = proxy_server_request.get("headers", {}) or {}
-        for key, value in proxy_headers.items():
-            if key.startswith("opik_"):
-                param_key = key.replace("opik_", "", 1)
-                if param_key == "project_name" and value:
-                    project_name = value
-                elif param_key == "thread_id" and value:
-                    thread_id = value
-                elif param_key == "tags" and value:
-                    try:
-                        parsed_tags = json.loads(value)
-                        if isinstance(parsed_tags, list):
-                            opik_tags.extend(parsed_tags)
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-                    
-        # Create input and output data
-        input_data = standard_logging_object.get("messages", {})
-        output_data = standard_logging_object.get("response", {})
-
-        # Create usage object
-        usage = create_usage_object(response_obj["usage"])
-
-        # Define span and trace names
-        span_name = "%s_%s_%s" % (
-            response_obj.get("model", "unknown-model"),
-            response_obj.get("object", "unknown-object"),
-            response_obj.get("created", 0),
-        )
-        trace_name = response_obj.get("object", "unknown type")
-
-        # Create metadata object, we add the opik metadata first and then
-        # update it with the standard_logging_object metadata
-        metadata = litellm_opik_metadata
-        if "current_span_data" in metadata:
-            del metadata["current_span_data"]
-        metadata["created_from"] = "litellm"
-
-        metadata.update(standard_logging_metadata)
-        if "call_type" in standard_logging_object:
-            metadata["type"] = standard_logging_object["call_type"]
-        if "status" in standard_logging_object:
-            metadata["status"] = standard_logging_object["status"]
-        if "response_cost" in kwargs:
-            metadata["cost"] = {
-                "total_tokens": kwargs["response_cost"],
-                "currency": "USD",
-            }
-        if "response_cost_failure_debug_info" in kwargs:
-            metadata["response_cost_failure_debug_info"] = kwargs[
-                "response_cost_failure_debug_info"
-            ]
-        if "model_map_information" in standard_logging_object:
-            metadata["model_map_information"] = standard_logging_object[
-                "model_map_information"
-            ]
-        if "model" in standard_logging_object:
-            metadata["model"] = standard_logging_object["model"]
-        if "model_id" in standard_logging_object:
-            metadata["model_id"] = standard_logging_object["model_id"]
-        if "model_group" in standard_logging_object:
-            metadata["model_group"] = standard_logging_object["model_group"]
-        if "api_base" in standard_logging_object:
-            metadata["api_base"] = standard_logging_object["api_base"]
-        if "cache_hit" in standard_logging_object:
-            metadata["cache_hit"] = standard_logging_object["cache_hit"]
-        if "saved_cache_cost" in standard_logging_object:
-            metadata["saved_cache_cost"] = standard_logging_object["saved_cache_cost"]
-        if "error_str" in standard_logging_object:
-            metadata["error_str"] = standard_logging_object["error_str"]
-        if "model_parameters" in standard_logging_object:
-            metadata["model_parameters"] = standard_logging_object["model_parameters"]
-        if "hidden_params" in standard_logging_object:
-            metadata["hidden_params"] = standard_logging_object["hidden_params"]
-
-        payload = []
-        if trace_id is None:
-            trace_id = create_uuid7()
-            verbose_logger.debug(
-                f"OpikLogger creating payload for trace with id {trace_id}"
-            )
-        payload.append(
-            {
-                "project_name": project_name,
-                "id": trace_id,
-                "name": trace_name,
-                "start_time": start_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
-                "end_time": end_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
-                "input": input_data,
-                "output": output_data,
-                "metadata": metadata,
-                "tags": opik_tags,
-                "thread_id": thread_id,
-            }
-        )
-
-        span_id = create_uuid7()
-        verbose_logger.debug(
-            f"OpikLogger creating payload for trace with id {trace_id} and span with id {span_id}"
-        )
-        payload.append(
-            {
-                "id": span_id,
-                "project_name": project_name,
-                "trace_id": trace_id,
-                "parent_span_id": parent_span_id,
-                "name": span_name,
-                "type": "llm",
-                "start_time": start_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
-                "end_time": end_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
-                "input": input_data,
-                "output": output_data,
-                "metadata": metadata,
-                "tags": opik_tags,
-                "thread_id": thread_id,
-                "usage": usage,
-            }
-        )
-        verbose_logger.debug(f"Payload: {payload}")
-        return payload

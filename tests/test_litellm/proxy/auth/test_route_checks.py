@@ -1,4 +1,3 @@
-import asyncio
 import os
 import sys
 from unittest.mock import MagicMock, patch
@@ -284,7 +283,6 @@ def test_virtual_key_llm_api_routes_allows_registered_pass_through_endpoints():
     (e.g., /azure-assistant) and a virtual key with llm_api_routes permission should be able to access
     both the exact path and subpaths (e.g., /azure-assistant/openai/assistants).
     """
-    from unittest.mock import patch
 
     # Mock the registered pass-through routes
     mock_registered_routes = {
@@ -336,7 +334,6 @@ def test_virtual_key_without_llm_api_routes_cannot_access_pass_through():
     """
     Test that virtual keys without llm_api_routes permission cannot access registered pass-through endpoints.
     """
-    from unittest.mock import patch
 
     # Mock the registered pass-through routes
     mock_registered_routes = {
@@ -642,3 +639,96 @@ def test_check_passthrough_route_access_empty_list():
     )
 
     assert result is False
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/videos",
+        "/v1/videos",
+        "/videos/video_123",
+        "/v1/videos/video_123",
+        "/videos/video_123/content",
+        "/v1/videos/video_123/content",
+        "/videos/video_123/remix",
+        "/v1/videos/video_123/remix",
+    ],
+)
+def test_videos_route_is_llm_api_route(route):
+    """Test that video routes are recognized as LLM API routes"""
+
+    # Test that all video routes are recognized as LLM API routes
+    assert RouteChecks.is_llm_api_route(route) is True
+
+
+def test_videos_route_accessible_to_internal_users():
+    """
+    Test that internal users can access the videos routes.
+
+    This test verifies the fix for issue #16470:
+    https://github.com/BerriAI/litellm/issues/16470
+
+    Videos routes should be accessible to internal_user role since video generation
+    is a legitimate user feature, not a management/admin-only feature.
+    """
+
+    # Create an internal user object
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    # Create an internal user API key auth
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    # Create a mock request
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    # Test that calling /v1/videos route does NOT raise an exception
+    # Since videos is now in openai_routes, it should be accessible to internal users
+    try:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/v1/videos",
+            request=request,
+            valid_token=valid_token,
+            request_data={"model": "sora-2", "prompt": "test video"},
+        )
+        # If no exception is raised, the test passes
+    except Exception as e:
+        pytest.fail(
+            f"Internal user should be able to access /v1/videos route. Got error: {str(e)}"
+        )
+
+
+def test_videos_route_with_virtual_key_llm_api_routes():
+    """Test that virtual keys with llm_api_routes permission can access videos endpoints"""
+
+    # Create a virtual key with llm_api_routes permission
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["llm_api_routes"],
+    )
+
+    # Test that all video routes are accessible
+    test_routes = [
+        "/v1/videos",
+        "/videos",
+        "/v1/videos/video_123",
+        "/videos/video_123/content",
+        "/v1/videos/video_123/remix",
+    ]
+
+    for route in test_routes:
+        result = RouteChecks.is_virtual_key_allowed_to_call_route(
+            route=route, valid_token=valid_token
+        )
+        assert (
+            result is True
+        ), f"Virtual key with llm_api_routes should be able to access {route}"

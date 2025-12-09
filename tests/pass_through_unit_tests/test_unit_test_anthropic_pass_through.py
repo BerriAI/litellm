@@ -35,7 +35,7 @@ def mock_httpx_response():
     mock_resp.json.return_value = {
         "content": [{"text": "Hi! My name is Claude.", "type": "text"}],
         "id": "msg_013Zva2CMHLNnXjNJJKqJ2EF",
-        "model": "claude-3-5-sonnet-20241022",
+        "model": "claude-sonnet-4-5-20250929",
         "role": "assistant",
         "stop_reason": "end_turn",
         "stop_sequence": None,
@@ -164,14 +164,14 @@ def test_create_anthropic_response_logging_payload(mock_logging_obj, metadata_pa
                         {"type": "bash_20241022", "name": "bash"},
                     ],
                     "max_tokens": 4096,
-                    "model": "claude-3-5-sonnet-20241022",
+                    "model": "claude-sonnet-4-5-20250929",
                     **metadata_params,
                 },
                 "response_body": {
                     "id": "msg_015uSaCZBvu9gUSkAmZtMfxC",
                     "type": "message",
                     "role": "assistant",
-                    "model": "claude-3-5-sonnet-20241022",
+                    "model": "claude-sonnet-4-5-20250929",
                     "content": [
                         {
                             "type": "text",
@@ -190,7 +190,7 @@ def test_create_anthropic_response_logging_payload(mock_logging_obj, metadata_pa
                 },
             },
             "response_cost": 0.007941,
-            "model": "claude-3-5-sonnet-20241022",
+            "model": "claude-sonnet-4-5-20250929",
         },
         start_time=start_time,
         end_time=end_time,
@@ -219,7 +219,7 @@ def test_get_user_from_metadata(end_user_id):
             "id": "msg_015uSaCZBvu9gUSkAmZtMfxC",
             "type": "message",
             "role": "assistant",
-            "model": "claude-3-5-sonnet-20241022",
+            "model": "claude-sonnet-4-5-20250929",
             "content": [
                 {
                     "type": "text",

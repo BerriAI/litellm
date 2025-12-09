@@ -314,7 +314,7 @@ class LLMCachingHandler:
                     )
                     self._update_litellm_logging_obj_environment(
                         logging_obj=logging_obj,
-                        model=model,
+                        model=f"{custom_llm_provider}/{model}",
                         kwargs=kwargs,
                         cached_result=cached_result,
                         is_async=False,

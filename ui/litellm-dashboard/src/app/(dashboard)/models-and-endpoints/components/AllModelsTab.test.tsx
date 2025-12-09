@@ -1,0 +1,276 @@
+import * as useAuthorizedModule from "@/app/(dashboard)/hooks/useAuthorized";
+import * as useTeamsModule from "@/app/(dashboard)/hooks/useTeams";
+import { render, screen, waitFor } from "@testing-library/react";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import AllModelsTab from "./AllModelsTab";
+
+// Mock window.matchMedia for Ant Design components
+beforeAll(() => {
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    value: (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    }),
+  });
+});
+
+describe("AllModelsTab", () => {
+  const mockSetSelectedModelGroup = vi.fn();
+  const mockSetSelectedModelId = vi.fn();
+  const mockSetSelectedTeamId = vi.fn();
+  const mockSetEditModel = vi.fn();
+
+  const defaultProps = {
+    selectedModelGroup: "all",
+    setSelectedModelGroup: mockSetSelectedModelGroup,
+    availableModelGroups: ["gpt-4", "gpt-3.5-turbo"],
+    availableModelAccessGroups: ["sales-team", "engineering-team"],
+    setSelectedModelId: mockSetSelectedModelId,
+    setSelectedTeamId: mockSetSelectedTeamId,
+    setEditModel: mockSetEditModel,
+    modelData: {
+      data: [],
+    },
+  };
+
+  const mockUseAuthorized = {
+    token: "mock-token",
+    accessToken: "mock-access-token",
+    userId: "user-123",
+    userEmail: "test@example.com",
+    userRole: "Admin",
+    premiumUser: true,
+    disabledPersonalKeyCreation: false,
+    showSSOBanner: false,
+  };
+
+  beforeAll(() => {
+    // Mock useAuthorized hook
+    vi.spyOn(useAuthorizedModule, "default").mockReturnValue(mockUseAuthorized);
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("should render with empty data", () => {
+    // Mock useTeams hook
+    vi.spyOn(useTeamsModule, "default").mockReturnValue({
+      teams: [],
+      setTeams: vi.fn(),
+    });
+
+    const { container } = render(<AllModelsTab {...defaultProps} />);
+    expect(container).toBeTruthy();
+    expect(screen.getByText("Current Team:")).toBeInTheDocument();
+  });
+
+  it("should filter models by direct team access when current team is selected", async () => {
+    const mockTeams = [
+      {
+        team_id: "team-456",
+        team_alias: "Engineering Team",
+        models: ["gpt-4"],
+        max_budget: null,
+        budget_duration: null,
+        tpm_limit: null,
+        rpm_limit: null,
+        organization_id: "org-123",
+        created_at: "2024-01-01",
+        keys: [],
+        members_with_roles: [],
+      },
+    ];
+
+    // Mock useTeams hook with team data
+    vi.spyOn(useTeamsModule, "default").mockReturnValue({
+      teams: mockTeams,
+      setTeams: vi.fn(),
+    });
+
+    const modelData = {
+      data: [
+        {
+          model_name: "gpt-4-accessible",
+          model_info: {
+            id: "model-1",
+            access_via_team_ids: ["team-456"], // Direct team access
+            access_groups: [],
+          },
+        },
+        {
+          model_name: "gpt-3.5-turbo-blocked",
+          model_info: {
+            id: "model-2",
+            access_via_team_ids: ["team-789"], // Different team
+            access_groups: [],
+          },
+        },
+      ],
+    };
+
+    render(<AllModelsTab {...defaultProps} modelData={modelData} />);
+
+    // Initially on "personal" team, should show 0 results (no models have direct_access)
+    await waitFor(() => {
+      expect(screen.getByText("Showing 0 results")).toBeInTheDocument();
+    });
+  });
+
+  it("should filter models by access group matching when team models match model access groups", async () => {
+    const mockTeams = [
+      {
+        team_id: "team-sales",
+        team_alias: "Sales Team",
+        models: ["sales-model-group"], // Team has this model group
+        max_budget: null,
+        budget_duration: null,
+        tpm_limit: null,
+        rpm_limit: null,
+        organization_id: "org-123",
+        created_at: "2024-01-01",
+        keys: [],
+        members_with_roles: [],
+      },
+    ];
+
+    // Mock useTeams hook
+    vi.spyOn(useTeamsModule, "default").mockReturnValue({
+      teams: mockTeams,
+      setTeams: vi.fn(),
+    });
+
+    const modelData = {
+      data: [
+        {
+          model_name: "gpt-4-sales",
+          model_info: {
+            id: "model-sales-1",
+            access_via_team_ids: [], // No direct team access
+            access_groups: ["sales-model-group"], // But has access group that matches team's models
+          },
+        },
+        {
+          model_name: "gpt-4-engineering",
+          model_info: {
+            id: "model-eng-1",
+            access_via_team_ids: [],
+            access_groups: ["engineering-model-group"], // Different access group
+          },
+        },
+      ],
+    };
+
+    render(<AllModelsTab {...defaultProps} modelData={modelData} />);
+
+    // Initially on "personal" team, should show 0 results
+    await waitFor(() => {
+      expect(screen.getByText("Showing 0 results")).toBeInTheDocument();
+    });
+  });
+
+  it("should filter models by direct_access for personal team", async () => {
+    // Mock useTeams hook
+    vi.spyOn(useTeamsModule, "default").mockReturnValue({
+      teams: [],
+      setTeams: vi.fn(),
+    });
+
+    const modelData = {
+      data: [
+        {
+          model_name: "gpt-4-personal",
+          model_info: {
+            id: "model-personal-1",
+            direct_access: true, // Available for personal use
+            access_via_team_ids: [],
+            access_groups: [],
+          },
+        },
+        {
+          model_name: "gpt-4-team-only",
+          model_info: {
+            id: "model-team-1",
+            direct_access: false, // Not available for personal use
+            access_via_team_ids: ["team-123"],
+            access_groups: [],
+          },
+        },
+      ],
+    };
+
+    render(<AllModelsTab {...defaultProps} modelData={modelData} />);
+
+    // When currentTeam is "personal" (default), it should filter by direct_access === true
+    // This tests the personal access logic in lines 72-73
+    // Should show 1 result (only gpt-4-personal with direct_access=true)
+    await waitFor(() => {
+      expect(screen.getByText("Showing 1 - 1 of 1 results")).toBeInTheDocument();
+    });
+  });
+
+  it("should show disabled delete icon for config models", async () => {
+    // Mock useTeams hook
+    vi.spyOn(useTeamsModule, "default").mockReturnValue({
+      teams: [],
+      setTeams: vi.fn(),
+    });
+
+    const modelData = {
+      data: [
+        {
+          model_name: "gpt-4-config",
+          litellm_model_name: "gpt-4-config",
+          provider: "openai",
+          model_info: {
+            id: "model-config-1",
+            db_model: false, // Config model (no db_model)
+            direct_access: true,
+            access_via_team_ids: [],
+            access_groups: [],
+            created_by: "user-123",
+            created_at: "2024-01-01",
+            updated_at: "2024-01-01",
+          },
+        },
+        {
+          model_name: "gpt-4-db",
+          litellm_model_name: "gpt-4-db",
+          provider: "openai",
+          model_info: {
+            id: "model-db-1",
+            db_model: true, // DB model
+            direct_access: true,
+            access_via_team_ids: [],
+            access_groups: [],
+            created_by: "user-123",
+            created_at: "2024-01-01",
+            updated_at: "2024-01-01",
+          },
+        },
+      ],
+    };
+
+    const { container } = render(<AllModelsTab {...defaultProps} modelData={modelData} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Showing \d+ - \d+ of 2 results/)).toBeInTheDocument();
+    });
+
+    const disabledIcons = container.querySelectorAll(".opacity-50.cursor-not-allowed");
+    expect(disabledIcons.length).toBeGreaterThan(0);
+
+    const configModelIcon = Array.from(disabledIcons).find((icon) => {
+      const parent = icon.closest('[class*="actions"], [class*="flex items-center justify-end"]');
+      return parent !== null;
+    });
+    expect(configModelIcon).toBeTruthy();
+  });
+});

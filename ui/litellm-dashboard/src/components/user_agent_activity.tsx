@@ -15,7 +15,6 @@ import {
 } from "@tremor/react";
 import { Select, Tooltip } from "antd";
 import { userAgentSummaryCall, tagDauCall, tagWauCall, tagMauCall, tagDistinctCall } from "./networking";
-import AdvancedDatePicker from "./shared/advanced_date_picker";
 import PerUserUsage from "./per_user_usage";
 import { DateRangePickerValue } from "@tremor/react";
 import { ChartLoader } from "./shared/chart_loader";
@@ -58,9 +57,11 @@ interface DistinctTagsResponse {
 interface UserAgentActivityProps {
   accessToken: string | null;
   userRole: string | null;
+  dateValue: DateRangePickerValue;
+  onDateChange?: (value: DateRangePickerValue) => void; // Optional - not used anymore
 }
 
-const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, userRole }) => {
+const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, userRole, dateValue, onDateChange }) => {
   // Maximum number of categories to show in charts to prevent color palette overflow
   const MAX_CATEGORIES = 10;
 
@@ -69,11 +70,6 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
   const [wauData, setWauData] = useState<ActiveUsersAnalyticsResponse>({ results: [] });
   const [mauData, setMauData] = useState<ActiveUsersAnalyticsResponse>({ results: [] });
   const [summaryData, setSummaryData] = useState<TagSummaryResponse>({ results: [] });
-
-  const [dateValue, setDateValue] = useState<DateRangePickerValue>({
-    from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
-    to: new Date(),
-  });
 
   const [userAgentFilter, setUserAgentFilter] = useState<string>("");
 
@@ -87,8 +83,6 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
   const [wauLoading, setWauLoading] = useState(false);
   const [mauLoading, setMauLoading] = useState(false);
   const [summaryLoading, setSummaryLoading] = useState(false);
-
-  const [isDateChanging, setIsDateChanging] = useState(false);
 
   // Use today's date as the end date for all API calls
   const today = new Date();
@@ -180,18 +174,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
       console.error("Failed to fetch user agent summary data:", error);
     } finally {
       setSummaryLoading(false);
-      setIsDateChanging(false);
     }
-  };
-
-  // Super responsive date change handler
-  const handleDateChange = (newValue: DateRangePickerValue) => {
-    // Instant visual feedback
-    setIsDateChanging(true);
-    setSummaryLoading(true);
-
-    // Update date immediately for UI responsiveness
-    setDateValue(newValue);
   };
 
   // Effect to fetch available tags on mount
@@ -425,12 +408,11 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
             </div>
           </div>
 
-          {/* Date Range Picker within Summary */}
-          <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
+          {/* Date Range Picker is controlled by parent component */}
 
           {/* Top 4 User Agents Cards */}
           {summaryLoading ? (
-            <ChartLoader isDateChanging={isDateChanging} />
+            <ChartLoader isDateChanging={false} />
           ) : (
             <Grid numItems={4} className="gap-4">
               {(summaryData.results || []).slice(0, 4).map((tag, index) => {

@@ -108,7 +108,7 @@ class DotpromptManager(CustomPromptManagement):
         Compile a .prompt file into a PromptManagementClient structure.
 
         This method:
-        1. Loads the prompt template from the .prompt file
+        1. Loads the prompt template from the .prompt file (with optional version)
         2. Renders it with the provided variables
         3. Converts the rendered text into chat messages
         4. Extracts model and optional parameters from metadata
@@ -116,13 +116,22 @@ class DotpromptManager(CustomPromptManagement):
 
         try:
 
-            # Get the prompt template
-            template = self.prompt_manager.get_prompt(prompt_id)
+            # Get the prompt template (versioned or base)
+            template = self.prompt_manager.get_prompt(
+                prompt_id=prompt_id, version=prompt_version
+            )
             if template is None:
-                raise ValueError(f"Prompt '{prompt_id}' not found in prompt directory")
+                version_str = f" (version {prompt_version})" if prompt_version else ""
+                raise ValueError(
+                    f"Prompt '{prompt_id}'{version_str} not found in prompt directory"
+                )
 
-            # Render the template with variables
-            rendered_content = self.prompt_manager.render(prompt_id, prompt_variables)
+            # Render the template with variables (pass version for proper lookup)
+            rendered_content = self.prompt_manager.render(
+                prompt_id=prompt_id,
+                prompt_variables=prompt_variables,
+                version=prompt_version,
+            )
 
             # Convert rendered content to chat messages
             messages = self._convert_to_messages(rendered_content)

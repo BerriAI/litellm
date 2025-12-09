@@ -4,9 +4,11 @@ from typing import Any, Optional, cast
 
 import litellm
 from litellm import get_llm_provider
+from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
@@ -15,8 +17,8 @@ from ..litellm_core_utils.get_litellm_params import get_litellm_params
 from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime
 from ..llms.openai.realtime.handler import OpenAIRealtime
-from litellm.types.realtime import RealtimeQueryParams
 from ..utils import client as wrapper_client
+from ..llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 
 azure_realtime = AzureOpenAIRealtime()
 openai_realtime = OpenAIRealtime()
@@ -177,10 +179,13 @@ async def _realtime_health_check(
         )
     else:
         raise ValueError(f"Unsupported model: {model}")
+    ssl_context = get_shared_realtime_ssl_context()
     async with websockets.connect(  # type: ignore
         url,
         extra_headers={
             "api-key": api_key,  # type: ignore
         },
+        max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+        ssl=ssl_context,
     ):
         return True
