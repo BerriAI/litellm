@@ -103,8 +103,8 @@ class TestAzureAnthropicConfig:
             call_args = mock_validate.call_args
             assert call_args[1]["litellm_params"].api_key == "provided-api-key"
 
-    def test_validate_environment_converts_api_key_to_x_api_key(self):
-        """Test that api-key header is converted to x-api-key (Azure Anthropic uses x-api-key)"""
+    def test_validate_environment_preserves_api_key_header(self):
+        """Test that api-key header is preserved as-is (Azure handles the header internally)"""
         config = AzureAnthropicConfig()
         headers = {}
         model = "claude-sonnet-4-5"
@@ -127,10 +127,9 @@ class TestAzureAnthropicConfig:
                     litellm_params=litellm_params,
                 )
 
-                # Verify api-key was converted to x-api-key
-                assert "x-api-key" in result
-                assert result["x-api-key"] == "test-api-key"
-                assert "api-key" not in result
+                # Verify api-key header is preserved as-is
+                assert "api-key" in result
+                assert result["api-key"] == "test-api-key"
 
     def test_validate_environment_sets_anthropic_version(self):
         """Test that anthropic-version header is set"""
