@@ -406,7 +406,7 @@ async def provider_user_add(client_id: str, signature: str, timestamp: str, requ
     if not org_email.endswith(add_user_allow_email_domain):
         return {'success': 'false', 'email': org_email, 'error': 'Invalid email domain' }
 
-    user_id = user_info['userId']
+    user_id = user_info.get('userId') or f"{client_id}_{uuid.uuid4()}"
     user_name = user_info['name']
     dept_id = user_info.get('deptId')
     if dept_id is None and user_info.get('deptIdList'):
