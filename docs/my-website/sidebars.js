@@ -644,13 +644,13 @@ const sidebars = {
           label: "Bedrock",
           items: [
             "providers/bedrock",
-            "providers/bedrock_writer",
             "providers/bedrock_embedding",
             "providers/bedrock_imported",
             "providers/bedrock_image_gen",
             "providers/bedrock_rerank",
             "providers/bedrock_agentcore",
             "providers/bedrock_agents",
+            "providers/bedrock_writer",
             "providers/bedrock_batches",
             "providers/bedrock_vector_store",
           ]
