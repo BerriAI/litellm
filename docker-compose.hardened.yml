@@ -1,4 +1,6 @@
 services:
+  # Hardened stack: for testing the proxy under non-root, read-only, proxy-enforced constraints.
+  # Keep this file focused on hardening/QA scenarios; leave the main docker-compose.yml for default dev usage.
   litellm:
     build:
       context: .
