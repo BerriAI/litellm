@@ -117,17 +117,18 @@ def test_virtual_key_allowed_routes_with_litellm_routes_member_name_denied():
         allowed_routes=["info_routes"],  # This is a member name in LiteLLMRoutes enum
     )
 
-    # Test that a route NOT in the info_routes group raises an exception
-    with pytest.raises(Exception) as exc_info:
+    # Test that a route NOT in the info_routes group raises an HTTPException
+    with pytest.raises(HTTPException) as exc_info:
         RouteChecks.is_virtual_key_allowed_to_call_route(
             route="/chat/completions",  # This is NOT in LiteLLMRoutes.info_routes.value
             valid_token=valid_token,
         )
 
-    # Verify the exception message
-    assert "Virtual key is not allowed to call this route" in str(exc_info.value)
-    assert "Only allowed to call routes: ['info_routes']" in str(exc_info.value)
-    assert "Tried to call route: /chat/completions" in str(exc_info.value)
+    # Verify the exception has correct status and message
+    assert exc_info.value.status_code == 403
+    assert "Virtual key is not allowed to call this route" in str(exc_info.value.detail)
+    assert "Only allowed to call routes: ['info_routes']" in str(exc_info.value.detail)
+    assert "Tried to call route: /chat/completions" in str(exc_info.value.detail)
 
 
 @pytest.mark.parametrize(
@@ -247,13 +248,14 @@ def test_virtual_key_allowed_routes_with_no_member_names_only_explicit():
     assert result1 is True
     assert result2 is True
 
-    # Test that non-allowed route raises exception
-    with pytest.raises(Exception) as exc_info:
+    # Test that non-allowed route raises HTTPException
+    with pytest.raises(HTTPException) as exc_info:
         RouteChecks.is_virtual_key_allowed_to_call_route(
             route="/user/info", valid_token=valid_token  # Not in allowed routes
         )
 
-    assert "Virtual key is not allowed to call this route" in str(exc_info.value)
+    assert exc_info.value.status_code == 403
+    assert "Virtual key is not allowed to call this route" in str(exc_info.value.detail)
 
 
 def test_anthropic_count_tokens_route_is_llm_api_route():
@@ -355,13 +357,14 @@ def test_virtual_key_without_llm_api_routes_cannot_access_pass_through():
         )
 
         # Test that access is denied
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(HTTPException) as exc_info:
             RouteChecks.is_virtual_key_allowed_to_call_route(
                 route="/azure-assistant",
                 valid_token=valid_token,
             )
 
-        assert "Virtual key is not allowed to call this route" in str(exc_info.value)
+        assert exc_info.value.status_code == 403
+        assert "Virtual key is not allowed to call this route" in str(exc_info.value.detail)
 
 
 def test_check_passthrough_route_access_key_metadata_exact_match():
