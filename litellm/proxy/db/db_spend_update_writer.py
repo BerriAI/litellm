@@ -117,45 +117,98 @@ class DBSpendUpdateWriter:
             if isinstance(payload["endTime"], datetime):
                 payload["endTime"] = payload["endTime"].isoformat()
 
-            asyncio.create_task(
-                self._update_user_db(
-                    response_cost=response_cost,
-                    user_id=user_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    litellm_proxy_budget_name=litellm_proxy_budget_name,
-                    end_user_id=end_user_id,
+            ## CHECK FOR FREE MODELS - Skip spend counter updates but preserve analytics ##
+            # Check both the payload model (actual provider model) and request model (alias)
+            _payload_model = payload.get("model")  # e.g., "MiniMaxAI/MiniMax-M2"
+            _request_model = kwargs.get("model")   # e.g., "xyne-spaces-minimax-m2"
+
+            # Also check litellm_params for the actual model
+            _litellm_model = None
+            litellm_params = kwargs.get("litellm_params", {})
+            if litellm_params and isinstance(litellm_params, dict):
+                _litellm_model = litellm_params.get("model")
+
+            FREE_MODELS_ENV = os.getenv('FREE_MODELS', '')
+            FREE_MODELS = [m.strip() for m in FREE_MODELS_ENV.split(',') if m.strip()]
+
+            # Check if ANY of the model identifiers match (case-insensitive)
+            is_free_model = False
+            _model_to_log = _payload_model or _request_model or _litellm_model
+            matched_free_model = None
+            if FREE_MODELS:
+                FREE_MODELS_LOWER = [m.lower() for m in FREE_MODELS]
+                for model_name in [_payload_model, _request_model, _litellm_model]:
+                    if model_name and model_name.lower() in FREE_MODELS_LOWER:
+                        is_free_model = True
+                        matched_free_model = model_name
+                        break
+
+            # Get user info for debugging
+            user_email = "unknown"
+            if user_id:
+                try:
+                    user_obj = await user_api_key_cache.async_get_cache(key=user_id)
+                    if user_obj and isinstance(user_obj, dict):
+                        user_email = user_obj.get('user_email', user_id)
+                    else:
+                        user_email = user_id
+                except Exception:
+                    user_email = user_id
+
+            # PRINT DEBUG: Always show what's happening
+            if is_free_model:
+                print(f"[FREE_MODELS] SPEND COUNTER SKIPPED - User: {user_email}, PayloadModel: {_payload_model}, RequestModel: {_request_model}, LiteLLMModel: {_litellm_model}, MatchedModel: {matched_free_model}, Cost: ${response_cost or 0.0:.6f} (analytics still recorded)")
+                verbose_proxy_logger.info(
+                    f"FREE_MODELS: Skipping spend counter updates for user={user_email}, matched_model={matched_free_model}, cost=${response_cost or 0.0:.4f}. Analytics (spend logs + daily tables) will still be recorded."
                 )
-            )
-            asyncio.create_task(
-                self._update_key_db(
-                    response_cost=response_cost,
-                    hashed_token=hashed_token,
-                    prisma_client=prisma_client,
+            else:
+                print(f"[PAID_MODEL] SPEND COUNTER UPDATED - User: {user_email}, PayloadModel: {_payload_model}, RequestModel: {_request_model}, LiteLLMModel: {_litellm_model}, Cost: ${response_cost or 0.0:.6f}")
+
+            # Only update spend counters (user, key, team, org, tag) if NOT a free model
+            # Free models still log to analytics tables (litellm_spendlogs, daily spend tables)
+            if not is_free_model:
+                print(f"[DB_QUEUE_ADD] PAID MODEL - Adding to database queue - User: {user_email}, Cost: ${response_cost or 0.0:.6f}")
+                asyncio.create_task(
+                    self._update_user_db(
+                        response_cost=response_cost,
+                        user_id=user_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        litellm_proxy_budget_name=litellm_proxy_budget_name,
+                        end_user_id=end_user_id,
+                    )
                 )
-            )
-            asyncio.create_task(
-                self._update_team_db(
-                    response_cost=response_cost,
-                    team_id=team_id,
-                    user_id=user_id,
-                    prisma_client=prisma_client,
+                asyncio.create_task(
+                    self._update_key_db(
+                        response_cost=response_cost,
+                        hashed_token=hashed_token,
+                        prisma_client=prisma_client,
+                    )
                 )
-            )
-            asyncio.create_task(
-                self._update_org_db(
-                    response_cost=response_cost,
-                    org_id=org_id,
-                    prisma_client=prisma_client,
+                asyncio.create_task(
+                    self._update_team_db(
+                        response_cost=response_cost,
+                        team_id=team_id,
+                        user_id=user_id,
+                        prisma_client=prisma_client,
+                    )
                 )
-            )
-            asyncio.create_task(
-                self._update_tag_db(
-                    response_cost=response_cost,
-                    request_tags=payload.get("request_tags"),
-                    prisma_client=prisma_client,
+                asyncio.create_task(
+                    self._update_org_db(
+                        response_cost=response_cost,
+                        org_id=org_id,
+                        prisma_client=prisma_client,
+                    )
                 )
-            )
+                asyncio.create_task(
+                    self._update_tag_db(
+                        response_cost=response_cost,
+                        request_tags=payload.get("request_tags"),
+                        prisma_client=prisma_client,
+                    )
+                )
+            else:
+                print(f"[DB_QUEUE_SKIP] FREE MODEL - NOT adding to database queue - User: {user_email}, Cost: ${response_cost or 0.0:.6f}")
 
             if disable_spend_logs is False:
                 await self._insert_spend_log_to_db(

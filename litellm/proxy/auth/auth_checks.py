@@ -152,12 +152,41 @@ async def common_checks(
     )
 
     # 4. If user is in budget
-    ## 4.1 check personal budget, if personal key
-    if (
-        (team_object is None or team_object.team_id is None)
-        and user_object is not None
-        and user_object.max_budget is not None
-    ):
+    ## 4.1 check user budget (for both personal and team keys)
+    # Check user budget regardless of team membership to enforce per-user limits
+    # Only check budget for routes that consume AI resources (not metadata endpoints)
+    AI_RESOURCE_ROUTES = [
+        "/chat/completions",
+        "/completions",
+        "/embeddings",
+        "/audio/transcriptions",
+        "/audio/translations",
+        "/audio/speech",
+        "/images/generations",
+        "/images/edits",
+        "/images/variations",
+        "/moderations",
+        "/messages",  # Anthropic native endpoint (Claude CLI)
+        "/v1/chat/completions",
+        "/v1/completions",
+        "/v1/embeddings",
+        "/v1/audio/transcriptions",
+        "/v1/audio/translations",
+        "/v1/audio/speech",
+        "/v1/images/generations",
+        "/v1/images/edits",
+        "/v1/images/variations",
+        "/v1/moderations",
+        "/v1/messages",  # Anthropic native endpoint (Claude CLI)
+    ]
+
+    should_check_budget = any(route.endswith(ai_route) for ai_route in AI_RESOURCE_ROUTES)
+
+    # Debug: Log when budget check is skipped for metadata endpoints
+    if user_object is not None and user_object.max_budget is not None and not should_check_budget:
+        print(f"[METADATA_ENDPOINT] Budget check SKIPPED - Route: {route}, User: {user_object.user_id if user_object else 'unknown'}")
+
+    if user_object is not None and user_object.max_budget is not None and should_check_budget:
         # Check if model is in free models list (bypass budget check for internal models)
         import os
         FREE_MODELS_ENV = os.getenv('FREE_MODELS', '')
@@ -165,15 +194,49 @@ async def common_checks(
 
         # Skip budget check for free models
         if _model and FREE_MODELS and _model in FREE_MODELS:
-            verbose_proxy_logger.debug(f"Skipping user budget check for free model: {_model}")
+            user_email = user_object.user_email if user_object.user_email else user_object.user_id
+            print(f"[FREE_MODELS] Budget check BYPASSED - Route: {route}, User: {user_email}, Model: {_model}, UserSpend: ${user_object.spend:.4f}, Budget: ${user_object.max_budget:.4f}")
+            verbose_proxy_logger.info(f"Free model usage - User: {user_email}, Model: {_model}")
         else:
             user_budget = user_object.max_budget
             if user_budget < user_object.spend:
+                user_email = user_object.user_email if user_object.user_email else user_object.user_id
+
+                # Get budget duration for user-friendly message
+                budget_duration = getattr(user_object, 'budget_duration', None)
+                if budget_duration == '1d' or budget_duration == 'daily':
+                    period_text = "daily"
+                elif budget_duration == '7d' or budget_duration == 'weekly':
+                    period_text = "weekly"
+                elif budget_duration == '30d' or budget_duration == 'monthly':
+                    period_text = "monthly"
+                else:
+                    period_text = "budget"
+
+                # Get FREE_MODELS list for the error message
+                import os
+                FREE_MODELS_ENV = os.getenv('FREE_MODELS', '')
+                FREE_MODELS = [m.strip() for m in FREE_MODELS_ENV.split(',') if m.strip()]
+                free_models_list = ", ".join(FREE_MODELS[:5]) if FREE_MODELS else "internal models"
+                if len(FREE_MODELS) > 5:
+                    free_models_list += f" and {len(FREE_MODELS) - 5} more"
+
+                print(f"[BUDGET_EXCEEDED] Route: {route}, User: {user_email}, Model: {_model}, Spend: ${user_object.spend:.4f}, Budget: ${user_budget:.4f}")
+
+                error_message = (
+                    f"You have exceeded your {period_text} limit for external paid models. "
+                    f"Current spend: ${user_object.spend:.2f}, Limit: ${user_budget:.2f}. "
+                    f"You can continue using free internal models: {free_models_list}. "
+                    f"Contact your administrator to increase your budget."
+                )
+
                 raise litellm.BudgetExceededError(
                     current_cost=user_object.spend,
                     max_budget=user_budget,
-                    message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_object.spend}, Budget={user_budget}",
+                    message=error_message,
                 )
+            else:
+                print(f"[BUDGET_CHECK_PASSED] Route: {route}, User: {user_object.user_id}, Model: {_model}, Spend: ${user_object.spend:.4f}, Budget: ${user_budget:.4f}")
 
     ## 4.2 check team member budget, if team key
     # 5. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
@@ -1877,7 +1940,8 @@ async def _virtual_key_max_budget_check(
     FREE_MODELS = [m.strip() for m in FREE_MODELS_ENV.split(',') if m.strip()]
 
     if model and FREE_MODELS and model in FREE_MODELS:
-        verbose_proxy_logger.debug(f"Skipping budget check for free model: {model}")
+        user_email = user_obj.user_email if user_obj and user_obj.user_email else (user_obj.user_id if user_obj else "unknown")
+        verbose_proxy_logger.info(f"Free model usage - User: {user_email}, Model: {model}, Key: {valid_token.token[:10]}...")
         return  # Skip budget check for free models
 
     if valid_token.spend is not None and valid_token.max_budget is not None:
