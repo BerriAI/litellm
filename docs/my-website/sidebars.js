@@ -307,6 +307,7 @@ const sidebars = {
           items: [
             "proxy/users",
             "proxy/team_budgets",
+            "project_management",
             "proxy/tag_budgets",
             "proxy/customers",
             "proxy/customer_usage",
