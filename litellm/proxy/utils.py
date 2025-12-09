@@ -1,6 +1,8 @@
 import asyncio
 import copy
+import gc
 import hashlib
+import inspect
 import json
 import os
 import smtplib
@@ -1717,7 +1719,6 @@ class PrismaClient:
     ):
         ## init logging object
         self.proxy_logging_obj = proxy_logging_obj
-        # Initialize instance-level spend_log_transactions and lock for thread-safe access
         self.spend_log_transactions: List = []
         self._spend_log_transactions_lock = asyncio.Lock()
         self.iam_token_db_auth: Optional[bool] = str_to_bool(
@@ -3340,17 +3341,125 @@ class ProxyUpdateSpend:
                 )
 
     @staticmethod
+    def _cleanup_batch_variables() -> None:
+        """Aggressively clean up batch processing variables from memory."""
+        frame = inspect.currentframe()
+        if frame is None or frame.f_back is None:
+            return
+        caller_frame = frame.f_back
+        caller_locals = caller_frame.f_locals
+        
+        # Use exec to delete variables in caller's scope
+        cleanup_vars = ['batch', 'batch_with_dates', 'batch_len']
+        for var_name in cleanup_vars:
+            if var_name in caller_locals:
+                try:
+                    exec(f'del {var_name}', caller_frame.f_globals, caller_locals)
+                except (NameError, KeyError):
+                    # Variable may have already been deleted, ignore
+                    pass
+        
+        gc.collect(0)  # Quick cleanup after each batch
+
+    @staticmethod
+    def _cleanup_http_variables() -> None:
+        """Aggressively clean up HTTP request variables from memory."""
+        frame = inspect.currentframe()
+        if frame is None or frame.f_back is None:
+            return
+        caller_frame = frame.f_back
+        caller_locals = caller_frame.f_locals
+        
+        # Use exec to delete variables in caller's scope
+        cleanup_vars = ['serialized_data', 'response', 'status_code']
+        for var_name in cleanup_vars:
+            if var_name in caller_locals:
+                try:
+                    exec(f'del {var_name}', caller_frame.f_globals, caller_locals)
+                except (NameError, KeyError):
+                    # Variable may have already been deleted, ignore
+                    pass
+        
+        gc.collect(0)  # Quick cleanup of recent allocations
+
+    @staticmethod
+    def _cleanup_loop_variables() -> None:
+        """Clean up loop-related variables from memory."""
+        frame = inspect.currentframe()
+        if frame is None or frame.f_back is None:
+            return
+        caller_frame = frame.f_back
+        caller_locals = caller_frame.f_locals
+        
+        # Use exec to delete variables in caller's scope
+        cleanup_vars = ['logs_len', 'j']
+        for var_name in cleanup_vars:
+            if var_name in caller_locals:
+                try:
+                    exec(f'del {var_name}', caller_frame.f_globals, caller_locals)
+                except (NameError, KeyError):
+                    # Variable may have already been deleted, ignore
+                    pass
+        
+        gc.collect(0)
+
+    @staticmethod
+    def _cleanup_all_spend_log_variables() -> None:
+        """Comprehensively clean up all spend log processing variables."""
+        frame = inspect.currentframe()
+        if frame is None or frame.f_back is None:
+            return
+        caller_frame = frame.f_back
+        caller_locals = caller_frame.f_locals
+        
+        # Clean up all variables in one pass
+        cleanup_vars = [
+            # HTTP variables
+            'serialized_data', 'response', 'status_code',
+            # Batch variables
+            'batch', 'batch_with_dates', 'batch_len',
+            # Loop variables
+            'logs_len', 'j',
+            # Other variables
+            'logs_to_process', 'base_url', 'remaining_count',
+        ]
+        for var_name in cleanup_vars:
+            if var_name in caller_locals:
+                try:
+                    exec(f'del {var_name}', caller_frame.f_globals, caller_locals)
+                except (NameError, KeyError):
+                    # Variable may have already been deleted, ignore
+                    pass
+
+    @staticmethod
+    def _quick_gc_cleanup() -> None:
+        """Perform quick garbage collection of generation 0 (most recent allocations)."""
+        gc.collect(0)
+
+    @staticmethod
+    def _full_gc_cleanup() -> None:
+        """Perform full garbage collection across all generations."""
+        gc.collect(0)  # Generation 0 cleanup
+        gc.collect(1)  # Generation 1 cleanup
+        gc.collect(2)  # Generation 2 cleanup (full collection)
+
+    @staticmethod
     async def update_spend_logs(
         n_retry_times: int,
         prisma_client: PrismaClient,
         db_writer_client: Optional[HTTPHandler],
         proxy_logging_obj: ProxyLogging,
     ):
+        
+        ## Note: Performance-optimized values. Executes every minute; rarely processes 10k logs per interval.
+        ## Increasing values may cause OOM from larger batches; decreasing values causes spend_log_transactions
+        ## accumulation, both leading to memory issues in production.
         BATCH_SIZE = 1000  # Preferred size of each batch to write to the database
         MAX_LOGS_PER_INTERVAL = (
             10000  # Maximum number of logs to flush in a single interval
         )
         # Use lock to atomically read and remove logs to prevent double processing
+        logs_to_process: List[Any] = []
         async with prisma_client._spend_log_transactions_lock:
             # Get initial logs to process
             logs_to_process = prisma_client.spend_log_transactions[:MAX_LOGS_PER_INTERVAL]
@@ -3359,9 +3468,14 @@ class ProxyUpdateSpend:
                 prisma_client.spend_log_transactions[len(logs_to_process) :]
             )
         
+        # Aggressive memory cleanup after removing logs from queue
+        ProxyUpdateSpend._quick_gc_cleanup()
+        gc.collect()   # Full collection
         start_time = time.time()
         try:
             for i in range(n_retry_times + 1):
+                if logs_to_process is None:
+                    raise ValueError("logs_to_process is None")
                 try:
                     base_url = os.getenv("SPEND_LOGS_URL", None)
                     if (
@@ -3372,17 +3486,24 @@ class ProxyUpdateSpend:
                         if not base_url.endswith("/"):
                             base_url += "/"
                         verbose_proxy_logger.debug("base_url: {}".format(base_url))
+                        # Serialize data and immediately delete reference after use
+                        serialized_data = json.dumps(logs_to_process)
                         response = await db_writer_client.post(
                             url=base_url + "spend/update",
-                            data=json.dumps(logs_to_process),
+                            data=serialized_data,
                             headers={"Content-Type": "application/json"},
                         )
-                        if response.status_code == 200:
+                        # Immediately delete serialized data and response after use
+                        status_code = response.status_code
+                        ProxyUpdateSpend._cleanup_http_variables()
+                        if status_code == 200:
                             # Logs already removed from queue above, no need to remove again
                             pass
                     else:
-                        for j in range(0, len(logs_to_process), BATCH_SIZE):
+                        logs_len = len(logs_to_process)
+                        for j in range(0, logs_len, BATCH_SIZE):
                             batch = logs_to_process[j : j + BATCH_SIZE]
+                            # Process batch and immediately clean up
                             batch_with_dates = [
                                 prisma_client.jsonify_object({**entry})
                                 for entry in batch
@@ -3390,28 +3511,51 @@ class ProxyUpdateSpend:
                             await prisma_client.db.litellm_spendlogs.create_many(
                                 data=batch_with_dates, skip_duplicates=True
                             )
+                            batch_len = len(batch)
                             verbose_proxy_logger.debug(
-                                f"Flushed {len(batch)} logs to the DB."
+                                f"Flushed {batch_len} logs to the DB."
                             )
+                            # Aggressive memory cleanup after each batch
+                            ProxyUpdateSpend._cleanup_batch_variables()
+
+                        # Clean up loop variables
+                        ProxyUpdateSpend._cleanup_loop_variables()
 
                         # Logs already removed from queue above, no need to remove again
                         async with prisma_client._spend_log_transactions_lock:
+                            remaining_count = len(prisma_client.spend_log_transactions)
                             verbose_proxy_logger.debug(
-                                f"{len(logs_to_process)} logs processed. Remaining in queue: {len(prisma_client.spend_log_transactions)}"
+                                f"{len(logs_to_process)} logs processed. Remaining in queue: {remaining_count}"
                             )
+                            del remaining_count
+                    # Clean up processed logs from memory
+                    ProxyUpdateSpend._cleanup_all_spend_log_variables()
+                    ProxyUpdateSpend._quick_gc_cleanup()
+                    gc.collect()   # Full cleanup
                     break
                 except DB_CONNECTION_ERROR_TYPES:
                     if i is None:
                         i = 0
                     if i >= n_retry_times:
                         raise
+                    # Clean up any variables before retry
+                    ProxyUpdateSpend._cleanup_all_spend_log_variables()
+                    ProxyUpdateSpend._quick_gc_cleanup()
                     await asyncio.sleep(2**i)
         except Exception as e:
             # On error, we don't put logs back since they were already removed
             # This prevents double processing - failed logs will need to be retried via other mechanisms
+            # Clean up memory before raising exception
+            ProxyUpdateSpend._cleanup_all_spend_log_variables()
+            ProxyUpdateSpend._quick_gc_cleanup()
+            gc.collect()
             _raise_failed_update_spend_exception(
                 e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
             )
+        finally:
+            # Final aggressive memory cleanup
+            ProxyUpdateSpend._cleanup_all_spend_log_variables()
+            ProxyUpdateSpend._full_gc_cleanup()
 
     @staticmethod
     def disable_spend_updates() -> bool:
