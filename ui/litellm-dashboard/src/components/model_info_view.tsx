@@ -79,6 +79,8 @@ export default function ModelInfoView({
   const [isAutoRouterModalOpen, setIsAutoRouterModalOpen] = useState(false);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
+  const [isPublicModalVisible, setIsPublicModalVisible] = useState(false);
+  const [grantingPublicAccess, setGrantingPublicAccess] = useState(false);
   const canEditModel =
     (userRole === "Admin" || modelData?.model_info?.created_by === userID) && modelData?.model_info?.db_model;
   const isAdmin = userRole === "Admin";
@@ -307,12 +309,13 @@ export default function ModelInfoView({
     }
   };
 
-  const handleMakePublic = async () => {
+  const handleGrantPublicAccess = async () => {
     if (!accessToken) return;
     try {
-      NotificationsManager.info("Making model public...");
+      setGrantingPublicAccess(true);
       await grantRequestedPublicAccess(accessToken, modelId);
       NotificationsManager.success("Model is now publicly accessible!");
+      setIsPublicModalVisible(false);
       
       // Refresh model data to reflect the change
       const modelInfoResponse = await modelInfoV1Call(accessToken, modelId);
@@ -335,6 +338,8 @@ export default function ModelInfoView({
       } else {
         NotificationsManager.error("Error making model public: " + String(error));
       }
+    } finally {
+      setGrantingPublicAccess(false);
     }
   };
 
@@ -412,7 +417,7 @@ export default function ModelInfoView({
           {modelData.model_info.team_id && (
             <TremorButton
               variant="secondary"
-              onClick={handleMakePublic}
+              onClick={() => setIsPublicModalVisible(true)}
               className="flex items-center gap-2"
               data-testid="make-public-button"
             >
@@ -1095,6 +1100,50 @@ export default function ModelInfoView({
         accessToken={accessToken || ""}
         userRole={userRole || ""}
       />
+
+      {/* Make Public Confirmation Modal */}
+      <Modal
+        title="Grant Public Access"
+        open={isPublicModalVisible}
+        onOk={handleGrantPublicAccess}
+        onCancel={() => {
+          setIsPublicModalVisible(false);
+        }}
+        okText="Grant Access"
+        okButtonProps={{ 
+          loading: grantingPublicAccess, 
+          type: "primary",
+          style: { backgroundColor: '#1890ff', borderColor: '#1890ff' }
+        }}
+        cancelButtonProps={{ disabled: grantingPublicAccess }}
+      >
+        <div className="space-y-4">
+          <p>
+            Are you sure you want to grant public access to this model deployment? Once granted, you will be able to grant access to user/team/key access.
+          </p>
+
+          <div className="bg-gray-50 p-4 rounded-md space-y-2">
+            <div>
+              <Text className="font-semibold">Public Name:</Text>
+              <Text className="ml-2">
+                {modelData.model_info.team_public_model_name || modelData.model_name}
+              </Text>
+            </div>
+            <div>
+              <Text className="font-semibold">Provider:</Text>
+              <Text className="ml-2">{modelData.litellm_params?.custom_llm_provider}</Text>
+            </div>
+            <div>
+              <Text className="font-semibold">Model:</Text>
+              <Text className="ml-2 font-mono text-xs">{modelData.litellm_params?.model}</Text>
+            </div>
+            <div>
+              <Text className="font-semibold">Team ID:</Text>
+              <Text className="ml-2 font-mono text-xs">{modelData.model_info.team_id}</Text>
+            </div>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
