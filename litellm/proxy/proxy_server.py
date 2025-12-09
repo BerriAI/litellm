@@ -4430,8 +4430,18 @@ class ProxyStartupEvent:
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             max_instances=1,
         )
-        # Second job starts after half the interval to stagger execution
-        staggered_start_time = datetime.now() + timedelta(seconds=batch_writing_interval // 2)
+        # Second job starts after first job is likely to finish (typical processing time + buffer)
+        # Typical processing: 15-20s for large batches, add 10s buffer to ensure first job completes
+        # Use 70% of interval or 30s minimum, whichever is larger, to ensure good separation
+        expected_processing_time = 20  # seconds - typical time for processing large batches
+        buffer_time = 10  # seconds - buffer to ensure first job completes
+        stagger_seconds = max(
+            expected_processing_time + buffer_time,
+            int(batch_writing_interval * 0.7)  # 70% of interval as fallback
+        )
+        # Ensure stagger doesn't exceed 80% of interval to maintain proper spacing
+        stagger_seconds = min(stagger_seconds, int(batch_writing_interval * 0.8))
+        staggered_start_time = datetime.now() + timedelta(seconds=stagger_seconds)
         scheduler.add_job(
             update_spend,
             "interval",
