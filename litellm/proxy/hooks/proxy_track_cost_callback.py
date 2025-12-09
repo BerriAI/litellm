@@ -1,4 +1,5 @@
 import asyncio
+import os
 import traceback
 from datetime import datetime
 from typing import Any, List, Optional, Union, cast
@@ -186,6 +187,31 @@ class _ProxyDBLogger(CustomLogger):
                 verbose_proxy_logger.debug(
                     f"user_api_key {user_api_key}, user_id {user_id}, team_id {team_id}, end_user_id {end_user_id}"
                 )
+
+                ## CHECK FOR FREE MODELS - Set cost to 0.0 for cache updates ##
+                # Get model from multiple sources (alias and actual model)
+                _request_model = kwargs.get("model")  # e.g., "xyne-spaces-minimax-m2" (alias)
+                _litellm_model = None
+                if litellm_params and isinstance(litellm_params, dict):
+                    _litellm_model = litellm_params.get("model")  # e.g., "MiniMaxAI/MiniMax-M2" (actual)
+
+                FREE_MODELS_ENV = os.getenv("FREE_MODELS", "")
+                FREE_MODELS = [m.strip() for m in FREE_MODELS_ENV.split(",") if m.strip()]
+
+                # Check if ANY of the model identifiers match (case-insensitive)
+                is_free_model = False
+                matched_model = None
+                if FREE_MODELS:
+                    FREE_MODELS_LOWER = [m.lower() for m in FREE_MODELS]
+                    for model_name in [_request_model, _litellm_model]:
+                        if model_name and model_name.lower() in FREE_MODELS_LOWER:
+                            is_free_model = True
+                            matched_model = model_name
+                            break
+
+                # DEBUG LOG
+                print(f"[CACHE_UPDATE_CHECK] User: {user_id}, RequestModel: {_request_model}, LiteLLMModel: {_litellm_model}, IsFreeModel: {is_free_model}, MatchedModel: {matched_model}, Cost: ${response_cost:.6f}")
+
                 if _should_track_cost_callback(
                     user_api_key=user_api_key,
                     user_id=user_id,
@@ -208,34 +234,53 @@ class _ProxyDBLogger(CustomLogger):
 
                     # Atomically update spend counters (in-memory + Redis)
                     # for cross-pod budget enforcement.
-                    await increment_spend_counters(
-                        token=user_api_key,
-                        team_id=team_id,
-                        user_id=user_id,
-                        response_cost=response_cost,
-                    )
-
-                    # update cache (fire-and-forget for backward compat:
-                    # cached object fields, soft budget alerts, etc.)
-                    asyncio.create_task(
-                        update_cache(
+                    # Skip for FREE_MODELS so free-tier traffic doesn't consume cross-pod budget.
+                    if not is_free_model:
+                        await increment_spend_counters(
                             token=user_api_key,
+                            team_id=team_id,
                             user_id=user_id,
+                            response_cost=response_cost,
+                        )
+
+                    # Update cache (fire-and-forget for backward compat:
+                    # cached object fields, soft budget alerts, etc.)
+                    # For FREE_MODELS: pass cost=0.0 so cached `spend` doesn't block future budget checks.
+                    if is_free_model:
+                        print(f"[CACHE_UPDATE_CALL] FREE MODEL - User: {user_id}, PassingCostToCache: $0.0000 (actual cost: ${response_cost:.6f})")
+                        asyncio.create_task(
+                            update_cache(
+                                token=user_api_key,
+                                user_id=user_id,
+                                end_user_id=end_user_id,
+                                response_cost=0.0,
+                                team_id=team_id,
+                                parent_otel_span=parent_otel_span,
+                                tags=tags,
+                            )
+                        )
+                        # No Slack alerts for free models
+                    else:
+                        print(f"[CACHE_UPDATE_CALL] PAID MODEL - User: {user_id}, PassingCostToCache: ${response_cost:.6f}")
+                        asyncio.create_task(
+                            update_cache(
+                                token=user_api_key,
+                                user_id=user_id,
+                                end_user_id=end_user_id,
+                                response_cost=response_cost,
+                                team_id=team_id,
+                                parent_otel_span=parent_otel_span,
+                                tags=tags,
+                            )
+                        )
+
+                        await proxy_logging_obj.slack_alerting_instance.customer_spend_alert(
+                            token=user_api_key,
+                            key_alias=key_alias,
                             end_user_id=end_user_id,
                             response_cost=response_cost,
-                            team_id=team_id,
-                            parent_otel_span=parent_otel_span,
-                            tags=tags,
+                            max_budget=end_user_max_budget,
                         )
-                    )
-
-                    await proxy_logging_obj.slack_alerting_instance.customer_spend_alert(
-                        token=user_api_key,
-                        key_alias=key_alias,
-                        end_user_id=end_user_id,
-                        response_cost=response_cost,
-                        max_budget=end_user_max_budget,
-                    )
             else:
                 # Non-model call types (health checks, afile_delete) have no model or standard_logging_object.
                 # Use .get() for "stream" to avoid KeyError on health checks.
