@@ -298,6 +298,7 @@ const sidebars = {
             "proxy/custom_auth",
             "proxy/ip_address",
             "proxy/multiple_admins",
+            "proxy/public_routes",
           ],
         },
         {
