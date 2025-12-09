@@ -4417,15 +4417,32 @@ class ProxyStartupEvent:
             )
 
         ### UPDATE SPEND ###
+        # Create two staggered jobs for controlled concurrent execution
+        # First job starts immediately
         scheduler.add_job(
             update_spend,
             "interval",
             seconds=batch_writing_interval,
             # REMOVED jitter parameter - major cause of memory leak
             args=[prisma_client, db_writer_client, proxy_logging_obj],
-            id="update_spend_job",
+            id="update_spend_job_1",
             replace_existing=True,
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+            max_instances=1,
+        )
+        # Second job starts after half the interval to stagger execution
+        staggered_start_time = datetime.now() + timedelta(seconds=batch_writing_interval // 2)
+        scheduler.add_job(
+            update_spend,
+            "interval",
+            seconds=batch_writing_interval,
+            # REMOVED jitter parameter - major cause of memory leak
+            args=[prisma_client, db_writer_client, proxy_logging_obj],
+            id="update_spend_job_2",
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+            max_instances=1,
+            next_run_time=staggered_start_time,
         )
 
         ### ADD NEW MODELS ###

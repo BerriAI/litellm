@@ -1709,8 +1709,6 @@ def jsonify_object(data: dict) -> dict:
 
 
 class PrismaClient:
-    spend_log_transactions: List = []
-
     def __init__(
         self,
         database_url: str,
@@ -1719,6 +1717,9 @@ class PrismaClient:
     ):
         ## init logging object
         self.proxy_logging_obj = proxy_logging_obj
+        # Initialize instance-level spend_log_transactions and lock for thread-safe access
+        self.spend_log_transactions: List = []
+        self._spend_log_transactions_lock = asyncio.Lock()
         self.iam_token_db_auth: Optional[bool] = str_to_bool(
             os.getenv("IAM_TOKEN_DB_AUTH")
         )
@@ -3345,12 +3346,19 @@ class ProxyUpdateSpend:
         db_writer_client: Optional[HTTPHandler],
         proxy_logging_obj: ProxyLogging,
     ):
-        BATCH_SIZE = 100  # Preferred size of each batch to write to the database
+        BATCH_SIZE = 1000  # Preferred size of each batch to write to the database
         MAX_LOGS_PER_INTERVAL = (
-            1000  # Maximum number of logs to flush in a single interval
+            10000  # Maximum number of logs to flush in a single interval
         )
-        # Get initial logs to process
-        logs_to_process = prisma_client.spend_log_transactions[:MAX_LOGS_PER_INTERVAL]
+        # Use lock to atomically read and remove logs to prevent double processing
+        async with prisma_client._spend_log_transactions_lock:
+            # Get initial logs to process
+            logs_to_process = prisma_client.spend_log_transactions[:MAX_LOGS_PER_INTERVAL]
+            # Remove the logs we're about to process to prevent double processing
+            prisma_client.spend_log_transactions = (
+                prisma_client.spend_log_transactions[len(logs_to_process) :]
+            )
+        
         start_time = time.time()
         try:
             for i in range(n_retry_times + 1):
@@ -3370,11 +3378,8 @@ class ProxyUpdateSpend:
                             headers={"Content-Type": "application/json"},
                         )
                         if response.status_code == 200:
-                            prisma_client.spend_log_transactions = (
-                                prisma_client.spend_log_transactions[
-                                    len(logs_to_process) :
-                                ]
-                            )
+                            # Logs already removed from queue above, no need to remove again
+                            pass
                     else:
                         for j in range(0, len(logs_to_process), BATCH_SIZE):
                             batch = logs_to_process[j : j + BATCH_SIZE]
@@ -3389,12 +3394,11 @@ class ProxyUpdateSpend:
                                 f"Flushed {len(batch)} logs to the DB."
                             )
 
-                        prisma_client.spend_log_transactions = (
-                            prisma_client.spend_log_transactions[len(logs_to_process) :]
-                        )
-                        verbose_proxy_logger.debug(
-                            f"{len(logs_to_process)} logs processed. Remaining in queue: {len(prisma_client.spend_log_transactions)}"
-                        )
+                        # Logs already removed from queue above, no need to remove again
+                        async with prisma_client._spend_log_transactions_lock:
+                            verbose_proxy_logger.debug(
+                                f"{len(logs_to_process)} logs processed. Remaining in queue: {len(prisma_client.spend_log_transactions)}"
+                            )
                     break
                 except DB_CONNECTION_ERROR_TYPES:
                     if i is None:
@@ -3403,9 +3407,8 @@ class ProxyUpdateSpend:
                         raise
                     await asyncio.sleep(2**i)
         except Exception as e:
-            prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[
-                len(logs_to_process) :
-            ]
+            # On error, we don't put logs back since they were already removed
+            # This prevents double processing - failed logs will need to be retried via other mechanisms
             _raise_failed_update_spend_exception(
                 e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
             )
@@ -3447,11 +3450,15 @@ async def update_spend(  # noqa: PLR0915
     )
 
     ### UPDATE SPEND LOGS ###
+    # Use lock for thread-safe read of spend_log_transactions length
+    async with prisma_client._spend_log_transactions_lock:
+        logs_count = len(prisma_client.spend_log_transactions)
+    
     verbose_proxy_logger.debug(
-        "Spend Logs transactions: {}".format(len(prisma_client.spend_log_transactions))
+        "Spend Logs transactions: {}".format(logs_count)
     )
 
-    if len(prisma_client.spend_log_transactions) > 0:
+    if logs_count > 0:
         await ProxyUpdateSpend.update_spend_logs(
             n_retry_times=n_retry_times,
             prisma_client=prisma_client,
