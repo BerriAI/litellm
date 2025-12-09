@@ -1698,7 +1698,10 @@ def on_backoff(details):
 
 
 def jsonify_object(data: dict) -> dict:
-    db_data = copy.deepcopy(data)
+    # Optimized: Avoid deepcopy - work with shallow copy and modify in place
+    # Since we're replacing dict values with JSON strings (not modifying nested dicts),
+    # we can safely modify the dict in place without deepcopy
+    db_data = dict(data)  # Shallow copy is sufficient
 
     for k, v in db_data.items():
         if isinstance(v, dict):
@@ -1800,7 +1803,10 @@ class PrismaClient:
         return hashed_token
 
     def jsonify_object(self, data: dict) -> dict:
-        db_data = copy.deepcopy(data)
+        # Optimized: Avoid deepcopy - work with shallow copy and modify in place
+        # Since we're replacing dict values with JSON strings (not modifying nested dicts),
+        # we can safely modify the dict in place without deepcopy
+        db_data = dict(data)  # Shallow copy is sufficient
 
         for k, v in db_data.items():
             if isinstance(v, dict):
@@ -3468,9 +3474,6 @@ class ProxyUpdateSpend:
                 prisma_client.spend_log_transactions[len(logs_to_process) :]
             )
         
-        # Aggressive memory cleanup after removing logs from queue
-        ProxyUpdateSpend._quick_gc_cleanup()
-        gc.collect()   # Full collection
         start_time = time.time()
         try:
             for i in range(n_retry_times + 1):
@@ -3504,8 +3507,9 @@ class ProxyUpdateSpend:
                         for j in range(0, logs_len, BATCH_SIZE):
                             batch = logs_to_process[j : j + BATCH_SIZE]
                             # Process batch and immediately clean up
+                            # jsonify_object creates its own copy, so no need for {**entry}
                             batch_with_dates = [
-                                prisma_client.jsonify_object({**entry})
+                                prisma_client.jsonify_object(entry)
                                 for entry in batch
                             ]
                             await prisma_client.db.litellm_spendlogs.create_many(
@@ -3518,20 +3522,14 @@ class ProxyUpdateSpend:
                             # Aggressive memory cleanup after each batch
                             ProxyUpdateSpend._cleanup_batch_variables()
 
-                        # Clean up loop variables
-                        ProxyUpdateSpend._cleanup_loop_variables()
-
                         # Logs already removed from queue above, no need to remove again
                         async with prisma_client._spend_log_transactions_lock:
                             remaining_count = len(prisma_client.spend_log_transactions)
                             verbose_proxy_logger.debug(
                                 f"{len(logs_to_process)} logs processed. Remaining in queue: {remaining_count}"
                             )
-                            del remaining_count
-                    # Clean up processed logs from memory
+                    # Clean up all processed logs from memory (includes loop variables and remaining_count)
                     ProxyUpdateSpend._cleanup_all_spend_log_variables()
-                    ProxyUpdateSpend._quick_gc_cleanup()
-                    gc.collect()   # Full cleanup
                     break
                 except DB_CONNECTION_ERROR_TYPES:
                     if i is None:
@@ -3540,15 +3538,12 @@ class ProxyUpdateSpend:
                         raise
                     # Clean up any variables before retry
                     ProxyUpdateSpend._cleanup_all_spend_log_variables()
-                    ProxyUpdateSpend._quick_gc_cleanup()
                     await asyncio.sleep(2**i)
         except Exception as e:
             # On error, we don't put logs back since they were already removed
             # This prevents double processing - failed logs will need to be retried via other mechanisms
             # Clean up memory before raising exception
             ProxyUpdateSpend._cleanup_all_spend_log_variables()
-            ProxyUpdateSpend._quick_gc_cleanup()
-            gc.collect()
             _raise_failed_update_spend_exception(
                 e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
             )
