@@ -63,6 +63,25 @@ class UIThemeSettingsResponse(SettingsResponse):
     pass
 
 
+class UISettings(BaseModel):
+    """Configuration for UI-specific flags"""
+
+    disable_model_add_for_internal_users: bool = Field(
+        default=False,
+        description="If true, internal users cannot add models from the UI",
+    )
+
+
+class UISettingsResponse(SettingsResponse):
+    """Response model for UI settings"""
+
+    pass
+
+
+# Allowlist of UI settings that can be stored
+ALLOWED_UI_SETTINGS_FIELDS = {"disable_model_add_for_internal_users"}
+
+
 @router.get(
     "/get/allowed_ips",
     tags=["Budget & Spend Tracking"],
@@ -647,6 +666,87 @@ async def update_ui_theme_settings(theme_config: UIThemeConfig):
         "theme_config": theme_data,
     }
 
+
+@router.get(
+    "/get/ui_settings",
+    tags=["UI Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=UISettingsResponse,
+)
+async def get_ui_settings():
+    """
+    Get UI-specific configuration flags.
+    All authenticated users can fetch these settings for client-side behavior.
+    """
+    from litellm.proxy.proxy_server import proxy_config
+
+    config = await proxy_config.get_config()
+
+    # Sanitize any unexpected keys from persisted config before returning
+    if (
+        "litellm_settings" in config
+        and isinstance(config["litellm_settings"].get("ui_settings"), dict)
+    ):
+        config["litellm_settings"]["ui_settings"] = {
+            k: v
+            for k, v in config["litellm_settings"]["ui_settings"].items()
+            if k in ALLOWED_UI_SETTINGS_FIELDS
+        }
+
+    return await _get_settings_with_schema(
+        settings_key="ui_settings",
+        settings_class=UISettings,
+        config=config,
+    )
+
+
+@router.patch(
+    "/update/ui_settings",
+    tags=["UI Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_ui_settings(
+    settings: UISettings, user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)
+):
+    """
+    Update UI-specific configuration flags.
+    Only proxy admins are allowed to modify these settings.
+    """
+    from litellm.proxy.proxy_server import proxy_config, store_model_in_db
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403, detail="Only proxy admins can update UI settings."
+        )
+
+    if store_model_in_db is not True:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
+            },
+        )
+
+    config = await proxy_config.get_config()
+
+    if "litellm_settings" not in config:
+        config["litellm_settings"] = {}
+
+    settings_dict = settings.model_dump(exclude_none=True)
+
+    # Enforce allowlist and drop anything unexpected
+    ui_settings = {
+        k: v for k, v in settings_dict.items() if k in ALLOWED_UI_SETTINGS_FIELDS
+    }
+    config["litellm_settings"]["ui_settings"] = ui_settings
+
+    await proxy_config.save_config(new_config=config)
+
+    return {
+        "message": "UI settings updated successfully",
+        "status": "success",
+        "settings": ui_settings,
+    }
 
 @router.post(
     "/upload/logo",
