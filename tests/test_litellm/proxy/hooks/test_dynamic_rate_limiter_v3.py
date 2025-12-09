@@ -1403,13 +1403,13 @@ async def test_async_log_success_event_increments_by_actual_tokens():
             end_time=None,
         )
     
-    # Verify increments happened with actual token count (50 completion tokens)
+    # Verify increments happened with actual token count (60 total tokens)
     assert len(increment_calls) == 2, f"Expected 2 increment calls, got {len(increment_calls)}"
     
-    # Both should increment by 50 (completion_tokens, since rate_limit_type defaults to 'output')
+    # Both should increment by 50 (total_tokens, since rate_limit_type defaults to 'total')
     for call in increment_calls:
-        assert call["increment_value"] == 50, (
-            f"Expected increment of 50 tokens, got {call['increment_value']} for key {call['key']}"
+        assert call["increment_value"] == 60, (
+            f"Expected increment of 60 tokens, got {call['increment_value']} for key {call['key']}"
         )
     
     # Verify correct keys were used
