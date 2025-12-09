@@ -95,6 +95,7 @@ from litellm.utils import (
     EmbeddingResponse,
     ImageResponse,
     ModelResponse,
+    ModelResponseStream,
     ProviderConfigManager,
     TextCompletionResponse,
     TranscriptionResponse,
@@ -131,6 +132,25 @@ def _cost_per_token_custom_pricing_helper(
         return 0, output_cost
 
     return None
+
+
+def _transcription_usage_has_token_details(
+    usage_block: Optional[Usage],
+) -> bool:
+    if usage_block is None:
+        return False
+
+    prompt_tokens_val = getattr(usage_block, "prompt_tokens", 0) or 0
+    completion_tokens_val = getattr(usage_block, "completion_tokens", 0) or 0
+    prompt_details = getattr(usage_block, "prompt_tokens_details", None)
+
+    if prompt_details is not None:
+        audio_token_count = getattr(prompt_details, "audio_tokens", 0) or 0
+        text_token_count = getattr(prompt_details, "text_tokens", 0) or 0
+        if audio_token_count > 0 or text_token_count > 0:
+            return True
+
+    return (prompt_tokens_val > 0) or (completion_tokens_val > 0)
 
 
 def cost_per_token(  # noqa: PLR0915
@@ -324,19 +344,18 @@ def cost_per_token(  # noqa: PLR0915
             usage=usage_block, model=model, custom_llm_provider=custom_llm_provider
         )
     elif call_type == "atranscription" or call_type == "transcription":
-
-        if model == "gpt-4o-mini-transcribe":
+        if _transcription_usage_has_token_details(usage_block):
             return openai_cost_per_token(
-                model=model,
+                model=model_without_prefix,
                 usage=usage_block,
                 service_tier=service_tier,
             )
-        else:
-            return openai_cost_per_second(
-                model=model,
-                custom_llm_provider=custom_llm_provider,
-                duration=audio_transcription_file_duration,
-            )
+
+        return openai_cost_per_second(
+            model=model_without_prefix,
+            custom_llm_provider=custom_llm_provider,
+            duration=audio_transcription_file_duration,
+        )
     elif call_type == "search" or call_type == "asearch":
         # Search providers use per-query pricing
         from litellm.search import search_provider_cost_per_query
@@ -636,7 +655,9 @@ def _infer_call_type(
     if completion_response is None:
         return None
 
-    if isinstance(completion_response, ModelResponse):
+    if isinstance(completion_response, ModelResponse) or isinstance(
+        completion_response, ModelResponseStream
+    ):
         return "completion"
     elif isinstance(completion_response, EmbeddingResponse):
         return "embedding"
@@ -839,9 +860,9 @@ def completion_cost(  # noqa: PLR0915
                     or isinstance(completion_response, dict)
                 ):  # tts returns a custom class
                     if isinstance(completion_response, dict):
-                        usage_obj: Optional[Union[dict, Usage]] = (
-                            completion_response.get("usage", {})
-                        )
+                        usage_obj: Optional[
+                            Union[dict, Usage]
+                        ] = completion_response.get("usage", {})
                     else:
                         usage_obj = getattr(completion_response, "usage", {})
                     if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
@@ -915,6 +936,17 @@ def completion_cost(  # noqa: PLR0915
                     elif len(prompt) > 0:
                         prompt_tokens = token_counter(model=model, text=prompt)
                     completion_tokens = token_counter(model=model, text=completion)
+
+                # Handle A2A calls before model check - A2A doesn't require a model
+                if call_type in (
+                    CallTypes.asend_message.value,
+                    CallTypes.send_message.value,
+                ):
+                    from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
+
+                    return A2ACostCalculator.calculate_a2a_cost(
+                        litellm_logging_obj=litellm_logging_obj
+                    )
 
                 if model is None:
                     raise ValueError(
@@ -1013,6 +1045,64 @@ def completion_cost(  # noqa: PLR0915
                             billed_units.get("search_units") or 1
                         )  # cohere charges per request by default.
                         completion_tokens = search_units
+                elif (
+                    call_type == CallTypes.search.value
+                    or call_type == CallTypes.asearch.value
+                ):
+                    from litellm.search import search_provider_cost_per_query
+
+                    # Extract number_of_queries from optional_params or default to 1
+                    number_of_queries = 1
+                    if optional_params is not None:
+                        # Check if query is a list (multiple queries)
+                        query = optional_params.get("query")
+                        if isinstance(query, list):
+                            number_of_queries = len(query)
+                        elif query is not None:
+                            number_of_queries = 1
+
+                    search_model = model or ""
+                    if custom_llm_provider and "/" not in search_model:
+                        # If model is like "tavily-search", construct "tavily/search" for cost lookup
+                        search_model = f"{custom_llm_provider}/search"
+
+                    (
+                        prompt_cost,
+                        completion_cost_result,
+                    ) = search_provider_cost_per_query(
+                        model=search_model,
+                        custom_llm_provider=custom_llm_provider,
+                        number_of_queries=number_of_queries,
+                        optional_params=optional_params,
+                    )
+
+                    # Return the total cost (prompt_cost + completion_cost, but for search it's just prompt_cost)
+                    _final_cost = prompt_cost + completion_cost_result
+
+                    # Apply discount
+                    original_cost = _final_cost
+                    (
+                        _final_cost,
+                        discount_percent,
+                        discount_amount,
+                    ) = _apply_cost_discount(
+                        base_cost=_final_cost,
+                        custom_llm_provider=custom_llm_provider,
+                    )
+
+                    # Store cost breakdown in logging object if available
+                    _store_cost_breakdown_in_logging_obj(
+                        litellm_logging_obj=litellm_logging_obj,
+                        prompt_tokens_cost_usd_dollar=prompt_cost,
+                        completion_tokens_cost_usd_dollar=completion_cost_result,
+                        cost_for_built_in_tools_cost_usd_dollar=0.0,
+                        total_cost_usd_dollar=_final_cost,
+                        original_cost=original_cost,
+                        discount_percent=discount_percent,
+                        discount_amount=discount_amount,
+                    )
+
+                    return _final_cost
                 elif call_type == CallTypes.arealtime.value and isinstance(
                     completion_response, LiteLLMRealtimeStreamLoggingObject
                 ):
@@ -1242,9 +1332,8 @@ def response_cost_calculator(
             response_cost = 0.0
         else:
             if isinstance(response_object, BaseModel):
-                response_object._hidden_params["optional_params"] = optional_params
-
                 if hasattr(response_object, "_hidden_params"):
+                    response_object._hidden_params["optional_params"] = optional_params
                     provider_response_cost = get_response_cost_from_hidden_params(
                         response_object._hidden_params
                     )

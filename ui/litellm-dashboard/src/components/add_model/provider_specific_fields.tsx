@@ -1,15 +1,10 @@
-import React from "react";
-import { Form, Select } from "antd";
-import { TextInput, Text } from "@tremor/react";
-import { Row, Col, Typography, Button as Button2, Upload, UploadProps } from "antd";
+import { useProviderFields } from "@/app/(dashboard)/hooks/providers/useProviderFields";
 import { UploadOutlined } from "@ant-design/icons";
+import { Text, TextInput } from "@tremor/react";
+import { Button as Button2, Col, Form, Input, Row, Select, Typography, Upload, UploadProps } from "antd";
+import React from "react";
+import { CredentialItem, ProviderCredentialFieldMetadata } from "../networking";
 import { provider_map, Providers } from "../provider_info_helpers";
-import {
-  CredentialItem,
-  ProviderCreateInfo,
-  ProviderCredentialFieldMetadata,
-  getProviderCreateMetadata,
-} from "../networking";
 const { Link } = Typography;
 
 interface ProviderSpecificFieldsProps {
@@ -23,7 +18,7 @@ interface ProviderCredentialField {
   placeholder?: string;
   tooltip?: string;
   required?: boolean;
-  type?: "text" | "password" | "select" | "upload";
+  type?: "text" | "password" | "select" | "upload" | "textarea";
   options?: string[];
   defaultValue?: string;
 }
@@ -41,7 +36,9 @@ const mapFieldMetadataToUiField = (field: ProviderCredentialFieldMetadata): Prov
         ? "select"
         : field.field_type === "upload"
           ? "upload"
-          : "text";
+          : field.field_type === "textarea"
+            ? "textarea"
+            : "text";
 
   return {
     key: field.key,
@@ -99,65 +96,42 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
   const form = Form.useFormInstance(); // Get form instance from context
 
-  const [providerMetadata, setProviderMetadata] = React.useState<ProviderCreateInfo[] | null>(null);
-  const [isLoading, setIsLoading] = React.useState<boolean>(false);
-  const [loadError, setLoadError] = React.useState<string | null>(null);
+  const { data: providerMetadata, isLoading, error: loadError } = useProviderFields();
 
+  // Memoize the expensive cache computation
+  const cacheEntries = React.useMemo(() => {
+    if (!providerMetadata) {
+      return null;
+    }
+
+    // Compute cache entries keyed by provider display name and identifiers
+    const entries: Record<string, ProviderCredentialField[]> = {};
+    providerMetadata.forEach((providerInfo) => {
+      const displayName = providerInfo.provider_display_name;
+      const mappedFields = providerInfo.credential_fields.map(mapFieldMetadataToUiField);
+
+      // Primary key: human-readable display name
+      entries[displayName] = mappedFields;
+
+      // Also cache by backend identifiers so lookups by provider slug work
+      if (providerInfo.provider) {
+        entries[providerInfo.provider] = mappedFields;
+      }
+      if (providerInfo.litellm_provider) {
+        entries[providerInfo.litellm_provider] = mappedFields;
+      }
+    });
+    return entries;
+  }, [providerMetadata]);
+
+  // Sync memoized cache entries to module-level cache
   React.useEffect(() => {
-    const hasCachedFields = Object.keys(providerFieldsByDisplayName).length > 0;
-    if (hasCachedFields) {
-      // We already have fields cached globally; no need to refetch.
-      // This is important so we can reuse credential field definitions
-      // across mounts and in non-React helpers.
+    if (!cacheEntries) {
       return;
     }
 
-    let isMounted = true;
-
-    const fetchProviderFields = async () => {
-      setIsLoading(true);
-      setLoadError(null);
-      try {
-        const metadata = await getProviderCreateMetadata();
-        if (!isMounted) {
-          return;
-        }
-        setProviderMetadata(metadata);
-
-        // Populate cache keyed by provider display name and identifiers
-        metadata.forEach((providerInfo) => {
-          const displayName = providerInfo.provider_display_name;
-          const mappedFields = providerInfo.credential_fields.map(mapFieldMetadataToUiField);
-
-          // Primary key: human-readable display name
-          providerFieldsByDisplayName[displayName] = mappedFields;
-
-          // Also cache by backend identifiers so lookups by provider slug work
-          if (providerInfo.provider) {
-            providerFieldsByDisplayName[providerInfo.provider] = mappedFields;
-          }
-          if (providerInfo.litellm_provider) {
-            providerFieldsByDisplayName[providerInfo.litellm_provider] = mappedFields;
-          }
-        });
-      } catch (error) {
-        console.error("Failed to load provider credential fields:", error);
-        if (isMounted) {
-          setLoadError("Failed to load provider credential fields");
-        }
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
-        }
-      }
-    };
-
-    fetchProviderFields();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
+    Object.assign(providerFieldsByDisplayName, cacheEntries);
+  }, [cacheEntries]);
 
   const allFields = React.useMemo(() => {
     // First try to resolve from the in-memory cache. We support both the
@@ -234,7 +208,9 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
       {loadError && allFields.length === 0 && (
         <Row>
           <Col span={24}>
-            <Text className="mb-2 text-red-500">{loadError}</Text>
+            <Text className="mb-2 text-red-500">
+              {loadError instanceof Error ? loadError.message : "Failed to load provider credential fields"}
+            </Text>
           </Col>
         </Row>
       )}
@@ -273,6 +249,13 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
               >
                 <Button2 icon={<UploadOutlined />}>Click to Upload</Button2>
               </Upload>
+            ) : field.type === "textarea" ? (
+              <Input.TextArea
+                placeholder={field.placeholder}
+                defaultValue={field.defaultValue}
+                rows={6}
+                style={{ fontFamily: "monospace", fontSize: "12px" }}
+              />
             ) : (
               <TextInput
                 placeholder={field.placeholder}

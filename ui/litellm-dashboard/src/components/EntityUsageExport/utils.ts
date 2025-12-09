@@ -1,5 +1,7 @@
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import type { EntitySpendData, EntityBreakdown, ExportMetadata, ExportScope } from "./types";
+import Papa from "papaparse";
+import type { EntitySpendData, EntityBreakdown, ExportMetadata, ExportScope, EntityType } from "./types";
+import type { DateRangePickerValue } from "@tremor/react";
 
 export const getEntityBreakdown = (spendData: EntitySpendData): EntityBreakdown[] => {
   const entitySpend: { [key: string]: EntityBreakdown } = {};
@@ -137,8 +139,8 @@ export const generateExportData = (
 };
 
 export const generateMetadata = (
-  entityType: "tag" | "team" | "organization",
-  dateRange: { from?: Date; to?: Date },
+  entityType: EntityType,
+  dateRange: DateRangePickerValue,
   selectedFilters: string[],
   exportScope: ExportScope,
   spendData: EntitySpendData,
@@ -159,3 +161,50 @@ export const generateMetadata = (
     total_tokens: spendData.metadata.total_tokens,
   },
 });
+
+export const handleExportCSV = (
+  spendData: EntitySpendData,
+  exportScope: ExportScope,
+  entityLabel: string,
+  entityType: EntityType,
+): void => {
+  const data = generateExportData(spendData, exportScope, entityLabel);
+  const csv = Papa.unparse(data);
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  const fileName = `${entityType}_usage_${exportScope}_${new Date().toISOString().split("T")[0]}.csv`;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(url);
+};
+
+export const handleExportJSON = (
+  spendData: EntitySpendData,
+  exportScope: ExportScope,
+  entityLabel: string,
+  entityType: EntityType,
+  dateRange: DateRangePickerValue,
+  selectedFilters: string[],
+): void => {
+  const data = generateExportData(spendData, exportScope, entityLabel);
+  const metadata = generateMetadata(entityType, dateRange, selectedFilters, exportScope, spendData);
+  const exportObject = {
+    metadata,
+    data,
+  };
+  const jsonString = JSON.stringify(exportObject, null, 2);
+  const blob = new Blob([jsonString], { type: "application/json" });
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  const fileName = `${entityType}_usage_${exportScope}_${new Date().toISOString().split("T")[0]}.json`;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(url);
+};
