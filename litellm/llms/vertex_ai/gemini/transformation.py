@@ -499,7 +499,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
         raise e
 
 
-def _transform_request_body(
+def _transform_request_body(  # noqa: PLR0915
     messages: List[AllMessageValues],
     model: str,
     optional_params: dict,
