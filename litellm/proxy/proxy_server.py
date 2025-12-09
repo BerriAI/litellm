@@ -4429,6 +4429,19 @@ class ProxyStartupEvent:
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
         )
 
+        ### MONITOR SPEND LOGS QUEUE (queue-size-based job) ###
+        if general_settings.get("disable_spend_logs", False) is False:
+            from litellm.proxy.utils import _monitor_spend_logs_queue
+            
+            # Start background task to monitor spend logs queue size
+            asyncio.create_task(
+                _monitor_spend_logs_queue(
+                    prisma_client=prisma_client,
+                    db_writer_client=db_writer_client,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            )
+
         ### ADD NEW MODELS ###
         store_model_in_db = (
             get_secret_bool("STORE_MODEL_IN_DB", store_model_in_db) or store_model_in_db

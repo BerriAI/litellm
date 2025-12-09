@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import gc
 import hashlib
 import json
 import os
@@ -66,6 +67,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     AlertType,
     CallInfo,
@@ -3342,14 +3344,14 @@ class ProxyUpdateSpend:
     async def update_spend_logs(
         n_retry_times: int,
         prisma_client: PrismaClient,
-        db_writer_client: Optional[HTTPHandler],
+        db_writer_client: Optional[AsyncHTTPHandler],
         proxy_logging_obj: ProxyLogging,
     ):
-        BATCH_SIZE = 100  # Preferred size of each batch to write to the database
+        BATCH_SIZE = 1000  # Preferred size of each batch to write to the database
         MAX_LOGS_PER_INTERVAL = (
-            1000  # Maximum number of logs to flush in a single interval
+            10000  # Maximum number of logs to flush in a single interval
         )
-        # Get initial logs to process
+        # Get initial logs to proces
         logs_to_process = prisma_client.spend_log_transactions[:MAX_LOGS_PER_INTERVAL]
         start_time = time.time()
         try:
@@ -3364,11 +3366,14 @@ class ProxyUpdateSpend:
                         if not base_url.endswith("/"):
                             base_url += "/"
                         verbose_proxy_logger.debug("base_url: {}".format(base_url))
+                        json_data = json.dumps(logs_to_process)
                         response = await db_writer_client.post(
                             url=base_url + "spend/update",
-                            data=json.dumps(logs_to_process),
+                            data=json_data,
                             headers={"Content-Type": "application/json"},
                         )
+                        del json_data
+                        gc.collect()
                         if response.status_code == 200:
                             prisma_client.spend_log_transactions = (
                                 prisma_client.spend_log_transactions[
@@ -3388,12 +3393,18 @@ class ProxyUpdateSpend:
                             verbose_proxy_logger.debug(
                                 f"Flushed {len(batch)} logs to the DB."
                             )
+                            # Explicitly clear batch memory
+                            del batch, batch_with_dates
+                            # Only run gc every 5 batches to reduce overhead
+                            if j % (BATCH_SIZE * 5) == 0:
+                                gc.collect()
 
                         prisma_client.spend_log_transactions = (
                             prisma_client.spend_log_transactions[len(logs_to_process) :]
                         )
+                        remaining_count = len(prisma_client.spend_log_transactions)
                         verbose_proxy_logger.debug(
-                            f"{len(logs_to_process)} logs processed. Remaining in queue: {len(prisma_client.spend_log_transactions)}"
+                            f"{len(logs_to_process)} logs processed. Remaining in queue: {remaining_count}"
                         )
                     break
                 except DB_CONNECTION_ERROR_TYPES:
@@ -3409,6 +3420,10 @@ class ProxyUpdateSpend:
             _raise_failed_update_spend_exception(
                 e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
             )
+        finally:
+            # Clean up logs_to_process after all processing is complete
+            del logs_to_process
+            gc.collect()
 
     @staticmethod
     def disable_spend_updates() -> bool:
@@ -3425,7 +3440,7 @@ class ProxyUpdateSpend:
 
 async def update_spend(  # noqa: PLR0915
     prisma_client: PrismaClient,
-    db_writer_client: Optional[HTTPHandler],
+    db_writer_client: Optional[AsyncHTTPHandler],
     proxy_logging_obj: ProxyLogging,
 ):
     """
@@ -3451,13 +3466,98 @@ async def update_spend(  # noqa: PLR0915
         "Spend Logs transactions: {}".format(len(prisma_client.spend_log_transactions))
     )
 
-    if len(prisma_client.spend_log_transactions) > 0:
-        await ProxyUpdateSpend.update_spend_logs(
-            n_retry_times=n_retry_times,
-            prisma_client=prisma_client,
-            proxy_logging_obj=proxy_logging_obj,
-            db_writer_client=db_writer_client,
-        )
+    # Spend log transactions are now processed by a separate queue-size-based job
+    # See update_spend_logs_job and _monitor_spend_logs_queue
+
+
+async def update_spend_logs_job(
+    prisma_client: PrismaClient,
+    db_writer_client: Optional[AsyncHTTPHandler],
+    proxy_logging_obj: ProxyLogging,
+):
+    """
+    Job to process spend_log_transactions queue.
+    
+    This job is triggered based on queue size rather than time.
+    Processes spend log transactions when the queue reaches a threshold.
+    """
+    n_retry_times = 3
+    
+    queue_size = len(prisma_client.spend_log_transactions)
+    
+    if queue_size == 0:
+        return
+    
+    await ProxyUpdateSpend.update_spend_logs(
+        n_retry_times=n_retry_times,
+        prisma_client=prisma_client,
+        proxy_logging_obj=proxy_logging_obj,
+        db_writer_client=db_writer_client,
+    )
+
+
+async def _monitor_spend_logs_queue(
+    prisma_client: PrismaClient,
+    db_writer_client: Optional[AsyncHTTPHandler],
+    proxy_logging_obj: ProxyLogging,
+):
+    """
+    Background task that monitors the spend_log_transactions queue size
+    and triggers processing when the threshold is reached.
+    
+    Args:
+        prisma_client: Prisma client instance
+        db_writer_client: Optional HTTP handler for external spend logs endpoint
+        proxy_logging_obj: Proxy logging object
+    """
+    from litellm.constants import SPEND_LOG_QUEUE_SIZE_THRESHOLD, SPEND_LOG_QUEUE_POLL_INTERVAL
+    
+    threshold = SPEND_LOG_QUEUE_SIZE_THRESHOLD
+    base_interval = SPEND_LOG_QUEUE_POLL_INTERVAL
+    max_backoff = 30.0  # Maximum backoff interval in seconds
+    backoff_multiplier = 1.5  # Exponential backoff multiplier
+    current_interval = base_interval
+    
+    verbose_proxy_logger.info(
+        f"Starting spend logs queue monitor (threshold: {threshold}, poll_interval: {base_interval}s)"
+    )
+    
+    while True:
+        try:
+            queue_size = len(prisma_client.spend_log_transactions)
+            
+            if queue_size > 0:
+                if queue_size >= threshold:
+                    verbose_proxy_logger.debug(
+                        f"Spend logs queue size ({queue_size}) reached threshold ({threshold}), triggering processing"
+                    )
+                    # Reset to base interval when threshold is reached
+                    current_interval = base_interval
+                else:
+                    verbose_proxy_logger.debug(
+                        f"Spend logs queue size ({queue_size}) below threshold ({threshold}), processing with backoff"
+                    )
+                    # Exponential backoff when below threshold but still processing
+                    current_interval = min(current_interval * backoff_multiplier, max_backoff)
+                
+                await update_spend_logs_job(
+                    prisma_client=prisma_client,
+                    db_writer_client=db_writer_client,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            else:
+                # Exponential backoff when no logs to process
+                current_interval = min(current_interval * backoff_multiplier, max_backoff)
+            
+            await asyncio.sleep(current_interval)
+        except Exception as e:
+            verbose_proxy_logger.error(
+                f"Error in spend logs queue monitor: {str(e)}\n{traceback.format_exc()}"
+            )
+            # Continue monitoring even if there's an error, with exponential backoff
+            current_interval = min(current_interval * backoff_multiplier, max_backoff)
+            await asyncio.sleep(current_interval)
+
 
 
 def _raise_failed_update_spend_exception(
