@@ -1,4 +1,5 @@
 #### CRUD ENDPOINTS for UI Settings #####
+import json
 from typing import Any, Dict, List, Union, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
@@ -678,20 +679,32 @@ async def get_ui_settings():
     Get UI-specific configuration flags.
     All authenticated users can fetch these settings for client-side behavior.
     """
-    from litellm.proxy.proxy_server import proxy_config
+    from litellm.proxy.proxy_server import prisma_client
 
-    config = await proxy_config.get_config()
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected. Please connect a database."},
+        )
+
+    ui_settings: Dict[str, Any] = {}
+
+    db_record = await prisma_client.db.litellm_uisettings.find_unique(
+        where={"id": "ui_settings"}
+    )
+
+    if db_record and db_record.ui_settings:
+        ui_settings_json = db_record.ui_settings
+        if isinstance(ui_settings_json, str):
+            ui_settings = json.loads(ui_settings_json)
+        else:
+            ui_settings = dict(ui_settings_json)
 
     # Sanitize any unexpected keys from persisted config before returning
-    if (
-        "litellm_settings" in config
-        and isinstance(config["litellm_settings"].get("ui_settings"), dict)
-    ):
-        config["litellm_settings"]["ui_settings"] = {
-            k: v
-            for k, v in config["litellm_settings"]["ui_settings"].items()
-            if k in ALLOWED_UI_SETTINGS_FIELDS
-        }
+    ui_settings = {k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
+
+    # Build config-like object for schema helper
+    config: Dict[str, Any] = {"litellm_settings": {"ui_settings": ui_settings}}
 
     return await _get_settings_with_schema(
         settings_key="ui_settings",
@@ -712,11 +725,17 @@ async def update_ui_settings(
     Update UI-specific configuration flags.
     Only proxy admins are allowed to modify these settings.
     """
-    from litellm.proxy.proxy_server import proxy_config, store_model_in_db
+    from litellm.proxy.proxy_server import prisma_client, store_model_in_db
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
             status_code=403, detail="Only proxy admins can update UI settings."
+        )
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected. Please connect a database."},
         )
 
     if store_model_in_db is not True:
@@ -727,20 +746,25 @@ async def update_ui_settings(
             },
         )
 
-    config = await proxy_config.get_config()
-
-    if "litellm_settings" not in config:
-        config["litellm_settings"] = {}
-
     settings_dict = settings.model_dump(exclude_none=True)
 
     # Enforce allowlist and drop anything unexpected
     ui_settings = {
         k: v for k, v in settings_dict.items() if k in ALLOWED_UI_SETTINGS_FIELDS
     }
-    config["litellm_settings"]["ui_settings"] = ui_settings
 
-    await proxy_config.save_config(new_config=config)
+    await prisma_client.db.litellm_uisettings.upsert(
+        where={"id": "ui_settings"},
+        data={
+            "create": {
+                "id": "ui_settings",
+                "ui_settings": json.dumps(ui_settings),
+            },
+            "update": {
+                "ui_settings": json.dumps(ui_settings),
+            },
+        },
+    )
 
     return {
         "message": "UI settings updated successfully",
