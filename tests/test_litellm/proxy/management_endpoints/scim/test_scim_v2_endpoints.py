@@ -10,6 +10,7 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import (
     create_group,
     create_user,
     get_service_provider_config,
+    patch_group,
     patch_user,
     update_group,
     update_user,
@@ -1190,3 +1191,203 @@ async def test_update_group_with_nonexistent_users_creates_users(mocker):
     assert result.id == group_id
     assert result.displayName == "Updated Group Name"
     assert len(result.members) == 3
+
+
+@pytest.mark.asyncio
+async def test_patch_group_refreshes_team_data_to_prevent_race_conditions(mocker):
+    """
+    Test that patch_group refreshes team data from database:
+    1. After applying updates (to get latest state before membership changes)
+    2. After membership changes (to get final state for response)
+    
+    This prevents race conditions when multiple PATCH requests come in simultaneously.
+    """
+    from litellm.proxy._types import LiteLLM_TeamTable, Member
+    
+    group_id = "test-group-123"
+    
+    # Mock existing team
+    existing_team = LiteLLM_TeamTable(
+        team_id=group_id,
+        team_alias="Original Team",
+        members=["user1", "user2"],
+        members_with_roles=[
+            Member(user_id="user1", role="user"),
+            Member(user_id="user2", role="user")
+        ],
+        metadata={}
+    )
+    
+    # Mock team after applying updates (simulating what _apply_group_patch_updates returns)
+    updated_team_after_patch = LiteLLM_TeamTable(
+        team_id=group_id,
+        team_alias="Updated Team",
+        members=["user1", "user2", "user3"],  # user3 added in patch
+        members_with_roles=[
+            Member(user_id="user1", role="user"),
+            Member(user_id="user2", role="user"),
+            Member(user_id="user3", role="user")
+        ],
+        metadata={}
+    )
+    
+    # Mock refreshed team (simulating concurrent update - user4 was added by another request)
+    refreshed_team_before_membership = LiteLLM_TeamTable(
+        team_id=group_id,
+        team_alias="Updated Team",
+        members=["user1", "user2", "user3", "user4"],  # user4 added concurrently
+        members_with_roles=[
+            Member(user_id="user1", role="user"),
+            Member(user_id="user2", role="user"),
+            Member(user_id="user3", role="user"),
+            Member(user_id="user4", role="user")  # Concurrent addition
+        ],
+        metadata={}
+    )
+    
+    # Mock final refreshed team after membership changes
+    final_refreshed_team = LiteLLM_TeamTable(
+        team_id=group_id,
+        team_alias="Updated Team",
+        members=["user1", "user2", "user3", "user4", "user5"],  # user5 added via membership change
+        members_with_roles=[
+            Member(user_id="user1", role="user"),
+            Member(user_id="user2", role="user"),
+            Member(user_id="user3", role="user"),
+            Member(user_id="user4", role="user"),
+            Member(user_id="user5", role="user")  # Added via membership change
+        ],
+        metadata={}
+    )
+    
+    # Mock SCIM patch operations - adding user3 and user5
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[
+            SCIMPatchOperation(op="add", path="members", value=[{"value": "user3"}, {"value": "user5"}])
+        ]
+    )
+    
+    # Mock prisma client
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    
+    # Mock user lookups (all users exist)
+    mock_user = mocker.MagicMock()
+    mock_user.user_id = "test-user"
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
+    
+    # Mock dependencies
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client)
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._check_team_exists",
+        AsyncMock(return_value=existing_team)
+    )
+    
+    # Mock _process_group_patch_operations
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._process_group_patch_operations",
+        AsyncMock(return_value=(
+            {"team_alias": "Updated Team"},
+            {"user1", "user2", "user3", "user5"}  # final_members after processing patch
+        ))
+    )
+    
+    # Mock _apply_group_patch_updates to return updated_team_after_patch
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._apply_group_patch_updates",
+        AsyncMock(return_value=updated_team_after_patch)
+    )
+    
+    # Mock find_unique calls for refresh operations
+    # First refresh (after applying updates) - returns team with concurrent update (user4)
+    # Second refresh (after membership changes) - returns final team (with user5)
+    # Need to add model_dump() method to mock Prisma model objects
+    mock_refreshed_team_before_membership = mocker.MagicMock()
+    # model_dump() should return a dict that can be used to construct LiteLLM_TeamTable
+    mock_refreshed_team_before_membership.model_dump = mocker.Mock(return_value={
+        "team_id": refreshed_team_before_membership.team_id,
+        "team_alias": refreshed_team_before_membership.team_alias,
+        "members": refreshed_team_before_membership.members,
+        "members_with_roles": refreshed_team_before_membership.members_with_roles,
+        "metadata": refreshed_team_before_membership.metadata,
+    })
+    
+    mock_final_refreshed_team = mocker.MagicMock()
+    mock_final_refreshed_team.model_dump = mocker.Mock(return_value={
+        "team_id": final_refreshed_team.team_id,
+        "team_alias": final_refreshed_team.team_alias,
+        "members": final_refreshed_team.members,
+        "members_with_roles": final_refreshed_team.members_with_roles,
+        "metadata": final_refreshed_team.metadata,
+    })
+    
+    refresh_calls = [mock_refreshed_team_before_membership, mock_final_refreshed_team]
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(side_effect=refresh_calls)
+    
+    # Mock _handle_group_membership_changes
+    mock_handle_group_membership_changes = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._handle_group_membership_changes",
+        AsyncMock()
+    )
+    
+    # Mock SCIM transformation
+    expected_scim_response = SCIMGroup(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+        id=group_id,
+        displayName="Updated Team",
+        members=[
+            SCIMMember(value="user1", display="user1"),
+            SCIMMember(value="user2", display="user2"),
+            SCIMMember(value="user3", display="user3"),
+            SCIMMember(value="user4", display="user4"),
+            SCIMMember(value="user5", display="user5")
+        ]
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_team_to_scim_group",
+        AsyncMock(return_value=expected_scim_response)
+    )
+    
+    # Execute patch_group
+    result = await patch_group(group_id=group_id, patch_ops=patch_ops)
+    
+    # Verify that find_unique was called twice (for the two refreshes)
+    assert mock_prisma_client.db.litellm_teamtable.find_unique.call_count == 2
+    
+    # Verify first refresh was called after applying updates
+    first_refresh_call = mock_prisma_client.db.litellm_teamtable.find_unique.call_args_list[0]
+    assert first_refresh_call[1]["where"]["team_id"] == group_id
+    
+    # Verify that _handle_group_membership_changes was called with refreshed members
+    # It should use refreshed_current_members (user1, user2, user3, user4) not updated_team_after_patch members
+    mock_handle_group_membership_changes.assert_called_once()
+    membership_call = mock_handle_group_membership_changes.call_args
+    # _handle_group_membership_changes is called with positional arguments: (group_id, current_members, final_members)
+    assert membership_call[0][0] == group_id
+    # current_members should be from refreshed_team_before_membership (includes user4 from concurrent update)
+    assert membership_call[0][1] == {"user1", "user2", "user3", "user4"}
+    # final_members should be from patch operations (user1, user2, user3, user5)
+    assert membership_call[0][2] == {"user1", "user2", "user3", "user5"}
+    
+    # Verify second refresh was called after membership changes
+    second_refresh_call = mock_prisma_client.db.litellm_teamtable.find_unique.call_args_list[1]
+    assert second_refresh_call[1]["where"]["team_id"] == group_id
+    
+    # Verify SCIM transformation was called with final_refreshed_team (not updated_team_after_patch)
+    from litellm.proxy.management_endpoints.scim.scim_v2 import ScimTransformations
+    ScimTransformations.transform_litellm_team_to_scim_group.assert_called_once()
+    transform_call = ScimTransformations.transform_litellm_team_to_scim_group.call_args[0][0]
+    # Verify it was called with final_refreshed_team (has user5)
+    assert isinstance(transform_call, LiteLLM_TeamTable)
+    member_ids = {member.user_id for member in transform_call.members_with_roles}
+    assert member_ids == {"user1", "user2", "user3", "user4", "user5"}
+    
+    # Verify response
+    assert result.id == group_id
+    assert result.displayName == "Updated Team"

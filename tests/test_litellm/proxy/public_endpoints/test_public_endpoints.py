@@ -53,3 +53,28 @@ def test_get_provider_create_fields():
     )
     assert has_detailed_fields, "Expected at least one provider to have detailed credential fields"
 
+
+def test_get_litellm_model_cost_map_returns_cost_map():
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    response = client.get("/public/litellm_model_cost_map")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert isinstance(payload, dict)
+    assert len(payload) > 0, "Expected model cost map to contain at least one model"
+
+    # Verify the structure contains expected keys for at least one model
+    # Check for a common model like gpt-4 or gpt-3.5-turbo
+    model_keys = list(payload.keys())
+    assert len(model_keys) > 0
+
+    # Verify at least one model has expected cost fields
+    sample_model = model_keys[0]
+    sample_model_data = payload[sample_model]
+    assert isinstance(sample_model_data, dict)
+    # Check for common cost fields that should be present
+    assert "input_cost_per_token" in sample_model_data or "output_cost_per_token" in sample_model_data
+

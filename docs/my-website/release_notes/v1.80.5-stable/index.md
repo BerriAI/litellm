@@ -500,6 +500,11 @@ New interactive playground UI enables side-by-side comparison of multiple LLM mo
 
 ---
 
+## Known Issues
+* `/audit` and `/user/available_users` routes return 404. Fixed in [PR #17337](https://github.com/BerriAI/litellm/pull/17337)
+
+---
+
 ## Full Changelog
 
 **[View complete changelog on GitHub](https://github.com/BerriAI/litellm/compare/v1.80.0-nightly...v1.80.5.rc.2)**

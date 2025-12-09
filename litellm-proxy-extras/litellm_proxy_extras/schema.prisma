@@ -689,3 +689,11 @@ model LiteLLM_CacheConfig {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 }
+
+// UI Settings configuration table
+model LiteLLM_UISettings {
+  id String @id @default("ui_settings")
+  ui_settings Json
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}
