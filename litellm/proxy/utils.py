@@ -1,5 +1,4 @@
 import asyncio
-import copy
 import gc
 import hashlib
 import inspect
@@ -9,6 +8,7 @@ import smtplib
 import threading
 import time
 import traceback
+import orjson  # type: ignore
 from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -1706,7 +1706,9 @@ def jsonify_object(data: dict) -> dict:
     for k, v in db_data.items():
         if isinstance(v, dict):
             try:
-                db_data[k] = json.dumps(v)
+                # Use orjson for faster serialization (5-10x faster than json.dumps)
+                # orjson.dumps() returns bytes, decode to string
+                db_data[k] = orjson.dumps(v).decode('utf-8')  # type: ignore
             except Exception:
                 # This avoids Prisma retrying this 5 times, and making 5 clients
                 db_data[k] = "failed-to-serialize-json"
@@ -1811,7 +1813,9 @@ class PrismaClient:
         for k, v in db_data.items():
             if isinstance(v, dict):
                 try:
-                    db_data[k] = json.dumps(v)
+                    # Use orjson for faster serialization (5-10x faster than json.dumps)
+                    # orjson.dumps() returns bytes, decode to string
+                    db_data[k] = orjson.dumps(v).decode('utf-8')  # type: ignore
                 except Exception:
                     # This avoids Prisma retrying this 5 times, and making 5 clients
                     db_data[k] = "failed-to-serialize-json"
