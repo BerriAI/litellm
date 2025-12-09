@@ -51,7 +51,7 @@ def _get_jwt(api_id, api_key):
     return resp.json()["access_token"]
 
 
-class HiddenLayerGuardrail(CustomGuardrail):
+class HiddenlayerGuardrail(CustomGuardrail):
     """Custom guardrail wrapper for HiddenLayer's safety checks."""
 
     def __init__(
@@ -68,10 +68,10 @@ class HiddenLayerGuardrail(CustomGuardrail):
 
         if is_saas(self.api_base):
             if not self.hiddenlayer_client_id:
-                raise EnvironmentError("`api_id` cannot be None when using the SaaS version of HiddenLayer.")
+                raise RuntimeError("`api_id` cannot be None when using the SaaS version of HiddenLayer.")
 
             if not self.hiddenlayer_client_secret:
-                raise EnvironmentError("`api_key` cannot be None when using the SaaS version of HiddenLayer.")
+                raise RuntimeError("`api_key` cannot be None when using the SaaS version of HiddenLayer.")
 
             self.jwt_token = _get_jwt(api_id=self.hiddenlayer_client_id, api_key=self.hiddenlayer_client_secret)
             self.refresh_jwt_func = lambda: _get_jwt(

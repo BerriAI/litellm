@@ -2,7 +2,7 @@ from typing import TYPE_CHECKING
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
-from .hiddenlayer import HiddenLayerGuardrail
+from .hiddenlayer import HiddenlayerGuardrail
 
 if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
@@ -11,9 +11,11 @@ if TYPE_CHECKING:
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
     import litellm
 
-    _hiddenlayer_callback = HiddenLayerGuardrail(
+    api_id = litellm_params.api_id if hasattr(litellm_params, "api_id") else None
+
+    _hiddenlayer_callback = HiddenlayerGuardrail(
         api_base=litellm_params.api_base,
-        api_id=litellm_params.api_id,
+        api_id=api_id,
         api_key=litellm_params.api_key,
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,
@@ -30,5 +32,5 @@ guardrail_initializer_registry = {
 
 
 guardrail_class_registry = {
-    SupportedGuardrailIntegrations.HIDDENLAYER.value: HiddenLayerGuardrail,
+    SupportedGuardrailIntegrations.HIDDENLAYER.value: HiddenlayerGuardrail,
 }
