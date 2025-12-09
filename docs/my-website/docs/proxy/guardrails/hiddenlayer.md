@@ -46,12 +46,13 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
 
 guardrails:
-  - guardrail_name: "hiddenlayer-input-guard"
+  - guardrail_name: "hiddenlayer-guardrails"
     litellm_params:
       guardrail: hiddenlayer
       mode: ["pre_call", "post_call", "during_call"] # run at multiple stages
       default_on: true
       api_base: os.environ/HIDDENLAYER_API_BASE
+      api_id: os.environ/HIDDENLAYER_CLIENT_ID # only needed for SaaS
       api_key: os.environ/HIDDENLAYER_CLIENT_SECRET # only needed for SaaS
 ```
 
@@ -167,7 +168,6 @@ guardrails:
 ### Required parameters
 
 - **`guardrail`**: Must be set to `hiddenlayer` so LiteLLM loads the HiddenLayer hook.
-- **`api_base`**: HiddenLayer REST endpoint. Defaults to `https://api.hiddenlayer.ai`, but point it at your self-hosted instance if you have one.
 
 ### Optional parameters (SaaS-only)
 
@@ -177,6 +177,7 @@ guardrails:
 
 ### Optional parameters (all deployments)
 
+- **`api_base`**: HiddenLayer REST endpoint. Defaults to `https://api.hiddenlayer.ai`, but point it at your self-hosted instance if you have one.
 - **`mode`**: Control when the guardrail runs (`pre_call`, `post_call`, `during_call`).
 - **`default_on`**: Automatically attach the guardrail to every request unless the client opts out.
 - **`hl-project-id` header**: Routes scans to a specific HiddenLayer project.

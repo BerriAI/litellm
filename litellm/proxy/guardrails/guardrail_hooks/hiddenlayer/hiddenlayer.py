@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional
 
-from httpx import HTTPStatusError
+from httpx import HTTPStatusError, Response
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -90,17 +90,22 @@ class HiddenLayerGuardrail(CustomGuardrail):
     ) -> str:
         """Validate (and optionally redact) text via HiddenLayer before/after LLM calls."""
 
+        # The model in the request and the response can be inconsistent
+        # I.e request can specify gpt-4o-mini but the response from the server will be
+        # gpt-4o-mini-2025-11-01. We need the model to be consistent so that inferences
+        # will be grouped correctly on the Hiddenlayer side
         hl_request_metadata = {"model": logging_obj.model}
 
-        # Try to get headers from request, if we can't - try getting them from the model request logger
-        # Generally the output calls will get the headers from the model request logger
+        # We need the hiddenlayer project id and requester id on both the input and output
+        # Since headers aren't available on the response back from the model, we get them
+        # from the logging object. It ends up working out that on the request, we parse the
+        # hiddenlayer params from the raw request and then retrieve those same headers
+        # from the logger object on the response from the model.
         headers = request_data.get("proxy_server_request", {}).get("headers", {})
-
         if not headers:
             headers = logging_obj.model_call_details.get("litellm_params", {}).get("metadata", {}).get("headers", {})
 
         hl_request_metadata["requester_id"] = headers.get("hl-requester-id") or "LiteLLM"
-
         project_id = headers.get("hl-project-id")
 
         if scan_params := inputs.get("structured_messages"):
@@ -158,6 +163,7 @@ class HiddenLayerGuardrail(CustomGuardrail):
         if self.jwt_token:
             headers["Authorization"] = f"Bearer {self.jwt_token}"
 
+        reponse: Response
         try:
             response = await self._http_client.post(
                 f"{self.api_base}/detection/v1/interactions",
@@ -176,8 +182,18 @@ class HiddenLayerGuardrail(CustomGuardrail):
                     json=data,
                     headers=headers,
                 )
+            else:
+                raise e
 
         response.raise_for_status()
         result = response.json()
 
         return result
+
+    @staticmethod
+    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+        from litellm.types.proxy.guardrails.guardrail_hooks.hiddenlayer import (
+            HiddenlayerGuardrailConfigModel,
+        )
+
+        return HiddenlayerGuardrailConfigModel

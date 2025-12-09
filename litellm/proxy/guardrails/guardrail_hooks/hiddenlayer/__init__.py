@@ -13,6 +13,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
 
     _hiddenlayer_callback = HiddenLayerGuardrail(
         api_base=litellm_params.api_base,
+        api_id=litellm_params.api_id,
         api_key=litellm_params.api_key,
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,
