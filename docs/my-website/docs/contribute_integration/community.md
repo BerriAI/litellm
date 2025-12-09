@@ -25,6 +25,6 @@ By filling out this form, you'll be able to:
 
 ## Questions?
 
-Once you've joined our Slack community, feel free to ask questions in the relevant channels. Our team and community members are happy to help you build great integrations with LiteLLM.
+Once you've joined our Slack community, head over to the **`#integration-partners`** channel to introduce yourself and ask questions. Our team and community members are happy to help you build great integrations with LiteLLM.
 
 We look forward to working with you! 🚀
