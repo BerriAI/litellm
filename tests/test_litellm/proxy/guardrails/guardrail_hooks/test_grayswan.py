@@ -3,7 +3,7 @@ from typing import Optional
 import pytest
 from fastapi import HTTPException
 
-from litellm.integrations.custom_guardrail import GuardrailPassthroughException
+from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.proxy.guardrails.guardrail_hooks.grayswan.grayswan import (
     GraySwanGuardrail,
     GraySwanGuardrailAPIError,
@@ -161,7 +161,7 @@ async def test_run_guardrail_raises_api_error(
 
 
 def test_process_response_passthrough_raises_exception_in_pre_call() -> None:
-    """Test that passthrough mode raises GuardrailPassthroughException in pre_call hook."""
+    """Test that passthrough mode raises ModifyResponseException in pre_call hook."""
     guardrail = GraySwanGuardrail(
         guardrail_name="grayswan-passthrough",
         api_key="test-key",
@@ -178,8 +178,8 @@ def test_process_response_passthrough_raises_exception_in_pre_call() -> None:
         "ipi": False,
     }
 
-    # Should raise GuardrailPassthroughException
-    with pytest.raises(GuardrailPassthroughException) as exc:
+    # Should raise ModifyResponseException
+    with pytest.raises(ModifyResponseException) as exc:
         guardrail._process_grayswan_response(
             response_json, data, GuardrailEventHooks.pre_call
         )
@@ -191,7 +191,7 @@ def test_process_response_passthrough_raises_exception_in_pre_call() -> None:
 
 
 def test_process_response_passthrough_raises_exception_in_during_call() -> None:
-    """Test that passthrough mode raises GuardrailPassthroughException in during_call hook."""
+    """Test that passthrough mode raises ModifyResponseException in during_call hook."""
     guardrail = GraySwanGuardrail(
         guardrail_name="grayswan-passthrough",
         api_key="test-key",
@@ -208,8 +208,8 @@ def test_process_response_passthrough_raises_exception_in_during_call() -> None:
         "ipi": False,
     }
 
-    # Should raise GuardrailPassthroughException
-    with pytest.raises(GuardrailPassthroughException) as exc:
+    # Should raise ModifyResponseException
+    with pytest.raises(ModifyResponseException) as exc:
         guardrail._process_grayswan_response(
             response_json, data, GuardrailEventHooks.during_call
         )

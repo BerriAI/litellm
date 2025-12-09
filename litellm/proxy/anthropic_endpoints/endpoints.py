@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.integrations.custom_guardrail import GuardrailPassthroughException
+from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.types.utils import TokenCountResponse
@@ -66,7 +66,7 @@ async def anthropic_response(  # noqa: PLR0915
             version=version,
         )
         return result
-    except GuardrailPassthroughException as e:
+    except ModifyResponseException as e:
         # Guardrail flagged content in passthrough mode - return 200 with violation message
         _data = e.request_data
         await proxy_logging_obj.post_call_failure_hook(

@@ -35,15 +35,15 @@ if TYPE_CHECKING:
 dc = DualCache()
 
 
-class GuardrailPassthroughException(Exception):
+class ModifyResponseException(Exception):
     """
-    Exception raised when a guardrail detects a violation in passthrough mode.
+    Exception raised when a guardrail wants to modify the response.
 
     This exception carries the synthetic response that should be returned
-    to the user instead of calling the LLM. It should be caught by the
-    proxy and returned with a 200 status code.
+    to the user instead of calling the LLM or instead of the LLM's response.
+    It should be caught by the proxy and returned with a 200 status code.
 
-    This is a base exception that all guardrails can use for passthrough mode,
+    This is a base exception that all guardrails can use to replace responses,
     allowing violation messages to be returned as successful responses
     rather than errors.
     """
@@ -57,7 +57,7 @@ class GuardrailPassthroughException(Exception):
         detection_info: Optional[Dict[str, Any]] = None,
     ):
         """
-        Initialize the passthrough exception.
+        Initialize the modify response exception.
 
         Args:
             message: The violation message to return to the user
@@ -157,8 +157,8 @@ class CustomGuardrail(CustomLogger):
             detection_info: Optional dictionary with detection metadata (scores, rules, etc.)
 
         Raises:
-            GuardrailPassthroughException: Always raises this exception to short-circuit
-                                          the LLM call and return the violation message
+            ModifyResponseException: Always raises this exception to short-circuit
+                                     the LLM call and return the violation message
 
         Example:
             if violation_detected and self.on_flagged_action == "passthrough":
@@ -171,7 +171,7 @@ class CustomGuardrail(CustomLogger):
         """
         model = request_data.get("model", "unknown")
 
-        raise GuardrailPassthroughException(
+        raise ModifyResponseException(
             message=violation_message,
             model=model,
             request_data=request_data,
