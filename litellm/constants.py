@@ -345,6 +345,7 @@ LITELLM_CHAT_PROVIDERS = [
     "huggingface",
     "together_ai",
     "datarobot",
+    "helicone",
     "openrouter",
     "cometapi",
     "vertex_ai",
@@ -553,6 +554,7 @@ openai_compatible_endpoints: List = [
     "https://api.morphllm.com/v1",
     "https://api.lambda.ai/v1",
     "https://api.hyperbolic.xyz/v1",
+    "https://ai-gateway.helicone.ai/",
     "https://ai-gateway.vercel.sh/v1",
     "https://api.inference.wandb.ai/v1",
     "https://api.clarifai.com/v2/ext/openai/v1",
@@ -598,6 +600,7 @@ openai_compatible_providers: List = [
     "moonshot",
     "publicai",
     "v0",
+    "helicone",
     "morph",
     "lambda_ai",
     "hyperbolic",
@@ -935,6 +938,8 @@ BEDROCK_CONVERSE_MODELS = [
     "amazon.nova-lite-v1:0",
     "amazon.nova-2-lite-v1:0",
     "amazon.nova-pro-v1:0",
+    "writer.palmyra-x4-v1:0",
+    "writer.palmyra-x5-v1:0",
 ]
 
 

@@ -25,9 +25,11 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParamFunctionChunk,
     ChatCompletionUserMessage,
     GenericChatCompletionMessage,
+    InputTokensDetails,
     OpenAIMcpServerTool,
     OpenAIWebSearchOptions,
     OpenAIWebSearchUserLocation,
+    OutputTokensDetails,
     Reasoning,
     ResponseAPIUsage,
     ResponseInputParam,
@@ -1130,6 +1132,36 @@ class LiteLLMCompletionResponsesConfig:
         # Preserve cost field if it exists (for streaming usage with cost calculation)
         if hasattr(usage, "cost") and usage.cost is not None:
             setattr(response_usage, "cost", usage.cost)
+
+        # Translate prompt_tokens_details to input_tokens_details
+        if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details is not None:
+            prompt_details = usage.prompt_tokens_details
+            input_details_dict: Dict[str, Optional[int]] = {}
+            
+            if hasattr(prompt_details, "cached_tokens") and prompt_details.cached_tokens is not None:
+                input_details_dict["cached_tokens"] = prompt_details.cached_tokens
+            
+            if hasattr(prompt_details, "text_tokens") and prompt_details.text_tokens is not None:
+                input_details_dict["text_tokens"] = prompt_details.text_tokens
+            
+            if hasattr(prompt_details, "audio_tokens") and prompt_details.audio_tokens is not None:
+                input_details_dict["audio_tokens"] = prompt_details.audio_tokens
+            
+            if input_details_dict:
+                response_usage.input_tokens_details = InputTokensDetails(**input_details_dict)
+
+        # Translate completion_tokens_details to output_tokens_details
+        if hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details is not None:
+            completion_details = usage.completion_tokens_details
+            output_details_dict: Dict[str, Optional[int]] = {}
+            if hasattr(completion_details, "reasoning_tokens") and completion_details.reasoning_tokens is not None:
+                output_details_dict["reasoning_tokens"] = completion_details.reasoning_tokens
+            
+            if hasattr(completion_details, "text_tokens") and completion_details.text_tokens is not None:
+                output_details_dict["text_tokens"] = completion_details.text_tokens
+            
+            if output_details_dict:
+                response_usage.output_tokens_details = OutputTokensDetails(**output_details_dict)
 
         return response_usage
 
