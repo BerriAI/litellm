@@ -5,13 +5,25 @@ import TabItem from '@theme/TabItem';
 
 Use OpenAI's Responses API format to call 100+ LLMs. Supports streaming, tool calling, and MCP integration.
 
+## Example
+
+```python
+from litellm import responses
+
+response = responses(
+    input="What is the capital of France?",
+    model="gpt-4o"
+)
+
+print(response.output[0].content[0].text)
+```
+
 ## Signature
 
 ```python
 def responses(
     input: Union[str, ResponseInputParam],
     model: str,
-    # Optional params
     instructions: Optional[str] = None,
     max_output_tokens: Optional[int] = None,
     temperature: Optional[float] = None,
@@ -25,7 +37,6 @@ def responses(
     reasoning: Optional[Reasoning] = None,
     truncation: Optional[Literal["auto", "disabled"]] = None,
     user: Optional[str] = None,
-    # LiteLLM params
     timeout: Optional[float] = None,
     custom_llm_provider: Optional[str] = None,
     **kwargs
@@ -124,26 +135,9 @@ response = await litellm.aresponses(
 )
 ```
 
-## Example
+## More Examples
 
 <Tabs>
-<TabItem value="basic" label="Basic">
-
-```python
-from litellm import responses
-import os
-
-os.environ["OPENAI_API_KEY"] = "sk-..."
-
-response = responses(
-    input="What is the capital of France?",
-    model="gpt-4o"
-)
-
-print(response.output[0].content[0].text)
-```
-
-</TabItem>
 <TabItem value="streaming" label="Streaming">
 
 ```python

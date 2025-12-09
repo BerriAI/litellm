@@ -5,15 +5,18 @@ import TabItem from '@theme/TabItem';
 
 Generate images from text prompts using DALL-E, Stable Diffusion, Imagen, and other models.
 
-## Overview
+## Example
 
-| Feature | Supported |
-|---------|-----------|
-| Cost Tracking | ✅ |
-| Logging | ✅ |
-| Fallbacks | ✅ |
-| Loadbalancing | ✅ |
-| Guardrails | ✅ |
+```python
+from litellm import image_generation
+
+response = image_generation(
+    prompt="A cute baby sea otter",
+    model="dall-e-3"
+)
+
+print(response.data[0].url)
+```
 
 ## Signature
 
@@ -54,7 +57,6 @@ def image_generation(
 
 :::info
 Any non-OpenAI params will be treated as provider-specific params and sent in the request body.
-[See Reserved Params](https://github.com/BerriAI/litellm/blob/main/litellm/litellm_core_utils/get_supported_openai_params.py)
 :::
 
 ## Returns
@@ -106,47 +108,46 @@ response = await litellm.aimage_generation(
 )
 ```
 
-## Example
+## More Examples
 
 <Tabs>
-<TabItem value="sdk" label="LiteLLM SDK">
+<TabItem value="multiple" label="Multiple Images">
 
 ```python
 from litellm import image_generation
-import os
-
-os.environ["OPENAI_API_KEY"] = "sk-..."
 
 response = image_generation(
-    prompt="A cute baby sea otter",
-    model="dall-e-3",
-    size="1024x1024"
+    prompt="A futuristic city",
+    model="dall-e-2",
+    n=3,
+    size="512x512"
 )
 
-print(response.data[0].url)
+for img in response.data:
+    print(img.url)
+```
+
+</TabItem>
+<TabItem value="b64" label="Base64 Response">
+
+```python
+from litellm import image_generation
+
+response = image_generation(
+    prompt="A mountain landscape",
+    model="dall-e-3",
+    response_format="b64_json"
+)
+
+# Decode and save
+import base64
+img_data = base64.b64decode(response.data[0].b64_json)
+with open("image.png", "wb") as f:
+    f.write(img_data)
 ```
 
 </TabItem>
 <TabItem value="proxy" label="LiteLLM Proxy">
-
-**1. Setup config.yaml**
-
-```yaml
-model_list:
-  - model_name: dall-e-3
-    litellm_params:
-      model: azure/dall-e-3
-      api_base: https://my-endpoint.openai.azure.com/
-      api_key: os.environ/AZURE_API_KEY
-```
-
-**2. Start proxy**
-
-```bash
-litellm --config /path/to/config.yaml
-```
-
-**3. Make request**
 
 ```bash
 curl -X POST 'http://0.0.0.0:4000/v1/images/generations' \

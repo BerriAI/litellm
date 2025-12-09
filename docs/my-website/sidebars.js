@@ -145,7 +145,6 @@ const sidebars = {
               items: [
                 "completion/input",
                 "completion/output",
-                "text_completion",
                 "api-reference/completion",
               ],
             },

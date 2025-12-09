@@ -5,13 +5,25 @@ import TabItem from '@theme/TabItem';
 
 Call 100+ LLMs using OpenAI's chat completion format.
 
+## Example
+
+```python
+from litellm import completion
+
+response = completion(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+
+print(response.choices[0].message.content)
+```
+
 ## Signature
 
 ```python
 def completion(
     model: str,
     messages: List[Dict[str, str]],
-    # Optional OpenAI params
     temperature: Optional[float] = None,
     top_p: Optional[float] = None,
     n: Optional[int] = None,
@@ -29,7 +41,6 @@ def completion(
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
     parallel_tool_calls: Optional[bool] = None,
-    # LiteLLM params
     timeout: Optional[float] = None,
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
@@ -162,26 +173,9 @@ response = await litellm.acompletion(
 )
 ```
 
-## Example
+## More Examples
 
 <Tabs>
-<TabItem value="basic" label="Basic">
-
-```python
-from litellm import completion
-import os
-
-os.environ["OPENAI_API_KEY"] = "sk-..."
-
-response = completion(
-    model="gpt-4o",
-    messages=[{"role": "user", "content": "Hello!"}]
-)
-
-print(response.choices[0].message.content)
-```
-
-</TabItem>
 <TabItem value="streaming" label="Streaming">
 
 ```python
