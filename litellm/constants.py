@@ -938,6 +938,8 @@ BEDROCK_CONVERSE_MODELS = [
     "amazon.nova-lite-v1:0",
     "amazon.nova-2-lite-v1:0",
     "amazon.nova-pro-v1:0",
+    "writer.palmyra-x4-v1:0",
+    "writer.palmyra-x5-v1:0",
 ]
 
 

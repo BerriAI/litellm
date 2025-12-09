@@ -298,6 +298,7 @@ const sidebars = {
             "proxy/custom_auth",
             "proxy/ip_address",
             "proxy/multiple_admins",
+            "proxy/public_routes",
           ],
         },
         {
@@ -650,6 +651,7 @@ const sidebars = {
             "providers/bedrock_rerank",
             "providers/bedrock_agentcore",
             "providers/bedrock_agents",
+            "providers/bedrock_writer",
             "providers/bedrock_batches",
             "providers/bedrock_vector_store",
           ]

@@ -236,7 +236,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
-from litellm.proxy.common_utils.html_forms.ui_login import html_form
+from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     check_file_size_under_limit,
@@ -8306,11 +8306,15 @@ async def fallback_login(request: Request):
         # Use UI Credentials set in .env
         from fastapi.responses import HTMLResponse
 
-        return HTMLResponse(content=html_form, status_code=200)
+        return HTMLResponse(
+            content=build_ui_login_form(show_deprecation_banner=False), status_code=200
+        )
     else:
         from fastapi.responses import HTMLResponse
 
-        return HTMLResponse(content=html_form, status_code=200)
+        return HTMLResponse(
+            content=build_ui_login_form(show_deprecation_banner=False), status_code=200
+        )
 
 
 @router.post(
