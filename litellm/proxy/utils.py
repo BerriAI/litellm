@@ -825,7 +825,12 @@ class ProxyLogging:
         return data
 
     def _process_prompt_template(
-        self, data: dict, litellm_logging_obj: Any, prompt_id: Any, prompt_version: Any, call_type: CallTypesLiteral
+        self,
+        data: dict,
+        litellm_logging_obj: Any,
+        prompt_id: Any,
+        prompt_version: Any,
+        call_type: CallTypesLiteral,
     ) -> None:
         """Process prompt template if applicable."""
         from litellm.utils import get_non_default_completion_params
@@ -878,27 +883,37 @@ class ProxyLogging:
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
+
         metadata_standard = data.get("metadata") or {}
         metadata_litellm = data.get("litellm_metadata") or {}
-        
+
         guardrails_in_metadata = []
         if isinstance(metadata_standard, dict) and "guardrails" in metadata_standard:
             guardrails_in_metadata = metadata_standard.get("guardrails", [])
         elif isinstance(metadata_litellm, dict) and "guardrails" in metadata_litellm:
             guardrails_in_metadata = metadata_litellm.get("guardrails", [])
-        
+
         if guardrails_in_metadata and isinstance(guardrails_in_metadata, list):
             applied_guardrails = []
-            if isinstance(metadata_standard, dict) and "applied_guardrails" in metadata_standard:
+            if (
+                isinstance(metadata_standard, dict)
+                and "applied_guardrails" in metadata_standard
+            ):
                 applied_guardrails = metadata_standard.get("applied_guardrails", [])
-            elif isinstance(metadata_litellm, dict) and "applied_guardrails" in metadata_litellm:
+            elif (
+                isinstance(metadata_litellm, dict)
+                and "applied_guardrails" in metadata_litellm
+            ):
                 applied_guardrails = metadata_litellm.get("applied_guardrails", [])
-            
+
             if not isinstance(applied_guardrails, list):
                 applied_guardrails = []
-            
+
             for guardrail_name in guardrails_in_metadata:
-                if isinstance(guardrail_name, str) and guardrail_name not in applied_guardrails:
+                if (
+                    isinstance(guardrail_name, str)
+                    and guardrail_name not in applied_guardrails
+                ):
                     add_guardrail_to_applied_guardrails_header(
                         request_data=data, guardrail_name=guardrail_name
                     )
@@ -980,7 +995,7 @@ class ProxyLogging:
                 ):
                     result = await self._process_guardrail_callback(
                         callback=_callback,
-                        data=data,
+                        data=data, # type: ignore
                         user_api_key_dict=user_api_key_dict,
                         call_type=call_type,
                     )
@@ -1022,10 +1037,10 @@ class ProxyLogging:
                         start_time=start_time,
                         end_time=end_time,
                     )
-            
+
             if data is not None:
                 self._process_guardrail_metadata(data)
-            
+
             return data
         except Exception as e:
             raise e
@@ -1602,7 +1617,7 @@ class ProxyLogging:
                     raise e
         return response
 
-    def async_post_call_streaming_iterator_hook(
+    async def async_post_call_streaming_iterator_hook(
         self,
         response,
         user_api_key_dict: UserAPIKeyAuth,
@@ -1615,6 +1630,7 @@ class ProxyLogging:
         Covers:
         1. /chat/completions
         """
+        current_response = response
 
         for callback in litellm.callbacks:
 
@@ -1631,23 +1647,27 @@ class ProxyLogging:
                 ) or _callback.should_run_guardrail(
                     data=request_data, event_type=GuardrailEventHooks.post_call
                 ):
-
                     if "apply_guardrail" in type(callback).__dict__:
                         request_data["guardrail_to_apply"] = callback
-                        response = (
+                        current_response = (
                             unified_guardrail.async_post_call_streaming_iterator_hook(
                                 user_api_key_dict=user_api_key_dict,
                                 request_data=request_data,
-                                response=response,
+                                response=current_response,
                             )
                         )
                     else:
-                        response = _callback.async_post_call_streaming_iterator_hook(
-                            user_api_key_dict=user_api_key_dict,
-                            response=response,
-                            request_data=request_data,
+                        current_response = (
+                            _callback.async_post_call_streaming_iterator_hook(
+                                user_api_key_dict=user_api_key_dict,
+                                response=current_response,
+                                request_data=request_data,
+                            )
                         )
-        return response
+
+        # Actually iterate through the chained async generator and yield chunks
+        async for chunk in current_response:
+            yield chunk
 
     def _init_response_taking_too_long_task(self, data: Optional[dict] = None):
         """
@@ -3143,7 +3163,7 @@ class PrismaClient:
                     key = (check.model_id, check.model_name)
                 else:
                     key = (None, check.model_name)
-                
+
                 # Only add if we haven't seen this key yet (since checks are ordered by checked_at desc)
                 if key not in latest_checks:
                     latest_checks[key] = check
