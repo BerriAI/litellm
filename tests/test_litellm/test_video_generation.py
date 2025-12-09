@@ -1,8 +1,8 @@
+import asyncio
 import json
 import os
 import sys
 from unittest.mock import MagicMock, patch
-import asyncio
 
 import pytest
 
@@ -11,14 +11,19 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
-from litellm.types.videos.main import VideoObject, VideoResponse
-from litellm.videos.main import video_generation, avideo_generation, video_status, avideo_status
-from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
-from litellm.llms.gemini.videos.transformation import GeminiVideoConfig
-from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.cost_calculator import default_video_cost_calculator
-from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.llms.gemini.videos.transformation import GeminiVideoConfig
+from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
+from litellm.types.videos.main import VideoObject, VideoResponse
+from litellm.videos.main import (
+    avideo_generation,
+    avideo_status,
+    video_generation,
+    video_status,
+)
 
 
 class TestVideoGeneration:
@@ -346,7 +351,7 @@ class TestVideoGeneration:
     def test_video_generation_unsupported_parameters(self):
         """Test video generation with provider-specific parameters via extra_body."""
         from litellm.videos.utils import VideoGenerationRequestUtils
-        
+
         # Test that provider-specific parameters can be passed via extra_body
         # This allows support for Vertex AI and Gemini specific parameters
         result = VideoGenerationRequestUtils.get_optional_params_video_generation(
@@ -819,6 +824,51 @@ def test_gemini_video_config_has_async_transform():
     """Ensure GeminiVideoConfig exposes async_transform_video_content_response at runtime."""
     cfg = GeminiVideoConfig()
     assert callable(getattr(cfg, "async_transform_video_content_response", None))
+
+
+def test_encode_video_id_with_provider_handles_azure_video_prefix():
+    """
+    Test that encode_video_id_with_provider correctly encodes Azure/OpenAI video IDs
+    that start with 'video_' prefix.
+    
+    This test verifies the fix for the issue where Azure returns video IDs like
+    'video_69323201cf6081909263f751f89991e6', which were previously skipped
+    from encoding, causing video status retrieval to default to 'openai' provider.
+    """
+    from litellm.types.videos.utils import (
+        decode_video_id_with_provider,
+        encode_video_id_with_provider,
+    )
+
+    # Test case: Azure returns a video ID starting with 'video_'
+    raw_azure_video_id = "video_69323201cf6081909263f751f89991e6"
+    provider = "azure"
+    model_id = "azure/sora-2"
+    
+    # Encode the video ID with provider information
+    encoded_id = encode_video_id_with_provider(
+        video_id=raw_azure_video_id,
+        provider=provider,
+        model_id=model_id
+    )
+    
+    # Verify the ID was encoded (should be different from the original)
+    assert encoded_id != raw_azure_video_id
+    assert encoded_id.startswith("video_")
+    
+    # Decode the encoded ID to verify provider information is preserved
+    decoded = decode_video_id_with_provider(encoded_id)
+    assert decoded.get("custom_llm_provider") == provider
+    assert decoded.get("model_id") == model_id
+    assert decoded.get("video_id") == raw_azure_video_id
+    
+    # Verify that encoding an already-encoded ID doesn't double-encode it
+    encoded_twice = encode_video_id_with_provider(
+        video_id=encoded_id,
+        provider=provider,
+        model_id=model_id
+    )
+    assert encoded_twice == encoded_id  # Should return the same encoded ID
 
 
 if __name__ == "__main__":
