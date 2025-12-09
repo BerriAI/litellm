@@ -211,21 +211,6 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
             <Text className="text-sm font-medium text-gray-700 mb-2">Add New Link</Text>
             <div className="grid grid-cols-3 gap-4">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">URL</label>
-                <input
-                  type="text"
-                  value={newLink.url}
-                  onChange={(e) =>
-                    setNewLink({
-                      ...newLink,
-                      url: e.target.value,
-                    })
-                  }
-                  placeholder="https://example.com"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
-                />
-              </div>
-              <div>
                 <label className="block text-xs text-gray-500 mb-1">Display Name</label>
                 <input
                   type="text"
@@ -237,6 +222,21 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
                     })
                   }
                   placeholder="Friendly name"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">URL</label>
+                <input
+                  type="text"
+                  value={newLink.url}
+                  onChange={(e) =>
+                    setNewLink({
+                      ...newLink,
+                      url: e.target.value,
+                    })
+                  }
+                  placeholder="https://example.com"
                   className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
                 />
               </div>
