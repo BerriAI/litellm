@@ -137,13 +137,34 @@ const sidebars = {
         },
         {
           type: "category",
-          label: "SDK Functions",
+          label: "Main Functions",
           items: [
-            "completion/input",    
-            "completion/output",
-            "text_completion",
+            {
+              type: "category",
+              label: "Completions",
+              items: [
+                "completion/input",
+                "completion/output",
+                "text_completion",
+                "api-reference/completion",
+              ],
+            },
+            {
+              type: "category",
+              label: "Responses",
+              items: [
+                "response_api",
+                "api-reference/responses",
+              ],
+            },
+          ],
+        },
+        {
+          type: "category",
+          label: "Embeddings",
+          items: [
             "embedding/supported_embedding",
-            "response_api",
+            "embedding/async_embedding",
           ],
         },
         {
@@ -212,7 +233,6 @@ const sidebars = {
           ],
         },
         "exception_mapping",
-        "migration",
         {
           type: "category",
           label: "LangChain, LlamaIndex, Instructor",
