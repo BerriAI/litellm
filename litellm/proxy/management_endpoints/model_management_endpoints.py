@@ -1451,9 +1451,9 @@ async def approve_public_model_request(
         # update the model to remove has_requested_public_access, remove the 'team_id', and replace the 'model_name' with the 'team_public_model_name'
 
         model_info_dict = model.model_info.model_dump()
-        model_info_dict.pop("team_id")
-        public_model_name = model_info_dict.pop("team_public_model_name")
-        model_info_dict.pop("has_requested_public_access")
+        model_info_dict.pop("team_id", None)
+        public_model_name = model_info_dict.pop("team_public_model_name", None)
+        model_info_dict.pop("has_requested_public_access", None)
         model.model_info = ModelInfo(**model_info_dict)
         model.model_name = public_model_name
 

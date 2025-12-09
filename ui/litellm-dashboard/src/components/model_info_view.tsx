@@ -27,6 +27,7 @@ import {
   credentialCreateCall,
   credentialGetCall,
   getGuardrailsList,
+  grantRequestedPublicAccess,
   modelDeleteCall,
   modelInfoV1Call,
   modelPatchUpdateCall,
@@ -306,6 +307,37 @@ export default function ModelInfoView({
     }
   };
 
+  const handleMakePublic = async () => {
+    if (!accessToken) return;
+    try {
+      NotificationsManager.info("Making model public...");
+      await grantRequestedPublicAccess(accessToken, modelId);
+      NotificationsManager.success("Model is now publicly accessible!");
+      
+      // Refresh model data to reflect the change
+      const modelInfoResponse = await modelInfoV1Call(accessToken, modelId);
+      const specificModelData = modelInfoResponse.data[0];
+      if (specificModelData && !specificModelData.litellm_model_name) {
+        specificModelData.litellm_model_name =
+          specificModelData?.litellm_params?.litellm_model_name ??
+          specificModelData?.litellm_params?.model ??
+          specificModelData?.model_info?.key ??
+          null;
+      }
+      setLocalModelData(specificModelData);
+      
+      if (onModelUpdate) {
+        onModelUpdate(specificModelData);
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        NotificationsManager.error("Error making model public: " + truncateString(error.message, 100));
+      } else {
+        NotificationsManager.error("Error making model public: " + String(error));
+      }
+    }
+  };
+
   const handleDelete = async () => {
     try {
       if (!accessToken) return;
@@ -376,6 +408,17 @@ export default function ModelInfoView({
           >
             Test Connection
           </TremorButton>
+
+          {modelData.model_info.team_id && (
+            <TremorButton
+              variant="secondary"
+              onClick={handleMakePublic}
+              className="flex items-center gap-2"
+              data-testid="make-public-button"
+            >
+              Make Public Model
+            </TremorButton>
+          )}
 
           <TremorButton
             icon={KeyIcon}
