@@ -2982,6 +2982,7 @@ class LlmProviders(str, Enum):
     LANGFUSE = "langfuse"
     HUMANLOOP = "humanloop"
     TOPAZ = "topaz"
+    SAP_GENERATIVE_AI_HUB = "sap"
     ASSEMBLYAI = "assemblyai"
     GITHUB_COPILOT = "github_copilot"
     SNOWFLAKE = "snowflake"
@@ -2989,6 +2990,7 @@ class LlmProviders(str, Enum):
     LLAMA = "meta_llama"
     NSCALE = "nscale"
     PG_VECTOR = "pg_vector"
+    HELICONE = "helicone"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
     FAL_AI = "fal_ai"
@@ -3306,6 +3308,11 @@ class PriorityReservationSettings(BaseModel):
     saturation_threshold: float = Field(
         default=0.50,
         description="Saturation threshold (0.0-1.0) at which strict priority enforcement begins. Below this threshold, generous mode allows priority borrowing. Above this threshold, strict mode enforces normalized priority limits.",
+    )
+
+    saturation_check_cache_ttl: int = Field(
+        default=60,
+        description="TTL in seconds for local cache when reading saturation check values from Redis.",
     )
 
     model_config = ConfigDict(protected_namespaces=())

@@ -10,6 +10,26 @@ import os
 os.environ['OPENAI_API_KEY'] = ""
 response = embedding(model='text-embedding-ada-002', input=["good morning from litellm"])
 ```
+
+## Async Usage - `aembedding()`
+
+LiteLLM provides an asynchronous version of the `embedding` function called `aembedding`:
+
+```python
+from litellm import aembedding
+import asyncio
+
+async def get_embedding():
+    response = await aembedding(
+        model='text-embedding-ada-002',
+        input=["good morning from litellm"]
+    )
+    return response
+
+response = asyncio.run(get_embedding())
+print(response)
+```
+
 ## Proxy Usage 
 
 **NOTE**
