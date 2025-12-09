@@ -622,6 +622,88 @@ class TestProxySettingEndpoints:
         assert "UI_LOGO_PATH" in updated_config["environment_variables"]
         assert mock_proxy_config["save_call_count"]() == 1
 
+    def test_get_ui_settings(self, mock_proxy_config, mock_auth):
+        """Test retrieving UI settings with allowlist sanitization"""
+        mock_proxy_config["config"]["litellm_settings"]["ui_settings"] = {
+            "disable_model_add_for_internal_users": True,
+            "unexpected_flag": True,
+        }
+
+        response = client.get("/get/ui_settings")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["values"]["disable_model_add_for_internal_users"] is True
+        assert "unexpected_flag" not in data["values"]
+        assert "disable_model_add_for_internal_users" in data["field_schema"]["properties"]
+
+    def test_update_ui_settings_allowlisted_value(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """Test updating UI settings with an allowlisted field"""
+
+        class MockUser:
+            def __init__(self, user_role):
+                self.user_role = user_role
+
+        async def mock_admin_auth():
+            return MockUser(LitellmUserRoles.PROXY_ADMIN)
+
+        monkeypatch.setattr(
+            "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.user_api_key_auth",
+            mock_admin_auth,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        payload = {"disable_model_add_for_internal_users": True}
+
+        response = client.patch("/update/ui_settings", json=payload)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        assert data["settings"]["disable_model_add_for_internal_users"] is True
+
+        ui_settings = mock_proxy_config["config"]["litellm_settings"]["ui_settings"]
+        assert ui_settings["disable_model_add_for_internal_users"] is True
+        assert mock_proxy_config["save_call_count"]() == 1
+
+    def test_update_ui_settings_ignores_non_allowlisted_value(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """Test non-allowlisted UI settings are ignored on update"""
+
+        class MockUser:
+            def __init__(self, user_role):
+                self.user_role = user_role
+
+        async def mock_admin_auth():
+            return MockUser(LitellmUserRoles.PROXY_ADMIN)
+
+        monkeypatch.setattr(
+            "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.user_api_key_auth",
+            mock_admin_auth,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        payload = {
+            "disable_model_add_for_internal_users": False,
+            "unsupported_flag": True,
+        }
+
+        response = client.patch("/update/ui_settings", json=payload)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        assert "unsupported_flag" not in data["settings"]
+        assert data["settings"]["disable_model_add_for_internal_users"] is False
+
+        ui_settings = mock_proxy_config["config"]["litellm_settings"]["ui_settings"]
+        assert "unsupported_flag" not in ui_settings
+        assert ui_settings["disable_model_add_for_internal_users"] is False
+        assert mock_proxy_config["save_call_count"]() == 1
+
     def test_get_sso_settings_from_database(self, mock_proxy_config, mock_auth, monkeypatch):
         """Test getting SSO settings from the dedicated database table"""
         import json
