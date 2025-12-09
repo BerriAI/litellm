@@ -137,25 +137,19 @@ const sidebars = {
         },
         {
           type: "category",
-          label: "Main Functions",
+          label: "Completions",
           items: [
-            {
-              type: "category",
-              label: "Completions",
-              items: [
-                "completion/input",
-                "completion/output",
-                "api-reference/completion",
-              ],
-            },
-            {
-              type: "category",
-              label: "Responses",
-              items: [
-                "response_api",
-                "api-reference/responses",
-              ],
-            },
+            "completion/input",
+            "completion/output",
+            "api-reference/completion",
+          ],
+        },
+        {
+          type: "category",
+          label: "Responses",
+          items: [
+            "response_api",
+            "api-reference/responses",
           ],
         },
         {
