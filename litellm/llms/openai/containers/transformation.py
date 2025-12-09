@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.containers.main import (
     ContainerCreateOptionalRequestParams,
+    ContainerFileListResponse,
     ContainerListResponse,
     ContainerObject,
     DeleteContainerResult,
@@ -19,7 +20,9 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     from ...base_llm.chat.transformation import BaseLLMException as _BaseLLMException
-    from ...base_llm.containers.transformation import BaseContainerConfig as _BaseContainerConfig
+    from ...base_llm.containers.transformation import (
+        BaseContainerConfig as _BaseContainerConfig,
+    )
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
     BaseContainerConfig = _BaseContainerConfig
@@ -246,6 +249,54 @@ class OpenAIContainerConfig(BaseContainerConfig):
         delete_result = DeleteContainerResult(**response_data)  # type: ignore[arg-type]
 
         return delete_result
+
+    def transform_container_file_list_request(
+        self,
+        container_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+        after: Optional[str] = None,
+        limit: Optional[int] = None,
+        order: Optional[str] = None,
+        extra_query: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[str, Dict]:
+        """Transform the container file list request for OpenAI API.
+        
+        OpenAI API expects the following request:
+        - GET /v1/containers/{container_id}/files
+        """
+        # Construct the URL for container files
+        url = f"{api_base.rstrip('/')}/{container_id}/files"
+
+        # Prepare query parameters
+        params: Dict[str, Any] = {}
+        if after is not None:
+            params["after"] = after
+        if limit is not None:
+            params["limit"] = str(limit)
+        if order is not None:
+            params["order"] = order
+
+        # Add any extra query parameters
+        if extra_query:
+            params.update(extra_query)
+
+        return url, params
+
+    def transform_container_file_list_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ContainerFileListResponse:
+        """Transform the OpenAI container file list response.
+        """
+        response_data = raw_response.json()
+
+        # Transform the response data
+        file_list = ContainerFileListResponse(**response_data)  # type: ignore[arg-type]
+
+        return file_list
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers],

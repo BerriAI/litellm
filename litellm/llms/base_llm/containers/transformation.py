@@ -12,11 +12,12 @@ from litellm.types.router import GenericLiteLLMParams
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.types.containers.main import (
-        ContainerListResponse as _ContainerListResponse,
+        ContainerFileListResponse as _ContainerFileListResponse,
     )
     from litellm.types.containers.main import (
-        ContainerObject as _ContainerObject,
+        ContainerListResponse as _ContainerListResponse,
     )
+    from litellm.types.containers.main import ContainerObject as _ContainerObject
     from litellm.types.containers.main import (
         DeleteContainerResult as _DeleteContainerResult,
     )
@@ -28,12 +29,14 @@ if TYPE_CHECKING:
     ContainerObject = _ContainerObject
     DeleteContainerResult = _DeleteContainerResult
     ContainerListResponse = _ContainerListResponse
+    ContainerFileListResponse = _ContainerFileListResponse
 else:
     LiteLLMLoggingObj = Any
     BaseLLMException = Any
     ContainerObject = Any
     DeleteContainerResult = Any
     ContainerListResponse = Any
+    ContainerFileListResponse = Any
 
 
 class BaseContainerConfig(ABC):
@@ -191,6 +194,34 @@ class BaseContainerConfig(ABC):
         logging_obj: LiteLLMLoggingObj,
     ) -> DeleteContainerResult:
         """Transform the container delete response."""
+        ...
+
+    @abstractmethod
+    def transform_container_file_list_request(
+        self,
+        container_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+        after: str | None = None,
+        limit: int | None = None,
+        order: str | None = None,
+        extra_query: dict[str, Any] | None = None,
+    ) -> tuple[str, dict]:
+        """Transform the container file list request into a URL and params.
+        
+        Returns:
+            tuple[str, dict]: (url, params) for the container file list request.
+        """
+        ...
+
+    @abstractmethod
+    def transform_container_file_list_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ContainerFileListResponse:
+        """Transform the container file list response."""
         ...
 
     def get_error_class(
