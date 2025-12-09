@@ -181,6 +181,66 @@ for part in response:
 }
 ```
 
+## Using OpenAI-Compatible Backends (AI Badgr)
+
+You can use any OpenAI-compatible backend by overriding the `base_url` parameter. Here's an example using [AI Badgr](https://aibadgr.com):
+
+### Python (OpenAI SDK)
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="YOUR_API_KEY",
+    base_url="https://aibadgr.com/api/v1"
+)
+
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "Hello!"}],
+    max_tokens=200
+)
+
+print(response.choices[0].message.content)
+```
+
+### JavaScript/Node.js (OpenAI SDK)
+
+```javascript
+import OpenAI from 'openai';
+
+const client = new OpenAI({
+    apiKey: 'YOUR_API_KEY',
+    baseURL: 'https://aibadgr.com/api/v1'
+});
+
+const response = await client.chat.completions.create({
+    model: 'gpt-3.5-turbo',
+    messages: [{ role: 'user', content: 'Hello!' }],
+    max_tokens: 200
+});
+
+console.log(response.choices[0].message.content);
+```
+
+### cURL
+
+```bash
+curl https://aibadgr.com/api/v1/chat/completions \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [{"role": "user", "content": "Hello!"}],
+    "max_tokens": 200
+  }'
+```
+
+### Additional Features
+
+- **Streaming**: Set `"stream": true` in your request
+- **JSON Mode**: Use `"response_format": {"type": "json_object"}` to get JSON responses
+
 ## Logging Observability ([Docs](https://docs.litellm.ai/docs/observability/callbacks))
 
 LiteLLM exposes pre defined callbacks to send data to Lunary, MLflow, Langfuse, DynamoDB, s3 Buckets, Helicone, Promptlayer, Traceloop, Athina, Slack
