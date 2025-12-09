@@ -124,6 +124,44 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
     )
 
 
+def test_fallback_login_has_no_deprecation_banner(client_no_auth):
+    response = client_no_auth.get("/fallback/login")
+
+    assert response.status_code == 200
+    html = response.text
+    assert '<div class="deprecation-banner">' not in html
+    assert "Deprecated:" not in html
+    assert "<form" in html
+
+
+def test_sso_key_generate_shows_deprecation_banner(client_no_auth, monkeypatch):
+    # Ensure the route returns the HTML form instead of redirecting
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.ui_sso.show_missing_vars_in_env",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.get_redirect_url_for_sso",
+        lambda *args, **kwargs: "http://test/redirect",
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler._get_cli_state",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.should_use_sso_handler",
+        lambda *args, **kwargs: False,
+    )
+    monkeypatch.setenv("UI_USERNAME", "admin")
+
+    response = client_no_auth.get("/sso/key/generate")
+
+    assert response.status_code == 200
+    html = response.text
+    assert '<div class="deprecation-banner">' in html
+    assert "Deprecated:" in html
+
+
 @pytest.mark.asyncio
 async def test_initialize_scheduled_jobs_credentials(monkeypatch):
     """

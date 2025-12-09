@@ -804,4 +804,34 @@ def test_proxy_admin_viewer_can_access_global_spend_tags():
         pytest.fail(
             f"proxy_admin_viewer should be able to access /global/spend/tags route. Got error: {str(e)}"
         )
+
+
+def test_route_in_additional_public_routes_wildcard_match():
+    """
+    Test that route_in_additonal_public_routes supports wildcard patterns.
+    """
+    from litellm.proxy.auth.auth_utils import route_in_additonal_public_routes
+
+    with patch("litellm.proxy.proxy_server.general_settings", {"public_routes": ["/api/*"]}), \
+         patch("litellm.proxy.proxy_server.premium_user", True):
+        # Wildcard should match subpaths
+        assert route_in_additonal_public_routes("/api/users") is True
+        assert route_in_additonal_public_routes("/api/users/123") is True
+        # Should not match different prefix
+        assert route_in_additonal_public_routes("/other/path") is False
+
+
+def test_route_in_additional_public_routes_exact_match():
+    """
+    Test that route_in_additonal_public_routes supports exact matches.
+    """
+    from litellm.proxy.auth.auth_utils import route_in_additonal_public_routes
+
+    with patch("litellm.proxy.proxy_server.general_settings", {"public_routes": ["/health", "/status"]}), \
+         patch("litellm.proxy.proxy_server.premium_user", True):
+        # Exact matches should work
+        assert route_in_additonal_public_routes("/health") is True
+        assert route_in_additonal_public_routes("/status") is True
+        # Non-matching routes should fail
+        assert route_in_additonal_public_routes("/other") is False
         

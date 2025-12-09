@@ -441,7 +441,6 @@ class CustomStreamWrapper:
             finish_reason = None
             logprobs = None
             usage = None
-
             if str_line and str_line.choices and len(str_line.choices) > 0:
                 if (
                     str_line.choices[0].delta is not None

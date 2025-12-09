@@ -8,7 +8,22 @@ if server_root_path != "":
     url_to_redirect_to += server_root_path
 url_to_redirect_to += "/login"
 new_ui_login_url = get_custom_url("", "ui/login")
-html_form = f"""
+
+
+def build_ui_login_form(show_deprecation_banner: bool = False) -> str:
+    banner_html = (
+        f"""
+        <div class="deprecation-banner">
+            <strong>Deprecated:</strong> Logging in with username and password on this page is deprecated.
+            Please use the <a href="{new_ui_login_url}">new login page</a> instead.
+            This page will be dedicated to signing in via SSO in the future.
+        </div>
+        """
+        if show_deprecation_banner
+        else ""
+    )
+
+    return f"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -209,11 +224,7 @@ html_form = f"""
 </head>
 <body>
     <form action="{url_to_redirect_to}" method="post">
-        <div class="deprecation-banner">
-            <strong>Deprecated:</strong> Logging in with username and password on this page is deprecated.
-            Please use the <a href="{new_ui_login_url}">new login page</a> instead.
-            This page will be dedicated to signing in via SSO in the future.
-        </div>
+        {banner_html}
         <div class="logo-container">
             <div class="logo">
                 🚅 LiteLLM
@@ -253,3 +264,6 @@ html_form = f"""
 </body>
 </html>
 """
+
+
+html_form = build_ui_login_form(show_deprecation_banner=True)
