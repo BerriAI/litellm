@@ -10,6 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 from unittest.mock import MagicMock, patch
 
+from litellm.constants import DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -1297,6 +1298,46 @@ def test_effort_with_other_features():
     assert "tools" in result
     assert len(result["tools"]) > 0
     assert "thinking" in result
+
+
+def test_reasoning_effort_opus45_sets_thinking_and_output_config():
+    """reasoning_effort on Opus 4.5 should set thinking and output_config."""
+    config = AnthropicConfig()
+
+    optional_params = {}
+    result = config.map_openai_params(
+        non_default_params={"reasoning_effort": "low"},
+        optional_params=optional_params,
+        model="claude-opus-4-5-20251101",
+        drop_params=False,
+    )
+
+    assert result["output_config"]["effort"] == "low"
+    assert result["thinking"]["type"] == "enabled"
+    assert (
+        result["thinking"]["budget_tokens"]
+        == DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
+    )
+
+
+def test_reasoning_effort_non_opus_sets_thinking_only():
+    """reasoning_effort on other Claude models should only set thinking."""
+    config = AnthropicConfig()
+
+    optional_params = {}
+    result = config.map_openai_params(
+        non_default_params={"reasoning_effort": "low"},
+        optional_params=optional_params,
+        model="claude-3-7-sonnet-20250219",
+        drop_params=False,
+    )
+
+    assert "thinking" in result
+    assert (
+        result["thinking"]["budget_tokens"]
+        == DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
+    )
+    assert "output_config" not in result
 
 
 def test_translate_system_message_skips_empty_string_content():

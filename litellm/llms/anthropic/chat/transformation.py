@@ -759,14 +759,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if param == "thinking":
                 optional_params["thinking"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
-                # For Claude Opus 4.5, map reasoning_effort to output_config
+                thinking_param = AnthropicConfig._map_reasoning_effort(value)
+                optional_params["thinking"] = thinking_param
+                # For Claude Opus 4.5, also map reasoning_effort to output_config
                 if self._is_claude_opus_4_5(model):
                     optional_params["output_config"] = {"effort": value}
-                else:
-                    # For other models, map to thinking parameter
-                    optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
-                        value
-                    )
             elif param == "web_search_options" and isinstance(value, dict):
                 hosted_web_search_tool = self.map_web_search_tool(
                     cast(OpenAIWebSearchOptions, value)
