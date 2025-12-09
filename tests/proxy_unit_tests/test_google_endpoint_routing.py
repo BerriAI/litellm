@@ -1,3 +1,4 @@
+
 import json
 import os
 import sys
@@ -6,15 +7,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
+import asyncio
+import yaml
 
 sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.proxy_server import app, initialize
-
-# Create a TestClient
-client = TestClient(app)
+from litellm.proxy.google_endpoints.endpoints import google_generate_content
+from fastapi import Request, Response
+from fastapi.datastructures import Headers
+from litellm.proxy.proxy_server import initialize, app, user_api_key_auth
+from litellm.router import Router
+from litellm.utils import ModelResponse
 
 @pytest.fixture
 def mock_user_api_key_dict():
@@ -33,37 +37,64 @@ def mock_user_api_key_dict():
         rpm_limit=None,
     )
 
-def mock_user_api_key_auth_dependency(mock_user_api_key_dict):
-    async def override():
-        return mock_user_api_key_dict
-    return override
+
+@pytest.fixture
+def mock_request(request):
+    """Create a mock FastAPI request with the sample payload."""
+    mock_req = MagicMock(spec=Request)
+    mock_req.headers = Headers({"content-type": "application/json"})
+    mock_req.method = "POST"
+    mock_req.url.path = request.param.get("path")
+    
+    async def mock_body():
+        return json.dumps(request.param.get("payload", {})).encode('utf-8')
+    
+    mock_req.body = mock_body
+    return mock_req
+
+
+@pytest.fixture  
+def mock_response():
+    """Create a mock FastAPI response."""
+    return MagicMock(spec=Response)
+
 
 @pytest.mark.asyncio
-async def test_google_generate_content_with_slashes_in_model_name(mock_user_api_key_dict):
+@pytest.mark.parametrize("mock_request", [{"path": "/v1beta/models/bedrock/claude-sonnet-3.7:generateContent", "payload": {"contents": [{"parts":[{"text": "The quick brown fox jumps over the lazy dog."}]}]}}], indirect=True)
+async def test_google_generate_content_with_slashes_in_model_name(
+    mock_request, mock_response, mock_user_api_key_dict
+):
     """
     Test that the google_generate_content endpoint correctly handles model names with slashes.
     """
-    with patch("litellm.proxy.proxy_server.llm_router") as mock_llm_router:
-        mock_llm_router.agenerate_content = AsyncMock()
-        
-        # Override the dependency
-        app.dependency_overrides[UserAPIKeyAuth] = mock_user_api_key_auth_dependency(mock_user_api_key_dict)
-
-        # Initialize the router
-        await initialize(model_list=[
+    config = {
+        "model_list": [
             {
                 "model_name": "bedrock/claude-sonnet-3.7",
                 "litellm_params": {
-                    "model": "bedrock/claude-3-sonnet-20240229-v1:0",
+                    "model": "bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
                 },
             }
-        ])
+        ]
+    }
+    filepath = os.path.dirname(os.path.abspath(__file__))
+    config_fp = f"{filepath}/test_config.yaml"
+    with open(config_fp, "w") as f:
+        yaml.dump(config, f)
 
-        response = client.post("/v1beta/models/bedrock/claude-sonnet-3.7:generateContent", json={})
+    await initialize(config=config_fp)
+
+    with patch("litellm.proxy.proxy_server.llm_router.agenerate_content", new_callable=AsyncMock) as mock_agenerate_content:
+        mock_agenerate_content.return_value = ModelResponse()
         
-        # Reset the dependency override
-        app.dependency_overrides = {}
-        
-        mock_llm_router.agenerate_content.assert_called_once()
-        call_args = mock_llm_router.agenerate_content.call_args[1]
-        assert call_args["model"] == "bedrock/claude-sonnet-3.7"
+        await google_generate_content(
+            request=mock_request,
+            model_name="bedrock/claude-sonnet-3.7",
+            fastapi_response=mock_response,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+        mock_agenerate_content.assert_called_once()
+        _, call_kwargs = mock_agenerate_content.call_args
+        assert call_kwargs["model"] == "bedrock/claude-sonnet-3.7"
+        os.remove(config_fp)
