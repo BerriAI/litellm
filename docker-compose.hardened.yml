@@ -19,23 +19,18 @@ services:
     security_opt:
       - no-new-privileges:true
     tmpfs:
-      - /.npm:rw,noexec,nosuid,nodev,size=64m,uid=101,gid=101,mode=1777
-      - /nonexistent:rw,noexec,nosuid,nodev,size=64m,uid=101,gid=101,mode=700
       - /app/cache:rw,noexec,nosuid,nodev,size=128m,uid=101,gid=101,mode=1777
       - /app/migrations:rw,noexec,nosuid,nodev,size=64m,uid=101,gid=101,mode=1777
     volumes:
       - ./proxy_server_config.yaml:/app/config.yaml:ro
     environment:
       LITELLM_NON_ROOT: "true"
-      NPM_CONFIG_CACHE: "/.npm"
       PRISMA_BINARY_CACHE_DIR: "/app/cache/prisma-python/binaries"
       XDG_CACHE_HOME: "/app/cache"
       LITELLM_MIGRATION_DIR: "/app/migrations"
       HTTP_PROXY: "http://squid:3128"
       HTTPS_PROXY: "http://squid:3128"
       NO_PROXY: "localhost,127.0.0.1,db"
-      LITELLM_SUCCESS_CALLBACKS: prometheus
-      LITELLM_CALLBACKS: prometheus
     command:
       - "--port"
       - "4000"
