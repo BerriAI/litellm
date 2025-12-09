@@ -110,7 +110,7 @@ def filter_web_search_deployments(
         return healthy_deployments
 
     is_web_search_request = False
-    tools = request_kwargs.get("tools", [])
+    tools = request_kwargs.get("tools") or []
     for tool in tools:
         # These are the two websearch tools for OpenAI / Azure. 
         if tool.get("type") == "web_search" or tool.get("type") == "web_search_preview":
