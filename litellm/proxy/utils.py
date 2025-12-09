@@ -3372,7 +3372,8 @@ class ProxyUpdateSpend:
                             data=json_data,
                             headers={"Content-Type": "application/json"},
                         )
-                        _cleanup_memory(json_data)
+                        del json_data
+                        gc.collect()
                         if response.status_code == 200:
                             prisma_client.spend_log_transactions = (
                                 prisma_client.spend_log_transactions[
@@ -3392,7 +3393,8 @@ class ProxyUpdateSpend:
                             verbose_proxy_logger.debug(
                                 f"Flushed {len(batch)} logs to the DB."
                             )
-                            _cleanup_memory(batch, batch_with_dates)
+                            del batch, batch_with_dates
+                            gc.collect()
 
                         prisma_client.spend_log_transactions = (
                             prisma_client.spend_log_transactions[len(logs_to_process) :]
@@ -3400,7 +3402,6 @@ class ProxyUpdateSpend:
                         verbose_proxy_logger.debug(
                             f"{len(logs_to_process)} logs processed. Remaining in queue: {len(prisma_client.spend_log_transactions)}"
                         )
-                    _cleanup_memory(logs_to_process)
                     break
                 except DB_CONNECTION_ERROR_TYPES:
                     if i is None:
@@ -3412,10 +3413,13 @@ class ProxyUpdateSpend:
             prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[
                 len(logs_to_process) :
             ]
-            _cleanup_memory(logs_to_process)
             _raise_failed_update_spend_exception(
                 e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
             )
+        finally:
+            # Clean up logs_to_process after all processing is complete
+            del logs_to_process
+            gc.collect()
 
     @staticmethod
     def disable_spend_updates() -> bool:
