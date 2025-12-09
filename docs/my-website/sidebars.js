@@ -137,10 +137,9 @@ const sidebars = {
         },
         {
           type: "category",
-          label: "SDK Functions",
+          label: "Core Functions",
           items: [
-            "completion/input",
-            "completion/output",
+            "api-reference/completion",
             "text_completion",
             "embedding/supported_embedding",
             "response_api",
@@ -150,7 +149,7 @@ const sidebars = {
           type: "category",
           label: "Images & Video",
           items: [
-            "api-reference/image_generation",
+            "image_generation",
             "videos",
           ],
         },
