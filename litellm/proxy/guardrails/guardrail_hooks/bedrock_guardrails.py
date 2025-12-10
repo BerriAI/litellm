@@ -1270,6 +1270,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             Exception: If content is blocked by Bedrock guardrail
         """
         texts = inputs.get("texts", [])
+
+        # Add the function name and arguments to guardrails validation
+        for tool in inputs.get("tool_calls", []):
+            if tool.get("type") != "function":
+                continue
+            func = tool.get("function", {})
+            texts.extend(filter(None, [func.get("name"), func.get("arguments")]))
+
         try:
             verbose_proxy_logger.debug(
                 f"Bedrock Guardrail: Applying guardrail to {len(texts)} text(s)"
@@ -1287,36 +1295,38 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             )
             filtered_messages = filter_result.payload_messages or mock_messages
 
-            bedrock_response = await self.make_bedrock_api_request(
-                source="INPUT",
-                messages=filtered_messages,
-                request_data=request_data,
-            )
-
-            if bedrock_response.get("action") == "BLOCKED":
-                raise Exception(
-                    f"Content blocked by Bedrock guardrail: {bedrock_response.get('reason', 'Unknown reason')}"
+            # Bedrock will throw an error if there is no text to process
+            if filtered_messages:
+                bedrock_response = await self.make_bedrock_api_request(
+                    source="INPUT",
+                    messages=filtered_messages,
+                    request_data=request_data,
                 )
 
-            # Apply any masking that was applied by the guardrail
+                if bedrock_response.get("action") == "BLOCKED":
+                    raise Exception(
+                        f"Content blocked by Bedrock guardrail: {bedrock_response.get('reason', 'Unknown reason')}"
+                    )
 
-            output_list = bedrock_response.get("output")
-            if output_list:
-                # If the guardrail returned modified content, use that
-                for output_item in output_list:
-                    text_content = output_item.get("text")
-                    if text_content:
-                        masked_text = str(text_content)
-                        masked_texts.append(masked_text)
-            else:
-                outputs_list = bedrock_response.get("outputs")
-                if outputs_list:
-                    # Fallback to outputs field if output is not available
-                    for output_item in outputs_list:
+                # Apply any masking that was applied by the guardrail
+
+                output_list = bedrock_response.get("output")
+                if output_list:
+                    # If the guardrail returned modified content, use that
+                    for output_item in output_list:
                         text_content = output_item.get("text")
                         if text_content:
                             masked_text = str(text_content)
                             masked_texts.append(masked_text)
+                else:
+                    outputs_list = bedrock_response.get("outputs")
+                    if outputs_list:
+                        # Fallback to outputs field if output is not available
+                        for output_item in outputs_list:
+                            text_content = output_item.get("text")
+                            if text_content:
+                                masked_text = str(text_content)
+                                masked_texts.append(masked_text)
 
             # If no output/outputs were provided, use the original texts
             # This happens when the guardrail allows content without modification
