@@ -1801,3 +1801,14 @@ def test_anthropic_structured_output_chat_completion_api():
     )
     assert response is not None
     print(f"response: {response}")
+
+
+def test_anthropic_reasoning_effort():
+    response = litellm.completion(
+        model="claude-opus-4-5-20251101",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        reasoning_effort="high",
+        litellm_request_debug=True,
+    )
+    assert response is not None
+    print(f"response: {response}")
