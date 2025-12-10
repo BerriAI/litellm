@@ -11,6 +11,8 @@ Call LangGraph agents through LiteLLM using the OpenAI chat completions format.
 | Provider Route on LiteLLM | `langgraph/{agent_id}` |
 | Provider Doc | [LangGraph Platform ↗](https://langchain-ai.github.io/langgraph/cloud/quick_start/) |
 
+**Prerequisites:** You need a running LangGraph server. See [Setting Up a Local LangGraph Server](#setting-up-a-local-langgraph-server) below.
+
 ## Quick Start
 
 ### Model Format
@@ -171,6 +173,65 @@ for chunk in stream:
 | `stream` | boolean | Enable streaming responses |
 | `api_base` | string | LangGraph server URL |
 | `api_key` | string | Optional API key |
+
+
+## Setting Up a Local LangGraph Server
+
+Before using LiteLLM with LangGraph, you need a running LangGraph server.
+
+### Prerequisites
+
+- Python 3.11+
+- An LLM API key (OpenAI or Google Gemini)
+
+### 1. Install the LangGraph CLI
+
+```bash
+pip install "langgraph-cli[inmem]"
+```
+
+### 2. Create a new LangGraph project
+
+```bash
+langgraph new my-agent --template new-langgraph-project-python
+cd my-agent
+```
+
+### 3. Install dependencies
+
+```bash
+pip install -e .
+```
+
+### 4. Set your API key
+
+```bash
+echo "OPENAI_API_KEY=your_key_here" > .env
+```
+
+### 5. Start the server
+
+```bash
+langgraph dev
+```
+
+The server will start at `http://localhost:2024`.
+
+### Verify the server is running
+
+```bash
+curl -s --request POST \
+  --url "http://localhost:2024/runs/wait" \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "assistant_id": "agent",
+    "input": {
+      "messages": [{"role": "human", "content": "Hello!"}]
+    }
+  }'
+```
+
+
 
 ## Further Reading
 
