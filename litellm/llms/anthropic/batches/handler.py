@@ -10,7 +10,6 @@ import httpx
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
-from litellm.types.llms.openai import RetrieveBatchRequest
 from litellm.types.utils import LiteLLMBatch, LlmProviders
 
 if TYPE_CHECKING:
