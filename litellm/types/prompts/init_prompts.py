@@ -11,6 +11,7 @@ class SupportedPromptIntegrations(str, Enum):
     CUSTOM = "custom"
     BITBUCKET = "bitbucket"
     GITLAB = "gitlab"
+    ARIZE_PHOENIX = "arize_phoenix"
 
 
 class PromptInfo(BaseModel):
@@ -22,6 +23,8 @@ class PromptInfo(BaseModel):
 class PromptLiteLLMParams(BaseModel):
     prompt_id: str
     prompt_integration: str
+    api_key: Optional[str] = None
+    api_base: Optional[str] = None
 
     dotprompt_content: Optional[str] = None
     """
