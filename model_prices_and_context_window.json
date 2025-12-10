@@ -26749,7 +26749,6 @@
         ]
     },
     "voyage/rerank-2": {
-        "input_cost_per_query": 5e-08,
         "input_cost_per_token": 5e-08,
         "litellm_provider": "voyage",
         "max_input_tokens": 16000,
@@ -26760,7 +26759,6 @@
         "output_cost_per_token": 0.0
     },
     "voyage/rerank-2-lite": {
-        "input_cost_per_query": 2e-08,
         "input_cost_per_token": 2e-08,
         "litellm_provider": "voyage",
         "max_input_tokens": 8000,
@@ -26771,7 +26769,6 @@
         "output_cost_per_token": 0.0
     },
     "voyage/rerank-2.5": {
-        "input_cost_per_query": 5e-08,
         "input_cost_per_token": 5e-08,
         "litellm_provider": "voyage",
         "max_input_tokens": 32000,
@@ -26782,7 +26779,6 @@
         "output_cost_per_token": 0.0
     },
     "voyage/rerank-2.5-lite": {
-        "input_cost_per_query": 2e-08,
         "input_cost_per_token": 2e-08,
         "litellm_provider": "voyage",
         "max_input_tokens": 32000,
