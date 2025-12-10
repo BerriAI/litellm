@@ -28,7 +28,6 @@ from typing import (
     Callable,
     Coroutine,
     Dict,
-    Iterable,
     List,
     Literal,
     Mapping,
@@ -105,7 +104,6 @@ from litellm.llms.vertex_ai.common_utils import (
 from litellm.realtime_api.main import _realtime_health_check
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.llms.openai import ToolParam
 from litellm.types.utils import RawRequestTypedDict, StreamingChoices
 from litellm.utils import (
     CustomStreamWrapper,
@@ -920,118 +918,6 @@ def mock_completion(
         raise Exception("Mock completion response failed - {}".format(e))
 
 
-async def _call_acompletion_internal(
-    **call_args: Any,
-) -> Union[ModelResponse, CustomStreamWrapper]:
-    """Invoke acompletion while skipping MCP interception to avoid recursion."""
-    safe_args = dict(call_args)
-    safe_args["_skip_mcp_handler"] = True
-    safe_args.pop("acompletion", None)
-    return await acompletion(**safe_args)
-
-
-async def _handle_chat_completion_with_mcp(
-    call_args: Dict[str, Any]
-) -> Optional[Union[ModelResponse, CustomStreamWrapper]]:
-    """Handle MCP-enabled tool execution for chat completion requests."""
-    from litellm.responses.mcp.litellm_proxy_mcp_handler import (
-        LiteLLM_Proxy_MCP_Handler,
-    )
-    from litellm.responses.utils import ResponsesAPIRequestUtils
-
-    tools = call_args.get("tools")
-    if not tools:
-        return None
-
-    mcp_tools, other_tools = LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(tools)
-    if not mcp_tools:
-        return None
-
-    base_call_args = dict(call_args)
-
-    user_api_key_auth = call_args.get("user_api_key_auth") or (
-        (call_args.get("metadata", {}) or {}).get("user_api_key_auth")
-    )
-    (
-        deduplicated_mcp_tools,
-        tool_server_map,
-    ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
-        user_api_key_auth=user_api_key_auth,
-        mcp_tools_with_litellm_proxy=mcp_tools,
-    )
-
-    openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
-        deduplicated_mcp_tools,
-        target_format="chat",
-    )
-
-    base_call_args["tools"] = openai_tools or None
-
-    should_auto_execute = LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(
-        mcp_tools_with_litellm_proxy=mcp_tools
-    )
-
-    (
-        mcp_auth_header,
-        mcp_server_auth_headers,
-        oauth2_headers,
-        raw_headers,
-    ) = ResponsesAPIRequestUtils.extract_mcp_headers_from_request(
-        secret_fields=base_call_args.get("secret_fields"),
-        tools=tools,
-    )
-
-    if not should_auto_execute:
-        return await _call_acompletion_internal(**base_call_args)
-
-    mock_tool_calls = base_call_args.pop("mock_tool_calls", None)
-
-    initial_call_args = dict(base_call_args)
-    initial_call_args["stream"] = False
-    if mock_tool_calls is not None:
-        initial_call_args["mock_tool_calls"] = mock_tool_calls
-
-    initial_response = await _call_acompletion_internal(**initial_call_args)
-    if not isinstance(initial_response, ModelResponse):
-        return initial_response
-
-    tool_calls = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_chat_response(
-        response=initial_response
-    )
-
-    if not tool_calls:
-        if base_call_args.get("stream"):
-            retry_args = dict(base_call_args)
-            retry_args["stream"] = call_args.get("stream")
-            return await _call_acompletion_internal(**retry_args)
-        return initial_response
-
-    tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
-        tool_server_map=tool_server_map,
-        tool_calls=tool_calls,
-        user_api_key_auth=user_api_key_auth,
-        mcp_auth_header=mcp_auth_header,
-        mcp_server_auth_headers=mcp_server_auth_headers,
-        oauth2_headers=oauth2_headers,
-        raw_headers=raw_headers,
-    )
-
-    if not tool_results:
-        return initial_response
-
-    follow_up_messages = LiteLLM_Proxy_MCP_Handler._create_follow_up_messages_for_chat(
-        original_messages=call_args.get("messages", []),
-        response=initial_response,
-        tool_results=tool_results,
-    )
-
-    follow_up_call_args = dict(base_call_args)
-    follow_up_call_args["messages"] = follow_up_messages
-    follow_up_call_args["stream"] = call_args.get("stream")
-
-    return await _call_acompletion_internal(**follow_up_call_args)
-
-
 def responses_api_bridge_check(
     model: str,
     custom_llm_provider: str,
@@ -1207,64 +1093,63 @@ def completion(  # type: ignore # noqa: PLR0915
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
 
     skip_mcp_handler = kwargs.pop("_skip_mcp_handler", False)
-    if not skip_mcp_handler:
-        from litellm.responses.mcp.litellm_proxy_mcp_handler import (
-            LiteLLM_Proxy_MCP_Handler,
+    if not skip_mcp_handler and tools:
+        from litellm.responses.mcp.chat_completions_handler import (
+            handle_chat_completion_with_mcp,
         )
-        tools_for_mcp = cast(Optional[Iterable[ToolParam]], tools)
 
-        if LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(
-            tools=tools_for_mcp
-        ):
-            call_args_for_mcp: Dict[str, Any] = {
-                "model": model,
-                "messages": messages,
-                "functions": functions,
-                "function_call": function_call,
-                "timeout": timeout,
-                "temperature": temperature,
-                "top_p": top_p,
-                "n": n,
-                "stream": stream,
-                "stream_options": stream_options,
-                "stop": stop,
-                "max_tokens": max_tokens,
-                "max_completion_tokens": max_completion_tokens,
-                "modalities": modalities,
-                "prediction": prediction,
-                "audio": audio,
-                "presence_penalty": presence_penalty,
-                "frequency_penalty": frequency_penalty,
-                "logit_bias": logit_bias,
-                "user": user,
-                "response_format": response_format,
-                "seed": seed,
-                "tools": tools,
-                "tool_choice": tool_choice,
-                "parallel_tool_calls": parallel_tool_calls,
-                "logprobs": logprobs,
-                "top_logprobs": top_logprobs,
-                "deployment_id": deployment_id,
-                "reasoning_effort": reasoning_effort,
-                "verbosity": verbosity,
-                "safety_identifier": safety_identifier,
-                "service_tier": service_tier,
-                "base_url": base_url,
-                "api_version": api_version,
-                "api_key": api_key,
-                "model_list": model_list,
-                "extra_headers": extra_headers,
-                "thinking": thinking,
-                "web_search_options": web_search_options,
-                "shared_session": shared_session,
-            }
-            call_args_for_mcp.update(kwargs)
+        call_args_for_mcp: Dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "functions": functions,
+            "function_call": function_call,
+            "timeout": timeout,
+            "temperature": temperature,
+            "top_p": top_p,
+            "n": n,
+            "stream": stream,
+            "stream_options": stream_options,
+            "stop": stop,
+            "max_tokens": max_tokens,
+            "max_completion_tokens": max_completion_tokens,
+            "modalities": modalities,
+            "prediction": prediction,
+            "audio": audio,
+            "presence_penalty": presence_penalty,
+            "frequency_penalty": frequency_penalty,
+            "logit_bias": logit_bias,
+            "user": user,
+            "response_format": response_format,
+            "seed": seed,
+            "tools": tools,
+            "tool_choice": tool_choice,
+            "parallel_tool_calls": parallel_tool_calls,
+            "logprobs": logprobs,
+            "top_logprobs": top_logprobs,
+            "deployment_id": deployment_id,
+            "reasoning_effort": reasoning_effort,
+            "verbosity": verbosity,
+            "safety_identifier": safety_identifier,
+            "service_tier": service_tier,
+            "base_url": base_url,
+            "api_version": api_version,
+            "api_key": api_key,
+            "model_list": model_list,
+            "extra_headers": extra_headers,
+            "thinking": thinking,
+            "web_search_options": web_search_options,
+            "shared_session": shared_session,
+        }
+        call_args_for_mcp.update(kwargs)
 
-            mcp_result = run_async_function(
-                _handle_chat_completion_with_mcp, call_args_for_mcp
-            )
-            if mcp_result is not None:
-                return mcp_result
+        completion_callable = globals().get("acompletion")
+        mcp_result = run_async_function(
+            handle_chat_completion_with_mcp,
+            call_args_for_mcp,
+            completion_callable,
+        )
+        if mcp_result is not None:
+            return mcp_result
     ######### unpacking kwargs #####################
     args = locals()
     api_base = kwargs.get("api_base", None)
