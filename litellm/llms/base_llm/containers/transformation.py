@@ -224,6 +224,35 @@ class BaseContainerConfig(ABC):
         """Transform the container file list response."""
         ...
 
+    @abstractmethod
+    def transform_container_file_content_request(
+        self,
+        container_id: str,
+        file_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> tuple[str, dict]:
+        """Transform the container file content request into a URL and params.
+        
+        Returns:
+            tuple[str, dict]: (url, params) for the container file content request.
+        """
+        ...
+
+    @abstractmethod
+    def transform_container_file_content_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> bytes:
+        """Transform the container file content response.
+        
+        Returns:
+            bytes: The raw file content.
+        """
+        ...
+
     def get_error_class(
         self, 
         error_message: str, 

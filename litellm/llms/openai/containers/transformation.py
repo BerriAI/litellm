@@ -298,6 +298,38 @@ class OpenAIContainerConfig(BaseContainerConfig):
 
         return file_list
 
+    def transform_container_file_content_request(
+        self,
+        container_id: str,
+        file_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """Transform the container file content request for OpenAI API.
+        
+        OpenAI API expects the following request:
+        - GET /v1/containers/{container_id}/files/{file_id}/content
+        """
+        # Construct the URL for container file content
+        url = f"{api_base.rstrip('/')}/{container_id}/files/{file_id}/content"
+
+        # No query parameters needed
+        params: Dict[str, Any] = {}
+
+        return url, params
+
+    def transform_container_file_content_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> bytes:
+        """Transform the OpenAI container file content response.
+        
+        Returns the raw binary content of the file.
+        """
+        return raw_response.content
+
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers],
     ) -> BaseLLMException:
