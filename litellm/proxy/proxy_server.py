@@ -171,6 +171,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
@@ -236,7 +237,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
-from litellm.proxy.common_utils.html_forms.ui_login import html_form
+from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     check_file_size_under_limit,
@@ -4428,6 +4429,19 @@ class ProxyStartupEvent:
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
         )
 
+        ### MONITOR SPEND LOGS QUEUE (queue-size-based job) ###
+        if general_settings.get("disable_spend_logs", False) is False:
+            from litellm.proxy.utils import _monitor_spend_logs_queue
+            
+            # Start background task to monitor spend logs queue size
+            asyncio.create_task(
+                _monitor_spend_logs_queue(
+                    prisma_client=prisma_client,
+                    db_writer_client=db_writer_client,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            )
+
         ### ADD NEW MODELS ###
         store_model_in_db = (
             get_secret_bool("STORE_MODEL_IN_DB", store_model_in_db) or store_model_in_db
@@ -4945,6 +4959,43 @@ async def chat_completion(  # noqa: PLR0915
             return model_dump_with_preserved_fields(result, exclude_unset=True)
         else:
             return result
+    except ModifyResponseException as e:
+        # Guardrail flagged content in passthrough mode - return 200 with violation message
+        _data = e.request_data
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=_data,
+        )
+        _chat_response = litellm.ModelResponse()
+        _chat_response.model = e.model  # type: ignore
+        _chat_response.choices[0].message.content = e.message  # type: ignore
+        _chat_response.choices[0].finish_reason = "content_filter"  # type: ignore
+
+        if data.get("stream", None) is not None and data["stream"] is True:
+            _iterator = litellm.utils.ModelResponseIterator(
+                model_response=_chat_response, convert_to_delta=True
+            )
+            _streaming_response = litellm.CustomStreamWrapper(
+                completion_stream=_iterator,
+                model=e.model,
+                custom_llm_provider="cached_response",
+                logging_obj=data.get("litellm_logging_obj", None),
+            )
+            selected_data_generator = select_data_generator(
+                response=_streaming_response,
+                user_api_key_dict=user_api_key_dict,
+                request_data=_data,
+            )
+
+            return StreamingResponse(
+                selected_data_generator,
+                media_type="text/event-stream",
+                status_code=200,  # Return 200 for passthrough mode
+            )
+        _usage = litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+        _chat_response.usage = _usage  # type: ignore
+        return _chat_response
     except RejectedRequestError as e:
         _data = e.request_data
         await proxy_logging_obj.post_call_failure_hook(
@@ -5054,6 +5105,55 @@ async def completion(  # noqa: PLR0915
             user_api_base=user_api_base,
             version=version,
         )
+    except ModifyResponseException as e:
+        # Guardrail flagged content in passthrough mode - return 200 with violation message
+        _data = e.request_data
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=_data,
+        )
+
+        if _data.get("stream", None) is not None and _data["stream"] is True:
+            _text_response = litellm.ModelResponse()
+            _text_response.choices[0].text = e.message
+            _text_response.model = e.model  # type: ignore
+            _usage = litellm.Usage(
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_tokens=0,
+            )
+            _text_response.usage = _usage  # type: ignore
+            _iterator = litellm.utils.ModelResponseIterator(
+                model_response=_text_response, convert_to_delta=True
+            )
+            _streaming_response = litellm.TextCompletionStreamWrapper(
+                completion_stream=_iterator,
+                model=e.model,
+            )
+
+            selected_data_generator = select_data_generator(
+                response=_streaming_response,
+                user_api_key_dict=user_api_key_dict,
+                request_data=_data,
+            )
+
+            return StreamingResponse(
+                selected_data_generator,
+                media_type="text/event-stream",
+                status_code=200,  # Return 200 for passthrough mode
+            )
+        else:
+            _response = litellm.TextCompletionResponse()
+            _response.choices[0].text = e.message
+            _response.model = e.model  # type: ignore
+            _usage = litellm.Usage(
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_tokens=0,
+            )
+            _response.usage = _usage  # type: ignore
+            return _response
     except RejectedRequestError as e:
         _data = e.request_data
         await proxy_logging_obj.post_call_failure_hook(
@@ -8306,11 +8406,15 @@ async def fallback_login(request: Request):
         # Use UI Credentials set in .env
         from fastapi.responses import HTMLResponse
 
-        return HTMLResponse(content=html_form, status_code=200)
+        return HTMLResponse(
+            content=build_ui_login_form(show_deprecation_banner=False), status_code=200
+        )
     else:
         from fastapi.responses import HTMLResponse
 
-        return HTMLResponse(content=html_form, status_code=200)
+        return HTMLResponse(
+            content=build_ui_login_form(show_deprecation_banner=False), status_code=200
+        )
 
 
 @router.post(
