@@ -19,6 +19,7 @@ from litellm.containers import (
 from litellm.containers.endpoint_factory import (
     list_container_files,
     retrieve_container_file,
+    retrieve_container_file_content,
     delete_container_file,
 )
 
@@ -63,7 +64,7 @@ def test_container_files_api():
         assert len(files.data) == 0  # New container has no files
         print(f"   Files found: {len(files.data)} ✓")
         
-        # 3. Try retrieve non-existent file (should raise error)
+        # 3. Try retrieve non-existent file metadata (should raise error)
         print("3. Testing retrieve_container_file (expect error)...")
         try:
             retrieve_container_file(
@@ -75,6 +76,19 @@ def test_container_files_api():
             assert False, "Should have raised error for non-existent file"
         except Exception as e:
             assert "not found" in str(e).lower() or "invalid" in str(e).lower()
+            print(f"   Got expected error ✓")
+        
+        # 3b. Try retrieve non-existent file content (should raise error)
+        print("3b. Testing retrieve_container_file_content (expect error)...")
+        try:
+            retrieve_container_file_content(
+                container_id=container.id,
+                file_id="cfile_nonexistent",
+                custom_llm_provider="openai",
+                api_key=api_key,
+            )
+            assert False, "Should have raised error for non-existent file content"
+        except Exception as e:
             print(f"   Got expected error ✓")
         
         # 4. Try delete non-existent file (should raise error)

@@ -7,10 +7,10 @@ FastAPI route handlers for ALL container file endpoints.
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Request, Response
-from fastapi.responses import ORJSONResponse
+from fastapi.responses import ORJSONResponse, StreamingResponse
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -34,10 +34,35 @@ def get_all_route_types() -> List[str]:
     return [endpoint["async_name"] for endpoint in config["endpoints"]]
 
 
-def _create_handler_for_path_params(path_params: List[str], route_type: str):
+def _get_container_provider_config(custom_llm_provider: str):
+    """Get the container provider config for the given provider."""
+    if custom_llm_provider == "openai":
+        from litellm.llms.openai.containers.transformation import OpenAIContainerConfig
+        return OpenAIContainerConfig()
+    else:
+        raise ValueError(f"Container API not supported for provider: {custom_llm_provider}")
+
+
+def _create_handler_for_path_params(path_params: List[str], route_type: str, returns_binary: bool = False):
     """
     Dynamically create a handler with the correct path parameter signature.
     """
+    # For binary content endpoints, use a different handler
+    if returns_binary and path_params == ["container_id", "file_id"]:
+        async def handler_binary_content(
+            request: Request,
+            container_id: str,
+            file_id: str,
+            user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        ):
+            return await _process_binary_request(
+                request=request,
+                container_id=container_id,
+                file_id=file_id,
+                user_api_key_dict=user_api_key_dict,
+            )
+        return handler_binary_content
+    
     # Create handlers for different path parameter combinations
     if path_params == ["container_id"]:
         async def handler_container_id(
@@ -87,6 +112,86 @@ def _create_handler_for_path_params(path_params: List[str], route_type: str):
                 path_params={},
             )
         return handler_no_params
+
+
+async def _process_binary_request(
+    request: Request,
+    container_id: str,
+    file_id: str,
+    user_api_key_dict: UserAPIKeyAuth,
+):
+    """
+    Process binary content requests using the proper transformation pattern.
+    
+    This uses the provider config transformations and llm_http_handler
+    to maintain consistency with the established pattern.
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+    from litellm.types.router import GenericLiteLLMParams
+
+    # Extract custom_llm_provider
+    custom_llm_provider = (
+        get_custom_llm_provider_from_request_headers(request=request)
+        or get_custom_llm_provider_from_request_query(request=request)
+        or "openai"
+    )
+    
+    # Get the provider config
+    container_provider_config = _get_container_provider_config(custom_llm_provider)
+    
+    # Build litellm_params - credentials are resolved by provider config from env
+    litellm_params = GenericLiteLLMParams()
+    
+    # Create logging object
+    logging_obj = Logging(
+        model="container-file-content",
+        messages=[],
+        stream=False,
+        call_type="container_file_content",
+        start_time=None,
+        litellm_call_id="",
+        function_id="",
+    )
+    
+    # Use the HTTP handler to make the request
+    handler = BaseLLMHTTPHandler()
+    
+    try:
+        content = await handler.async_container_file_content_handler(
+            container_id=container_id,
+            file_id=file_id,
+            container_provider_config=container_provider_config,
+            litellm_params=litellm_params,
+            logging_obj=logging_obj,
+        )
+        
+        # Determine content type based on common file extensions in the file_id
+        content_type = "application/octet-stream"
+        file_id_lower = file_id.lower()
+        if ".png" in file_id_lower or file_id_lower.endswith("png"):
+            content_type = "image/png"
+        elif ".jpg" in file_id_lower or ".jpeg" in file_id_lower:
+            content_type = "image/jpeg"
+        elif ".gif" in file_id_lower:
+            content_type = "image/gif"
+        elif ".csv" in file_id_lower:
+            content_type = "text/csv"
+        elif ".json" in file_id_lower:
+            content_type = "application/json"
+        elif ".txt" in file_id_lower:
+            content_type = "text/plain"
+        elif ".pdf" in file_id_lower:
+            content_type = "application/pdf"
+        
+        return Response(
+            content=content,
+            media_type=content_type,
+        )
+        
+    except Exception as e:
+        from litellm.proxy.proxy_server import proxy_logging_obj
+        raise e
 
 
 async def _process_request(
@@ -167,24 +272,40 @@ def register_container_file_endpoints(router: APIRouter) -> None:
         method = endpoint_config["method"].lower()
         path_params = endpoint_config.get("path_params", [])
         route_type = endpoint_config["async_name"]
+        returns_binary = endpoint_config.get("returns_binary", False)
         
         # Create handler with correct signature for path params
-        handler = _create_handler_for_path_params(path_params, route_type)
+        handler = _create_handler_for_path_params(path_params, route_type, returns_binary)
         
         # Register routes
         route_method = getattr(router, method)
         
-        # Register both /v1/... and /... paths
-        route_method(
-            f"/v1{path}",
-            dependencies=[Depends(user_api_key_auth)],
-            response_class=ORJSONResponse,
-            tags=["containers"],
-        )(handler)
-        
-        route_method(
-            path,
-            dependencies=[Depends(user_api_key_auth)],
-            response_class=ORJSONResponse,
-            tags=["containers"],
-        )(handler)
+        # For binary endpoints, don't use ORJSONResponse
+        if returns_binary:
+            # Register both /v1/... and /... paths without JSON response class
+            route_method(
+                f"/v1{path}",
+                dependencies=[Depends(user_api_key_auth)],
+                tags=["containers"],
+            )(handler)
+            
+            route_method(
+                path,
+                dependencies=[Depends(user_api_key_auth)],
+                tags=["containers"],
+            )(handler)
+        else:
+            # Register both /v1/... and /... paths with JSON response
+            route_method(
+                f"/v1{path}",
+                dependencies=[Depends(user_api_key_auth)],
+                response_class=ORJSONResponse,
+                tags=["containers"],
+            )(handler)
+            
+            route_method(
+                path,
+                dependencies=[Depends(user_api_key_auth)],
+                response_class=ORJSONResponse,
+                tags=["containers"],
+            )(handler)

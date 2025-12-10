@@ -209,6 +209,8 @@ class GenericContainerHandler:
         
         # Make request
         method = endpoint_config["method"].upper()
+        returns_binary = endpoint_config.get("returns_binary", False)
+        
         try:
             if method == "GET":
                 response = http_client.get(url=url, headers=headers, params=query_params)
@@ -218,6 +220,10 @@ class GenericContainerHandler:
                 response = http_client.post(url=url, headers=headers, params=query_params)
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
+            
+            # For binary responses, return raw content
+            if returns_binary:
+                return response.content
             
             # Check for error response
             response_json = response.json()
@@ -300,6 +306,8 @@ class GenericContainerHandler:
         
         # Make request
         method = endpoint_config["method"].upper()
+        returns_binary = endpoint_config.get("returns_binary", False)
+        
         try:
             if method == "GET":
                 response = await http_client.get(url=url, headers=headers, params=query_params)
@@ -309,6 +317,10 @@ class GenericContainerHandler:
                 response = await http_client.post(url=url, headers=headers, params=query_params)
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
+            
+            # For binary responses, return raw content
+            if returns_binary:
+                return response.content
             
             # Check for error response
             response_json = response.json()
