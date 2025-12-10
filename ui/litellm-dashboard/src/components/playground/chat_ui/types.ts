@@ -70,12 +70,24 @@ export interface VectorStoreSearchResponse {
   data: VectorStoreSearchResult[];
 }
 
+export interface A2ATaskMetadata {
+  taskId?: string;
+  contextId?: string;
+  status?: {
+    state?: string;
+    timestamp?: string;
+    message?: string;
+  };
+  metadata?: Record<string, any>;
+}
+
 export interface MessageType {
   role: string;
   content: string | MultimodalContent[];
   model?: string;
   isImage?: boolean;
   isAudio?: boolean;
+  isEmbeddings?: boolean;
   reasoningContent?: string;
   timeToFirstToken?: number;
   totalLatency?: number;
@@ -93,6 +105,7 @@ export interface MessageType {
     detail: string;
   };
   searchResults?: VectorStoreSearchResponse[];
+  a2aMetadata?: A2ATaskMetadata;
 }
 
 export interface MultimodalContent {

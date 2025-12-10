@@ -84,7 +84,7 @@ async def get_global_activity(
             FROM "LiteLLM_SpendLogs" sl
             LEFT JOIN "LiteLLM_VerificationToken" vt ON sl."api_key" = vt."token"
             WHERE 
-                sl."startTime" BETWEEN $1::date AND $2::date + interval '1 day'
+                sl."startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
             GROUP BY 
                 vt."key_alias",
                 sl."call_type",

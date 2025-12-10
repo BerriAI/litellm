@@ -82,31 +82,31 @@ export const QuickActions: React.FC<QuickActionsProps> = ({ onSelectAll, onUnsel
           </Tooltip>
         </div>
         <Button
-          type="default"
-          danger
+          color="danger"
+          variant="outlined"
           onClick={onUnselectAll}
           disabled={!hasSelectedEntities}
           icon={<CloseOutlined />}
-          className="border-gray-300 hover:text-red-600 hover:border-red-300"
         >
           Unselect All
         </Button>
       </div>
       <div className="grid grid-cols-2 gap-4">
         <Button
-          type="default"
+          color="primary"
+          variant="outlined"
           onClick={() => onSelectAll("MASK")}
-          className="flex items-center justify-center h-10 border-blue-200 hover:border-blue-300 hover:text-blue-700 bg-blue-50 hover:bg-blue-100 text-blue-600"
+          className="h-10"
           block
           icon={<EyeInvisibleOutlined />}
         >
           Select All & Mask
         </Button>
         <Button
-          type="default"
-          danger
+          color="danger"
+          variant="outlined"
           onClick={() => onSelectAll("BLOCK")}
-          className="flex items-center justify-center h-10 border-red-200 hover:border-red-300 hover:text-red-700 bg-red-50 hover:bg-red-100 text-red-600"
+          className="h-10 hover:bg-red-100"
           block
           icon={<StopOutlined />}
         >

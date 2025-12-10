@@ -196,31 +196,51 @@ async def test_logging_non_streaming_request():
 
     import litellm
 
-    mock_logging_obj = MockPrometheusLogger()
+    # Save original callbacks to restore after test
+    original_callbacks = getattr(litellm, "callbacks", [])
 
-    litellm.callbacks = [mock_logging_obj]
+    try:
+        mock_logging_obj = MockPrometheusLogger()
 
-    with patch.object(
-        mock_logging_obj,
-        "async_log_success_event",
-    ) as mock_async_log_success_event:
-        await litellm.acompletion(
-            max_tokens=100,
-            messages=[{"role": "user", "content": "Hey"}],
-            model="openai/codex-mini-latest",
-            mock_response="Hello, world!",
-        )
-        await asyncio.sleep(1)
-        mock_async_log_success_event.assert_called_once()
-        assert mock_async_log_success_event.call_count == 1
-        print(
-            "mock_async_log_success_event.call_args.kwargs",
-            mock_async_log_success_event.call_args.kwargs,
-        )
-        standard_logging_object = mock_async_log_success_event.call_args.kwargs[
-            "kwargs"
-        ]["standard_logging_object"]
-        assert standard_logging_object["stream"] is not True
+        litellm.callbacks = [mock_logging_obj]
+
+        with patch.object(
+            mock_logging_obj,
+            "async_log_success_event",
+        ) as mock_async_log_success_event:
+            await litellm.acompletion(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "Hey"}],
+                model="openai/codex-mini-latest",
+                mock_response="Hello, world!",
+            )
+            await asyncio.sleep(1)
+            
+            # Filter calls to only count the one with the expected input message "Hey"
+            # Bridge models may make internal calls that also log, so we filter by the actual input
+            calls_with_expected_input = []
+            for call in mock_async_log_success_event.call_args_list:
+                messages = call.kwargs.get("kwargs", {}).get("messages", [])
+                if messages and len(messages) > 0:
+                    first_message_content = messages[0].get("content")
+                    if first_message_content == "Hey":
+                        calls_with_expected_input.append(call)
+            
+            # Assert that we have exactly one call with the expected input
+            assert len(calls_with_expected_input) == 1, (
+                f"Expected 1 call with input 'Hey', but got {len(calls_with_expected_input)}. "
+                f"Total calls: {mock_async_log_success_event.call_count}"
+            )
+            
+            # Use the filtered call for assertions
+            call_args = calls_with_expected_input[0]
+            standard_logging_object = call_args.kwargs["kwargs"][
+                "standard_logging_object"
+            ]
+            assert standard_logging_object["stream"] is not True
+    finally:
+        # Restore original callbacks to ensure test isolation
+        litellm.callbacks = original_callbacks
 
 
 def test_get_user_agent_tags():
@@ -759,3 +779,62 @@ def test_get_final_response_obj_with_empty_response_obj_and_list_init():
     assert len(result) == 2
     assert result[0].name == "Object1"
     assert result[1].name == "Object2"
+
+
+def test_append_system_prompt_messages():
+    """
+    Test append_system_prompt_messages prepends system message from kwargs to messages list.
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    # Test case 1: system in kwargs with existing messages
+    kwargs = {"system": "You are a helpful assistant"}
+    messages = [{"role": "user", "content": "Hello"}]
+    result = StandardLoggingPayloadSetup.append_system_prompt_messages(
+        kwargs=kwargs, messages=messages
+    )
+    assert len(result) == 2
+    assert result[0] == {"role": "system", "content": "You are a helpful assistant"}
+    assert result[1] == {"role": "user", "content": "Hello"}
+
+    # Test case 2: system in kwargs with None messages
+    kwargs = {"system": "You are a helpful assistant"}
+    result = StandardLoggingPayloadSetup.append_system_prompt_messages(
+        kwargs=kwargs, messages=None
+    )
+    assert len(result) == 1
+    assert result[0] == {"role": "system", "content": "You are a helpful assistant"}
+
+    # Test case 3: system in kwargs with empty messages list
+    kwargs = {"system": "You are a helpful assistant"}
+    result = StandardLoggingPayloadSetup.append_system_prompt_messages(
+        kwargs=kwargs, messages=[]
+    )
+    assert len(result) == 1
+    assert result[0] == {"role": "system", "content": "You are a helpful assistant"}
+
+    # Test case 4: duplicate system message should not be added
+    kwargs = {"system": "You are a helpful assistant"}
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant"},
+        {"role": "user", "content": "Hello"},
+    ]
+    result = StandardLoggingPayloadSetup.append_system_prompt_messages(
+        kwargs=kwargs, messages=messages
+    )
+    assert len(result) == 2
+    assert result[0] == {"role": "system", "content": "You are a helpful assistant"}
+
+    # Test case 5: no system in kwargs returns messages unchanged
+    kwargs = {}
+    messages = [{"role": "user", "content": "Hello"}]
+    result = StandardLoggingPayloadSetup.append_system_prompt_messages(
+        kwargs=kwargs, messages=messages
+    )
+    assert result == messages
+
+    # Test case 6: None kwargs returns messages unchanged
+    result = StandardLoggingPayloadSetup.append_system_prompt_messages(
+        kwargs=None, messages=messages
+    )
+    assert result == messages
