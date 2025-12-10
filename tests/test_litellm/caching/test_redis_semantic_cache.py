@@ -147,32 +147,50 @@ async def test_redis_semantic_cache_async_get_cache(monkeypatch):
 
 
 
-@patch.dict(
-    "sys.modules",
-    {
-        "redisvl.extensions.llmcache": MagicMock(),
-        "redisvl.utils.vectorize": MagicMock(),
-        "redisvl.extensions.cache.embeddings": MagicMock(),
-    },
-)
 def test_redis_semantic_cache_embeddings_cache_enabled(monkeypatch):
-    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+    # Create proper mocks for redisvl modules
+    mock_embeddings_cache_instance = MagicMock()
+    mock_embeddings_cache_class = MagicMock(return_value=mock_embeddings_cache_instance)
+    semantic_cache_mock = MagicMock()
+    custom_vectorizer_mock = MagicMock()
 
-    # Set environment variables
-    monkeypatch.setenv("REDIS_HOST", "localhost")
-    monkeypatch.setenv("REDIS_PORT", "6379")
-    monkeypatch.setenv("REDIS_PASSWORD", "test_password")
+    with patch.dict(
+        "sys.modules",
+        {
+            "redisvl.extensions.llmcache": MagicMock(SemanticCache=semantic_cache_mock),
+            "redisvl.utils.vectorize": MagicMock(
+                CustomTextVectorizer=custom_vectorizer_mock
+            ),
+            "redisvl.extensions.cache.embeddings": MagicMock(
+                EmbeddingsCache=mock_embeddings_cache_class
+            ),
+        },
+    ):
+        from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
-    cache = RedisSemanticCache(
-        similarity_threshold=0.8,
-        embedding_cache_enabled=True,
-        embedding_cache_name="test_embed_cache",
-        embedding_cache_ttl=123,
-    )
+        # Set environment variables
+        monkeypatch.setenv("REDIS_HOST", "localhost")
+        monkeypatch.setenv("REDIS_PORT", "6379")
+        monkeypatch.setenv("REDIS_PASSWORD", "test_password")
 
-    # Ensure embeddings cache is initialized when enabled
-    assert cache.embedding_cache_enabled is True
-    assert cache.embeddings_cache is not None
+        cache = RedisSemanticCache(
+            similarity_threshold=0.8,
+            embedding_cache_enabled=True,
+            embedding_cache_name="test_embed_cache",
+            embedding_cache_ttl=123,
+        )
+
+        # Ensure embeddings cache is initialized when enabled
+        assert cache.embedding_cache_enabled is True
+        assert cache.embeddings_cache is not None
+        assert cache.embeddings_cache is mock_embeddings_cache_instance
+
+        # Verify EmbeddingsCache was called with correct parameters
+        mock_embeddings_cache_class.assert_called_once_with(
+            name="test_embed_cache",
+            redis_url="redis://:test_password@localhost:6379",
+            ttl=123,
+        )
 
 
 @pytest.mark.asyncio

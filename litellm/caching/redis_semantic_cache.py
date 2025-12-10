@@ -101,6 +101,8 @@ class RedisSemanticCache(BaseCache):
         self.embedding_cache_ttl: Optional[int] = embedding_cache_ttl
         if embedding_cache_name is None:
             self.embedding_cache_name = self.DEFAULT_REDIS_EMBEDDINGS_CACHE_NAME
+        else:
+            self.embedding_cache_name = embedding_cache_name
         self._embeddings_cache: Optional[EmbeddingsCache] = None
 
         # Set up Redis connection
