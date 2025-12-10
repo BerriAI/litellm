@@ -481,7 +481,7 @@ def test_copilot_vision_request_header_text_only():
 def test_copilot_vision_request_header_with_type_image_url():
     """Test that Copilot-Vision-Request header is added for content with type: image_url"""
     config = GithubCopilotConfig()
-    
+
     # Mock the authenticator
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.return_value = "gh.test-key-123"
@@ -496,7 +496,7 @@ def test_copilot_vision_request_header_with_type_image_url():
             ]
         }
     ]
-    
+
     headers = config.validate_environment(
         headers={},
         model="github_copilot/gpt-4-vision-preview",
@@ -506,6 +506,305 @@ def test_copilot_vision_request_header_with_type_image_url():
         api_key=None,
         api_base=None,
     )
-    
+
     assert headers["Copilot-Vision-Request"] == "true"
     assert headers["X-Initiator"] == "user"
+
+
+# ==================== Tool Result Consolidation Tests ====================
+
+
+def test_consolidate_openai_tool_messages_no_duplicates():
+    """Test that messages without duplicate tool_call_ids are unchanged"""
+    config = GithubCopilotConfig()
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "call_1", "function": {"name": "tool1", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "call_1", "content": "Result 1"},
+        {"role": "tool", "tool_call_id": "call_2", "content": "Result 2"},
+    ]
+
+    result = config._consolidate_openai_tool_messages(messages)
+
+    # Messages should be unchanged
+    assert len(result) == 4
+    assert result[2]["tool_call_id"] == "call_1"
+    assert result[2]["content"] == "Result 1"
+    assert result[3]["tool_call_id"] == "call_2"
+    assert result[3]["content"] == "Result 2"
+
+
+def test_consolidate_openai_tool_messages_with_duplicates():
+    """Test that duplicate tool messages with same tool_call_id are consolidated"""
+    config = GithubCopilotConfig()
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "call_1", "function": {"name": "tool1", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "call_1", "content": "Result part 1"},
+        {"role": "tool", "tool_call_id": "call_1", "content": "Result part 2"},
+        {"role": "tool", "tool_call_id": "call_1", "content": "Result part 3"},
+    ]
+
+    result = config._consolidate_openai_tool_messages(messages)
+
+    # Should have 3 messages: user, assistant, and one consolidated tool message
+    assert len(result) == 3
+    assert result[0]["role"] == "user"
+    assert result[1]["role"] == "assistant"
+    assert result[2]["role"] == "tool"
+    assert result[2]["tool_call_id"] == "call_1"
+    assert "Result part 1" in result[2]["content"]
+    assert "Result part 2" in result[2]["content"]
+    assert "Result part 3" in result[2]["content"]
+
+
+def test_consolidate_openai_tool_messages_mixed():
+    """Test consolidation with mixed duplicate and unique tool messages"""
+    config = GithubCopilotConfig()
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "tool", "tool_call_id": "call_1", "content": "Result 1a"},
+        {"role": "tool", "tool_call_id": "call_1", "content": "Result 1b"},
+        {"role": "tool", "tool_call_id": "call_2", "content": "Result 2"},
+    ]
+
+    result = config._consolidate_openai_tool_messages(messages)
+
+    # Should have 3 messages: user, consolidated call_1, and call_2
+    assert len(result) == 3
+    assert result[0]["role"] == "user"
+    assert result[1]["tool_call_id"] == "call_1"
+    assert "Result 1a" in result[1]["content"]
+    assert "Result 1b" in result[1]["content"]
+    assert result[2]["tool_call_id"] == "call_2"
+    assert result[2]["content"] == "Result 2"
+
+
+def test_consolidate_anthropic_tool_results_no_duplicates():
+    """Test that Anthropic-style messages without duplicate tool_use_ids are unchanged"""
+    config = GithubCopilotConfig()
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "Result 1"},
+                {"type": "tool_result", "tool_use_id": "toolu_2", "content": "Result 2"},
+            ]
+        }
+    ]
+
+    result = config._consolidate_anthropic_tool_results(messages)
+
+    # Messages should be unchanged
+    assert len(result) == 1
+    assert len(result[0]["content"]) == 2
+    assert result[0]["content"][0]["tool_use_id"] == "toolu_1"
+    assert result[0]["content"][1]["tool_use_id"] == "toolu_2"
+
+
+def test_consolidate_anthropic_tool_results_with_duplicates():
+    """Test that Anthropic-style tool_result blocks with same tool_use_id are consolidated"""
+    config = GithubCopilotConfig()
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "Result part 1"},
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "Result part 2"},
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "Result part 3"},
+            ]
+        }
+    ]
+
+    result = config._consolidate_anthropic_tool_results(messages)
+
+    # Should have 1 message with 1 consolidated tool_result
+    assert len(result) == 1
+    assert len(result[0]["content"]) == 1
+    assert result[0]["content"][0]["tool_use_id"] == "toolu_1"
+    assert "Result part 1" in result[0]["content"][0]["content"]
+    assert "Result part 2" in result[0]["content"][0]["content"]
+    assert "Result part 3" in result[0]["content"][0]["content"]
+
+
+def test_consolidate_anthropic_tool_results_mixed_content():
+    """Test consolidation with mixed tool_results and other content types"""
+    config = GithubCopilotConfig()
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Here are the results:"},
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "Result 1a"},
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "Result 1b"},
+                {"type": "tool_result", "tool_use_id": "toolu_2", "content": "Result 2"},
+            ]
+        }
+    ]
+
+    result = config._consolidate_anthropic_tool_results(messages)
+
+    # Should have 1 message with text + 2 tool_results (one consolidated, one original)
+    assert len(result) == 1
+    content = result[0]["content"]
+    assert len(content) == 3  # text + consolidated toolu_1 + toolu_2
+
+    # First should be the text
+    assert content[0]["type"] == "text"
+
+    # Second should be consolidated toolu_1
+    assert content[1]["type"] == "tool_result"
+    assert content[1]["tool_use_id"] == "toolu_1"
+    assert "Result 1a" in content[1]["content"]
+    assert "Result 1b" in content[1]["content"]
+
+    # Third should be toolu_2
+    assert content[2]["type"] == "tool_result"
+    assert content[2]["tool_use_id"] == "toolu_2"
+    assert content[2]["content"] == "Result 2"
+
+
+def test_merge_tool_results_string_content():
+    """Test merging tool_results with string content"""
+    config = GithubCopilotConfig()
+
+    tool_results = [
+        {"type": "tool_result", "tool_use_id": "toolu_1", "content": "Part 1"},
+        {"type": "tool_result", "tool_use_id": "toolu_1", "content": "Part 2"},
+    ]
+
+    merged = config._merge_tool_results(tool_results)
+
+    assert merged["type"] == "tool_result"
+    assert merged["tool_use_id"] == "toolu_1"
+    assert merged["content"] == "Part 1\nPart 2"
+
+
+def test_merge_tool_results_list_content():
+    """Test merging tool_results with list content"""
+    config = GithubCopilotConfig()
+
+    tool_results = [
+        {"type": "tool_result", "tool_use_id": "toolu_1", "content": [{"type": "text", "text": "Part 1"}]},
+        {"type": "tool_result", "tool_use_id": "toolu_1", "content": [{"type": "text", "text": "Part 2"}]},
+    ]
+
+    merged = config._merge_tool_results(tool_results)
+
+    assert merged["type"] == "tool_result"
+    assert merged["tool_use_id"] == "toolu_1"
+    assert isinstance(merged["content"], list)
+    assert len(merged["content"]) == 2
+    assert merged["content"][0]["text"] == "Part 1"
+    assert merged["content"][1]["text"] == "Part 2"
+
+
+def test_merge_tool_results_preserves_is_error():
+    """Test that is_error flag is preserved when any result has it True"""
+    config = GithubCopilotConfig()
+
+    tool_results = [
+        {"type": "tool_result", "tool_use_id": "toolu_1", "content": "Success"},
+        {"type": "tool_result", "tool_use_id": "toolu_1", "content": "Error occurred", "is_error": True},
+    ]
+
+    merged = config._merge_tool_results(tool_results)
+
+    assert merged["is_error"] is True
+
+
+def test_merge_tool_results_preserves_cache_control():
+    """Test that cache_control is preserved from first result"""
+    config = GithubCopilotConfig()
+
+    tool_results = [
+        {"type": "tool_result", "tool_use_id": "toolu_1", "content": "Part 1", "cache_control": {"type": "ephemeral"}},
+        {"type": "tool_result", "tool_use_id": "toolu_1", "content": "Part 2"},
+    ]
+
+    merged = config._merge_tool_results(tool_results)
+
+    assert "cache_control" in merged
+    assert merged["cache_control"]["type"] == "ephemeral"
+
+
+def test_transform_messages_consolidates_tool_results():
+    """Test that _transform_messages consolidates duplicate tool results"""
+    import litellm
+
+    config = GithubCopilotConfig()
+
+    # Save original value
+    original_flag = litellm.disable_copilot_system_to_assistant
+    try:
+        litellm.disable_copilot_system_to_assistant = True  # Don't modify system messages
+
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "call_1", "function": {"name": "tool1", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "Part 1"},
+            {"role": "tool", "tool_call_id": "call_1", "content": "Part 2"},
+        ]
+
+        result = config._transform_messages(messages, model="github_copilot/claude-sonnet-4")
+
+        # Should consolidate duplicate tool messages
+        assert len(result) == 3
+        assert result[2]["role"] == "tool"
+        assert result[2]["tool_call_id"] == "call_1"
+        assert "Part 1" in result[2]["content"]
+        assert "Part 2" in result[2]["content"]
+    finally:
+        litellm.disable_copilot_system_to_assistant = original_flag
+
+
+def test_consolidate_tool_results_no_tool_messages():
+    """Test that messages without any tool content are unchanged"""
+    config = GithubCopilotConfig()
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi there!"},
+    ]
+
+    result = config._consolidate_tool_results(messages)
+
+    # Messages should be unchanged
+    assert len(result) == 2
+    assert result[0]["content"] == "Hello"
+    assert result[1]["content"] == "Hi there!"
+
+
+def test_merge_tool_messages_with_name():
+    """Test that name is preserved when merging tool messages"""
+    config = GithubCopilotConfig()
+
+    tool_messages = [
+        {"role": "tool", "tool_call_id": "call_1", "content": "Part 1", "name": "my_tool"},
+        {"role": "tool", "tool_call_id": "call_1", "content": "Part 2"},
+    ]
+
+    merged = config._merge_tool_messages(tool_messages)
+
+    assert merged["name"] == "my_tool"
+
+
+def test_consolidate_anthropic_tool_results_no_content_list():
+    """Test that messages with non-list content are unchanged"""
+    config = GithubCopilotConfig()
+
+    messages = [
+        {"role": "user", "content": "Just a string content"},
+        {"role": "assistant", "content": "Response"},
+    ]
+
+    result = config._consolidate_anthropic_tool_results(messages)
+
+    # Messages should be unchanged
+    assert result == messages
