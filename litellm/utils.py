@@ -7375,6 +7375,8 @@ class ProviderConfigManager:
             return litellm.VertexAIRerankConfig()
         elif litellm.LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIRerankConfig()
+        elif litellm.LlmProviders.VOYAGE == provider:
+            return litellm.VoyageRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod
