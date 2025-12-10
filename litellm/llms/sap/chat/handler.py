@@ -2,21 +2,22 @@ from __future__ import annotations
 
 import json
 import time
+from typing import AsyncIterator, Iterator, Optional
+
 import httpx
 
-from typing import Iterator, Optional, AsyncIterator
-
-from litellm.llms.base_llm.chat.transformation import BaseConfig
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import OpenAIChatCompletionChunk
+
 from ...custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 
 
 # -------------------------------
 # Errors
 # -------------------------------
-class GenAIHubOrchestrationError(Exception):
+class GenAIHubOrchestrationError(BaseLLMException):
     def __init__(self, status_code: int, message: str):
-        super().__init__(message)
+        super().__init__(status_code=status_code, message=message)
         self.status_code = status_code
         self.message = message
 
