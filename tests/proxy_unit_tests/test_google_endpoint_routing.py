@@ -5,7 +5,6 @@ import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import asyncio
 import yaml
 
 sys.path.insert(0, os.path.abspath("../.."))
