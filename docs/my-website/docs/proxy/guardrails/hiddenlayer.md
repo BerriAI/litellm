@@ -8,20 +8,21 @@ LiteLLM ships with a native integration for [HiddenLayer](https://hiddenlayer.co
 
 ## Quick Start
 
-### 1. Create a HiddenLayer project & (optionally) API credentials
+### 1. Create a HiddenLayer project & API credentials
 
 **SaaS (`*.hiddenlayer.ai`)**
 
-1. Sign in to the HiddenLayer console and create (or select) a project with detection policies enabled.
+1. Sign in to the HiddenLayer console and create (or select) a project with policies enabled.
 2. Generate a **Client ID** and **Client Secret** for the project.
-3. Export them as environment variables so LiteLLM can mint OAuth tokens:
+3. Export them as environment variables in your LiteLLM deployment:
 
 ```shell
 export HIDDENLAYER_CLIENT_ID="hl_client_id"
 export HIDDENLAYER_CLIENT_SECRET="hl_client_secret"
+
 # Optional overrides
-export HIDDENLAYER_API_BASE="https://api.hiddenlayer.ai"
-export HL_AUTH_URL="https://auth.hiddenlayer.ai"
+# export HIDDENLAYER_API_BASE="https://api.eu.hiddenlayer.ai"
+# export HL_AUTH_URL="https://auth.hiddenlayer.ai"
 ```
 
 **Self-hosted HiddenLayer**
@@ -31,10 +32,6 @@ If you run HiddenLayer on-prem, just expose the endpoint and set:
 ```shell
 export HIDDENLAYER_API_BASE="https://hiddenlayer.your-domain.com"
 ```
-
-No OAuth exchange is required in that case—the proxy will talk directly to your deployment.
-
-> LiteLLM automatically exchanges the client credentials for a Bearer token when the `api_base` ends with `hiddenlayer.ai`. For self-hosted deployments, skip the OAuth variables entirely unless you replicated the SaaS auth flow.
 
 ### 2. Add the hiddenlayer guardrail to `config.yaml`
 
@@ -58,8 +55,8 @@ guardrails:
 
 #### Supported values for `mode`
 
-- `pre_call` Run **before** the LLM call on **input**
-- `post_call` Run **after** the LLM call on **input & output**
+- `pre_call` Run **before** the LLM call on **input**.
+- `post_call` Run **after** the LLM call on **input & output**.
 - `during_call` Run **during** the LLM call on **input**. LiteLLM sends the request to the model and HiddenLayer in parallel. The response waits for the guardrail result before returning.
 
 ### 3. Start LiteLLM Gateway
@@ -169,15 +166,10 @@ guardrails:
 
 - **`guardrail`**: Must be set to `hiddenlayer` so LiteLLM loads the HiddenLayer hook.
 
-### Optional parameters (SaaS-only)
-
-- **`HIDDENLAYER_CLIENT_ID`** / `api_id`: Used to mint JWTs for the SaaS API.
-- **`HIDDENLAYER_CLIENT_SECRET`** / `api_key`: Client secret that pairs with the ID above.
-- **`HL_AUTH_URL`**: Override the OAuth issuer (defaults to `https://auth.hiddenlayer.ai`).
-
-### Optional parameters (all deployments)
+### Optional parameters
 
 - **`api_base`**: HiddenLayer REST endpoint. Defaults to `https://api.hiddenlayer.ai`, but point it at your self-hosted instance if you have one.
+- **`auth_url`**: Authentication url for hiddenlayer. Defaults to `https;//auth.hiddenlayer.ai`.
 - **`mode`**: Control when the guardrail runs (`pre_call`, `post_call`, `during_call`).
 - **`default_on`**: Automatically attach the guardrail to every request unless the client opts out.
 - **`hl-project-id` header**: Routes scans to a specific HiddenLayer project.
@@ -189,10 +181,9 @@ guardrails:
 # SaaS
 export HIDDENLAYER_CLIENT_ID="hl_client_id"
 export HIDDENLAYER_CLIENT_SECRET="hl_client_secret"
-export HL_AUTH_URL="https://auth.hiddenlayer.ai"
 
 # Shared (SaaS or self-hosted)
 export HIDDENLAYER_API_BASE="https://api.hiddenlayer.ai"
 ```
 
-Set only the variables you need—self-hosted installs can leave the client ID/secret unset and just configure `HIDDENLAYER_API_BASE`.
+Set only the variables you need, self-hosted installs can leave the client ID/secret unset and just configure `HIDDENLAYER_API_BASE`.
