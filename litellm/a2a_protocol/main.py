@@ -7,7 +7,9 @@ Provides standalone functions with @client decorator for LiteLLM logging integra
 import asyncio
 from typing import TYPE_CHECKING, Any, AsyncIterator, Coroutine, Dict, Optional, Union
 
+import litellm
 from litellm._logging import verbose_logger
+from litellm.a2a_protocol.utils import A2ARequestUtils
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -36,6 +38,29 @@ try:
     A2A_SDK_AVAILABLE = True
 except ImportError:
     pass
+
+
+def _set_usage_on_logging_obj(
+    kwargs: Dict[str, Any],
+    prompt_tokens: int,
+    completion_tokens: int,
+) -> None:
+    """
+    Set usage on litellm_logging_obj for standard logging payload.
+
+    Args:
+        kwargs: The kwargs dict containing litellm_logging_obj
+        prompt_tokens: Number of input tokens
+        completion_tokens: Number of output tokens
+    """
+    litellm_logging_obj = kwargs.get("litellm_logging_obj")
+    if litellm_logging_obj is not None:
+        usage = litellm.Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        )
+        litellm_logging_obj.model_call_details["usage"] = usage
 
 
 def _get_a2a_model_info(a2a_client: Any, kwargs: Dict[str, Any]) -> str:
@@ -122,6 +147,20 @@ async def asend_message(
 
     # Wrap in LiteLLM response type for _hidden_params support
     response = LiteLLMSendMessageResponse.from_a2a_response(a2a_response)
+
+    # Calculate token usage from request and response
+    response_dict = a2a_response.model_dump(mode="json", exclude_none=True)
+    prompt_tokens, completion_tokens, _ = A2ARequestUtils.calculate_usage_from_request_response(
+        request=request,
+        response_dict=response_dict,
+    )
+
+    # Set usage on logging obj for standard logging payload
+    _set_usage_on_logging_obj(
+        kwargs=kwargs,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
 
     return response
 

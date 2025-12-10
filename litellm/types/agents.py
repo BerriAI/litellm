@@ -221,6 +221,9 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
     result: Optional[Dict[str, Any]] = None
     error: Optional[Dict[str, Any]] = None
 
+    # LiteLLM usage tracking
+    usage: Optional[Dict[str, Any]] = None
+
     model_config = {"extra": "allow"}
 
     # LiteLLM private attributes for logging/cost tracking
