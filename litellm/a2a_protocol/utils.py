@@ -2,13 +2,13 @@
 Utility functions for A2A protocol.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Tuple, Union
 
 import litellm
 from litellm._logging import verbose_logger
 
 if TYPE_CHECKING:
-    from a2a.types import SendMessageRequest
+    from a2a.types import SendMessageRequest, SendStreamingMessageRequest
 
 
 class A2ARequestUtils:
@@ -64,12 +64,14 @@ class A2ARequestUtils:
         return A2ARequestUtils.extract_text_from_message(message)
 
     @staticmethod
-    def get_input_message_from_request(request: "SendMessageRequest") -> Any:
+    def get_input_message_from_request(
+        request: "Union[SendMessageRequest, SendStreamingMessageRequest]",
+    ) -> Any:
         """
-        Extract the input message from an A2A SendMessageRequest.
+        Extract the input message from an A2A request.
 
         Args:
-            request: The A2A SendMessageRequest
+            request: The A2A SendMessageRequest or SendStreamingMessageRequest
 
         Returns:
             The message object/dict or None
@@ -100,14 +102,14 @@ class A2ARequestUtils:
 
     @staticmethod
     def calculate_usage_from_request_response(
-        request: "SendMessageRequest",
+        request: "Union[SendMessageRequest, SendStreamingMessageRequest]",
         response_dict: Dict[str, Any],
     ) -> Tuple[int, int, int]:
         """
         Calculate token usage from A2A request and response.
 
         Args:
-            request: The A2A SendMessageRequest
+            request: The A2A SendMessageRequest or SendStreamingMessageRequest
             response_dict: The A2A response as a dict
 
         Returns:
