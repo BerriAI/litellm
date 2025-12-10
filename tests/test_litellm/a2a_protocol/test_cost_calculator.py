@@ -65,3 +65,71 @@ async def test_asend_message_uses_cost_per_query():
     await asyncio.sleep(0.1)
 
     assert cost_logger.response_cost == 0.05
+
+
+class TokenLogger(CustomLogger):
+    """Custom logger to capture token usage."""
+
+    def __init__(self):
+        self.standard_logging_payload = None
+        super().__init__()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.standard_logging_payload = kwargs.get("standard_logging_object")
+
+
+@pytest.mark.asyncio
+async def test_asend_message_token_tracking():
+    """
+    Test that asend_message tracks input/output/total tokens.
+    """
+    from litellm.a2a_protocol import asend_message
+
+    # Setup logger
+    litellm.logging_callback_manager._reset_all_callbacks()
+    token_logger = TokenLogger()
+    litellm.callbacks = [token_logger]
+
+    # Mock A2A client
+    mock_client = MagicMock()
+    mock_client._litellm_agent_card = MagicMock()
+    mock_client._litellm_agent_card.name = "test-agent"
+
+    # Realistic A2A response with message parts
+    mock_response = MagicMock()
+    mock_response.model_dump = MagicMock(return_value={
+        "id": "test-123",
+        "jsonrpc": "2.0",
+        "result": {
+            "status": {"state": "completed"},
+            "message": {
+                "role": "assistant",
+                "parts": [{"kind": "text", "text": "Hello! I am your assistant. How can I help you today?"}],
+                "messageId": "msg-456",
+            }
+        },
+    })
+    mock_client.send_message = AsyncMock(return_value=mock_response)
+
+    # Mock request with message parts
+    mock_request = MagicMock()
+    mock_request.id = "test-123"
+    mock_request.params = MagicMock()
+    mock_request.params.message = {
+        "role": "user",
+        "parts": [{"kind": "text", "text": "Hello, what can you do?"}],
+        "messageId": "msg-123",
+    }
+
+    await asend_message(
+        a2a_client=mock_client,
+        request=mock_request,
+    )
+
+    await asyncio.sleep(0.1)
+
+    slp = token_logger.standard_logging_payload
+    print("\n=== Token Tracking Results ===")
+    print(f"prompt_tokens: {slp.get('prompt_tokens')}")
+    print(f"completion_tokens: {slp.get('completion_tokens')}")
+    print(f"total_tokens: {slp.get('total_tokens')}")
