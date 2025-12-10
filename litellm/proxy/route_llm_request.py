@@ -274,8 +274,19 @@ async def route_request(
                 "adelete_container_file",
                 "aretrieve_container_file_content",
             ]:
-                # moderation endpoint does not require `model` parameter
+                # These endpoints can work with or without model parameter
                 return getattr(llm_router, f"{route_type}")(**data)
+            elif route_type in [
+                "avideo_status",
+                "avideo_content",
+                "avideo_remix",
+            ]:
+                # Video endpoints: If model is provided (e.g., from decoded video_id), try router first
+                try:
+                    return getattr(llm_router, f"{route_type}")(**data)
+                except Exception:
+                    # If router fails (e.g., model not found in router), fall back to direct call
+                    return getattr(litellm, f"{route_type}")(**data)
 
     elif user_model is not None:
         return getattr(litellm, f"{route_type}")(**data)

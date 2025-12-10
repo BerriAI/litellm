@@ -6723,6 +6723,58 @@ class Router:
         """
         return candidate_id in self.model_id_to_deployment_index_map
 
+    def resolve_model_name_from_model_id(self, model_id: Optional[str]) -> Optional[str]:
+        """
+        Resolve model_name from model_id.
+        
+        This method attempts to find the correct model_name to use with the router
+        so that litellm_params can be automatically injected from the model config.
+        
+        Strategy:
+        1. First, check if model_id directly matches a model_name or deployment ID
+        2. If not, search through router's model_list to find a match by litellm_params.model
+        3. Return the model_name if found, None otherwise
+        
+        Args:
+            model_id: The model_id extracted from decoded video_id
+                     (could be model_name or litellm_params.model value)
+        
+        Returns:
+            model_name if found, None otherwise. If None, the request will fall through
+            to normal flow using environment variables.
+        """
+        if not model_id:
+            return None
+        
+        # Strategy 1: Check if model_id directly matches a model_name or deployment ID
+        if model_id in self.model_names or self.has_model_id(model_id):
+            return model_id
+        
+        # Strategy 2: Search through router's model_list to find by litellm_params.model
+        all_models = self.get_model_list(model_name=None)
+        if not all_models:
+            return None
+        
+        for deployment in all_models:
+            litellm_params = deployment.get("litellm_params", {})
+            actual_model = litellm_params.get("model")
+            
+            # Match by exact match or by checking if actual_model ends with /model_id or :model_id
+            # e.g., model_id="veo-2.0-generate-001" matches actual_model="vertex_ai/veo-2.0-generate-001"
+            matches = (
+                actual_model == model_id
+                or (actual_model and actual_model.endswith(f"/{model_id}"))
+                or (actual_model and actual_model.endswith(f":{model_id}"))
+            )
+            
+            if matches:
+                model_name = deployment.get("model_name")
+                if model_name:
+                    return model_name
+        
+        # No match found
+        return None
+
     def map_team_model(self, team_model_name: str, team_id: str) -> Optional[str]:
         """
         Map a team model name to a team-specific model name.
