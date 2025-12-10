@@ -11,7 +11,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.types.llms.openai import RetrieveBatchRequest
-from litellm.types.utils import LiteLLMBatch
+from litellm.types.utils import LiteLLMBatch, LlmProviders
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -106,7 +106,7 @@ class AnthropicBatchesHandler:
             },
         )
         # Make the request
-        async_client = get_async_httpx_client(llm_provider="anthropic")
+        async_client = get_async_httpx_client(llm_provider=LlmProviders.ANTHROPIC)
         response = await async_client.get(
             url=retrieve_url,
             headers=headers
