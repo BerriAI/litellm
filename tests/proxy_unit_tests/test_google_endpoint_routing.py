@@ -14,7 +14,6 @@ from litellm.proxy.google_endpoints.endpoints import google_generate_content
 from fastapi import Request, Response
 from fastapi.datastructures import Headers
 from litellm.proxy.proxy_server import initialize
-from litellm.router import Router
 from litellm.utils import ModelResponse
 
 @pytest.fixture
