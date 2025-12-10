@@ -16,6 +16,7 @@ const sidebars = {
   // // By default, Docusaurus generates a sidebar from the docs folder structure
   integrationsSidebar: [
     { type: "doc", id: "integrations/index" },
+    { type: "doc", id: "integrations/community" },
     {
       type: "category",
       label: "Observability",

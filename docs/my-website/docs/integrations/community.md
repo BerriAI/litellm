@@ -1,4 +1,4 @@
-# Join the LiteLLM Community
+# Be an Integration Partner
 
 Welcome, integration partners! 👋
 
