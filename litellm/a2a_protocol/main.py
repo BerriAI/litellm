@@ -208,10 +208,14 @@ async def asend_message(
         return LiteLLMSendMessageResponse.from_dict(response_dict)
 
     # Standard A2A client flow
-    if a2a_client is None:
-        raise ValueError("a2a_client is required for standard A2A flow")
     if request is None:
         raise ValueError("request is required")
+
+    # Create A2A client if not provided but api_base is available
+    if a2a_client is None:
+        if api_base is None:
+            raise ValueError("Either a2a_client or api_base is required for standard A2A flow")
+        a2a_client = await create_a2a_client(base_url=api_base)
 
     agent_name = _get_a2a_model_info(a2a_client, kwargs)
 
@@ -347,10 +351,14 @@ async def asend_message_streaming(
         return
 
     # Standard A2A client flow
-    if a2a_client is None:
-        raise ValueError("a2a_client is required for standard A2A flow")
     if request is None:
         raise ValueError("request is required")
+
+    # Create A2A client if not provided but api_base is available
+    if a2a_client is None:
+        if api_base is None:
+            raise ValueError("Either a2a_client or api_base is required for standard A2A flow")
+        a2a_client = await create_a2a_client(base_url=api_base)
 
     verbose_logger.info(f"A2A send_message_streaming request_id={request.id}")
 
