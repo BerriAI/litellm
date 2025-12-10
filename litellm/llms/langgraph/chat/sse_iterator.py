@@ -5,12 +5,12 @@ Handles Server-Sent Events (SSE) streaming responses from LangGraph.
 """
 
 import json
+import uuid
 from typing import TYPE_CHECKING, Optional
 
 import httpx
 
 from litellm._logging import verbose_logger
-from litellm._uuid import uuid
 from litellm.types.utils import Delta, ModelResponse, StreamingChoices
 
 if TYPE_CHECKING:
