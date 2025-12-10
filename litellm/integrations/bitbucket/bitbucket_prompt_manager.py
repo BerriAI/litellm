@@ -491,6 +491,8 @@ class BitBucketPromptManager(CustomPromptManagement):
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Get chat completion prompt from BitBucket and return processed model, messages, and parameters.

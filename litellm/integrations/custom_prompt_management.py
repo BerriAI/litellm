@@ -10,6 +10,17 @@ from litellm.types.utils import StandardCallbackDynamicParams
 
 
 class CustomPromptManagement(CustomLogger, PromptManagementBase):
+    def __init__(
+        self,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
+        **kwargs,
+    ):
+        self.ignore_prompt_manager_model = ignore_prompt_manager_model
+        self.ignore_prompt_manager_optional_params = (
+            ignore_prompt_manager_optional_params
+        )
+
     def get_chat_completion_prompt(
         self,
         model: str,
@@ -20,6 +31,8 @@ class CustomPromptManagement(CustomLogger, PromptManagementBase):
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Returns:
