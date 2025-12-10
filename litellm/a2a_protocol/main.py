@@ -5,11 +5,14 @@ Provides standalone functions with @client decorator for LiteLLM logging integra
 """
 
 import asyncio
+import datetime
 from typing import TYPE_CHECKING, Any, AsyncIterator, Coroutine, Dict, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.a2a_protocol.streaming_iterator import A2AStreamingIterator
 from litellm.a2a_protocol.utils import A2ARequestUtils
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -362,16 +365,42 @@ async def asend_message_streaming(
 
     verbose_logger.info(f"A2A send_message_streaming request_id={request.id}")
 
+    # Track for logging
+    import datetime
+
+    start_time = datetime.datetime.now()
     stream = a2a_client.send_message_streaming(request)
 
-    chunk_count = 0
-    async for chunk in stream:
-        chunk_count += 1
-        yield chunk
+    # Build logging object for streaming completion callbacks
+    agent_card = getattr(a2a_client, "_litellm_agent_card", None) or getattr(a2a_client, "agent_card", None)
+    agent_name = getattr(agent_card, "name", "unknown") if agent_card else "unknown"
+    model = f"a2a_agent/{agent_name}"
 
-    verbose_logger.info(
-        f"A2A send_message_streaming completed, request_id={request.id}, chunks={chunk_count}"
+    logging_obj = Logging(
+        model=model,
+        messages=[{"role": "user", "content": "streaming-request"}],
+        stream=False,  # complete response logging after stream ends
+        call_type="asend_message_streaming",
+        start_time=start_time,
+        litellm_call_id=str(request.id),
+        function_id=str(request.id),
     )
+    logging_obj.model = model
+    logging_obj.custom_llm_provider = "a2a_agent"
+    logging_obj.model_call_details["model"] = model
+    logging_obj.model_call_details["custom_llm_provider"] = "a2a_agent"
+    if agent_id:
+        logging_obj.model_call_details["agent_id"] = agent_id
+
+    iterator = A2AStreamingIterator(
+        stream=stream,
+        request=request,
+        logging_obj=logging_obj,
+        agent_name=agent_name,
+    )
+
+    async for chunk in iterator:
+        yield chunk
 
 
 async def create_a2a_client(
