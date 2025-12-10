@@ -35,6 +35,7 @@ IGNORE_FUNCTIONS = [
     "_fix_enum_types",  # max depth set.
     "_collect_argument_paths",  # max depth set.
     "_split_text",  # max depth set.
+    "_delete_nested_value_custom",  # max depth set (bounded by number of path segments).
 ]
 
 
