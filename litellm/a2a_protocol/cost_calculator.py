@@ -1,5 +1,8 @@
 """
 Cost calculator for A2A (Agent-to-Agent) calls.
+
+Supports dynamic cost_per_query parameter that allows platform owners
+to define custom costs per agent query.
 """
 
 from typing import TYPE_CHECKING, Any, Optional
@@ -20,17 +23,34 @@ class A2ACostCalculator:
         """
         Calculate the cost of an A2A send_message call.
 
-        Default is 0.0. In the future, users can configure cost per agent call.
+        Supports cost_per_query parameter for platform owners to define
+        custom costs per agent query.
+
+        Priority order:
+        1. response_cost - if set directly (backward compatibility)
+        2. cost_per_query - in litellm_params
+        3. Default to 0.0
+
+        Args:
+            litellm_logging_obj: The LiteLLM logging object containing call details
+
+        Returns:
+            float: The cost of the A2A call
         """
         if litellm_logging_obj is None:
             return 0.0
 
-        # Check if user set a custom response cost
-        response_cost = litellm_logging_obj.model_call_details.get(
-            "response_cost", None
-        )
+        model_call_details = litellm_logging_obj.model_call_details
+
+        # Check if user set a custom response cost (backward compatibility)
+        response_cost = model_call_details.get("response_cost", None)
         if response_cost is not None:
-            return response_cost
+            return float(response_cost)
+
+        # Check for cost_per_query in litellm_params (standard location for cost params)
+        litellm_params = model_call_details.get("litellm_params", {})
+        if litellm_params and litellm_params.get("cost_per_query") is not None:
+            return float(litellm_params["cost_per_query"])
 
         # Default to 0.0 for A2A calls
         return 0.0
