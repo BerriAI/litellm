@@ -28,9 +28,13 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
     """
 
     def _get_clean_model_name(self, model: str) -> str:
-        """Strip 'ranking/' prefix from model name."""
+        """Strip 'nvidia_nim/' and 'ranking/' prefixes from model name."""
+        # First strip nvidia_nim/ prefix if present
+        if model.startswith("nvidia_nim/"):
+            model = model[len("nvidia_nim/"):]
+        # Then strip ranking/ prefix if present
         if model.startswith("ranking/"):
-            return model[len("ranking/"):]
+            model = model[len("ranking/"):]
         return model
 
     def get_complete_url(
