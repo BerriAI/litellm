@@ -164,3 +164,61 @@ async def test_asend_message_uses_input_output_cost_per_token():
 
     # Verify exact cost calculation
     assert response_cost == expected_cost, f"response_cost {response_cost} should equal expected {expected_cost}"
+
+
+class AgentIdLogger(CustomLogger):
+    """Custom logger to capture agent_id from kwargs."""
+
+    def __init__(self):
+        self.agent_id: Optional[str] = None
+        self.kwargs: Optional[dict] = None
+        super().__init__()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.kwargs = kwargs
+        self.agent_id = kwargs.get("agent_id")
+
+
+@pytest.mark.asyncio
+async def test_asend_message_passes_agent_id_to_callback():
+    """
+    Test that asend_message passes agent_id to callbacks via kwargs.
+    """
+    from litellm.a2a_protocol import asend_message
+
+    # Setup logger
+    litellm.logging_callback_manager._reset_all_callbacks()
+    agent_id_logger = AgentIdLogger()
+    litellm.callbacks = [agent_id_logger]
+
+    # Mock A2A client
+    mock_client = MagicMock()
+    mock_client._litellm_agent_card = MagicMock()
+    mock_client._litellm_agent_card.name = "test-agent"
+
+    # Mock response
+    mock_response = MagicMock()
+    mock_response.model_dump = MagicMock(return_value={
+        "id": "test-123",
+        "jsonrpc": "2.0",
+        "result": {"status": "completed"},
+    })
+    mock_client.send_message = AsyncMock(return_value=mock_response)
+
+    # Mock request
+    mock_request = MagicMock()
+    mock_request.id = "test-123"
+
+    test_agent_id = "agent-uuid-12345"
+
+    # Call asend_message with agent_id
+    await asend_message(
+        a2a_client=mock_client,
+        request=mock_request,
+        agent_id=test_agent_id,
+    )
+
+    await asyncio.sleep(0.1)
+
+    # Verify agent_id was passed to callback
+    assert agent_id_logger.agent_id == test_agent_id, f"Expected agent_id '{test_agent_id}', got '{agent_id_logger.agent_id}'"
