@@ -8,7 +8,44 @@ Routes A2A protocol requests through `litellm.acompletion`, enabling any LiteLLM
 A2A Request → Transform → litellm.acompletion → Transform → A2A Response
 ```
 
-## Usage
+## SDK Usage
+
+Use the existing `asend_message` and `asend_message_streaming` functions with `litellm_params`:
+
+```python
+from litellm.a2a_protocol import asend_message, asend_message_streaming
+from a2a.types import SendMessageRequest, SendStreamingMessageRequest, MessageSendParams
+from uuid import uuid4
+
+# Non-streaming
+request = SendMessageRequest(
+    id=str(uuid4()),
+    params=MessageSendParams(
+        message={"role": "user", "parts": [{"kind": "text", "text": "Hello!"}], "messageId": uuid4().hex}
+    )
+)
+response = await asend_message(
+    request=request,
+    api_base="http://localhost:2024",
+    litellm_params={"custom_llm_provider": "langgraph", "model": "agent"},
+)
+
+# Streaming
+stream_request = SendStreamingMessageRequest(
+    id=str(uuid4()),
+    params=MessageSendParams(
+        message={"role": "user", "parts": [{"kind": "text", "text": "Hello!"}], "messageId": uuid4().hex}
+    )
+)
+async for chunk in asend_message_streaming(
+    request=stream_request,
+    api_base="http://localhost:2024",
+    litellm_params={"custom_llm_provider": "langgraph", "model": "agent"},
+):
+    print(chunk)
+```
+
+## Proxy Usage
 
 Configure an agent with `custom_llm_provider` in `litellm_params`:
 
