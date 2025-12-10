@@ -68,7 +68,7 @@ def _set_agent_id_on_logging_obj(
     agent_id: Optional[str],
 ) -> None:
     """
-    Set agent_id on litellm_logging_obj metadata for SpendLogs tracking.
+    Set agent_id on litellm_logging_obj for SpendLogs tracking.
 
     Args:
         kwargs: The kwargs dict containing litellm_logging_obj
@@ -79,10 +79,8 @@ def _set_agent_id_on_logging_obj(
 
     litellm_logging_obj = kwargs.get("litellm_logging_obj")
     if litellm_logging_obj is not None:
-        # Set agent_id in metadata for spend logs
-        if "metadata" not in litellm_logging_obj.model_call_details:
-            litellm_logging_obj.model_call_details["metadata"] = {}
-        litellm_logging_obj.model_call_details["metadata"]["agent_id"] = agent_id
+        # Set agent_id directly on model_call_details (same pattern as custom_llm_provider)
+        litellm_logging_obj.model_call_details["agent_id"] = agent_id
 
 
 def _get_a2a_model_info(a2a_client: Any, kwargs: Dict[str, Any]) -> str:
