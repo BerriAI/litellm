@@ -98,7 +98,8 @@ const sidebars = {
         "proxy/litellm_prompt_management",
         "proxy/custom_prompt_management",
         "proxy/native_litellm_prompt",
-        "proxy/prompt_management"
+        "proxy/prompt_management",
+        "proxy/arize_phoenix_prompts"
       ]
     },
     {
@@ -172,7 +173,7 @@ const sidebars = {
             {
               type: "link",
               label: "All Supported Endpoints →",
-              href: "/docs/supported_endpoints",
+              href: "https://docs.litellm.ai/docs/supported_endpoints",
             },
           ],
         },
