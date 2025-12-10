@@ -360,7 +360,7 @@ class AmazonConverseConfig(BaseConfig):
 
         ## Filter out 'cross-region' from model name
         base_model = BedrockModelInfo.get_base_model(model)
-
+        # print(f"DEBUG: base_model={base_model}")
         if (
             base_model.startswith("anthropic")
             or base_model.startswith("mistral")
@@ -372,6 +372,10 @@ class AmazonConverseConfig(BaseConfig):
             or base_model.startswith("amazon.nova")
             or base_model.startswith("moonshot")
             or base_model.startswith("minimax")
+            or base_model.startswith("google")
+            or base_model.startswith("nvidia")
+            or base_model.startswith("qwen")
+            or base_model.startswith("openai")
             or supports_function_calling(
                 model=model, custom_llm_provider=self.custom_llm_provider
             )
@@ -381,6 +385,10 @@ class AmazonConverseConfig(BaseConfig):
         if (
             base_model.startswith("moonshot")
             or base_model.startswith("minimax")
+            or base_model.startswith("google")
+            or base_model.startswith("nvidia")
+            or base_model.startswith("qwen")
+            or base_model.startswith("openai")
             or litellm.utils.supports_tool_choice(
                 model=model, custom_llm_provider=self.custom_llm_provider
             )

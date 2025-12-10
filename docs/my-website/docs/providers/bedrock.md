@@ -2491,3 +2491,36 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 }
 ```
 
+### New Bedrock Models (Dec 2025)
+
+LiteLLM supports the following newly added Bedrock models:
+
+| Provider | Model IDs | Tool Support |
+|----------|-----------|--------------|
+| Google | `google.gemma-3-4b-it`, `google.gemma-3-12b-it`, `google.gemma-3-27b-it` | ✅ |
+| Mistral | `mistral.mistral-large-3-675b-instruct`, `mistral.ministral-3-3b-instruct`, `mistral.ministral-3-8b-instruct` | ✅ |
+| Mistral | `mistral.magistral-small-2509`, `mistral.voxtral-mini-3b-2507`, `mistral.voxtral-small-24b-2507`, `mistral.ministral-3-14b-instruct` | ❌ |
+| MiniMax | `minimax.minimax-m2` | ✅ |
+| Moonshot | `moonshot.kimi-k2-thinking` | ✅ |
+| NVIDIA | `nvidia.nemotron-nano-9b-v2`, `nvidia.nemotron-nano-12b-v2` | ❌ |
+| OpenAI | `openai.gpt-oss-safeguard-20b` | ❌ |
+| OpenAI | `openai.gpt-oss-safeguard-120b` | ✅ |
+| Qwen | `qwen.qwen3-coder-30b-a3b-v1:0`, `qwen.qwen3-235b-a22b-2507-v1:0`, `qwen.qwen3-32b-v1:0`, `qwen.qwen3-vl-235b-a22b`, `qwen.qwen3-next-80b-a3b` | ✅ |
+
+**Usage:**
+
+```python
+import os
+from litellm import completion
+
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = "us-west-2"
+
+# Note: Use 'bedrock/converse/' prefix to ensure Converse API is used for new models
+response = completion(
+    model="bedrock/converse/qwen.qwen3-vl-235b-a22b",
+    messages=[{"role": "user", "content": "Hello"}]
+)
+```
+

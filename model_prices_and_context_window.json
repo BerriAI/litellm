@@ -27749,5 +27749,149 @@
         "metadata": {
             "comment": "Estimated cost based on standard TTS pricing. RunwayML uses ElevenLabs models."
         }
+    },
+    "google.gemma-3-4b-it": {
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "max_tokens": 128000,
+        "input_cost_per_token": 4e-08,
+        "output_cost_per_token": 8e-08,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "google.gemma-3-12b-it": {
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "max_tokens": 128000,
+        "input_cost_per_token": 9e-08,
+        "output_cost_per_token": 2.9e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "google.gemma-3-27b-it": {
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "max_tokens": 128000,
+        "input_cost_per_token": 2.3e-07,
+        "output_cost_per_token": 3.8e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "mistral.mistral-large-3-675b-instruct": {
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "max_tokens": 256000,
+        "input_cost_per_token": 5e-07,
+        "output_cost_per_token": 1.5e-06,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "mistral.ministral-3-3b-instruct": {
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "max_tokens": 256000,
+        "input_cost_per_token": 4e-08,
+        "output_cost_per_token": 1.2e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "mistral.ministral-3-8b-instruct": {
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "max_tokens": 256000,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 3e-07,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "nvidia.nemotron-nano-9b-v2": {
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "max_tokens": 128000,
+        "input_cost_per_token": 6e-08,
+        "output_cost_per_token": 2.3e-07,
+        "supports_function_calling": false,
+        "supports_tool_choice": false
+    },
+    "nvidia.nemotron-nano-12b-v2": {
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "max_tokens": 128000,
+        "input_cost_per_token": 2e-07,
+        "output_cost_per_token": 6e-07,
+        "supports_function_calling": false,
+        "supports_tool_choice": false
+    },
+    "qwen.qwen3-vl-235b-a22b": {
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "max_tokens": 256000,
+        "input_cost_per_token": 8e-07,
+        "output_cost_per_token": 2.4e-06,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "openai.gpt-oss-safeguard-20b": {
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "max_tokens": 128000,
+        "input_cost_per_token": 7e-08,
+        "output_cost_per_token": 3e-07,
+        "supports_function_calling": false,
+        "supports_tool_choice": false
+    },
+    "qwen.qwen3-next-80b-a3b": {
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "max_tokens": 128000,
+        "input_cost_per_token": 4e-07,
+        "output_cost_per_token": 1.2e-06,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "mistral.magistral-small-2509": {
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "max_tokens": 128000,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 3e-07,
+        "supports_function_calling": false,
+        "supports_tool_choice": false
+    },
+    "mistral.voxtral-mini-3b-2507": {
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "max_tokens": 128000,
+        "input_cost_per_token": 4e-08,
+        "output_cost_per_token": 1.2e-07,
+        "supports_function_calling": false,
+        "supports_tool_choice": false
+    },
+    "mistral.voxtral-small-24b-2507": {
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "max_tokens": 128000,
+        "input_cost_per_token": 2e-07,
+        "output_cost_per_token": 6e-07,
+        "supports_function_calling": false,
+        "supports_tool_choice": false
+    },
+    "mistral.ministral-3-14b-instruct": {
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "max_tokens": 128000,
+        "input_cost_per_token": 2e-07,
+        "output_cost_per_token": 6e-07,
+        "supports_function_calling": false,
+        "supports_tool_choice": false
+    },
+    "openai.gpt-oss-safeguard-120b": {
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "max_tokens": 128000,
+        "input_cost_per_token": 4e-07,
+        "output_cost_per_token": 1.2e-06,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
     }
 }
