@@ -14428,6 +14428,37 @@
         "supports_web_search": true,
         "tpm": 800000
     },
+    "gemini/gemini-2.5-computer-use-preview-10-2025": {
+        "input_cost_per_token": 1.25e-06,
+        "input_cost_per_token_above_200k_tokens": 2.5e-06,
+        "litellm_provider": "gemini",
+        "max_images_per_prompt": 3000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "output_cost_per_token_above_200k_tokens": 1.5e-05,
+        "rpm": 2000,
+        "source": "https://ai.google.dev/gemini-api/docs/computer-use",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "tpm": 800000
+    },
     "gemini/gemini-3-pro-preview": {
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_above_200k_tokens": 4e-07,
@@ -26066,6 +26097,26 @@
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
+    "vertex_ai/deepseek-ai/deepseek-v3.2-maas": {
+        "input_cost_per_token": 5.6e-07,
+        "input_cost_per_token_batches": 2.8e-07,
+        "litellm_provider": "vertex_ai-deepseek_models",
+        "max_input_tokens": 163840,
+        "max_output_tokens": 32768,
+        "max_tokens": 163840,
+        "mode": "chat",
+        "output_cost_per_token": 1.68e-06,
+        "output_cost_per_token_batches": 8.4e-07,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
+        "supported_regions": [
+            "us-west2"
+        ],
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
     "vertex_ai/deepseek-ai/deepseek-r1-0528-maas": {
         "input_cost_per_token": 1.35e-06,
         "litellm_provider": "vertex_ai-deepseek_models",
@@ -26749,7 +26800,6 @@
         ]
     },
     "voyage/rerank-2": {
-        "input_cost_per_query": 5e-08,
         "input_cost_per_token": 5e-08,
         "litellm_provider": "voyage",
         "max_input_tokens": 16000,
@@ -26760,13 +26810,32 @@
         "output_cost_per_token": 0.0
     },
     "voyage/rerank-2-lite": {
-        "input_cost_per_query": 2e-08,
         "input_cost_per_token": 2e-08,
         "litellm_provider": "voyage",
         "max_input_tokens": 8000,
         "max_output_tokens": 8000,
         "max_query_tokens": 8000,
         "max_tokens": 8000,
+        "mode": "rerank",
+        "output_cost_per_token": 0.0
+    },
+    "voyage/rerank-2.5": {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "voyage",
+        "max_input_tokens": 32000,
+        "max_output_tokens": 32000,
+        "max_query_tokens": 32000,
+        "max_tokens": 32000,
+        "mode": "rerank",
+        "output_cost_per_token": 0.0
+    },
+    "voyage/rerank-2.5-lite": {
+        "input_cost_per_token": 2e-08,
+        "litellm_provider": "voyage",
+        "max_input_tokens": 32000,
+        "max_output_tokens": 32000,
+        "max_query_tokens": 32000,
+        "max_tokens": 32000,
         "mode": "rerank",
         "output_cost_per_token": 0.0
     },
