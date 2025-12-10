@@ -180,6 +180,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         
         # Construct the URL for video content download
         url = f"{api_base.rstrip('/')}/{original_video_id}/content"
+        print("🔥 [OPENAI VIDEO CONTENT] URL:", url)
         
         # No additional data needed for GET content request
         data: Dict[str, Any] = {}
