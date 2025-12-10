@@ -2,21 +2,33 @@ services:
   litellm:
     build:
       context: .
-      args:
-        target: runtime
-    image: ghcr.io/berriai/litellm:main-stable
+      dockerfile: Dockerfile
+      target: runtime
+    # Remove image line to force local build for development
     #########################################
-    ## Uncomment these lines to start proxy with a config.yaml file ##
-    # volumes:
-    #  - ./config.yaml:/app/config.yaml
-    # command:
-    #  - "--config=/app/config.yaml"
+    ## Development volumes for local code changes ##
+    volumes:
+     # Mount your local code changes
+     - ./litellm:/app/litellm
+     # Mount your modified config file
+     - ./proxy_server_config.yaml:/app/proxy_server_config.yaml
+     # Optional: Mount requirements.txt if you modify dependencies
+     - ./requirements.txt:/app/requirements.txt
+     # Original config.yaml (if you still want to use it)
+     # - ./config.yaml:/app/config.yaml
+    command:
+     - "--config=/app/proxy_server_config.yaml"
     ##############################################
     ports:
       - "4000:4000" # Map the container port to the host, change the host port if necessary
     environment:
       DATABASE_URL: "postgresql://llmproxy:dbpassword9090@db:5432/litellm"
       STORE_MODEL_IN_DB: "True" # allows adding models to proxy via UI
+      # Development environment variables
+      LITELLM_ENV: "development"
+      PYTHONPATH: "/app"
+      # Enable debug logging for development
+      LITELLM_LOG: "debug"
     env_file:
       - .env # Load local .env file
     depends_on:
@@ -28,7 +40,7 @@ services:
       interval: 30s  # Perform health check every 30 seconds
       timeout: 10s   # Health check command times out after 10 seconds
       retries: 3     # Retry up to 3 times if health check fails
-      start_period: 40s  # Wait 40 seconds after container start before beginning health checks
+      start_period: 60s  # Wait longer for development setup
 
   db:
     image: postgres:18
@@ -39,7 +51,7 @@ services:
       POSTGRES_USER: llmproxy
       POSTGRES_PASSWORD: dbpassword9090
     ports:
-      - "5432:5432"
+      - "5432:5434"
     volumes:
       - postgres_data:/var/lib/postgresql/data # Persists Postgres data across container restarts
     healthcheck:

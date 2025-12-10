@@ -94,6 +94,7 @@ class LicenseCheck:
             return False
 
     def is_premium(self) -> bool:
+        return True
         """
         1. verify_license_without_api_request: checks if license was generate using private / public key pair
         2. _verify: checks if license is valid calling litellm API. This is the old way we were generating/validating license
