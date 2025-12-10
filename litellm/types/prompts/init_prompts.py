@@ -11,6 +11,7 @@ class SupportedPromptIntegrations(str, Enum):
     CUSTOM = "custom"
     BITBUCKET = "bitbucket"
     GITLAB = "gitlab"
+    GENERIC_PROMPT_MANAGEMENT = "generic_prompt_management"
 
 
 class PromptInfo(BaseModel):
@@ -20,8 +21,11 @@ class PromptInfo(BaseModel):
 
 
 class PromptLiteLLMParams(BaseModel):
-    prompt_id: str
+    prompt_id: Optional[str] = None
     prompt_integration: str
+
+    api_base: Optional[str] = None
+    api_key: Optional[str] = None
 
     dotprompt_content: Optional[str] = None
     """
