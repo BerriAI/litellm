@@ -63,6 +63,28 @@ def _set_usage_on_logging_obj(
         litellm_logging_obj.model_call_details["usage"] = usage
 
 
+def _set_agent_id_on_logging_obj(
+    kwargs: Dict[str, Any],
+    agent_id: Optional[str],
+) -> None:
+    """
+    Set agent_id on litellm_logging_obj metadata for SpendLogs tracking.
+
+    Args:
+        kwargs: The kwargs dict containing litellm_logging_obj
+        agent_id: The A2A agent ID
+    """
+    if agent_id is None:
+        return
+
+    litellm_logging_obj = kwargs.get("litellm_logging_obj")
+    if litellm_logging_obj is not None:
+        # Set agent_id in metadata for spend logs
+        if "metadata" not in litellm_logging_obj.model_call_details:
+            litellm_logging_obj.model_call_details["metadata"] = {}
+        litellm_logging_obj.model_call_details["metadata"]["agent_id"] = agent_id
+
+
 def _get_a2a_model_info(a2a_client: Any, kwargs: Dict[str, Any]) -> str:
     """
     Extract agent info and set model/custom_llm_provider for cost tracking.
@@ -101,6 +123,7 @@ async def asend_message(
     request: Optional["SendMessageRequest"] = None,
     api_base: Optional[str] = None,
     litellm_params: Optional[Dict[str, Any]] = None,
+    agent_id: Optional[str] = None,
     **kwargs: Any,
 ) -> LiteLLMSendMessageResponse:
     """
@@ -114,6 +137,7 @@ async def asend_message(
         request: SendMessageRequest from a2a.types (optional if using completion bridge with api_base)
         api_base: API base URL (required for completion bridge, optional for standard A2A)
         litellm_params: Optional dict with custom_llm_provider, model, etc. for completion bridge
+        agent_id: Optional agent ID for tracking in SpendLogs
         **kwargs: Additional arguments passed to the client decorator
 
     Returns:
@@ -216,6 +240,9 @@ async def asend_message(
         completion_tokens=completion_tokens,
     )
 
+    # Set agent_id on logging obj for SpendLogs tracking
+    _set_agent_id_on_logging_obj(kwargs=kwargs, agent_id=agent_id)
+
     return response
 
 
@@ -254,6 +281,7 @@ async def asend_message_streaming(
     request: Optional["SendStreamingMessageRequest"] = None,
     api_base: Optional[str] = None,
     litellm_params: Optional[Dict[str, Any]] = None,
+    agent_id: Optional[str] = None,
 ) -> AsyncIterator[Any]:
     """
     Async: Send a streaming message to an A2A agent.
@@ -265,6 +293,7 @@ async def asend_message_streaming(
         request: SendStreamingMessageRequest from a2a.types
         api_base: API base URL (required for completion bridge)
         litellm_params: Optional dict with custom_llm_provider, model, etc. for completion bridge
+        agent_id: Optional agent ID for tracking in SpendLogs (currently unused in streaming)
 
     Yields:
         SendStreamingMessageResponse chunks from the agent
