@@ -1414,6 +1414,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     onEnabledChange={codeInterpreter.setEnabled}
                     selectedContainerId={null}
                     onContainerChange={() => {}}
+                    selectedModel={selectedModel || ""}
                   />
                 </div>
               )}
