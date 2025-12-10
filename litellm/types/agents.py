@@ -246,3 +246,16 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
         response_dict = response.model_dump(mode="json", exclude_none=True)
 
         return cls(**response_dict)
+
+    @classmethod
+    def from_dict(cls, response_dict: Dict[str, Any]) -> "LiteLLMSendMessageResponse":
+        """
+        Create a LiteLLMSendMessageResponse from a dict.
+
+        Args:
+            response_dict: Dict with A2A response structure
+
+        Returns:
+            LiteLLMSendMessageResponse with _hidden_params support
+        """
+        return cls(**response_dict)
