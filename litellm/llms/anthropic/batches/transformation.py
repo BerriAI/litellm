@@ -197,25 +197,15 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
             failed=request_counts_data.get("errored", 0),
         )
 
-        # Extract results_url - this will be used for file content retrieval
-        results_url = response_data.get("results_url")
-        # Store results_url in output_file_id for later retrieval
-        # We'll encode it in a way that we can detect it's an Anthropic results URL
-        output_file_id = None
-        if results_url:
-            # Encode the batch_id and results_url so we can retrieve it later
-            # Format: anthropic_batch_results:{batch_id}
-            output_file_id = f"anthropic_batch_results:{batch_id}"
-
         return LiteLLMBatch(
             id=batch_id,
             object="batch",
             endpoint="/v1/messages",
             errors=None,
-            input_file_id=None,
+            input_file_id="None",
             completion_window="24h",
             status=openai_status,
-            output_file_id=output_file_id,
+            output_file_id=batch_id,
             error_file_id=None,
             created_at=created_at or int(time.time()),
             in_progress_at=created_at if processing_status == "in_progress" else None,
@@ -236,7 +226,13 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         """Get the appropriate error class for Anthropic."""
         from ..common_utils import AnthropicError
 
-        return AnthropicError(status_code=status_code, message=error_message, headers=headers)
+        # Convert Dict to Headers if needed
+        if isinstance(headers, dict):
+            headers_obj: Optional[Headers] = Headers(headers)
+        else:
+            headers_obj = headers if isinstance(headers, Headers) else None
+
+        return AnthropicError(status_code=status_code, message=error_message, headers=headers_obj)
 
     def transform_response(
         self,
