@@ -3,7 +3,17 @@ import os
 import ssl
 import sys
 import time
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Tuple,
+    Union,
+)
 
 import certifi
 import httpx
@@ -54,28 +64,28 @@ def _prepare_request_data_and_content(
 ) -> Tuple[Optional[Union[dict, Mapping]], Any]:
     """
     Helper function to route data/content parameters correctly for httpx requests
-    
+
     This prevents httpx DeprecationWarnings that cause memory leaks.
-    
+
     Background:
     - httpx shows a DeprecationWarning when you pass bytes/str to `data=`
     - It wants you to use `content=` instead for bytes/str
     - The warning itself leaks memory when triggered repeatedly
-    
+
     Solution:
     - Move bytes/str from `data=` to `content=` before calling build_request
     - Keep dicts in `data=` (that's still the correct parameter for dicts)
-    
+
     Args:
         data: Request data (can be dict, str, or bytes)
         content: Request content (raw bytes/str)
-        
+
     Returns:
         Tuple of (request_data, request_content) properly routed for httpx
     """
     request_data = None
     request_content = content
-    
+
     if data is not None:
         if isinstance(data, (bytes, str)):
             # Bytes/strings belong in content= (only if not already provided)
@@ -84,14 +94,16 @@ def _prepare_request_data_and_content(
         else:
             # dict/Mapping stays in data= parameter
             request_data = data
-    
+
     return request_data, request_content
 
 
 # Cache for SSL contexts to avoid creating duplicate contexts with the same configuration
 # Key: tuple of (cafile, ssl_security_level, ssl_ecdh_curve)
 # Value: ssl.SSLContext
-_ssl_context_cache: Dict[Tuple[Optional[str], Optional[str], Optional[str]], ssl.SSLContext] = {}
+_ssl_context_cache: Dict[
+    Tuple[Optional[str], Optional[str], Optional[str]], ssl.SSLContext
+] = {}
 
 
 def _create_ssl_context(
@@ -201,7 +213,7 @@ def get_ssl_configuration(
     if ssl_verify is not False:
         # Create cache key from configuration parameters
         cache_key = (cafile, ssl_security_level, ssl_ecdh_curve)
-        
+
         # Check if we have a cached SSL context for this configuration
         if cache_key not in _ssl_context_cache:
             _ssl_context_cache[cache_key] = _create_ssl_context(
@@ -209,7 +221,7 @@ def get_ssl_configuration(
                 ssl_security_level=ssl_security_level,
                 ssl_ecdh_curve=ssl_ecdh_curve,
             )
-        
+
         # Return the cached SSL context
         return _ssl_context_cache[cache_key]
 
@@ -389,8 +401,10 @@ class AsyncHTTPHandler:
                 timeout = self.timeout
 
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
-            request_data, request_content = _prepare_request_data_and_content(data, content)
-                
+            request_data, request_content = _prepare_request_data_and_content(
+                data, content
+            )
+
             req = self.client.build_request(
                 "POST",
                 url,
@@ -401,7 +415,7 @@ class AsyncHTTPHandler:
                 timeout=timeout,
                 files=files,
                 content=request_content,
-            )        
+            )
             response = await self.client.send(req, stream=stream)
             response.raise_for_status()
             return response
@@ -467,7 +481,9 @@ class AsyncHTTPHandler:
                 timeout = self.timeout
 
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
-            request_data, request_content = _prepare_request_data_and_content(data, content)
+            request_data, request_content = _prepare_request_data_and_content(
+                data, content
+            )
 
             req = self.client.build_request(
                 "PUT", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
@@ -531,7 +547,9 @@ class AsyncHTTPHandler:
                 timeout = self.timeout
 
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
-            request_data, request_content = _prepare_request_data_and_content(data, content)
+            request_data, request_content = _prepare_request_data_and_content(
+                data, content
+            )
 
             req = self.client.build_request(
                 "PATCH", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
@@ -593,10 +611,12 @@ class AsyncHTTPHandler:
         try:
             if timeout is None:
                 timeout = self.timeout
-            
+
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
-            request_data, request_content = _prepare_request_data_and_content(data, content)
-            
+            request_data, request_content = _prepare_request_data_and_content(
+                data, content
+            )
+
             req = self.client.build_request(
                 "DELETE", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
             )
@@ -648,7 +668,7 @@ class AsyncHTTPHandler:
         """
         # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
         request_data, request_content = _prepare_request_data_and_content(data, content)
-        
+
         req = client.build_request(
             "POST", url, data=request_data, json=json, params=params, headers=headers, content=request_content  # type: ignore
         )
@@ -802,8 +822,10 @@ class AsyncHTTPHandler:
         if AIOHTTP_CONNECTOR_LIMIT > 0:
             transport_connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
         if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
-            transport_connector_kwargs["limit_per_host"] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
-        
+            transport_connector_kwargs["limit_per_host"] = (
+                AIOHTTP_CONNECTOR_LIMIT_PER_HOST
+            )
+
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(
                 connector=TCPConnector(**transport_connector_kwargs),
@@ -832,6 +854,9 @@ class HTTPHandler:
         concurrent_limit=None,  # Kept for backward compatibility, but ignored (no limits)
         client: Optional[httpx.Client] = None,
         ssl_verify: Optional[Union[bool, str]] = None,
+        disable_default_headers: Optional[
+            bool
+        ] = False,  # arize phoenix returns different API responses when user agent header in request
     ):
         if timeout is None:
             timeout = _DEFAULT_TIMEOUT
@@ -852,7 +877,7 @@ class HTTPHandler:
                 timeout=timeout,
                 verify=ssl_config,
                 cert=cert,
-                headers=headers,
+                headers=headers if not disable_default_headers else None,
                 follow_redirects=True,
             )
         else:
@@ -877,7 +902,9 @@ class HTTPHandler:
         params.update(self.extract_query_params(url))
 
         response = self.client.get(
-            url, params=params, headers=headers, follow_redirects=_follow_redirects  # type: ignore
+            url,
+            params=params,
+            headers=headers,
         )
 
         return response
@@ -910,8 +937,10 @@ class HTTPHandler:
     ):
         try:
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
-            request_data, request_content = _prepare_request_data_and_content(data, content)
-            
+            request_data, request_content = _prepare_request_data_and_content(
+                data, content
+            )
+
             if timeout is not None:
                 req = self.client.build_request(
                     "POST",
@@ -964,8 +993,10 @@ class HTTPHandler:
     ):
         try:
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
-            request_data, request_content = _prepare_request_data_and_content(data, content)
-            
+            request_data, request_content = _prepare_request_data_and_content(
+                data, content
+            )
+
             if timeout is not None:
                 req = self.client.build_request(
                     "PATCH", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
@@ -1011,8 +1042,10 @@ class HTTPHandler:
     ):
         try:
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
-            request_data, request_content = _prepare_request_data_and_content(data, content)
-            
+            request_data, request_content = _prepare_request_data_and_content(
+                data, content
+            )
+
             if timeout is not None:
                 req = self.client.build_request(
                     "PUT", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
@@ -1045,8 +1078,10 @@ class HTTPHandler:
     ):
         try:
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
-            request_data, request_content = _prepare_request_data_and_content(data, content)
-            
+            request_data, request_content = _prepare_request_data_and_content(
+                data, content
+            )
+
             if timeout is not None:
                 req = self.client.build_request(
                     "DELETE", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore

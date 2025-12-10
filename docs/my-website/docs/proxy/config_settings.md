@@ -739,6 +739,8 @@ router_settings:
 | OPENMETER_API_ENDPOINT | API endpoint for OpenMeter integration
 | OPENMETER_API_KEY | API key for OpenMeter services
 | OPENMETER_EVENT_TYPE | Type of events sent to OpenMeter
+| ONYX_API_BASE | Base URL for Onyx Security AI Guard service (defaults to https://ai-guard.onyx.security)
+| ONYX_API_KEY | API key for Onyx Security AI Guard service
 | OTEL_ENDPOINT | OpenTelemetry endpoint for traces
 | OTEL_EXPORTER_OTLP_ENDPOINT | OpenTelemetry endpoint for traces
 | OTEL_ENVIRONMENT_NAME | Environment name for OpenTelemetry
@@ -794,6 +796,7 @@ router_settings:
 | REPLICATE_MODEL_NAME_WITH_ID_LENGTH | Length of Replicate model names with ID. Default is 64
 | REPLICATE_POLLING_DELAY_SECONDS | Delay in seconds for Replicate polling operations. Default is 0.5
 | REQUEST_TIMEOUT | Timeout in seconds for requests. Default is 6000
+| ROOT_REDIRECT_URL | URL to redirect root path (/) to when DOCS_URL is set to something other than "/" (DOCS_URL is "/" by default)
 | ROUTER_MAX_FALLBACKS | Maximum number of fallbacks for router. Default is 5
 | RUNWAYML_DEFAULT_API_VERSION | Default API version for RunwayML service. Default is "2024-11-06"
 | RUNWAYML_POLLING_TIMEOUT | Timeout in seconds for RunwayML image generation polling. Default is 600 (10 minutes)

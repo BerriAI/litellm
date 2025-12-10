@@ -13,11 +13,11 @@ router = APIRouter(
 
 
 @router.post(
-    "/v1beta/models/{model_name}:generateContent",
+    "/v1beta/models/{model_name:path}:generateContent",
     dependencies=[Depends(user_api_key_auth)],
 )
 @router.post(
-    "/models/{model_name}:generateContent", dependencies=[Depends(user_api_key_auth)]
+    "/models/{model_name:path}:generateContent", dependencies=[Depends(user_api_key_auth)]
 )
 async def google_generate_content(
     request: Request,
@@ -50,11 +50,11 @@ async def google_generate_content(
 
 
 @router.post(
-    "/v1beta/models/{model_name}:streamGenerateContent",
+    "/v1beta/models/{model_name:path}:streamGenerateContent",
     dependencies=[Depends(user_api_key_auth)],
 )
 @router.post(
-    "/models/{model_name}:streamGenerateContent",
+    "/models/{model_name:path}:streamGenerateContent",
     dependencies=[Depends(user_api_key_auth)],
 )
 async def google_stream_generate_content(
@@ -95,12 +95,12 @@ async def google_stream_generate_content(
 
 
 @router.post(
-    "/v1beta/models/{model_name}:countTokens",
+    "/v1beta/models/{model_name:path}:countTokens",
     dependencies=[Depends(user_api_key_auth)],
     response_model=TokenCountDetailsResponse,
 )
 @router.post(
-    "/models/{model_name}:countTokens",
+    "/models/{model_name:path}:countTokens",
     dependencies=[Depends(user_api_key_auth)],
     response_model=TokenCountDetailsResponse,
 )

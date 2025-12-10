@@ -404,6 +404,10 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = "lemonade"
         elif model.startswith("clarifai/"):
             custom_llm_provider = "clarifai"
+        elif model.startswith("amazon_nova"):
+            custom_llm_provider = "amazon_nova"
+        elif model.startswith("sap/"):
+            custom_llm_provider = "sap"
         if not custom_llm_provider:
             if litellm.suppress_debug_info is False:
                 print()  # noqa
@@ -565,7 +569,7 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         api_base = (
             api_base
             or get_secret("OLLAMA_API_BASE")
-            or "http://127.0.0.1:11434"
+            or "http://localhost:11434"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("OLLAMA_API_KEY")
     elif (custom_llm_provider == "ai21_chat") or (
@@ -687,12 +691,12 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base, api_key
         )
     elif custom_llm_provider == "zai":
-        api_base = (
-            api_base
-            or get_secret_str("ZAI_API_BASE")
-            or "https://api.z.ai/api/paas/v4"
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.ZAIChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
         )
-        dynamic_api_key = api_key or get_secret_str("ZAI_API_KEY")
     elif custom_llm_provider == "together_ai":
         api_base = (
             api_base

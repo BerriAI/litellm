@@ -310,13 +310,12 @@ export const getOpenAPISchema = async () => {
   return jsonData;
 };
 
-export const modelCostMap = async (accessToken: string) => {
+export const modelCostMap = async () => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/get/litellm_model_cost_map` : `/get/litellm_model_cost_map`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/public/litellm_model_cost_map` : `/public/litellm_model_cost_map`;
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -1736,6 +1735,25 @@ export const organizationDailyActivityCall = async (
   });
 };
 
+export const customerDailyActivityCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  page: number = 1,
+  customerIds: string[] | null = null,
+) => {
+  return fetchDailyActivity({
+    accessToken,
+    endpoint: "/customer/daily/activity",
+    startTime,
+    endTime,
+    page,
+    extraQueryParams: {
+      end_user_ids: customerIds,
+    },
+  });
+};
+
 export const getTotalSpendCall = async (accessToken: string) => {
   /**
    * Get all models on proxy
@@ -2511,7 +2529,7 @@ export const allEndUsersCall = async (accessToken: string) => {
     console.log(data);
     return data;
   } catch (error) {
-    console.error("Failed to create key:", error);
+    console.error("Failed to fetch end users:", error);
     throw error;
   }
 };
@@ -8009,6 +8027,44 @@ export const loginCall = async (username: string, password: string): Promise<Log
     throw new Error(errorMessage);
   }
 
+  const data = await response.json();
+  return data;
+};
+
+export const getUiSettings = async (accessToken: string) => {
+  const proxyBaseUrl = getProxyBaseUrl();
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/get/ui_settings` : `/get/ui_settings`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+    },
+  });
+  if (!response.ok) {
+    const errorData = await response.json();
+    const errorMessage = deriveErrorMessage(errorData);
+    throw new Error(errorMessage);
+  }
+  const data = await response.json();
+  return data;
+};
+
+export const updateUiSettings = async (accessToken: string, settings: Record<string, any>) => {
+  const proxyBaseUrl = getProxyBaseUrl();
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/update/ui_settings` : `/update/ui_settings`;
+  const response = await fetch(url, {
+    method: "PATCH",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(settings),
+  });
+  if (!response.ok) {
+    const errorData = await response.json();
+    const errorMessage = deriveErrorMessage(errorData);
+    throw new Error(errorMessage);
+  }
   const data = await response.json();
   return data;
 };

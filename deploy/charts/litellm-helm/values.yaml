@@ -30,6 +30,7 @@ serviceAccount:
 
 # annotations for litellm deployment
 deploymentAnnotations: {}
+deploymentLabels: {}
 # annotations for litellm pods
 podAnnotations: {}
 podLabels: {}
@@ -253,8 +254,22 @@ envVars: {}
 # Additional environment variables to be added to the deployment as a list of k8s env vars
 extraEnvVars: {}
 
+# if you want to override the container command, you can do so here
+command: {}
+# if you want to override the container args, you can do so here
+args: {}
+
 # - name: EXTRA_ENV_VAR
 #   value: EXTRA_ENV_VAR_VALUE
+# Additional Kubernetes resources to deploy with litellm
+extraResources: []
+
+# - apiVersion: v1
+#   kind: ConfigMap
+#   metadata:
+#     name: my-extra-config
+#   data:
+#     foo: bar
 # Pod Disruption Budget
 pdb:
   enabled: false

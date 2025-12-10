@@ -6,9 +6,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import CommonProxyErrors, LiteLLMPromptInjectionParams
 from litellm.proxy.types_utils.utils import get_instance_fn
-from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-    decrypt_value_helper,
-)
 from litellm.types.utils import (
     StandardLoggingGuardrailInformation,
     StandardLoggingPayload,
@@ -385,6 +382,8 @@ def add_guardrail_to_applied_guardrails_header(
         _metadata["applied_guardrails"].append(guardrail_name)
     else:
         _metadata["applied_guardrails"] = [guardrail_name]
+    # Ensure metadata is set back to request_data (important when metadata didn't exist)
+    request_data["metadata"] = _metadata
 
 
 def add_guardrail_response_to_standard_logging_object(
@@ -434,11 +433,7 @@ def process_callback(_callback: str, callback_type: str, environment_variables: 
         if env_variable is None:
             env_vars_dict[_var] = None
         else:
-            # decode + decrypt the value
-            decrypted_value = decrypt_value_helper(
-                value=env_variable, key=_var
-            )
-            env_vars_dict[_var] = decrypted_value
+            env_vars_dict[_var] = env_variable
 
     return {
         "name": _callback,

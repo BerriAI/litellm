@@ -632,6 +632,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             return Reasoning(effort="none")  # type: ignore
         elif reasoning_effort == "high":
             return Reasoning(effort="high")
+        elif reasoning_effort == "xhigh":
+            return Reasoning(effort="xhigh")  # type: ignore[typeddict-item]
         elif reasoning_effort == "medium":
             return Reasoning(effort="medium")
         elif reasoning_effort == "low":
@@ -871,8 +873,10 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                     usage=None,
                 )
             elif output_item.get("type") == "message":
+                # Don't emit is_finished=True here - there may be more output items
+                # (e.g., tool_calls) coming after the message. Wait for response.completed.
                 return GenericStreamingChunk(
-                    finish_reason="stop", is_finished=True, usage=None, text=""
+                    finish_reason="", is_finished=False, usage=None, text=""
                 )
 
         elif event_type == "response.output_text.delta":
@@ -905,6 +909,12 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         )
                     ]
                 )
+        elif event_type == "response.completed":
+            # Response is fully complete - now we can signal is_finished=True
+            # This ensures we don't prematurely end the stream before tool_calls arrive
+            return GenericStreamingChunk(
+                text="", tool_use=None, is_finished=True, finish_reason="stop", usage=None
+            )
         else:
             pass
         # For any unhandled event types, create a minimal valid chunk or skip

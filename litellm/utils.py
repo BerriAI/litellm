@@ -138,6 +138,10 @@ from litellm.litellm_core_utils.redact_messages import (
     LiteLLMLoggingObject,
     redact_message_input_output_from_logging,
 )
+from litellm.litellm_core_utils.dot_notation_indexing import (
+    delete_nested_value,
+    is_nested_path,
+)
 from litellm.litellm_core_utils.rules import Rules
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
@@ -790,7 +794,7 @@ def function_setup(  # noqa: PLR0915
         ):
             _file_obj: FileTypes = args[1] if len(args) > 1 else kwargs["file"]
             file_checksum = (
-                litellm.litellm_core_utils.audio_utils.utils.get_audio_file_name(
+                litellm.litellm_core_utils.audio_utils.utils.get_audio_file_content_hash(
                     file_obj=_file_obj
                 )
             )
@@ -2886,6 +2890,21 @@ def get_optional_params_embeddings(  # noqa: PLR0915
                 model=model,
                 drop_params=drop_params if drop_params is not None else False,
             )
+        final_params = {**optional_params, **kwargs}
+        return final_params
+    elif custom_llm_provider == "sap":
+        supported_params = get_supported_openai_params(
+            model=model,
+            custom_llm_provider="sap",
+            request_type="embeddings",
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.GenAIHubEmbeddingConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params={},
+            model=model,
+            drop_params=drop_params if drop_params is not None else False
+        )
     elif custom_llm_provider == "infinity":
         supported_params = get_supported_openai_params(
             model=model,
@@ -2899,6 +2918,10 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             model=model,
             drop_params=drop_params if drop_params is not None else False,
         )
+
+        final_params = {**optional_params, **kwargs}
+        return final_params
+
     elif custom_llm_provider == "fireworks_ai":
         supported_params = get_supported_openai_params(
             model=model,
@@ -4129,6 +4152,13 @@ def get_optional_params(  # noqa: PLR0915
         non_default_params=non_default_params,
         allowed_openai_params=allowed_openai_params,
     )
+
+    # Apply nested drops from additional_drop_params
+    if additional_drop_params:
+        nested_paths = [p for p in additional_drop_params if is_nested_path(p)]
+        for path in nested_paths:
+            optional_params = delete_nested_value(optional_params, path)
+
     return optional_params
 
 
@@ -7052,6 +7082,8 @@ class ProviderConfigManager:
             return litellm.DatabricksConfig()
         elif litellm.LlmProviders.XAI == provider:
             return litellm.XAIChatConfig()
+        elif litellm.LlmProviders.ZAI == provider:
+            return litellm.ZAIChatConfig()
         elif litellm.LlmProviders.LAMBDA_AI == provider:
             return litellm.LambdaAIChatConfig()
         elif litellm.LlmProviders.LLAMA == provider:
@@ -7214,6 +7246,8 @@ class ProviderConfigManager:
             return litellm.TritonConfig()
         elif litellm.LlmProviders.PETALS == provider:
             return litellm.PetalsConfig()
+        elif litellm.LlmProviders.SAP_GENERATIVE_AI_HUB == provider:
+            return litellm.GenAIHubOrchestrationConfig()
         elif litellm.LlmProviders.FEATHERLESS_AI == provider:
             return litellm.FeatherlessAIConfig()
         elif litellm.LlmProviders.NOVITA == provider:
@@ -7252,6 +7286,8 @@ class ProviderConfigManager:
             return litellm.HyperbolicChatConfig()
         elif litellm.LlmProviders.OVHCLOUD == provider:
             return litellm.OVHCloudChatConfig()
+        elif litellm.LlmProviders.AMAZON_NOVA == provider:
+            return litellm.AmazonNovaChatConfig()
         return None
 
     @staticmethod
@@ -7272,6 +7308,8 @@ class ProviderConfigManager:
             return litellm.TritonEmbeddingConfig()
         elif litellm.LlmProviders.WATSONX == provider:
             return litellm.IBMWatsonXEmbeddingConfig()
+        elif litellm.LlmProviders.SAP_GENERATIVE_AI_HUB == provider:
+            return litellm.GenAIHubEmbeddingConfig()
         elif litellm.LlmProviders.INFINITY == provider:
             return litellm.InfinityEmbeddingConfig()
         elif litellm.LlmProviders.SAMBANOVA == provider:
@@ -7339,9 +7377,17 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.DEEPINFRA == provider:
             return litellm.DeepinfraRerankConfig()
         elif litellm.LlmProviders.NVIDIA_NIM == provider:
-            return litellm.NvidiaNimRerankConfig()
+            from litellm.llms.nvidia_nim.rerank.common_utils import (
+                get_nvidia_nim_rerank_config,
+            )
+
+            return get_nvidia_nim_rerank_config(model)
         elif litellm.LlmProviders.VERTEX_AI == provider:
             return litellm.VertexAIRerankConfig()
+        elif litellm.LlmProviders.FIREWORKS_AI == provider:
+            return litellm.FireworksAIRerankConfig()
+        elif litellm.LlmProviders.VOYAGE == provider:
+            return litellm.VoyageRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod
@@ -7358,12 +7404,19 @@ class ProviderConfigManager:
 
             return BedrockModelInfo.get_bedrock_provider_config_for_messages_api(model)
         elif litellm.LlmProviders.VERTEX_AI == provider:
-            if "claude" in model:
+            if "claude" in model.lower():
                 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
                     VertexAIPartnerModelsAnthropicMessagesConfig,
                 )
 
                 return VertexAIPartnerModelsAnthropicMessagesConfig()
+        elif litellm.LlmProviders.AZURE_AI == provider:
+            if "claude" in model.lower():
+                from litellm.llms.azure_ai.anthropic.messages_transformation import (
+                    AzureAnthropicMessagesConfig,
+                )
+
+                return AzureAnthropicMessagesConfig()
         return None
 
     @staticmethod
