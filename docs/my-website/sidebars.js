@@ -429,6 +429,7 @@ const sidebars = {
           ]
         },
         "containers",
+        "container_files",
         {
           type: "category",
           label: "/chat/completions",
@@ -781,6 +782,7 @@ const sidebars = {
         "completion/image_generation_chat",
         "completion/json_mode",
         "completion/knowledgebase",
+        "guides/code_interpreter",
         "completion/message_trimming",
         "completion/model_alias",
         "completion/mock_requests",
