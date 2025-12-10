@@ -10,7 +10,6 @@ from typing import Any, List, Optional
 
 import httpx
 
-import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.llms.bedrock import BedrockInvokeNovaRequest
 from litellm.types.llms.openai import AllMessageValues
@@ -80,7 +79,7 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
         encoding: Any,
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
-    ) -> litellm.ModelResponse:
+    ) -> ModelResponse:
         return AmazonConverseConfig.transform_response(
             self,
             model,

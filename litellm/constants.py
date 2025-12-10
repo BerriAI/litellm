@@ -100,8 +100,10 @@ RUNWAYML_POLLING_TIMEOUT = int(
 ########## Networking constants ##############################################################
 _DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client for 1 hour
 
-# Aiohttp connection pooling constants
-AIOHTTP_CONNECTOR_LIMIT = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 0))
+# Aiohttp connection pooling - prevents memory leaks from unbounded connection growth
+# Set to 0 for unlimited (not recommended for production)
+AIOHTTP_CONNECTOR_LIMIT = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 300))
+AIOHTTP_CONNECTOR_LIMIT_PER_HOST = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT_PER_HOST", 50))
 AIOHTTP_KEEPALIVE_TIMEOUT = int(os.getenv("AIOHTTP_KEEPALIVE_TIMEOUT", 120))
 AIOHTTP_TTL_DNS_CACHE = int(os.getenv("AIOHTTP_TTL_DNS_CACHE", 300))
 # enable_cleanup_closed is only needed for Python versions with the SSL leak bug
@@ -147,9 +149,10 @@ REDIS_UPDATE_BUFFER_KEY = "litellm_spend_update_buffer"
 REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_spend_update_buffer"
 REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_team_spend_update_buffer"
 REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_org_spend_update_buffer"
+REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_end_user_spend_update_buffer"
 REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_tag_spend_update_buffer"
 MAX_REDIS_BUFFER_DEQUEUE_COUNT = int(os.getenv("MAX_REDIS_BUFFER_DEQUEUE_COUNT", 100))
-MAX_SIZE_IN_MEMORY_QUEUE = int(os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", 10000))
+MAX_SIZE_IN_MEMORY_QUEUE = int(os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", 2000))
 MAX_IN_MEMORY_QUEUE_FLUSH_COUNT = int(
     os.getenv("MAX_IN_MEMORY_QUEUE_FLUSH_COUNT", 1000)
 )
@@ -262,7 +265,9 @@ TOGETHER_AI_EMBEDDING_350_M = int(os.getenv("TOGETHER_AI_EMBEDDING_350_M", 350))
 QDRANT_SCALAR_QUANTILE = float(os.getenv("QDRANT_SCALAR_QUANTILE", 0.99))
 QDRANT_VECTOR_SIZE = int(os.getenv("QDRANT_VECTOR_SIZE", 1536))
 CACHED_STREAMING_CHUNK_DELAY = float(os.getenv("CACHED_STREAMING_CHUNK_DELAY", 0.02))
-AUDIO_SPEECH_CHUNK_SIZE = 8192  # chunk_size for audio speech streaming. Balance between latency and memory usage
+AUDIO_SPEECH_CHUNK_SIZE = int(
+    os.getenv("AUDIO_SPEECH_CHUNK_SIZE", 8192)
+)  # chunk_size for audio speech streaming. Balance between latency and memory usage
 MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = int(
     os.getenv("MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB", 512)
 )
@@ -285,10 +290,16 @@ REDACTED_BY_LITELM_STRING = "REDACTED_BY_LITELM"
 MAX_LANGFUSE_INITIALIZED_CLIENTS = int(
     os.getenv("MAX_LANGFUSE_INITIALIZED_CLIENTS", 50)
 )
-LOGGING_WORKER_CONCURRENCY = int(os.getenv("LOGGING_WORKER_CONCURRENCY", 100)) # Must be above 0
+LOGGING_WORKER_CONCURRENCY = int(
+    os.getenv("LOGGING_WORKER_CONCURRENCY", 100)
+)  # Must be above 0
 LOGGING_WORKER_MAX_QUEUE_SIZE = int(os.getenv("LOGGING_WORKER_MAX_QUEUE_SIZE", 50_000))
-LOGGING_WORKER_MAX_TIME_PER_COROUTINE = float(os.getenv("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0))
-LOGGING_WORKER_CLEAR_PERCENTAGE = int(os.getenv("LOGGING_WORKER_CLEAR_PERCENTAGE", 50))  # Percentage of queue to clear (default: 50%)
+LOGGING_WORKER_MAX_TIME_PER_COROUTINE = float(
+    os.getenv("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0)
+)
+LOGGING_WORKER_CLEAR_PERCENTAGE = int(
+    os.getenv("LOGGING_WORKER_CLEAR_PERCENTAGE", 50)
+)  # Percentage of queue to clear (default: 50%)
 MAX_ITERATIONS_TO_CLEAR_QUEUE = int(os.getenv("MAX_ITERATIONS_TO_CLEAR_QUEUE", 200))
 MAX_TIME_TO_CLEAR_QUEUE = float(os.getenv("MAX_TIME_TO_CLEAR_QUEUE", 5.0))
 LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS = float(
@@ -334,6 +345,7 @@ LITELLM_CHAT_PROVIDERS = [
     "huggingface",
     "together_ai",
     "datarobot",
+    "helicone",
     "openrouter",
     "cometapi",
     "vertex_ai",
@@ -403,6 +415,7 @@ LITELLM_CHAT_PROVIDERS = [
     "ovhcloud",
     "lemonade",
     "docker_model_runner",
+    "amazon_nova",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -528,6 +541,7 @@ openai_compatible_endpoints: List = [
     "https://api.friendli.ai/serverless/v1",
     "api.sambanova.ai/v1",
     "api.x.ai/v1",
+    "ollama.com",
     "api.galadriel.ai/v1",
     "api.llama.com/compat/v1/",
     "api.featherless.ai/v1",
@@ -535,11 +549,12 @@ openai_compatible_endpoints: List = [
     "api.studio.nebius.ai/v1",
     "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "https://api.moonshot.ai/v1",
-    "https://platform.publicai.co/v1",
+    "https://api.publicai.co/v1",
     "https://api.v0.dev/v1",
     "https://api.morphllm.com/v1",
     "https://api.lambda.ai/v1",
     "https://api.hyperbolic.xyz/v1",
+    "https://ai-gateway.helicone.ai/",
     "https://ai-gateway.vercel.sh/v1",
     "https://api.inference.wandb.ai/v1",
     "https://api.clarifai.com/v2/ext/openai/v1",
@@ -577,6 +592,7 @@ openai_compatible_providers: List = [
     "github_copilot",  # GitHub Copilot Chat API
     "novita",
     "meta_llama",
+    "publicai",  # PublicAI - JSON-configured provider
     "featherless_ai",
     "nscale",
     "nebius",
@@ -584,6 +600,7 @@ openai_compatible_providers: List = [
     "moonshot",
     "publicai",
     "v0",
+    "helicone",
     "morph",
     "lambda_ai",
     "hyperbolic",
@@ -593,6 +610,7 @@ openai_compatible_providers: List = [
     "cometapi",
     "clarifai",
     "docker_model_runner",
+    "ragflow",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -865,8 +883,9 @@ BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "nova",
     "deepseek_r1",
     "qwen3",
+    "qwen2",
     "twelvelabs",
-    "openai"
+    "openai",
 ]
 
 BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[
@@ -919,6 +938,8 @@ BEDROCK_CONVERSE_MODELS = [
     "amazon.nova-lite-v1:0",
     "amazon.nova-2-lite-v1:0",
     "amazon.nova-pro-v1:0",
+    "writer.palmyra-x4-v1:0",
+    "writer.palmyra-x5-v1:0",
 ]
 
 
@@ -1091,6 +1112,8 @@ CLOUDZERO_MAX_FETCHED_DATA_RECORDS = int(
 SPEND_LOG_CLEANUP_JOB_NAME = "spend_log_cleanup"
 SPEND_LOG_RUN_LOOPS = int(os.getenv("SPEND_LOG_RUN_LOOPS", 500))
 SPEND_LOG_CLEANUP_BATCH_SIZE = int(os.getenv("SPEND_LOG_CLEANUP_BATCH_SIZE", 1000))
+SPEND_LOG_QUEUE_SIZE_THRESHOLD = int(os.getenv("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100))
+SPEND_LOG_QUEUE_POLL_INTERVAL = float(os.getenv("SPEND_LOG_QUEUE_POLL_INTERVAL", 2.0))
 DEFAULT_CRON_JOB_LOCK_TTL_SECONDS = int(
     os.getenv("DEFAULT_CRON_JOB_LOCK_TTL_SECONDS", 60)
 )  # 1 minute

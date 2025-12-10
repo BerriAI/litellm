@@ -27,6 +27,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.guardrails import GenericGuardrailAPIInputs
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import (
     BlockedWord,
@@ -304,12 +305,11 @@ class ContentFilterGuardrail(CustomGuardrail):
 
     async def apply_guardrail(
         self,
-        texts: List[str],
+        inputs: "GenericGuardrailAPIInputs",
         request_data: dict,
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
-        images: Optional[List[str]] = None,
-    ) -> Tuple[List[str], Optional[List[str]]]:
+    ) -> "GenericGuardrailAPIInputs":
         """
         Apply content filtering guardrail to a batch of texts.
 
@@ -317,17 +317,19 @@ class ContentFilterGuardrail(CustomGuardrail):
         either blocking the request or masking the sensitive content.
 
         Args:
-            texts: List of texts to apply the guardrail to
+            inputs: Dictionary containing texts and optional images
             request_data: Request data dictionary for logging metadata
             input_type: Whether this is a "request" or "response"
-            images: Optional list of images (not processed)
+            logging_obj: Optional logging object
 
         Returns:
-            Tuple of (processed_texts, images) - texts may be masked, images unchanged
+            GenericGuardrailAPIInputs - processed_texts may be masked, images unchanged
 
         Raises:
             HTTPException: If sensitive content is detected and action is BLOCK
         """
+        texts = inputs.get("texts", [])
+
         verbose_proxy_logger.debug(
             f"ContentFilterGuardrail: Applying guardrail to {len(texts)} text(s)"
         )
@@ -335,10 +337,11 @@ class ContentFilterGuardrail(CustomGuardrail):
         processed_texts = []
 
         for text in texts:
-            # Check regex patterns
-            pattern_match = self._check_patterns(text)
-            if pattern_match:
-                matched_text, pattern_name, action = pattern_match
+            # Check regex patterns - process ALL patterns, not just first match
+            for compiled_pattern, pattern_name, action in self.compiled_patterns:
+                match = compiled_pattern.search(text)
+                if not match:
+                    continue
 
                 if action == ContentFilterAction.BLOCK:
                     error_msg = f"Content blocked: {pattern_name} pattern detected"
@@ -348,15 +351,23 @@ class ContentFilterGuardrail(CustomGuardrail):
                         detail={"error": error_msg, "pattern": pattern_name},
                     )
                 elif action == ContentFilterAction.MASK:
-                    # Replace the matched text with redaction tag
-                    redaction_tag = self._mask_content(matched_text, pattern_name)
-                    text = text.replace(matched_text, redaction_tag)
-                    verbose_proxy_logger.info(f"Masked {pattern_name} in content")
+                    # Replace ALL matches of this pattern with redaction tag
+                    redaction_tag = self.pattern_redaction_format.format(
+                        pattern_name=pattern_name.upper()
+                    )
+                    text = compiled_pattern.sub(redaction_tag, text)
+                    verbose_proxy_logger.info(f"Masked all {pattern_name} matches in content")
 
-            # Check blocked words
-            word_match = self._check_blocked_words(text)
-            if word_match:
-                keyword, action, description = word_match
+            # Check blocked words - iterate through ALL blocked words
+            # to ensure all matching keywords are processed, not just the first one
+            text_lower = text.lower()
+            for keyword, (action, description) in self.blocked_words.items():
+                if keyword not in text_lower:
+                    continue
+
+                verbose_proxy_logger.debug(
+                    f"Blocked word '{keyword}' found with action {action}"
+                )
 
                 if action == ContentFilterAction.BLOCK:
                     error_msg = f"Content blocked: keyword '{keyword}' detected"
@@ -379,6 +390,8 @@ class ContentFilterGuardrail(CustomGuardrail):
                         text,
                         flags=re.IGNORECASE,
                     )
+                    # Update text_lower after masking to avoid re-matching
+                    text_lower = text.lower()
                     verbose_proxy_logger.info(f"Masked keyword '{keyword}' in content")
 
             processed_texts.append(text)
@@ -386,7 +399,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         verbose_proxy_logger.debug(
             "ContentFilterGuardrail: Guardrail applied successfully"
         )
-        return processed_texts, images
+        inputs["texts"] = processed_texts
+        return inputs
 
     async def async_post_call_streaming_iterator_hook(
         self,
@@ -423,11 +437,16 @@ class ContentFilterGuardrail(CustomGuardrail):
                         if isinstance(choice.delta.content, str):
                             # Check the chunk content using apply_guardrail
                             try:
-                                processed_content = await self.apply_guardrail(
-                                    texts=[choice.delta.content],
+                                guardrailed_inputs = await self.apply_guardrail(
+                                    inputs={"texts": [choice.delta.content]},
                                     input_type="response",
-                                    images=None,
                                     request_data=request_data,
+                                )
+                                processed_texts = guardrailed_inputs.get("texts", [])
+                                processed_content = (
+                                    processed_texts[0]
+                                    if processed_texts
+                                    else choice.delta.content
                                 )
                                 if processed_content != choice.delta.content:
                                     choice.delta.content = processed_content

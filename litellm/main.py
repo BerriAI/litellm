@@ -52,12 +52,12 @@ from pydantic import BaseModel
 from typing_extensions import overload
 
 import litellm
-from litellm import (  # type: ignore
-    client,
-    exception_type,
-    get_litellm_params,
-    get_optional_params,
-)
+
+# client must be imported from litellm as it's a decorator used at function definition time
+from litellm import client
+
+# Other utils are imported directly to avoid circular imports
+from litellm.utils import exception_type, get_litellm_params, get_optional_params
 
 # Logging is imported lazily when needed to avoid loading litellm_logging at import time
 if TYPE_CHECKING:
@@ -176,6 +176,7 @@ from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.deprecated_providers import aleph_alpha, palm
 from .llms.gemini.common_utils import get_api_key_from_env
 from .llms.groq.chat.handler import GroqChatCompletion
+from .llms.sap.chat.handler import GenAIHubOrchestration
 from .llms.heroku.chat.transformation import HerokuChatConfig
 from .llms.huggingface.embedding.handler import HuggingFaceEmbedding
 from .llms.lemonade.chat.transformation import LemonadeChatConfig
@@ -255,6 +256,8 @@ openai_text_completions = OpenAITextCompletion()
 openai_audio_transcriptions = OpenAIAudioTranscription()
 openai_image_variations = OpenAIImageVariationsHandler()
 groq_chat_completions = GroqChatCompletion()
+sap_gen_ai_hub_chat_completions = GenAIHubOrchestration()
+sap_gen_ai_hub_emb = GenAIHubOrchestration()
 azure_ai_embedding = AzureAIEmbedding()
 anthropic_chat_completions = AnthropicChatCompletion()
 azure_anthropic_chat_completions = AzureAnthropicChatCompletion()
@@ -393,7 +396,7 @@ async def acompletion(
     top_logprobs: Optional[int] = None,
     deployment_id=None,
     reasoning_effort: Optional[
-        Literal["none", "minimal", "low", "medium", "high", "default"]
+        Literal["none", "minimal", "low", "medium", "high", "xhigh", "default"]
     ] = None,
     verbosity: Optional[Literal["low", "medium", "high"]] = None,
     safety_identifier: Optional[str] = None,
@@ -1006,7 +1009,7 @@ def completion(  # type: ignore # noqa: PLR0915
     user: Optional[str] = None,
     # openai v1.0+ new params
     reasoning_effort: Optional[
-        Literal["none", "minimal", "low", "medium", "high", "default"]
+        Literal["none", "minimal", "low", "medium", "high", "xhigh", "default"]
     ] = None,
     verbosity: Optional[Literal["low", "medium", "high"]] = None,
     response_format: Optional[Union[dict, Type[BaseModel]]] = None,
@@ -1988,6 +1991,36 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
                 raise e
 
+        elif custom_llm_provider == "ragflow":
+            ## COMPLETION CALL - RAGFlow uses HTTP handler to support custom URL paths
+            try:
+                response = base_llm_http_handler.completion(
+                    model=model,
+                    messages=messages,
+                    headers=headers,
+                    model_response=model_response,
+                    api_key=api_key,
+                    api_base=api_base,
+                    acompletion=acompletion,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    shared_session=shared_session,
+                    timeout=timeout,
+                    client=client,
+                    custom_llm_provider=custom_llm_provider,
+                    encoding=encoding,
+                    stream=stream,
+                    provider_config=provider_config,
+                )
+            except Exception as e:
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=str(e),
+                    additional_args={"headers": headers},
+                )
+                raise e
         elif custom_llm_provider == "xai":
             ## COMPLETION CALL
             try:
@@ -2062,6 +2095,34 @@ def completion(  # type: ignore # noqa: PLR0915
                 api_key=api_key,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
                 client=client,
+            )
+        elif custom_llm_provider == "sap":
+            headers = headers or litellm.headers
+            ## LOAD CONFIG - if set
+            config = litellm.GenAIHubOrchestrationConfig.get_config()
+            for k, v in config.items():
+                if (
+                        k not in optional_params
+                ):  # completion(top_k=3) > openai_config(top_k=3) <- allows for dynamic variables to be passed in
+                    optional_params[k] = v
+
+            response = sap_gen_ai_hub_chat_completions.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                timeout=timeout,  # type: ignore
+                shared_session=shared_session,
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+                encoding=encoding,
+                api_key=api_key,
+                api_base=api_base,
+                stream=stream,
             )
         elif custom_llm_provider == "aiohttp_openai":
             # NEW aiohttp provider for 10-100x higher RPS
@@ -2635,6 +2696,35 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
             response = model_response
+        elif custom_llm_provider == "amazon_nova":
+            api_key = (
+                api_key
+                or litellm.amazon_nova_api_key
+                or get_secret_str("AMAZON_NOVA_API_KEY")
+                or litellm.api_key
+            )
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("AMAZON_NOVA_API_BASE")
+                or "https://api.nova.amazon.com/v1"
+            )
+            response = openai_like_chat_completion.completion(
+                model=model,
+                messages=messages,
+                api_base=api_base,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                custom_llm_provider=custom_llm_provider,
+                custom_prompt_dict=custom_prompt_dict,
+            )
         elif custom_llm_provider == "huggingface":
             huggingface_key = (
                 api_key
@@ -3476,6 +3566,9 @@ def completion(  # type: ignore # noqa: PLR0915
                 or get_secret("OLLAMA_API_BASE")
                 or "http://localhost:11434"
             )
+            if api_key is not None and "Authorization" not in headers:
+                headers["Authorization"] = f"Bearer {api_key}"
+
             response = base_llm_http_handler.completion(
                 model=model,
                 stream=stream,
@@ -3509,6 +3602,9 @@ def completion(  # type: ignore # noqa: PLR0915
                 or os.environ.get("OLLAMA_API_KEY")
                 or litellm.api_key
             )
+            if api_key is not None and "Authorization" not in headers:
+                headers["Authorization"] = f"Bearer {api_key}"
+
 
             response = base_llm_http_handler.completion(
                 model=model,
@@ -4790,6 +4886,21 @@ def embedding(  # noqa: PLR0915
                 timeout=timeout,
                 model_response=EmbeddingResponse(),
                 optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+            )
+        elif custom_llm_provider == "sap":
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                litellm_params={},
                 client=client,
                 aembedding=aembedding,
             )

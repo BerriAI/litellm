@@ -1071,7 +1071,7 @@ def _parse_content_for_reasoning(
         return None, message_text
 
     reasoning_match = re.match(
-        r"<(?:think|thinking)>(.*?)</(?:think|thinking)>(.*)", message_text, re.DOTALL
+        r"<(?:think|thinking|budget:thinking)>(.*?)</(?:think|thinking|budget:thinking)>(.*)", message_text, re.DOTALL
     )
 
     if reasoning_match:

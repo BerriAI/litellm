@@ -71,6 +71,7 @@ from litellm.litellm_core_utils.redact_messages import (
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils
+from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.containers.main import ContainerObject
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -1738,6 +1739,7 @@ class Logging(LiteLLMLoggingBaseClass):
             and logging_result.get("object") == "search"  # Search API (dict format)
             or isinstance(logging_result, VideoObject)
             or isinstance(logging_result, ContainerObject)
+            or isinstance(logging_result, LiteLLMSendMessageResponse)  # A2A
             or (self.call_type == CallTypes.call_mcp_tool.value)
         ):
             return True
@@ -3617,15 +3619,15 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
 
             for callback in _in_memory_loggers:
                 if (
-                    isinstance(callback, OpenTelemetry)
+                    isinstance(callback, ArizePhoenixLogger)
                     and callback.callback_name == "arize_phoenix"
                 ):
                     return callback  # type: ignore
-            _otel_logger = OpenTelemetry(
+            _arize_phoenix_otel_logger = ArizePhoenixLogger(
                 config=otel_config, callback_name="arize_phoenix"
             )
-            _in_memory_loggers.append(_otel_logger)
-            return _otel_logger  # type: ignore
+            _in_memory_loggers.append(_arize_phoenix_otel_logger)
+            return _arize_phoenix_otel_logger  # type: ignore
         elif logging_integration == "otel":
             from litellm.integrations.opentelemetry import OpenTelemetry
 
@@ -3797,6 +3799,31 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
                     return callback  # type: ignore
             _otel_logger = LangfuseOtelLogger(
                 config=otel_config, callback_name="langfuse_otel"
+            )
+            _in_memory_loggers.append(_otel_logger)
+            return _otel_logger  # type: ignore
+        elif logging_integration == "weave_otel":
+            from litellm.integrations.opentelemetry import (
+                OpenTelemetryConfig,
+            )
+            from litellm.integrations.weave.weave_otel import WeaveOtelLogger, get_weave_otel_config
+
+            weave_otel_config = get_weave_otel_config()
+
+            otel_config = OpenTelemetryConfig(
+                exporter=weave_otel_config.protocol,
+                endpoint=weave_otel_config.endpoint,
+                headers=weave_otel_config.otlp_auth_headers,
+            )
+
+            for callback in _in_memory_loggers:
+                if (
+                    isinstance(callback, WeaveOtelLogger)
+                    and callback.callback_name == "weave_otel"
+                ):
+                    return callback  # type: ignore
+            _otel_logger = WeaveOtelLogger(
+                config=otel_config, callback_name="weave_otel"
             )
             _in_memory_loggers.append(_otel_logger)
             return _otel_logger  # type: ignore

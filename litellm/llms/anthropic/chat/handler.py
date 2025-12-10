@@ -10,6 +10,7 @@ from typing import (
     Callable,
     Dict,
     List,
+    Literal,
     Optional,
     Tuple,
     Union,
@@ -436,9 +437,7 @@ class AnthropicChatCompletion(BaseLLM):
 
             else:
                 if client is None or not isinstance(client, HTTPHandler):
-                    client = _get_httpx_client(
-                        params={"timeout": timeout}
-                    )
+                    client = _get_httpx_client(params={"timeout": timeout})
                 else:
                     client = client
 
@@ -500,6 +499,11 @@ class ModelResponseIterator:
         # Track if we've converted any response_format tools (affects finish_reason)
         self.converted_response_format_tool: bool = False
 
+        # For handling partial JSON chunks from fragmentation
+        # See: https://github.com/BerriAI/litellm/issues/17473
+        self.accumulated_json: str = ""
+        self.chunk_type: Literal["valid_json", "accumulated_json"] = "valid_json"
+
     def check_empty_tool_call_args(self) -> bool:
         """
         Check if the tool call block so far has been an empty string
@@ -528,9 +532,7 @@ class ModelResponseIterator:
             usage_object=cast(dict, anthropic_usage_chunk), reasoning_content=None
         )
 
-    def _content_block_delta_helper(
-        self, chunk: dict
-    ) -> Tuple[
+    def _content_block_delta_helper(self, chunk: dict) -> Tuple[
         str,
         Optional[ChatCompletionToolCallChunk],
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]],
@@ -870,42 +872,105 @@ class ModelResponseIterator:
         usage = self._handle_usage(anthropic_usage_chunk=message_delta["usage"])
         return finish_reason, usage
 
+    def _handle_accumulated_json_chunk(
+        self, data_str: str
+    ) -> Optional[ModelResponseStream]:
+        """
+        Handle partial JSON chunks by accumulating them until valid JSON is received.
+
+        This fixes network fragmentation issues where SSE data chunks may be split
+        across TCP packets. See: https://github.com/BerriAI/litellm/issues/17473
+
+        Args:
+            data_str: The JSON string to parse (without "data:" prefix)
+
+        Returns:
+            ModelResponseStream if JSON is complete, None if still accumulating
+        """
+        # Accumulate JSON data
+        self.accumulated_json += data_str
+
+        # Try to parse the accumulated JSON
+        try:
+            data_json = json.loads(self.accumulated_json)
+            self.accumulated_json = ""  # Reset after successful parsing
+            return self.chunk_parser(chunk=data_json)
+        except json.JSONDecodeError:
+            # If it's not valid JSON yet, continue to the next chunk
+            return None
+
+    def _parse_sse_data(self, str_line: str) -> Optional[ModelResponseStream]:
+        """
+        Parse SSE data line, handling both complete and partial JSON chunks.
+
+        Args:
+            str_line: The SSE line starting with "data:"
+
+        Returns:
+            ModelResponseStream if parsing succeeded, None if accumulating partial JSON
+        """
+        data_str = str_line[5:]  # Remove "data:" prefix
+
+        if self.chunk_type == "accumulated_json":
+            # Already in accumulation mode, keep accumulating
+            return self._handle_accumulated_json_chunk(data_str)
+
+        # Try to parse as valid JSON first
+        try:
+            data_json = json.loads(data_str)
+            return self.chunk_parser(chunk=data_json)
+        except json.JSONDecodeError:
+            # Switch to accumulation mode and start accumulating
+            self.chunk_type = "accumulated_json"
+            return self._handle_accumulated_json_chunk(data_str)
+
     # Sync iterator
     def __iter__(self):
         return self
 
     def __next__(self):
-        try:
-            chunk = self.response_iterator.__next__()
-        except StopIteration:
-            raise StopIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+        while True:
+            try:
+                chunk = self.response_iterator.__next__()
+            except StopIteration:
+                # If we have accumulated JSON when stream ends, try to parse it
+                if self.accumulated_json:
+                    try:
+                        data_json = json.loads(self.accumulated_json)
+                        self.accumulated_json = ""
+                        return self.chunk_parser(chunk=data_json)
+                    except json.JSONDecodeError:
+                        pass
+                raise StopIteration
+            except ValueError as e:
+                raise RuntimeError(f"Error receiving chunk from stream: {e}")
 
-        try:
-            str_line = chunk
-            if isinstance(chunk, bytes):  # Handle binary data
-                str_line = chunk.decode("utf-8")  # Convert bytes to string
-                index = str_line.find("data:")
-                if index != -1:
-                    str_line = str_line[index:]
+            try:
+                str_line = chunk
+                if isinstance(chunk, bytes):  # Handle binary data
+                    str_line = chunk.decode("utf-8")  # Convert bytes to string
+                    index = str_line.find("data:")
+                    if index != -1:
+                        str_line = str_line[index:]
 
-            if str_line.startswith("data:"):
-                data_json = json.loads(str_line[5:])
-                return self.chunk_parser(chunk=data_json)
-            else:
-                return GenericStreamingChunk(
-                    text="",
-                    is_finished=False,
-                    finish_reason="",
-                    usage=None,
-                    index=0,
-                    tool_use=None,
-                )
-        except StopIteration:
-            raise StopIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+                if str_line.startswith("data:"):
+                    result = self._parse_sse_data(str_line)
+                    if result is not None:
+                        return result
+                    # If None, continue loop to get more chunks for accumulation
+                else:
+                    return GenericStreamingChunk(
+                        text="",
+                        is_finished=False,
+                        finish_reason="",
+                        usage=None,
+                        index=0,
+                        tool_use=None,
+                    )
+            except StopIteration:
+                raise StopIteration
+            except ValueError as e:
+                raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
     # Async iterator
     def __aiter__(self):
@@ -913,37 +978,48 @@ class ModelResponseIterator:
         return self
 
     async def __anext__(self):
-        try:
-            chunk = await self.async_response_iterator.__anext__()
-        except StopAsyncIteration:
-            raise StopAsyncIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+        while True:
+            try:
+                chunk = await self.async_response_iterator.__anext__()
+            except StopAsyncIteration:
+                # If we have accumulated JSON when stream ends, try to parse it
+                if self.accumulated_json:
+                    try:
+                        data_json = json.loads(self.accumulated_json)
+                        self.accumulated_json = ""
+                        return self.chunk_parser(chunk=data_json)
+                    except json.JSONDecodeError:
+                        pass
+                raise StopAsyncIteration
+            except ValueError as e:
+                raise RuntimeError(f"Error receiving chunk from stream: {e}")
 
-        try:
-            str_line = chunk
-            if isinstance(chunk, bytes):  # Handle binary data
-                str_line = chunk.decode("utf-8")  # Convert bytes to string
-                index = str_line.find("data:")
-                if index != -1:
-                    str_line = str_line[index:]
+            try:
+                str_line = chunk
+                if isinstance(chunk, bytes):  # Handle binary data
+                    str_line = chunk.decode("utf-8")  # Convert bytes to string
+                    index = str_line.find("data:")
+                    if index != -1:
+                        str_line = str_line[index:]
 
-            if str_line.startswith("data:"):
-                data_json = json.loads(str_line[5:])
-                return self.chunk_parser(chunk=data_json)
-            else:
-                return GenericStreamingChunk(
-                    text="",
-                    is_finished=False,
-                    finish_reason="",
-                    usage=None,
-                    index=0,
-                    tool_use=None,
-                )
-        except StopAsyncIteration:
-            raise StopAsyncIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+                if str_line.startswith("data:"):
+                    result = self._parse_sse_data(str_line)
+                    if result is not None:
+                        return result
+                    # If None, continue loop to get more chunks for accumulation
+                else:
+                    return GenericStreamingChunk(
+                        text="",
+                        is_finished=False,
+                        finish_reason="",
+                        usage=None,
+                        index=0,
+                        tool_use=None,
+                    )
+            except StopAsyncIteration:
+                raise StopAsyncIteration
+            except ValueError as e:
+                raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
     def convert_str_chunk_to_generic_chunk(self, chunk: str) -> ModelResponseStream:
         """

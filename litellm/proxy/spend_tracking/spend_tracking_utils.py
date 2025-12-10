@@ -415,10 +415,15 @@ def get_logging_payload(  # noqa: PLR0915
         )
 
         verbose_proxy_logger.debug(
-            "SpendTable: created payload - payload: %s\n\n",
-            json.dumps(payload, indent=4, default=str),
+            "SpendTable: created payload - request_id: %s, model: %s, spend: %s",
+            payload.get("request_id"),
+            payload.get("model"),
+            payload.get("spend"),
         )
 
+        # Explicitly clear large intermediate objects to reduce memory pressure
+        del response_obj_dict, usage, clean_metadata, additional_usage_values
+        
         return payload
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -483,7 +488,7 @@ async def get_spend_by_team_and_customer(
         ON 
             sl.team_id = tt.team_id
         WHERE
-            sl."startTime" BETWEEN $1::date AND $2::date
+            sl."startTime" >= $1::timestamptz AND sl."startTime" < ($2::timestamptz + INTERVAL '1 day')
             AND sl.team_id = $3
             AND sl.end_user = $4
         GROUP BY

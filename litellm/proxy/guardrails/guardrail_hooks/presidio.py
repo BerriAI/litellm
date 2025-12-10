@@ -29,9 +29,11 @@ import aiohttp
 import litellm  # noqa: E401
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
+from litellm.types.guardrails import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
 from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
 from litellm.exceptions import BlockedPiiEntityError
@@ -205,6 +207,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Send text to the Presidio analyzer endpoint and get analysis results
         """
         try:
+            # Skip empty or whitespace-only text to avoid Presidio errors
+            # Common in tool/function calling where assistant content is empty
+            if not text or len(text.strip()) == 0:
+                verbose_proxy_logger.debug(
+                    "Skipping Presidio analysis for empty/whitespace-only text"
+                )
+                return []
+
             async with aiohttp.ClientSession() as session:
                 if self.mock_redacted_text is not None:
                     return self.mock_redacted_text
@@ -229,9 +239,42 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 async with session.post(analyze_url, json=analyze_payload) as response:
                     analyze_results = await response.json()
                     verbose_proxy_logger.debug("analyze_results: %s", analyze_results)
+                    
+                    # Handle error responses from Presidio (e.g., {'error': 'No text provided'})
+                    # Presidio may return a dict instead of a list when errors occur
+                    if isinstance(analyze_results, dict):
+                        if "error" in analyze_results:
+                            verbose_proxy_logger.warning(
+                                "Presidio analyzer returned error: %s, returning empty list",
+                                analyze_results.get("error")
+                            )
+                            return []
+                        # If it's a dict but not an error, try to process it as a single item
+                        verbose_proxy_logger.debug(
+                            "Presidio returned dict (not list), attempting to process as single item"
+                        )
+                        try:
+                            return [PresidioAnalyzeResponseItem(**analyze_results)]
+                        except Exception as e:
+                            verbose_proxy_logger.warning(
+                                "Failed to parse Presidio dict response: %s, returning empty list",
+                                e
+                            )
+                            return []
+                    
+                    # Normal case: list of results
                     final_results = []
                     for item in analyze_results:
-                        final_results.append(PresidioAnalyzeResponseItem(**item))
+                        try:
+                            final_results.append(PresidioAnalyzeResponseItem(**item))
+                        except TypeError as te:
+                            # Handle case where item is not a dict (shouldn't happen, but be defensive)
+                            verbose_proxy_logger.warning(
+                                "Skipping invalid Presidio result item: %s (error: %s)",
+                                item,
+                                te
+                            )
+                            continue
                     return final_results
         except Exception as e:
             raise e
@@ -713,17 +756,18 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
     async def apply_guardrail(
         self,
-        texts: List[str],
+        inputs: "GenericGuardrailAPIInputs",
         request_data: dict,
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
-        images: Optional[List[str]] = None,
-    ) -> Tuple[List[str], Optional[List[str]]]:
+    ) -> "GenericGuardrailAPIInputs":
         """
         UI will call this function to check:
             1. If the connection to the guardrail is working
             2. When Testing the guardrail with some text, this function will be called with the input text and returns a text after applying the guardrail
         """
+        texts = inputs.get("texts", [])
+
         new_texts = []
         for text in texts:
             modified_text = await self.check_pii(
@@ -733,7 +777,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 request_data=request_data or {},
             )
             new_texts.append(modified_text)
-        return new_texts, images
+        inputs["texts"] = new_texts
+        return inputs
 
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
         """

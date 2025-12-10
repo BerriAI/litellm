@@ -49,12 +49,13 @@ class CohereRerankHandler(BaseTranslation):
         # Process query only
         query = data.get("query")
         if query is not None and isinstance(query, str):
-            guardrailed_texts, _ = await guardrail_to_apply.apply_guardrail(
-                texts=[query],
+            guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+                inputs={"texts": [query]},
                 request_data=data,
                 input_type="request",
                 logging_obj=litellm_logging_obj,
             )
+            guardrailed_texts = guardrailed_inputs.get("texts", [])
             data["query"] = guardrailed_texts[0] if guardrailed_texts else query
 
             verbose_proxy_logger.debug(
