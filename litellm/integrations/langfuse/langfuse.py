@@ -45,6 +45,7 @@ class LangFuseLogger:
         langfuse_secret=None,
         langfuse_host=None,
         flush_interval=1,
+        langfuse_masking_function=None,
     ):
         try:
             import langfuse
@@ -87,6 +88,12 @@ class LangFuseLogger:
 
         if Version(self.langfuse_sdk_version) >= Version("2.6.0"):
             parameters["sdk_integration"] = "litellm"
+
+        # Add masking function if provided
+        # See: https://langfuse.com/docs/observability/features/masking
+        if langfuse_masking_function is not None:
+            parameters["mask"] = langfuse_masking_function
+
         self.Langfuse: Langfuse = self.safe_init_langfuse_client(parameters)
 
         # set the current langfuse project id in the environ

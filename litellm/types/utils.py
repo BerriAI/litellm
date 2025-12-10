@@ -2659,6 +2659,10 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langfuse_secret_key: Optional[str]
     langfuse_host: Optional[str]
 
+    # Langfuse masking function - called to mask/redact sensitive data before sending to Langfuse
+    # See: https://langfuse.com/docs/observability/features/masking
+    langfuse_masking_function: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]]
+
     # Langfuse prompt version
     langfuse_prompt_version: Optional[int]
 

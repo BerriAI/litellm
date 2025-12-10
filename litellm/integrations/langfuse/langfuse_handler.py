@@ -54,9 +54,15 @@ class LangFuseHandler:
         )
         credentials_dict = dict(_credentials)
 
+        # Create a cache-friendly version of credentials
+        # masking_function can't be serialized to JSON, so we use its id for caching
+        cache_credentials = LangFuseHandler._get_cache_friendly_credentials(
+            credentials_dict
+        )
+
         # check if langfuse logger is already cached
         temp_langfuse_logger = in_memory_dynamic_logger_cache.get_cache(
-            credentials=credentials_dict, service_name="langfuse"
+            credentials=cache_credentials, service_name="langfuse"
         )
 
         # if not cached, create a new langfuse logger and cache it
@@ -64,11 +70,28 @@ class LangFuseHandler:
             temp_langfuse_logger = (
                 LangFuseHandler._create_langfuse_logger_from_credentials(
                     credentials=credentials_dict,
+                    cache_credentials=cache_credentials,
                     in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
                 )
             )
 
         return temp_langfuse_logger
+
+    @staticmethod
+    def _get_cache_friendly_credentials(credentials: Dict) -> Dict:
+        """
+        Convert credentials dict to a cache-friendly version.
+
+        The masking function can't be serialized to JSON (used by the cache),
+        so we replace it with its id() for caching purposes.
+        """
+        cache_credentials = credentials.copy()
+        masking_function = cache_credentials.get("langfuse_masking_function")
+        if masking_function is not None:
+            # Use the function's id for cache key generation
+            cache_credentials["langfuse_masking_function_id"] = id(masking_function)
+            del cache_credentials["langfuse_masking_function"]
+        return cache_credentials
 
     @staticmethod
     def _return_global_langfuse_logger(
@@ -99,6 +122,7 @@ class LangFuseHandler:
             globalLangfuseLogger = (
                 LangFuseHandler._create_langfuse_logger_from_credentials(
                     credentials=credentials_dict,
+                    cache_credentials=credentials_dict,
                     in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
                 )
             )
@@ -107,21 +131,28 @@ class LangFuseHandler:
     @staticmethod
     def _create_langfuse_logger_from_credentials(
         credentials: Dict,
+        cache_credentials: Dict,
         in_memory_dynamic_logger_cache: DynamicLoggingCache,
     ) -> LangFuseLogger:
         """
         This function is used to
         1. create a LangFuseLogger from the credentials
         2. cache the LangFuseLogger to prevent re-creating it for the same credentials
+
+        Args:
+            credentials: The full credentials dict (may include masking_function callable)
+            cache_credentials: Cache-friendly version of credentials (masking_function replaced with id)
+            in_memory_dynamic_logger_cache: The cache to store the logger
         """
 
         langfuse_logger = LangFuseLogger(
             langfuse_public_key=credentials.get("langfuse_public_key"),
             langfuse_secret=credentials.get("langfuse_secret"),
             langfuse_host=credentials.get("langfuse_host"),
+            langfuse_masking_function=credentials.get("langfuse_masking_function"),
         )
         in_memory_dynamic_logger_cache.set_cache(
-            credentials=credentials,
+            credentials=cache_credentials,
             service_name="langfuse",
             logging_obj=langfuse_logger,
         )
@@ -147,6 +178,9 @@ class LangFuseHandler:
                 "langfuse_public_key"
             ),
             langfuse_host=standard_callback_dynamic_params.get("langfuse_host"),
+            langfuse_masking_function=standard_callback_dynamic_params.get(
+                "langfuse_masking_function"
+            ),
         )
 
     @staticmethod
@@ -165,6 +199,8 @@ class LangFuseHandler:
             or standard_callback_dynamic_params.get("langfuse_public_key") is not None
             or standard_callback_dynamic_params.get("langfuse_secret") is not None
             or standard_callback_dynamic_params.get("langfuse_secret_key") is not None
+            or standard_callback_dynamic_params.get("langfuse_masking_function")
+            is not None
         ):
             return True
         return False

@@ -387,3 +387,5 @@ def test_get_text_completion_content_for_langfuse():
     mock_response = TextCompletionResponse()
     result = LangFuseLogger._get_text_completion_content_for_langfuse(mock_response)
     assert result is None
+
+
