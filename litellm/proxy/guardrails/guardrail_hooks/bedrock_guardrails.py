@@ -1270,14 +1270,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             Exception: If content is blocked by Bedrock guardrail
         """
         texts = inputs.get("texts", [])
-
-        # Add the function name and arguments to guardrails validation
-        for tool in inputs.get("tool_calls", []):
-            if tool.get("type") != "function":
-                continue
-            func = tool.get("function", {})
-            texts.extend(filter(None, [func.get("name"), func.get("arguments")]))
-
         try:
             verbose_proxy_logger.debug(
                 f"Bedrock Guardrail: Applying guardrail to {len(texts)} text(s)"
