@@ -103,7 +103,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 status_code=400,
             )
         ####### get required params for all anthropic messages requests ######
-        verbose_logger.debug(f"🔍 TRANSFORMATION DEBUG - Messages: {messages}")
+        verbose_logger.debug(f"TRANSFORMATION DEBUG - Messages: {messages}")
         anthropic_messages_request: AnthropicMessagesRequest = AnthropicMessagesRequest(
             messages=messages,
             max_tokens=max_tokens,

@@ -1,4 +1,5 @@
 import importlib
+import traceback
 from typing import Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -293,7 +294,11 @@ if MCP_AVAILABLE:
         NewMCPServerRequest,
     )
 
-    async def _execute_with_mcp_client(request: NewMCPServerRequest, operation):
+    async def _execute_with_mcp_client(
+        request: NewMCPServerRequest,
+        operation,
+        oauth2_headers: Optional[Dict[str, str]] = None,
+    ):
         """
         Common helper to create MCP client, execute operation, and ensure proper cleanup.
 
@@ -315,13 +320,19 @@ if MCP_AVAILABLE:
                     mcp_info=request.mcp_info,
                 ),
                 mcp_auth_header=None,
+                extra_headers=oauth2_headers,
             )
 
             return await operation(client)
 
         except Exception as e:
             verbose_logger.error(f"Error in MCP operation: {e}", exc_info=True)
-            return {"status": "error", "message": "An internal error has occurred."}
+            stack_trace = traceback.format_exc()
+            return {
+                "status": "error",
+                "message": f"An internal error has occurred: {str(e)}",
+                "stack_trace": stack_trace,
+            }
 
     @router.post("/test/connection")
     async def test_connection(
@@ -342,12 +353,19 @@ if MCP_AVAILABLE:
 
     @router.post("/test/tools/list")
     async def test_tools_list(
-        request: NewMCPServerRequest,
+        request: Request,
+        new_mcp_server_request: NewMCPServerRequest,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
         Preview tools available from MCP server before adding it
         """
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+
+        headers = request.headers
+        oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers)
 
         async def _list_tools_operation(client):
             async def _list_tools_session_operation(session):
@@ -366,4 +384,6 @@ if MCP_AVAILABLE:
                 "message": "Successfully retrieved tools",
             }
 
-        return await _execute_with_mcp_client(request, _list_tools_operation)
+        return await _execute_with_mcp_client(
+            new_mcp_server_request, _list_tools_operation, oauth2_headers
+        )

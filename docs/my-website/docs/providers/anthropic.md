@@ -5,6 +5,7 @@ import TabItem from '@theme/TabItem';
 LiteLLM supports all anthropic models.
 
 - `claude-sonnet-4-5-20250929`
+- `claude-opus-4-5-20251101`
 - `claude-opus-4-1-20250805`
 - `claude-4` (`claude-opus-4-20250514`, `claude-sonnet-4-20250514`)
 - `claude-3.7` (`claude-3-7-sonnet-20250219`)
@@ -17,11 +18,11 @@ LiteLLM supports all anthropic models.
 
 | Property | Details |
 |-------|-------|
-| Description | Claude is a highly performant, trustworthy, and intelligent AI platform built by Anthropic. Claude excels at tasks involving language, reasoning, analysis, coding, and more. |
-| Provider Route on LiteLLM | `anthropic/` (add this prefix to the model name, to route any requests to Anthropic - e.g. `anthropic/claude-3-5-sonnet-20240620`) |
-| Provider Doc | [Anthropic ↗](https://docs.anthropic.com/en/docs/build-with-claude/overview) |
-| API Endpoint for Provider | https://api.anthropic.com |
-| Supported Endpoints | `/chat/completions` |
+| Description | Claude is a highly performant, trustworthy, and intelligent AI platform built by Anthropic. Claude excels at tasks involving language, reasoning, analysis, coding, and more. Also available via Azure Foundry. |
+| Provider Route on LiteLLM | `anthropic/` (add this prefix to the model name, to route any requests to Anthropic - e.g. `anthropic/claude-3-5-sonnet-20240620`). For Azure Foundry deployments, use `azure/claude-*` (see [Azure Anthropic documentation](../providers/azure/azure_anthropic)) |
+| Provider Doc | [Anthropic ↗](https://docs.anthropic.com/en/docs/build-with-claude/overview), [Azure Foundry Claude ↗](https://learn.microsoft.com/en-us/azure/ai-services/foundry-models/claude) |
+| API Endpoint for Provider | https://api.anthropic.com (or Azure Foundry endpoint: `https://<resource-name>.services.ai.azure.com/anthropic`) |
+| Supported Endpoints | `/chat/completions`, `/v1/messages` (passthrough) |
 
 
 ## Supported OpenAI Parameters
@@ -40,13 +41,118 @@ Check this in code, [here](../completion/input.md#translated-openai-params)
 "extra_headers",
 "parallel_tool_calls",
 "response_format",
-"user"
+"user",
+"reasoning_effort",
 ```
 
 :::info
 
-Anthropic API fails requests when `max_tokens` are not passed. Due to this litellm passes `max_tokens=4096` when no `max_tokens` are passed.
+**Notes:**
+- Anthropic API fails requests when `max_tokens` are not passed. Due to this litellm passes `max_tokens=4096` when no `max_tokens` are passed.
+- `response_format` is fully supported for Claude Sonnet 4.5 and Opus 4.1 models (see [Structured Outputs](#structured-outputs) section)
+- `reasoning_effort` is automatically mapped to `output_config={"effort": ...}` for Claude Opus 4.5 models (see [Effort Parameter](./anthropic_effort.md))
 
+:::
+
+## **Structured Outputs**
+
+LiteLLM supports Anthropic's [structured outputs feature](https://platform.claude.com/docs/en/build-with-claude/structured-outputs) for Claude Sonnet 4.5 and Opus 4.1 models. When you use `response_format` with these models, LiteLLM automatically:
+- Adds the required `structured-outputs-2025-11-13` beta header
+- Transforms OpenAI's `response_format` to Anthropic's `output_format` format
+
+### Supported Models
+- `sonnet-4-5` or `sonnet-4.5` (all Sonnet 4.5 variants)
+- `opus-4-1` or `opus-4.1` (all Opus 4.1 variants)
+  - `opus-4-5` or `opus-4.5` (all Opus 4.5 variants)
+  
+### Example Usage
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="claude-sonnet-4-5-20250929",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    response_format={
+        "type": "json_schema",
+        "json_schema": {
+            "name": "capital_response",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "country": {"type": "string"},
+                    "capital": {"type": "string"}
+                },
+                "required": ["country", "capital"],
+                "additionalProperties": False
+            }
+        }
+    }
+)
+
+print(response.choices[0].message.content)
+# Output: {"country": "France", "capital": "Paris"}
+```
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: claude-sonnet-4-5
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5-20250929
+      api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it!
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "claude-sonnet-4-5",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "capital_response",
+            "strict": true,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "country": {"type": "string"},
+                    "capital": {"type": "string"}
+                },
+                "required": ["country", "capital"],
+                "additionalProperties": false
+            }
+        }
+    }
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+:::info
+When using structured outputs with supported models, LiteLLM automatically:
+- Converts OpenAI's `response_format` to Anthropic's `output_schema`
+- Adds the `anthropic-beta: structured-outputs-2025-11-13` header
+- Creates a tool with the schema and forces the model to use it
 :::
 
 ## API Keys
@@ -58,6 +164,22 @@ os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 # os.environ["ANTHROPIC_API_BASE"] = "" # [OPTIONAL] or 'ANTHROPIC_BASE_URL'
 # os.environ["LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX"] = "true" # [OPTIONAL] Disable automatic URL suffix appending
 ```
+
+:::tip Azure Foundry Support
+
+Claude models are also available via Microsoft Azure Foundry. Use the `azure/` prefix instead of `anthropic/` and configure Azure authentication. See the [Azure Anthropic documentation](../providers/azure/azure_anthropic) for details.
+
+Example:
+```python
+response = completion(
+    model="azure/claude-sonnet-4-5",
+    api_base="https://<resource-name>.services.ai.azure.com/anthropic",
+    api_key="your-azure-api-key",
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+```
+
+:::
 
 ### Custom API Base
 
@@ -78,6 +200,30 @@ Without `LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX`:
 
 With `LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX=true`:
 - Base URL `https://my-proxy.com/custom/path` → `https://my-proxy.com/custom/path` (unchanged)
+
+### Azure AI Foundry (Alternative Method)
+
+:::tip Recommended Method
+For full Azure support including Azure AD authentication, use the dedicated [Azure Anthropic provider](./azure/azure_anthropic) with `azure_ai/` prefix.
+:::
+
+As an alternative, you can use the `anthropic/` provider directly with your Azure endpoint since Azure exposes Claude using Anthropic's native API.
+
+```python
+from litellm import completion
+
+response = completion(
+    model="anthropic/claude-sonnet-4-5",
+    api_base="https://<your-resource>.services.ai.azure.com/anthropic",
+    api_key="<your-azure-api-key>",
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+print(response)
+```
+
+:::info
+**Finding your Azure endpoint:** Go to Azure AI Foundry → Your deployment → Overview. Your base URL will be `https://<resource-name>.services.ai.azure.com/anthropic`
+:::
 
 ## Usage
 

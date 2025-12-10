@@ -132,3 +132,188 @@ describe("daily activity helpers", () => {
     expect(urlWithTeams.searchParams.get("exclude_team_ids")).toBe("litellm-dashboard");
   });
 });
+
+describe("UI config and public endpoints", () => {
+  const originalFetch = global.fetch;
+
+  const setupMockFetch = (responses: Array<{ url: string; data: any }>) => {
+    const mockFetch = vi.fn().mockImplementation((url: string) => {
+      const response = responses.find((r) => url.includes(r.url));
+      if (response) {
+        return Promise.resolve({
+          ok: true,
+          json: vi.fn().mockResolvedValue(response.data),
+        } as any);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: vi.fn().mockResolvedValue({}),
+      } as any);
+    });
+    global.fetch = mockFetch as any;
+    return mockFetch;
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("should use proxyBaseURL and server_root_path for /public/providers/fields when server_root_path is defined", async () => {
+    const uiConfig = {
+      server_root_path: "/api/v1",
+      proxy_base_url: "https://example.com",
+    };
+
+    const mockFetch = setupMockFetch([
+      { url: "/litellm/.well-known/litellm-ui-config", data: uiConfig },
+      { url: "/public/providers/fields", data: [] },
+    ]);
+
+    // First call getUiConfig to set up proxyBaseUrl
+    await Networking.getUiConfig();
+
+    // Then call the public endpoint
+    await Networking.getProviderCreateMetadata();
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    const publicEndpointCall = mockFetch.mock.calls.find((call) =>
+      (call[0] as string).includes("/public/providers/fields"),
+    );
+    expect(publicEndpointCall).toBeDefined();
+    const calledUrl = publicEndpointCall![0] as string;
+    expect(calledUrl).toBe("https://example.com/api/v1/public/providers/fields");
+  });
+
+  it("should use proxyBaseURL and server_root_path for /public/model_hub/info when server_root_path is defined", async () => {
+    const uiConfig = {
+      server_root_path: "/api/v1",
+      proxy_base_url: "https://example.com",
+    };
+
+    const mockFetch = setupMockFetch([
+      { url: "/litellm/.well-known/litellm-ui-config", data: uiConfig },
+      { url: "/public/model_hub/info", data: {} },
+    ]);
+
+    await Networking.getUiConfig();
+    await Networking.getPublicModelHubInfo();
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    const publicEndpointCall = mockFetch.mock.calls.find((call) =>
+      (call[0] as string).includes("/public/model_hub/info"),
+    );
+    expect(publicEndpointCall).toBeDefined();
+    const calledUrl = publicEndpointCall![0] as string;
+    expect(calledUrl).toBe("https://example.com/api/v1/public/model_hub/info");
+  });
+
+  it("should use proxyBaseURL and server_root_path for /public/model_hub when server_root_path is defined", async () => {
+    const uiConfig = {
+      server_root_path: "/api/v1",
+      proxy_base_url: "https://example.com",
+    };
+
+    const mockFetch = setupMockFetch([
+      { url: "/litellm/.well-known/litellm-ui-config", data: uiConfig },
+      { url: "/public/model_hub", data: [] },
+    ]);
+
+    await Networking.getUiConfig();
+    await Networking.modelHubPublicModelsCall();
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    const publicEndpointCall = mockFetch.mock.calls.find(
+      (call) => (call[0] as string).includes("/public/model_hub") && !(call[0] as string).includes("/info"),
+    );
+    expect(publicEndpointCall).toBeDefined();
+    const calledUrl = publicEndpointCall![0] as string;
+    expect(calledUrl).toBe("https://example.com/api/v1/public/model_hub");
+  });
+
+  it("should use proxyBaseURL and server_root_path for /public/agent_hub when server_root_path is defined", async () => {
+    const uiConfig = {
+      server_root_path: "/api/v1",
+      proxy_base_url: "https://example.com",
+    };
+
+    const mockFetch = setupMockFetch([
+      { url: "/litellm/.well-known/litellm-ui-config", data: uiConfig },
+      { url: "/public/agent_hub", data: [] },
+    ]);
+
+    await Networking.getUiConfig();
+    await Networking.agentHubPublicModelsCall();
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    const publicEndpointCall = mockFetch.mock.calls.find((call) => (call[0] as string).includes("/public/agent_hub"));
+    expect(publicEndpointCall).toBeDefined();
+    const calledUrl = publicEndpointCall![0] as string;
+    expect(calledUrl).toBe("https://example.com/api/v1/public/agent_hub");
+  });
+
+  it("should use proxyBaseURL and server_root_path for /public/mcp_hub when server_root_path is defined", async () => {
+    const uiConfig = {
+      server_root_path: "/api/v1",
+      proxy_base_url: "https://example.com",
+    };
+
+    const mockFetch = setupMockFetch([
+      { url: "/litellm/.well-known/litellm-ui-config", data: uiConfig },
+      { url: "/public/mcp_hub", data: [] },
+    ]);
+
+    await Networking.getUiConfig();
+    await Networking.mcpHubPublicServersCall();
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    const publicEndpointCall = mockFetch.mock.calls.find((call) => (call[0] as string).includes("/public/mcp_hub"));
+    expect(publicEndpointCall).toBeDefined();
+    const calledUrl = publicEndpointCall![0] as string;
+    expect(calledUrl).toBe("https://example.com/api/v1/public/mcp_hub");
+  });
+
+  it("should not include server_root_path when it is root path", async () => {
+    const uiConfig = {
+      server_root_path: "/",
+      proxy_base_url: "https://example.com",
+    };
+
+    const mockFetch = setupMockFetch([
+      { url: "/litellm/.well-known/litellm-ui-config", data: uiConfig },
+      { url: "/public/providers/fields", data: [] },
+    ]);
+
+    await Networking.getUiConfig();
+    await Networking.getProviderCreateMetadata();
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    const publicEndpointCall = mockFetch.mock.calls.find((call) =>
+      (call[0] as string).includes("/public/providers/fields"),
+    );
+    expect(publicEndpointCall).toBeDefined();
+    const calledUrl = publicEndpointCall![0] as string;
+    expect(calledUrl).toBe("https://example.com/public/providers/fields");
+  });
+
+  it("should return UI config from getUiConfig", async () => {
+    const uiConfig = {
+      server_root_path: "/api/v1",
+      proxy_base_url: "https://example.com",
+    };
+
+    const mockFetch = setupMockFetch([{ url: "/litellm/.well-known/litellm-ui-config", data: uiConfig }]);
+
+    const result = await Networking.getUiConfig();
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    expect(result).toEqual(uiConfig);
+    const configCall = mockFetch.mock.calls.find((call) =>
+      (call[0] as string).includes("/litellm/.well-known/litellm-ui-config"),
+    );
+    expect(configCall).toBeDefined();
+  });
+});

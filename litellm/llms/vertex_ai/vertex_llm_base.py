@@ -19,6 +19,7 @@ from .common_utils import (
     _get_gemini_url,
     _get_vertex_url,
     all_gemini_url_modes,
+    get_vertex_base_model_name,
     is_global_only_vertex_model,
 )
 
@@ -89,9 +90,15 @@ class VertexBase:
                     else ""
                 )
                 if isinstance(environment_id, str) and "aws" in environment_id:
-                    creds = self._credentials_from_identity_pool_with_aws(json_obj)
+                    creds = self._credentials_from_identity_pool_with_aws(
+                        json_obj,
+                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                    )
                 else:
-                    creds = self._credentials_from_identity_pool(json_obj)
+                    creds = self._credentials_from_identity_pool(
+                        json_obj,
+                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                    )
             # Check if the JSON object contains Authorized User configuration (via gcloud auth application-default login)
             elif "type" in json_obj and json_obj["type"] == "authorized_user":
                 creds = self._credentials_from_authorized_user(
@@ -130,15 +137,21 @@ class VertexBase:
         return creds, project_id
 
     # Google Auth Helpers -- extracted for mocking purposes in tests
-    def _credentials_from_identity_pool(self, json_obj):
+    def _credentials_from_identity_pool(self, json_obj, scopes):
         from google.auth import identity_pool
 
-        return identity_pool.Credentials.from_info(json_obj)
+        creds = identity_pool.Credentials.from_info(json_obj)
+        if scopes and hasattr(creds, "requires_scopes") and creds.requires_scopes:
+            creds = creds.with_scopes(scopes)
+        return creds
 
-    def _credentials_from_identity_pool_with_aws(self, json_obj):
+    def _credentials_from_identity_pool_with_aws(self, json_obj, scopes):
         from google.auth import aws
 
-        return aws.Credentials.from_info(json_obj)
+        creds = aws.Credentials.from_info(json_obj)
+        if scopes and hasattr(creds, "requires_scopes") and creds.requires_scopes:
+            creds = creds.with_scopes(scopes)
+        return creds
 
     def _credentials_from_authorized_user(self, json_obj, scopes):
         import google.oauth2.credentials
@@ -241,6 +254,9 @@ class VertexBase:
             auth_header=None,
             url=default_api_base,
             model=model,
+            vertex_project=vertex_project or project_id,
+            vertex_location=vertex_location or "us-central1",
+            vertex_api_version="v1",  # Partner models typically use v1
         )
         return api_base
 
@@ -289,9 +305,24 @@ class VertexBase:
         auth_header: Optional[str],
         url: str,
         model: Optional[str] = None,
+        vertex_project: Optional[str] = None,
+        vertex_location: Optional[str] = None,
+        vertex_api_version: Optional[Literal["v1", "v1beta1"]] = None,
+        use_psc_endpoint_format: bool = False,
     ) -> Tuple[Optional[str], str]:
         """
         for cloudflare ai gateway - https://github.com/BerriAI/litellm/issues/4317
+
+        Handles custom api_base for:
+        1. Gemini (Google AI Studio) - constructs /models/{model}:{endpoint}
+        2. Vertex AI with standard proxies - constructs {api_base}:{endpoint}
+        3. Vertex AI with PSC endpoints - constructs full path structure
+           {api_base}/v1/projects/{project}/locations/{location}/endpoints/{model}:{endpoint}
+           (only when use_psc_endpoint_format=True)
+
+        Args:
+            use_psc_endpoint_format: If True, constructs PSC endpoint URL format.
+                                     If False (default), uses api_base as-is and appends :{endpoint}
 
         ## Returns
         - (auth_header, url) - Tuple[Optional[str], str]
@@ -309,10 +340,31 @@ class VertexBase:
                         "Missing gemini_api_key, please set `GEMINI_API_KEY`"
                     )
                 if gemini_api_key is not None:
-                    auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment] 
+                    auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
             else:
-                url = "{}:{}".format(api_base, endpoint)
-
+                # For Vertex AI
+                if use_psc_endpoint_format:
+                    # User explicitly specified PSC endpoint format
+                    # Construct full PSC/custom endpoint URL
+                    if not (vertex_project and vertex_location and model):
+                        raise ValueError(
+                            "vertex_project, vertex_location, and model are required when use_psc_endpoint_format=True"
+                        )
+                    # Strip routing prefixes (bge/, gemma/, etc.) for endpoint URL construction
+                    model_for_url = get_vertex_base_model_name(model=model)
+                    # Format: {api_base}/v1/projects/{project}/locations/{location}/endpoints/{model}:{endpoint}
+                    version = vertex_api_version or "v1"
+                    url = "{}/{}/projects/{}/locations/{}/endpoints/{}:{}".format(
+                        api_base.rstrip("/"),
+                        version,
+                        vertex_project,
+                        vertex_location,
+                        model_for_url,
+                        endpoint,
+                    )
+                else:
+                    # Fallback to simple format if we don't have all parameters
+                    url = "{}:{}".format(api_base, endpoint)
             if stream is True:
                 url = url + "?alt=sse"
         return auth_header, url
@@ -330,6 +382,7 @@ class VertexBase:
         api_base: Optional[str],
         should_use_v1beta1_features: Optional[bool] = False,
         mode: all_gemini_url_modes = "chat",
+        use_psc_endpoint_format: bool = False,
     ) -> Tuple[Optional[str], str]:
         """
         Internal function. Returns the token and url for the call.
@@ -339,6 +392,7 @@ class VertexBase:
         Returns
             token, url
         """
+        version: Optional[Literal["v1beta1", "v1"]] = None
         if custom_llm_provider == "gemini":
             url, endpoint = _get_gemini_url(
                 mode=mode,
@@ -354,9 +408,7 @@ class VertexBase:
             )
 
             ### SET RUNTIME ENDPOINT ###
-            version: Literal["v1beta1", "v1"] = (
-                "v1beta1" if should_use_v1beta1_features is True else "v1"
-            )
+            version = "v1beta1" if should_use_v1beta1_features is True else "v1"
             url, endpoint = _get_vertex_url(
                 mode=mode,
                 model=model,
@@ -375,6 +427,10 @@ class VertexBase:
             stream=stream,
             url=url,
             model=model,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_api_version=version,
+            use_psc_endpoint_format=use_psc_endpoint_format,
         )
 
     def _handle_reauthentication(
@@ -629,13 +685,13 @@ class VertexBase:
     def safe_get_vertex_ai_project(litellm_params: dict) -> Optional[str]:
         """
         Safely get Vertex AI project without mutating the litellm_params dict.
-        
+
         Unlike get_vertex_ai_project(), this does NOT pop values from the dict,
         making it safe to call multiple times with the same litellm_params.
-        
+
         Args:
             litellm_params: Dictionary containing Vertex AI parameters
-            
+
         Returns:
             Vertex AI project ID or None
         """
@@ -650,13 +706,13 @@ class VertexBase:
     def safe_get_vertex_ai_credentials(litellm_params: dict) -> Optional[str]:
         """
         Safely get Vertex AI credentials without mutating the litellm_params dict.
-        
+
         Unlike get_vertex_ai_credentials(), this does NOT pop values from the dict,
         making it safe to call multiple times with the same litellm_params.
-        
+
         Args:
             litellm_params: Dictionary containing Vertex AI parameters
-            
+
         Returns:
             Vertex AI credentials or None
         """
@@ -670,13 +726,13 @@ class VertexBase:
     def safe_get_vertex_ai_location(litellm_params: dict) -> Optional[str]:
         """
         Safely get Vertex AI location without mutating the litellm_params dict.
-        
+
         Unlike get_vertex_ai_location(), this does NOT pop values from the dict,
         making it safe to call multiple times with the same litellm_params.
-        
+
         Args:
             litellm_params: Dictionary containing Vertex AI parameters
-            
+
         Returns:
             Vertex AI location/region or None
         """

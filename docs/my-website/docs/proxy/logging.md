@@ -371,6 +371,8 @@ export LANGFUSE_PUBLIC_KEY="pk_kk"
 export LANGFUSE_SECRET_KEY="sk_ss"
 # Optional, defaults to https://cloud.langfuse.com
 export LANGFUSE_HOST="https://xxx.langfuse.com"
+# Optional - When True, forwards LiteLLM's logging trace_id to Langfuse
+LANGFUSE_PROPAGATE_TRACE_ID=True
 ```
 
 **Step 4**: Start the proxy, make a test request
@@ -2439,7 +2441,7 @@ Your logs should be available on DynamoDB
     "S": "{'user': 'ishaan-2'}"
   },
   "response": {
-    "S": "EmbeddingResponse(model='text-embedding-ada-002', data=[{'embedding': [-0.03503197431564331, -0.020601635798811913, -0.015375726856291294,
+    "S": "EmbeddingResponse(model='text-embedding-ada-002-v2', data=[{'embedding': [-0.03503197431564331, -0.020601635798811913, -0.015375726856291294,
   }
 }
 ```

@@ -70,6 +70,7 @@ class LangFuseLogger:
         self.langfuse_flush_interval = LangFuseLogger._get_langfuse_flush_interval(
             flush_interval
         )
+        self.langfuse_propagate_trace_id  = str_to_bool(os.getenv("LANGFUSE_PROPAGATE_TRACE_ID", "False")) is True
         http_client = _get_httpx_client()
         self.langfuse_client = http_client.client
 
@@ -228,6 +229,8 @@ class LangFuseLogger:
 
             functions = optional_params.pop("functions", None)
             tools = optional_params.pop("tools", None)
+            # Remove secret_fields to prevent leaking sensitive data (e.g., authorization headers)
+            optional_params.pop("secret_fields", None)
             if functions is not None:
                 prompt["functions"] = functions
             if tools is not None:
@@ -534,7 +537,15 @@ class LangFuseLogger:
 
             session_id = clean_metadata.pop("session_id", None)
             trace_name = cast(Optional[str], clean_metadata.pop("trace_name", None))
-            trace_id = clean_metadata.pop("trace_id", litellm_call_id)
+            trace_id = clean_metadata.pop("trace_id", None)
+            if (
+                trace_id is None
+                and self.langfuse_propagate_trace_id is True
+                and standard_logging_object is not None
+            ):
+                trace_id = cast(Optional[str], standard_logging_object.get("trace_id"))
+            if trace_id is None:
+                trace_id = litellm_call_id
             existing_trace_id = clean_metadata.pop("existing_trace_id", None)
             update_trace_keys = cast(list, clean_metadata.pop("update_trace_keys", []))
             debug = clean_metadata.pop("debug_langfuse", None)

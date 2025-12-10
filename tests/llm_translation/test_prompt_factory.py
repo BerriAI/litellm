@@ -18,7 +18,9 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_pt,
     claude_2_1_pt,
     convert_to_anthropic_image_obj,
+    convert_to_anthropic_tool_invoke,
     convert_url_to_base64,
+    create_anthropic_image_param,
     llama_2_chat_pt,
     prompt_factory,
 )
@@ -205,6 +207,125 @@ def test_base64_image_input(url, expected_media_type):
     response = convert_to_anthropic_image_obj(openai_image_url=url, format=None)
 
     assert response["media_type"] == expected_media_type
+
+
+def test_create_anthropic_image_param_with_http_url():
+    """Test that HTTP/HTTPS URLs are passed as URL references, not base64."""
+    image_param = create_anthropic_image_param(
+        "https://example.com/image.jpg", format=None
+    )
+    
+    assert image_param["type"] == "image"
+    assert image_param["source"]["type"] == "url"
+    assert image_param["source"]["url"] == "https://example.com/image.jpg"
+
+
+def test_create_anthropic_image_param_with_https_url():
+    """Test that HTTPS URLs are passed as URL references."""
+    image_param = create_anthropic_image_param(
+        "https://example.com/image.png", format=None
+    )
+    
+    assert image_param["type"] == "image"
+    assert image_param["source"]["type"] == "url"
+    assert image_param["source"]["url"] == "https://example.com/image.png"
+
+
+def test_create_anthropic_image_param_with_dict_input():
+    """Test that dict input with URL is handled correctly."""
+    image_param = create_anthropic_image_param(
+        {"url": "https://example.com/image.jpg", "format": "image/jpeg"}, format=None
+    )
+    
+    assert image_param["type"] == "image"
+    assert image_param["source"]["type"] == "url"
+    assert image_param["source"]["url"] == "https://example.com/image.jpg"
+
+
+def test_create_anthropic_image_param_with_base64_data_uri():
+    """Test that data URIs are converted to base64."""
+    image_param = create_anthropic_image_param(
+        "data:image/jpeg;base64,/9j/4AAQSkZJRg==", format=None
+    )
+    
+    assert image_param["type"] == "image"
+    assert image_param["source"]["type"] == "base64"
+    assert image_param["source"]["media_type"] == "image/jpeg"
+    assert image_param["source"]["data"] == "/9j/4AAQSkZJRg=="
+
+
+def test_create_anthropic_image_param_with_format_override():
+    """Test that format parameter can override media type."""
+    image_param = create_anthropic_image_param(
+        "data:image/jpeg;base64,1234", format="image/png"
+    )
+    
+    assert image_param["type"] == "image"
+    assert image_param["source"]["type"] == "base64"
+    assert image_param["source"]["media_type"] == "image/png"
+
+
+def test_anthropic_messages_pt_with_url_image():
+    """Test that anthropic_messages_pt correctly handles HTTP/HTTPS URLs as URL references."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": "https://example.com/image.jpg",
+                },
+            ],
+        }
+    ]
+    
+    result = anthropic_messages_pt(
+        messages=messages, model="claude-3-5-sonnet", llm_provider="anthropic"
+    )
+    
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    assert isinstance(result[0]["content"], list)
+    assert len(result[0]["content"]) == 2
+    
+    # Check text content
+    assert result[0]["content"][0]["type"] == "text"
+    
+    # Check image content - should be URL reference, not base64
+    assert result[0]["content"][1]["type"] == "image"
+    assert result[0]["content"][1]["source"]["type"] == "url"
+    assert result[0]["content"][1]["source"]["url"] == "https://example.com/image.jpg"
+
+
+def test_anthropic_messages_pt_with_base64_image():
+    """Test that anthropic_messages_pt correctly handles data URIs as base64."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": "data:image/jpeg;base64,/9j/4AAQSkZJRg==",
+                },
+            ],
+        }
+    ]
+    
+    result = anthropic_messages_pt(
+        messages=messages, model="claude-3-5-sonnet", llm_provider="anthropic"
+    )
+    
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    assert isinstance(result[0]["content"], list)
+    assert len(result[0]["content"]) == 2
+    
+    # Check image content - should be base64, not URL
+    assert result[0]["content"][1]["type"] == "image"
+    assert result[0]["content"][1]["source"]["type"] == "base64"
+    assert result[0]["content"][1]["source"]["media_type"] == "image/jpeg"
 
 
 def test_anthropic_messages_tool_call():
@@ -447,7 +568,7 @@ def test_vertex_only_image_user_message():
         },
     ]
 
-    response = _gemini_convert_messages_with_history(messages=messages)
+    response = _gemini_convert_messages_with_history(messages=messages, model="gemini-1.5-pro")
 
     expected_response = [
         {
@@ -456,7 +577,7 @@ def test_vertex_only_image_user_message():
                 {
                     "inline_data": {
                         "data": "/9j/2wCEAAgGBgcGBQ",
-                        "mimeType": "image/jpeg",
+                        "mime_type": "image/jpeg",
                     }
                 },
                 {"text": " "},
@@ -827,3 +948,217 @@ def test_ollama_pt():
     ]
     prompt = ollama_pt(model="ollama/llama3.1", messages=messages)
     print(prompt)
+
+
+# ============ Server Tool Use Reconstruction Tests ============
+# Fixes: https://github.com/BerriAI/litellm/issues/17737
+
+
+def test_convert_to_anthropic_tool_invoke_regular_tool():
+    """Test that regular tool_use is converted correctly."""
+    tool_calls = [
+        {
+            "id": "toolu_01ABC123",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"location": "San Francisco"}'
+            }
+        }
+    ]
+
+    result = convert_to_anthropic_tool_invoke(tool_calls)
+
+    assert len(result) == 1
+    assert result[0]["type"] == "tool_use"
+    assert result[0]["id"] == "toolu_01ABC123"
+    assert result[0]["name"] == "get_weather"
+    assert result[0]["input"] == {"location": "San Francisco"}
+
+
+def test_convert_to_anthropic_tool_invoke_server_tool():
+    """
+    Test that server_tool_use (srvtoolu_) is reconstructed as server_tool_use.
+    
+    Fixes: https://github.com/BerriAI/litellm/issues/17737
+    """
+    tool_calls = [
+        {
+            "id": "srvtoolu_01ABC123",
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "arguments": '{"query": "elephant weight"}'
+            }
+        }
+    ]
+
+    result = convert_to_anthropic_tool_invoke(tool_calls)
+
+    assert len(result) == 1
+    assert result[0]["type"] == "server_tool_use"  # NOT tool_use
+    assert result[0]["id"] == "srvtoolu_01ABC123"
+    assert result[0]["name"] == "web_search"
+    assert result[0]["input"] == {"query": "elephant weight"}
+
+
+def test_convert_to_anthropic_tool_invoke_with_web_search_results():
+    """
+    Test that web_search_tool_result is included after server_tool_use.
+    
+    Fixes: https://github.com/BerriAI/litellm/issues/17737
+    """
+    tool_calls = [
+        {
+            "id": "srvtoolu_01ABC123",
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "arguments": '{"query": "elephant weight"}'
+            }
+        }
+    ]
+
+    web_search_results = [
+        {
+            "type": "web_search_tool_result",
+            "tool_use_id": "srvtoolu_01ABC123",
+            "content": [
+                {
+                    "type": "web_search_result",
+                    "url": "https://example.com",
+                    "title": "Elephant Facts",
+                    "snippet": "Elephants weigh 5000 kg"
+                }
+            ]
+        }
+    ]
+
+    result = convert_to_anthropic_tool_invoke(tool_calls, web_search_results=web_search_results)
+
+    assert len(result) == 2
+    # First: server_tool_use
+    assert result[0]["type"] == "server_tool_use"
+    assert result[0]["id"] == "srvtoolu_01ABC123"
+    # Second: web_search_tool_result
+    assert result[1]["type"] == "web_search_tool_result"
+    assert result[1]["tool_use_id"] == "srvtoolu_01ABC123"
+
+
+def test_convert_to_anthropic_tool_invoke_mixed_tools():
+    """
+    Test that mixed server and regular tools are reconstructed correctly.
+    
+    Fixes: https://github.com/BerriAI/litellm/issues/17737
+    """
+    tool_calls = [
+        {
+            "id": "srvtoolu_01ABC123",
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "arguments": '{"query": "elephant weight"}'
+            }
+        },
+        {
+            "id": "toolu_01XYZ789",
+            "type": "function",
+            "function": {
+                "name": "add_numbers",
+                "arguments": '{"a": 5000, "b": 100}'
+            }
+        }
+    ]
+
+    web_search_results = [
+        {
+            "type": "web_search_tool_result",
+            "tool_use_id": "srvtoolu_01ABC123",
+            "content": [{"url": "https://example.com", "title": "Test"}]
+        }
+    ]
+
+    result = convert_to_anthropic_tool_invoke(tool_calls, web_search_results=web_search_results)
+
+    assert len(result) == 3
+    # First: server_tool_use
+    assert result[0]["type"] == "server_tool_use"
+    assert result[0]["id"] == "srvtoolu_01ABC123"
+    # Second: web_search_tool_result
+    assert result[1]["type"] == "web_search_tool_result"
+    # Third: regular tool_use
+    assert result[2]["type"] == "tool_use"
+    assert result[2]["id"] == "toolu_01XYZ789"
+
+
+def test_anthropic_messages_pt_with_server_tool_use():
+    """
+    Test that anthropic_messages_pt correctly reconstructs server_tool_use from provider_specific_fields.
+    
+    Fixes: https://github.com/BerriAI/litellm/issues/17737
+    """
+    messages = [
+        {"role": "user", "content": "Search for elephant weight and add 100"},
+        {
+            "role": "assistant",
+            "content": "Let me search for that.",
+            "tool_calls": [
+                {
+                    "id": "srvtoolu_01ABC123",
+                    "type": "function",
+                    "function": {
+                        "name": "web_search",
+                        "arguments": '{"query": "elephant weight"}'
+                    }
+                },
+                {
+                    "id": "toolu_01XYZ789",
+                    "type": "function",
+                    "function": {
+                        "name": "add_numbers",
+                        "arguments": '{"a": 5000, "b": 100}'
+                    }
+                }
+            ],
+            "provider_specific_fields": {
+                "web_search_results": [
+                    {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "srvtoolu_01ABC123",
+                        "content": [{"url": "https://example.com", "title": "Test", "snippet": "5000 kg"}]
+                    }
+                ]
+            }
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_01XYZ789",
+            "content": "5100"
+        }
+    ]
+
+    result = anthropic_messages_pt(messages, model="claude-sonnet-4-5", llm_provider="anthropic")
+
+    # Find the assistant message
+    assistant_msg = next(m for m in result if m["role"] == "assistant")
+    content = assistant_msg["content"]
+
+    # Should have: text, server_tool_use, web_search_tool_result, tool_use
+    types = [c.get("type") for c in content]
+    assert "text" in types
+    assert "server_tool_use" in types
+    assert "web_search_tool_result" in types
+    assert "tool_use" in types
+
+    # Verify server_tool_use
+    server_tool = next(c for c in content if c.get("type") == "server_tool_use")
+    assert server_tool["id"] == "srvtoolu_01ABC123"
+
+    # Verify web_search_tool_result comes after server_tool_use
+    server_idx = types.index("server_tool_use")
+    web_result_idx = types.index("web_search_tool_result")
+    assert web_result_idx == server_idx + 1
+
+    # Verify regular tool_use
+    tool_use = next(c for c in content if c.get("type") == "tool_use")
+    assert tool_use["id"] == "toolu_01XYZ789"

@@ -85,6 +85,10 @@ from litellm.router_utils.clientside_credential_handler import (
     get_dynamic_litellm_params,
     is_clientside_credential,
 )
+from litellm.router_utils.common_utils import (
+    filter_team_based_models,
+    filter_web_search_deployments,
+)
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.cooldown_handlers import (
     DEFAULT_COOLDOWN_TIME_SECONDS,
@@ -779,6 +783,9 @@ class Router:
         self.aanthropic_messages = self.factory_function(
             litellm.anthropic_messages, call_type="anthropic_messages"
         )
+        self.anthropic_messages = self.factory_function(
+            litellm.anthropic_messages, call_type="anthropic_messages"
+        )
         self.agenerate_content = self.factory_function(
             litellm.agenerate_content, call_type="agenerate_content"
         )
@@ -835,8 +842,8 @@ class Router:
             litellm.acancel_batch, call_type="acancel_batch"
         )
 
-    def _initialize_specialized_endpoints(self):
-        """Helper to initialize specialized router endpoints (vector store, OCR, search, video, container)."""
+    def _initialize_vector_store_endpoints(self):
+        """Initialize vector store endpoints."""
         from litellm.vector_stores.main import acreate, asearch, create, search
 
         self.avector_store_search = self.factory_function(
@@ -852,6 +859,8 @@ class Router:
             create, call_type="vector_store_create"
         )
 
+    def _initialize_vector_store_file_endpoints(self):
+        """Initialize vector store file endpoints."""
         from litellm.vector_store_files.main import (
             acreate as avector_store_file_create_fn,
         )
@@ -884,6 +893,7 @@ class Router:
         from litellm.vector_store_files.main import (
             update as vector_store_file_update_fn,
         )
+
         self.avector_store_file_create = self.factory_function(
             avector_store_file_create_fn, call_type="avector_store_file_create"
         )
@@ -921,6 +931,8 @@ class Router:
             vector_store_file_delete_fn, call_type="vector_store_file_delete"
         )
 
+    def _initialize_google_genai_endpoints(self):
+        """Initialize Google GenAI endpoints."""
         from litellm.google_genai import (
             agenerate_content,
             agenerate_content_stream,
@@ -941,6 +953,8 @@ class Router:
             generate_content_stream, call_type="generate_content_stream"
         )
 
+    def _initialize_ocr_search_endpoints(self):
+        """Initialize OCR and search endpoints."""
         from litellm.ocr import aocr, ocr
 
         self.aocr = self.factory_function(aocr, call_type="aocr")
@@ -951,6 +965,8 @@ class Router:
         self.asearch = self.factory_function(asearch, call_type="asearch")
         self.search = self.factory_function(search, call_type="search")
 
+    def _initialize_video_endpoints(self):
+        """Initialize video endpoints."""
         from litellm.videos import (
             avideo_content,
             avideo_generation,
@@ -989,6 +1005,8 @@ class Router:
         )
         self.video_remix = self.factory_function(video_remix, call_type="video_remix")
 
+    def _initialize_container_endpoints(self):
+        """Initialize container endpoints."""
         from litellm.containers import (
             acreate_container,
             adelete_container,
@@ -998,6 +1016,9 @@ class Router:
             delete_container,
             list_containers,
             retrieve_container,
+        )
+        from litellm.containers.endpoint_factory import (
+            _generated_endpoints as container_file_endpoints,
         )
 
         self.acreate_container = self.factory_function(
@@ -1024,6 +1045,35 @@ class Router:
         self.delete_container = self.factory_function(
             delete_container, call_type="delete_container"
         )
+        
+        # Auto-register JSON-generated container file endpoints
+        for name, func in container_file_endpoints.items():
+            setattr(self, name, self.factory_function(func, call_type=name))  # type: ignore[arg-type]
+
+    def _initialize_skills_endpoints(self):
+        """Initialize Anthropic Skills API endpoints."""
+        self.acreate_skill = self.factory_function(
+            litellm.acreate_skill, call_type="acreate_skill"
+        )
+        self.alist_skills = self.factory_function(
+            litellm.alist_skills, call_type="alist_skills"
+        )
+        self.aget_skill = self.factory_function(
+            litellm.aget_skill, call_type="aget_skill"
+        )
+        self.adelete_skill = self.factory_function(
+            litellm.adelete_skill, call_type="adelete_skill"
+        )
+
+    def _initialize_specialized_endpoints(self):
+        """Helper to initialize specialized router endpoints (vector store, OCR, search, video, container, skills)."""
+        self._initialize_vector_store_endpoints()
+        self._initialize_vector_store_file_endpoints()
+        self._initialize_google_genai_endpoints()
+        self._initialize_ocr_search_endpoints()
+        self._initialize_video_endpoints()
+        self._initialize_container_endpoints()
+        self._initialize_skills_endpoints()
 
     def initialize_router_endpoints(self):
         self._initialize_core_endpoints()
@@ -3798,6 +3848,16 @@ class Router:
             "retrieve_container",
             "adelete_container",
             "delete_container",
+            "alist_container_files",
+            "list_container_files",
+            "aretrieve_container_file",
+            "retrieve_container_file",
+            "adelete_container_file",
+            "delete_container_file",
+            "acreate_skill",
+            "alist_skills",
+            "aget_skill",
+            "adelete_skill",
         ] = "assistants",
     ):
         """
@@ -3826,6 +3886,7 @@ class Router:
             "retrieve_container",
             "delete_container",
         ):
+
             def sync_wrapper(
                 custom_llm_provider: Optional[str] = None,
                 client: Optional[Any] = None,
@@ -3913,14 +3974,29 @@ class Router:
                 "avideo_status",
                 "avideo_content",
                 "avideo_remix",
+                "acancel_batch",
+                "acreate_skill",
+                "alist_skills",
+                "aget_skill",
+                "adelete_skill",
+            ):
+                return await self._ageneric_api_call_with_fallbacks(
+                    original_function=original_function,
+                    **kwargs,
+                )
+            elif call_type in (
                 "acreate_container",
                 "alist_containers",
                 "aretrieve_container",
                 "adelete_container",
-                "acancel_batch",
+                "alist_container_files",
+                "aretrieve_container_file",
+                "adelete_container_file",
+                "aretrieve_container_file_content",
             ):
-                return await self._ageneric_api_call_with_fallbacks(
+                return await self._init_containers_api_endpoints(
                     original_function=original_function,
+                    custom_llm_provider=custom_llm_provider,
                     **kwargs,
                 )
             elif call_type == "allm_passthrough_route":
@@ -3966,6 +4042,22 @@ class Router:
     ):
         """
         Initialize the Vector Store API endpoints on the router.
+        """
+        if custom_llm_provider and "custom_llm_provider" not in kwargs:
+            kwargs["custom_llm_provider"] = custom_llm_provider
+        return await original_function(**kwargs)
+
+    async def _init_containers_api_endpoints(
+        self,
+        original_function: Callable,
+        custom_llm_provider: Optional[str] = None,
+        **kwargs,
+    ):
+        """
+        Initialize the Containers API endpoints on the router.
+
+        Container operations don't need model-based routing, so we call the
+        original function directly with the custom_llm_provider.
         """
         if custom_llm_provider and "custom_llm_provider" not in kwargs:
             kwargs["custom_llm_provider"] = custom_llm_provider
@@ -5895,6 +5987,59 @@ class Router:
                     raise Exception("Model Name invalid - {}".format(type(model)))
         return None
 
+    def get_deployment_credentials_with_provider(
+        self, model_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get API credentials and provider info from a model name in model_list.
+        Useful for passthrough endpoints (files, batches, etc.) that need credentials.
+
+        This method tries to find a deployment by model_id first, and if not found,
+        it tries to find by model_group_name (model_name).
+
+        Args:
+            model_id: Model ID or model name from model_list (e.g., "gpt-4o-litellm")
+
+        Returns:
+            Dictionary containing api_key, api_base, custom_llm_provider, etc.
+            Returns None if model not found.
+
+        Example:
+            credentials = router.get_deployment_credentials_with_provider("gpt-4o-litellm")
+            # Returns: {"api_key": "sk-...", "custom_llm_provider": "openai", ...}
+        """
+        # Try to get deployment by model_id first
+        deployment = self.get_deployment(model_id=model_id)
+
+        # If not found, try by model_group_name
+        if deployment is None:
+            deployment = self.get_deployment_by_model_group_name(
+                model_group_name=model_id
+            )
+
+        if deployment is None:
+            return None
+
+        # Get basic credentials
+        credentials = CredentialLiteLLMParams(
+            **deployment.litellm_params.model_dump(exclude_none=True)
+        ).model_dump(exclude_none=True)
+
+        # Add custom_llm_provider
+        if deployment.litellm_params.custom_llm_provider:
+            credentials["custom_llm_provider"] = (
+                deployment.litellm_params.custom_llm_provider
+            )
+        elif "/" in deployment.litellm_params.model:
+            # Extract provider from "provider/model" format
+            credentials["custom_llm_provider"] = deployment.litellm_params.model.split(
+                "/"
+            )[0]
+        else:
+            credentials["custom_llm_provider"] = "openai"  # default
+
+        return credentials
+
     @overload
     def get_router_model_info(
         self, deployment: dict, received_model_name: str, id: None = None
@@ -6577,6 +6722,58 @@ class Router:
         mutation helpers.
         """
         return candidate_id in self.model_id_to_deployment_index_map
+
+    def resolve_model_name_from_model_id(self, model_id: Optional[str]) -> Optional[str]:
+        """
+        Resolve model_name from model_id.
+        
+        This method attempts to find the correct model_name to use with the router
+        so that litellm_params can be automatically injected from the model config.
+        
+        Strategy:
+        1. First, check if model_id directly matches a model_name or deployment ID
+        2. If not, search through router's model_list to find a match by litellm_params.model
+        3. Return the model_name if found, None otherwise
+        
+        Args:
+            model_id: The model_id extracted from decoded video_id
+                     (could be model_name or litellm_params.model value)
+        
+        Returns:
+            model_name if found, None otherwise. If None, the request will fall through
+            to normal flow using environment variables.
+        """
+        if not model_id:
+            return None
+        
+        # Strategy 1: Check if model_id directly matches a model_name or deployment ID
+        if model_id in self.model_names or self.has_model_id(model_id):
+            return model_id
+        
+        # Strategy 2: Search through router's model_list to find by litellm_params.model
+        all_models = self.get_model_list(model_name=None)
+        if not all_models:
+            return None
+        
+        for deployment in all_models:
+            litellm_params = deployment.get("litellm_params", {})
+            actual_model = litellm_params.get("model")
+            
+            # Match by exact match or by checking if actual_model ends with /model_id or :model_id
+            # e.g., model_id="veo-2.0-generate-001" matches actual_model="vertex_ai/veo-2.0-generate-001"
+            matches = (
+                actual_model == model_id
+                or (actual_model and actual_model.endswith(f"/{model_id}"))
+                or (actual_model and actual_model.endswith(f":{model_id}"))
+            )
+            
+            if matches:
+                model_name = deployment.get("model_name")
+                if model_name:
+                    return model_name
+        
+        # No match found
+        return None
 
     def map_team_model(self, team_model_name: str, team_id: str) -> Optional[str]:
         """
@@ -7348,7 +7545,6 @@ class Router:
         *OR*
         - Dict, if specific model chosen
         """
-        from litellm.router_utils.common_utils import filter_team_based_models
 
         model, healthy_deployments = self._common_checks_available_deployment(
             model=model,
@@ -7364,6 +7560,15 @@ class Router:
             healthy_deployments=healthy_deployments,
             request_kwargs=request_kwargs,
         )
+
+        verbose_router_logger.debug(f"healthy_deployments after team filter: {healthy_deployments}")
+
+        healthy_deployments = filter_web_search_deployments(
+            healthy_deployments=healthy_deployments,
+            request_kwargs=request_kwargs,
+        )
+
+        verbose_router_logger.debug(f"healthy_deployments after web search filter: {healthy_deployments}")
 
         if isinstance(healthy_deployments, dict):
             return healthy_deployments

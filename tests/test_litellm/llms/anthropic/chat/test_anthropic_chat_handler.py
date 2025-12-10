@@ -460,3 +460,75 @@ def test_streaming_chunks_have_stable_ids():
     response_two = iterator.chunk_parser(chunk=second_chunk)
 
     assert response_one.id == response_two.id == iterator.response_id
+
+
+def test_partial_json_chunk_accumulation():
+    """
+    Test that partial JSON chunks are accumulated correctly.
+
+    This tests the fix for https://github.com/BerriAI/litellm/issues/17473
+    where network fragmentation can cause SSE data to arrive in partial chunks.
+    """
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+
+    # Simulate a complete JSON chunk being split into two parts
+    partial_chunk_1 = '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hel'
+    partial_chunk_2 = 'lo"}}'
+
+    # First partial chunk should return None (still accumulating)
+    result1 = iterator._parse_sse_data(f"data:{partial_chunk_1}")
+    assert result1 is None, "First partial chunk should return None while accumulating"
+    assert iterator.chunk_type == "accumulated_json", "Should switch to accumulated_json mode"
+    assert iterator.accumulated_json == partial_chunk_1, "Should have accumulated first part"
+
+    # Second partial chunk should complete the JSON and return a parsed result
+    result2 = iterator._parse_sse_data(f"data:{partial_chunk_2}")
+    assert result2 is not None, "Second chunk should return parsed result"
+    assert iterator.accumulated_json == "", "Buffer should be cleared after successful parse"
+    assert result2.choices[0].delta.content == "Hello", f"Expected 'Hello', got '{result2.choices[0].delta.content}'"
+
+
+def test_complete_json_chunk_no_accumulation():
+    """
+    Test that complete JSON chunks are parsed immediately without accumulation.
+    """
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+
+    complete_chunk = '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}'
+
+    result = iterator._parse_sse_data(f"data:{complete_chunk}")
+    assert result is not None, "Complete chunk should return parsed result immediately"
+    assert iterator.chunk_type == "valid_json", "Should remain in valid_json mode"
+    assert iterator.accumulated_json == "", "Buffer should remain empty"
+    assert result.choices[0].delta.content == "Hello", f"Expected 'Hello', got '{result.choices[0].delta.content}'"
+
+
+def test_multiple_partial_chunks_accumulation():
+    """
+    Test that multiple partial chunks can be accumulated across several iterations.
+    """
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+
+    # Split a JSON chunk into three parts
+    part1 = '{"type":"content_block_del'
+    part2 = 'ta","index":0,"delta":{"type":"text_del'
+    part3 = 'ta","text":"Hello"}}'
+
+    result1 = iterator._parse_sse_data(f"data:{part1}")
+    assert result1 is None
+    assert iterator.accumulated_json == part1
+
+    result2 = iterator._parse_sse_data(f"data:{part2}")
+    assert result2 is None
+    assert iterator.accumulated_json == part1 + part2
+
+    result3 = iterator._parse_sse_data(f"data:{part3}")
+    assert result3 is not None
+    assert iterator.accumulated_json == ""
+    assert result3.choices[0].delta.content == "Hello"
