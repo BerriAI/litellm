@@ -78,6 +78,9 @@ class ExceptionCheckers:
             "is longer than the model's context length",
             "input tokens exceed the configured limit",
             "`inputs` tokens + `max_new_tokens` must be",
+            # Gemini pattern: "The input token count exceeds the maximum number of tokens allowed"
+            # See: https://github.com/BerriAI/litellm/issues/XXXX
+            "input token count exceeds the maximum number of tokens allowed",
         ]
         for substring in known_exception_substrings:
             if substring in _error_str_lowercase:

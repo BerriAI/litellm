@@ -40,6 +40,16 @@ context_window_test_cases = [
         "`inputs` tokens + `max_new_tokens` must be <= 4096",
         True,
     ),
+    # Gemini context window error format
+    # See: https://github.com/BerriAI/litellm/issues/XXXX
+    (
+        "The input token count exceeds the maximum number of tokens allowed 1048576.",
+        True,
+    ),
+    (
+        "GeminiException BadRequestError - {\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"The input token count exceeds the maximum number of tokens allowed 1048576.\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }\n}\n",
+        True,
+    ),
     # Test case insensitivity
     ("ERROR: THIS MODEL'S MAXIMUM CONTEXT LENGTH IS 1024.", True),
     # Cerebras context window error format
