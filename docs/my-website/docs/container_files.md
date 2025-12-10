@@ -7,6 +7,10 @@ title: /containers/files
 
 Manage files within Code Interpreter containers. Files are created automatically when code interpreter generates outputs (charts, CSVs, images, etc.).
 
+:::tip
+Looking for how to use Code Interpreter? See the [Code Interpreter Guide](/docs/guides/code_interpreter).
+:::
+
 | Feature | Supported |
 |---------|-----------|
 | Cost Tracking | ✅ |

@@ -2,6 +2,10 @@
 
 Manage OpenAI code interpreter containers (sessions) for executing code in isolated environments.
 
+:::tip
+Looking for how to use Code Interpreter? See the [Code Interpreter Guide](/docs/guides/code_interpreter).
+:::
+
 | Feature | Supported | 
 |---------|-----------|
 | Cost Tracking | ✅ |
