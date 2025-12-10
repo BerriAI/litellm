@@ -1412,8 +1412,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
                     enabled={codeInterpreter.enabled}
                     onEnabledChange={codeInterpreter.setEnabled}
-                    selectedContainerId={codeInterpreter.containerId}
-                    onContainerChange={codeInterpreter.setContainerId}
+                    selectedContainerId={null}
+                    onContainerChange={() => {}}
                   />
                 </div>
               )}

@@ -1,5 +1,6 @@
 /**
- * Custom hook for managing Code Interpreter state and logic.
+ * Custom hook for managing Code Interpreter state.
+ * Container creation is handled automatically by OpenAI with container: { type: "auto" }
  */
 
 import { useState, useCallback } from "react";
@@ -9,18 +10,16 @@ export interface UseCodeInterpreterReturn {
   // State
   enabled: boolean;
   result: CodeInterpreterResult | null;
-  containerId: string | null;
   
   // Actions
   setEnabled: (enabled: boolean) => void;
   setResult: (result: CodeInterpreterResult | null) => void;
-  setContainerId: (containerId: string | null) => void;
   clearResult: () => void;
   toggle: () => void;
 }
 
 export function useCodeInterpreter(): UseCodeInterpreterReturn {
-  const [enabled, setEnabled] = useState<boolean>(() => {
+  const [enabled, setEnabledState] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
     const saved = sessionStorage.getItem("codeInterpreterEnabled");
     return saved ? JSON.parse(saved) : false;
@@ -28,28 +27,11 @@ export function useCodeInterpreter(): UseCodeInterpreterReturn {
 
   const [result, setResult] = useState<CodeInterpreterResult | null>(null);
 
-  const [containerId, setContainerId] = useState<string | null>(() => {
-    if (typeof window === "undefined") return null;
-    return sessionStorage.getItem("selectedContainerId") || null;
-  });
-
   // Persist enabled state to session storage
-  const handleSetEnabled = useCallback((value: boolean) => {
-    setEnabled(value);
+  const setEnabled = useCallback((value: boolean) => {
+    setEnabledState(value);
     if (typeof window !== "undefined") {
       sessionStorage.setItem("codeInterpreterEnabled", JSON.stringify(value));
-    }
-  }, []);
-
-  // Persist container ID to session storage
-  const handleSetContainerId = useCallback((value: string | null) => {
-    setContainerId(value);
-    if (typeof window !== "undefined") {
-      if (value) {
-        sessionStorage.setItem("selectedContainerId", value);
-      } else {
-        sessionStorage.removeItem("selectedContainerId");
-      }
     }
   }, []);
 
@@ -58,16 +40,14 @@ export function useCodeInterpreter(): UseCodeInterpreterReturn {
   }, []);
 
   const toggle = useCallback(() => {
-    handleSetEnabled(!enabled);
-  }, [enabled, handleSetEnabled]);
+    setEnabled(!enabled);
+  }, [enabled, setEnabled]);
 
   return {
     enabled,
     result,
-    containerId,
-    setEnabled: handleSetEnabled,
+    setEnabled,
     setResult,
-    setContainerId: handleSetContainerId,
     clearResult,
     toggle,
   };
@@ -75,4 +55,3 @@ export function useCodeInterpreter(): UseCodeInterpreterReturn {
 
 // Re-export the type for convenience
 export type { CodeInterpreterResult } from "../llm_calls/code_interpreter_handler";
-
