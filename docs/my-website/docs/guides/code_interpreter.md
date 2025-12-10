@@ -95,6 +95,7 @@ The LiteLLM Admin UI includes built-in Code Interpreter support.
 
 1. Go to **Playground** in the LiteLLM UI
 2. Select an **OpenAI model** (e.g., `openai/gpt-4o`)
+3. Select `v1/responses` as the endpoint under `Endpoint Type`
 3. Toggle **Code Interpreter** in the left panel
 4. Send a prompt requesting code execution or file generation
 
