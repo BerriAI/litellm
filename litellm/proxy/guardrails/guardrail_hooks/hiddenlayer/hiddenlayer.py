@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional, Type, TYPE_CHECKING, Literal
 
-from httpx import HTTPStatusError, Response
+from httpx import HTTPStatusError
 
-from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.types.guardrails import GenericGuardrailAPIInputs
 from urllib.parse import urlparse
 import requests
 from requests.auth import HTTPBasicAuth
@@ -18,6 +20,9 @@ from requests.auth import HTTPBasicAuth
 from fastapi import HTTPException
 
 from litellm.types.proxy.guardrails.guardrail_hooks.hiddenlayer import HiddenlayerAction, HiddenlayerMessages
+
+if TYPE_CHECKING:
+    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
 def is_saas(host: str) -> bool:
@@ -31,9 +36,7 @@ def is_saas(host: str) -> bool:
     return False
 
 
-def _get_jwt(api_id, api_key):
-    auth_url = os.getenv("HL_AUTH_URL", "https://auth.hiddenlayer.ai")
-
+def _get_jwt(auth_url, api_id, api_key):
     token_url = f"{auth_url}/oauth2/token?grant_type=client_credentials"
 
     resp = requests.post(token_url, auth=HTTPBasicAuth(api_id, api_key))
@@ -59,12 +62,15 @@ class HiddenlayerGuardrail(CustomGuardrail):
         api_id: Optional[str] = None,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        auth_url: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
         self.hiddenlayer_client_id = api_id or os.getenv("HIDDENLAYER_CLIENT_ID")
         self.hiddenlayer_client_secret = api_key or os.getenv("HIDDENLAYER_CLIENT_SECRET")
         self.api_base = api_base or os.getenv("HIDDENLAYER_API_BASE") or "https://api.hiddenlayer.ai"
         self.jwt_token = None
+
+        auth_url = auth_url or os.getenv("HIDDENLAYER_AUTH_URL") or "https://auth.hiddenlayer.ai"
 
         if is_saas(self.api_base):
             if not self.hiddenlayer_client_id:
@@ -73,9 +79,11 @@ class HiddenlayerGuardrail(CustomGuardrail):
             if not self.hiddenlayer_client_secret:
                 raise RuntimeError("`api_key` cannot be None when using the SaaS version of HiddenLayer.")
 
-            self.jwt_token = _get_jwt(api_id=self.hiddenlayer_client_id, api_key=self.hiddenlayer_client_secret)
+            self.jwt_token = _get_jwt(
+                auth_url=auth_url, api_id=self.hiddenlayer_client_id, api_key=self.hiddenlayer_client_secret
+            )
             self.refresh_jwt_func = lambda: _get_jwt(
-                api_id=self.hiddenlayer_client_id, api_key=self.hiddenlayer_client_secret
+                auth_url=auth_url, api_id=self.hiddenlayer_client_id, api_key=self.hiddenlayer_client_secret
             )
 
         self._http_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
@@ -163,13 +171,16 @@ class HiddenlayerGuardrail(CustomGuardrail):
         if self.jwt_token:
             headers["Authorization"] = f"Bearer {self.jwt_token}"
 
-        reponse: Response
         try:
             response = await self._http_client.post(
                 f"{self.api_base}/detection/v1/interactions",
                 json=data,
                 headers=headers,
             )
+            response.raise_for_status()
+            result = response.json()
+
+            return result
         except HTTPStatusError as e:
             # Try the request again by refreshing the jwt if we get 401
             # since the Hiddenlayer jwt timeout is an hour and this is
@@ -185,10 +196,10 @@ class HiddenlayerGuardrail(CustomGuardrail):
             else:
                 raise e
 
-        response.raise_for_status()
-        result = response.json()
+            response.raise_for_status()
+            result = response.json()
 
-        return result
+            return result
 
     @staticmethod
     def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
