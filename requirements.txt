@@ -64,4 +64,4 @@ soundfile==0.12.1 # for audio file processing
 ########################
 # LITELLM ENTERPRISE DEPENDENCIES
 ########################
-litellm-enterprise==0.1.23
+litellm-enterprise==0.1.24
