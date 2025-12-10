@@ -493,6 +493,7 @@ const sidebars = {
           ]
         },
         "anthropic_unified",
+        "anthropic_count_tokens",
         "moderation",
         "ocr",
         {
