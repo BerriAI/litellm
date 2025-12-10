@@ -1020,9 +1020,6 @@ class Router:
         from litellm.containers.endpoint_factory import (
             _generated_endpoints as container_file_endpoints,
         )
-        from litellm.containers.endpoint_factory import (
-            get_all_endpoint_names as get_container_file_endpoint_names,
-        )
 
         self.acreate_container = self.factory_function(
             acreate_container, call_type="acreate_container"

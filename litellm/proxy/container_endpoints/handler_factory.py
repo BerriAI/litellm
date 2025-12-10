@@ -7,10 +7,10 @@ FastAPI route handlers for ALL container file endpoints.
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, Request, Response
-from fastapi.responses import ORJSONResponse, StreamingResponse
+from fastapi.responses import ORJSONResponse
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -190,7 +190,6 @@ async def _process_binary_request(
         )
         
     except Exception as e:
-        from litellm.proxy.proxy_server import proxy_logging_obj
         raise e
 
 

@@ -10,7 +10,7 @@ import contextvars
 import json
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable, Coroutine, Dict, List, Literal, Optional, Type, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Type
 
 import litellm
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
@@ -23,7 +23,6 @@ from litellm.types.containers.main import (
     DeleteContainerFileResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import CallTypes
 from litellm.utils import ProviderConfigManager, client
 
 # Response type mapping
