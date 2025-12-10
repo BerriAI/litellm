@@ -1,3 +1,5 @@
+import Image from '@theme/IdealImage';
+
 # Code Interpreter
 
 Use OpenAI's Code Interpreter tool to execute Python code in a secure, sandboxed environment.
@@ -91,13 +93,15 @@ for file in files.data:
 
 The LiteLLM Admin UI includes built-in Code Interpreter support.
 
+<Image img={require('../../img/code_interp.png')} />
+
 **Steps:**
 
 1. Go to **Playground** in the LiteLLM UI
 2. Select an **OpenAI model** (e.g., `openai/gpt-4o`)
-3. Select `v1/responses` as the endpoint under `Endpoint Type`
-3. Toggle **Code Interpreter** in the left panel
-4. Send a prompt requesting code execution or file generation
+3. Select `/v1/responses` as the endpoint under **Endpoint Type**
+4. Toggle **Code Interpreter** in the left panel
+5. Send a prompt requesting code execution or file generation
 
 The UI will display:
 - Executed Python code (collapsible)
