@@ -4339,6 +4339,7 @@ class BaseLLMHTTPHandler:
             headers=extra_headers or {},
             model="",
             api_key=api_key,
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -4414,6 +4415,7 @@ class BaseLLMHTTPHandler:
             headers=extra_headers or {},
             model="",
             api_key=api_key,
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -4728,6 +4730,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -4900,6 +4903,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -4986,6 +4990,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
