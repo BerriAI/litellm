@@ -228,10 +228,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         Gemini 3 models include:
         - gemini-3-pro-preview
+        - gemini-3-flash
+        - skyhawk (Gemini 3 Flash checkpoint)
         - Any future Gemini 3.x models
         """
         # Check for Gemini 3 models
         if "gemini-3" in model:
+            return True
+        
+        # Check for skyhawk (Gemini 3 Flash checkpoint)
+        if "skyhawk" in model.lower():
             return True
 
         return False
@@ -626,22 +632,40 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         Returns:
             GeminiThinkingConfig with thinkingLevel and includeThoughts
         """
+        # Check if this is skyhawk/gemini-3-flash which supports MINIMAL thinking level
+        is_skyhawk = model and (
+            "skyhawk" in model.lower() or "gemini-3-flash" in model.lower()
+        )
         if reasoning_effort == "minimal":
-            return {"thinkingLevel": "low", "includeThoughts": True}
+            if is_skyhawk:
+                return {"thinkingLevel": "minimal", "includeThoughts": True}
+            else:
+                return {"thinkingLevel": "low", "includeThoughts": True}
         elif reasoning_effort == "low":
             return {"thinkingLevel": "low", "includeThoughts": True}
         elif reasoning_effort == "medium":
-            return {
-                "thinkingLevel": "high",
-                "includeThoughts": True,
-            }  # medium is not out yet
+            # For skyhawk, medium maps to "medium", otherwise "high"
+            if is_skyhawk:
+                return {"thinkingLevel": "medium", "includeThoughts": True}
+            else:
+                return {
+                    "thinkingLevel": "high",
+                    "includeThoughts": True,
+                }  # medium is not out yet for other models
         elif reasoning_effort == "high":
             return {"thinkingLevel": "high", "includeThoughts": True}
         elif reasoning_effort == "disable":
-            # Gemini 3 cannot fully disable thinking, so we use "low" but hide thoughts
-            return {"thinkingLevel": "low", "includeThoughts": False}
+            # Gemini 3 cannot fully disable thinking, so we use "minimal" for skyhawk, "low" for others
+            if is_skyhawk:
+                return {"thinkingLevel": "minimal", "includeThoughts": False}
+            else:
+                return {"thinkingLevel": "low", "includeThoughts": False}
         elif reasoning_effort == "none":
-            return {"thinkingLevel": "low", "includeThoughts": False}
+            # For skyhawk, use "minimal" instead of "low"
+            if is_skyhawk:
+                return {"thinkingLevel": "minimal", "includeThoughts": False}
+            else:
+                return {"thinkingLevel": "low", "includeThoughts": False}
         else:
             raise ValueError(f"Invalid reasoning effort: {reasoning_effort}")
 
@@ -911,7 +935,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     "thinkingLevel" not in thinking_config
                     and "thinkingBudget" not in thinking_config
                 ):
-                    thinking_config["thinkingLevel"] = "low"
+                    # For skyhawk, default to "minimal" to match Gemini 2.5 Flash behavior
+                    # For other Gemini 3 models, default to "low"
+                    is_skyhawk = "skyhawk" in model.lower() or "gemini-3-flash" in model.lower()
+                    thinking_config["thinkingLevel"] = "minimal" if is_skyhawk else "low"
                     optional_params["thinkingConfig"] = thinking_config
 
         return optional_params
