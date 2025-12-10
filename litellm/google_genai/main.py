@@ -398,6 +398,7 @@ async def agenerate_content_stream(
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:
             # Use the adapter to convert to completion format
+            kwargs.pop('stream', None)  # Remove the stream flag
             return (
                 await GenerateContentToCompletionHandler.async_generate_content_handler(
                     model=model,
