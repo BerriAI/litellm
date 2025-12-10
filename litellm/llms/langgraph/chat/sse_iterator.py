@@ -11,7 +11,7 @@ import httpx
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
-from litellm.types.utils import Delta, ModelResponse, StreamingChoices, Usage
+from litellm.types.utils import Delta, ModelResponse, StreamingChoices
 
 if TYPE_CHECKING:
     pass

@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 import httpx
 
 from litellm._logging import verbose_logger
-from litellm._uuid import uuid
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
