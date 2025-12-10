@@ -6,7 +6,7 @@ import mimetypes
 import re
 import xml.etree.ElementTree as ET
 from enum import Enum
-from typing import Any, List, Optional, Tuple, Union, cast, overload
+from typing import Any, Dict, List, Optional, Tuple, Union, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
@@ -1455,7 +1455,7 @@ def convert_to_gemini_tool_call_invoke(
 def convert_to_gemini_tool_call_result(
     message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage],
     last_message_with_tool_calls: Optional[dict],
-) -> VertexPartType:
+) -> Union[VertexPartType, List[VertexPartType]]:
     """
     OpenAI message with a tool result looks like:
     {
@@ -1471,16 +1471,47 @@ def convert_to_gemini_tool_call_result(
         "name": "get_current_weather",
         "content": "function result goes here",
     }
+
+    Supports content with images for Computer Use:
+    {
+        "role": "tool",
+        "tool_call_id": "call_abc123",
+        "content": [
+            {"type": "text",       "text": "I found the requested image:"},
+            {"type": "input_image", "image_url": "https://example.com/image.jpg" }
+        ]
+    }
     """
+    from litellm.types.llms.vertex_ai import BlobType
+    
     content_str: str = ""
+    inline_data: Optional[BlobType] = None
+    
     if "content" in message:
         if isinstance(message["content"], str):
             content_str = message["content"]
         elif isinstance(message["content"], List):
             content_list = message["content"]
             for content in content_list:
-                if content["type"] == "text":
-                    content_str += content["text"]
+                content_type = content.get("type", "")
+                if content_type == "text":
+                    content_str += content.get("text", "")
+                elif content_type == "input_image":
+                    # Extract image for inline_data (for Computer Use screenshots)
+                    image_url = content.get("image_url", "")
+                    
+                    if image_url:
+                        # Convert image to base64 blob format for Gemini
+                        try:
+                            image_obj = convert_to_anthropic_image_obj(image_url, format=None)
+                            inline_data = BlobType(
+                                data=image_obj["data"],
+                                mime_type=image_obj["media_type"]
+                            )
+                        except Exception as e:
+                            verbose_logger.warning(
+                                f"Failed to process image in tool response: {e}"
+                            )
     name: Optional[str] = message.get("name", "")  # type: ignore
 
     # Recover name from last message with tool calls
@@ -1503,14 +1534,41 @@ def convert_to_gemini_tool_call_result(
             )
         )
 
+    # Parse response data - support both JSON string and plain string
+    # For Computer Use, the response should contain structured data like {"url": "..."}
+    response_data: dict
+    try:
+        import json
+        if content_str.strip().startswith("{") or content_str.strip().startswith("["):
+            # Try to parse as JSON (for Computer Use structured responses)
+            parsed = json.loads(content_str)
+            if isinstance(parsed, dict):
+                response_data = parsed  # Use the parsed JSON directly
+            else:
+                response_data = {"content": content_str}
+        else:
+            response_data = {"content": content_str}
+    except (json.JSONDecodeError, ValueError):
+        # Not valid JSON, wrap in content field
+        response_data = {"content": content_str}
+    
     # We can't determine from openai message format whether it's a successful or
     # error call result so default to the successful result template
     _function_response = VertexFunctionResponse(
-        name=name, response={"content": content_str}  # type: ignore
+        name=name, response=response_data  # type: ignore
     )
 
-    _part = VertexPartType(function_response=_function_response)
-
+    # Create part with function_response, and optionally inline_data for images (Computer Use)
+    _part: VertexPartType = {"function_response": _function_response}
+    
+    # For Computer Use, if we have an image, we need separate parts:
+    # - One part with function_response
+    # - One part with inline_data
+    # Gemini's PartType is a oneof, so we can't have both in the same part
+    if inline_data:
+        image_part: VertexPartType = {"inline_data": inline_data}
+        return [_part, image_part]
+    
     return _part
 
 
@@ -2085,13 +2143,18 @@ def anthropic_messages_pt(  # noqa: PLR0915
             ):  # support assistant tool invoke conversion
                 # Get web_search_results from provider_specific_fields for server_tool_use reconstruction
                 # Fixes: https://github.com/BerriAI/litellm/issues/17737
-                _provider_specific_fields = assistant_content_block.get("provider_specific_fields") or {}
+                _provider_specific_fields_raw = assistant_content_block.get("provider_specific_fields")
+                _provider_specific_fields: Dict[str, Any] = {}
+                if isinstance(_provider_specific_fields_raw, dict):
+                    _provider_specific_fields = cast(Dict[str, Any], _provider_specific_fields_raw)
                 _web_search_results = _provider_specific_fields.get("web_search_results")
+                tool_invoke_results = convert_to_anthropic_tool_invoke(
+                    assistant_tool_calls,
+                    web_search_results=_web_search_results,
+                )
+                # AnthropicMessagesAssistantMessageValues includes AnthropicMessagesToolUseParam
                 assistant_content.extend(
-                    convert_to_anthropic_tool_invoke(
-                        assistant_tool_calls,
-                        web_search_results=_web_search_results,
-                    )
+                    cast(List[AnthropicMessagesAssistantMessageValues], tool_invoke_results)
                 )
 
             assistant_function_call = assistant_content_block.get("function_call")
