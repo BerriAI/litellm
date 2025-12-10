@@ -1104,3 +1104,27 @@ def test_initialize_skills_endpoints():
     for endpoint in skills_endpoints:
         assert hasattr(router, endpoint)
         assert callable(getattr(router, endpoint))
+
+
+@pytest.mark.asyncio
+async def test_init_containers_api_endpoints():
+    """
+    Test that _init_containers_api_endpoints calls the original function
+    directly without model-based routing.
+    """
+    router = Router(model_list=[])
+
+    mock_response = {"id": "cntr_test", "name": "Test Container"}
+    mock_original_function = AsyncMock(return_value=mock_response)
+
+    result = await router._init_containers_api_endpoints(
+        original_function=mock_original_function,
+        custom_llm_provider="openai",
+        name="Test Container"
+    )
+
+    mock_original_function.assert_called_once_with(
+        custom_llm_provider="openai",
+        name="Test Container"
+    )
+    assert result == mock_response

@@ -43,10 +43,6 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.exception_mapping_utils
 from litellm import get_secret_str
-from litellm.router_utils.common_utils import (
-    filter_team_based_models,
-    filter_web_search_deployments,
-)
 from litellm._logging import verbose_router_logger
 from litellm._uuid import uuid
 from litellm.caching.caching import (
@@ -88,6 +84,10 @@ from litellm.router_utils.client_initalization_utils import InitalizeCachedClien
 from litellm.router_utils.clientside_credential_handler import (
     get_dynamic_litellm_params,
     is_clientside_credential,
+)
+from litellm.router_utils.common_utils import (
+    filter_team_based_models,
+    filter_web_search_deployments,
 )
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.cooldown_handlers import (
@@ -157,7 +157,11 @@ from litellm.types.utils import (
 )
 from litellm.types.utils import ModelInfo
 from litellm.types.utils import ModelInfo as ModelMapInfo
-from litellm.types.utils import ModelResponseStream, StandardLoggingPayload, Usage
+from litellm.types.utils import (
+    ModelResponseStream,
+    StandardLoggingPayload,
+    Usage,
+)
 from litellm.utils import (
     CustomStreamWrapper,
     EmbeddingResponse,
@@ -3957,10 +3961,6 @@ class Router:
                 "avideo_status",
                 "avideo_content",
                 "avideo_remix",
-                "acreate_container",
-                "alist_containers",
-                "aretrieve_container",
-                "adelete_container",
                 "acancel_batch",
                 "acreate_skill",
                 "alist_skills",
@@ -3969,6 +3969,17 @@ class Router:
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
+                    **kwargs,
+                )
+            elif call_type in (
+                "acreate_container",
+                "alist_containers",
+                "aretrieve_container",
+                "adelete_container",
+            ):
+                return await self._init_containers_api_endpoints(
+                    original_function=original_function,
+                    custom_llm_provider=custom_llm_provider,
                     **kwargs,
                 )
             elif call_type == "allm_passthrough_route":
@@ -4014,6 +4025,22 @@ class Router:
     ):
         """
         Initialize the Vector Store API endpoints on the router.
+        """
+        if custom_llm_provider and "custom_llm_provider" not in kwargs:
+            kwargs["custom_llm_provider"] = custom_llm_provider
+        return await original_function(**kwargs)
+
+    async def _init_containers_api_endpoints(
+        self,
+        original_function: Callable,
+        custom_llm_provider: Optional[str] = None,
+        **kwargs,
+    ):
+        """
+        Initialize the Containers API endpoints on the router.
+
+        Container operations don't need model-based routing, so we call the
+        original function directly with the custom_llm_provider.
         """
         if custom_llm_provider and "custom_llm_provider" not in kwargs:
             kwargs["custom_llm_provider"] = custom_llm_provider
