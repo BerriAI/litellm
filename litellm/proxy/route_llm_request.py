@@ -36,6 +36,11 @@ ROUTE_ENDPOINT_MAPPING = {
     "alist_containers": "/containers",
     "aretrieve_container": "/containers/{container_id}",
     "adelete_container": "/containers/{container_id}",
+    # Auto-generated container file routes
+    "alist_container_files": "/containers/{container_id}/files",
+    "aretrieve_container_file": "/containers/{container_id}/files/{file_id}",
+    "adelete_container_file": "/containers/{container_id}/files/{file_id}",
+    "aretrieve_container_file_content": "/containers/{container_id}/files/{file_id}/content",
     "acreate_skill": "/skills",
     "alist_skills": "/skills",
     "aget_skill": "/skills/{skill_id}",
@@ -132,6 +137,10 @@ async def route_request(
         "alist_containers",
         "aretrieve_container",
         "adelete_container",
+        "alist_container_files",
+        "aretrieve_container_file",
+        "adelete_container_file",
+        "aretrieve_container_file_content",
         "acreate_skill",
         "alist_skills",
         "aget_skill",
@@ -184,6 +193,10 @@ async def route_request(
             "alist_containers",
             "aretrieve_container",
             "adelete_container",
+            "alist_container_files",
+            "aretrieve_container_file",
+            "adelete_container_file",
+            "aretrieve_container_file_content",
         ]:
             return getattr(llm_router, f"{route_type}")(**data)
         if route_type in [
@@ -256,6 +269,10 @@ async def route_request(
                 "alist_containers",
                 "aretrieve_container",
                 "adelete_container",
+                "alist_container_files",
+                "aretrieve_container_file",
+                "adelete_container_file",
+                "aretrieve_container_file_content",
             ]:
                 # moderation endpoint does not require `model` parameter
                 return getattr(llm_router, f"{route_type}")(**data)

@@ -1017,6 +1017,9 @@ class Router:
             list_containers,
             retrieve_container,
         )
+        from litellm.containers.endpoint_factory import (
+            _generated_endpoints as container_file_endpoints,
+        )
 
         self.acreate_container = self.factory_function(
             acreate_container, call_type="acreate_container"
@@ -1042,6 +1045,10 @@ class Router:
         self.delete_container = self.factory_function(
             delete_container, call_type="delete_container"
         )
+        
+        # Auto-register JSON-generated container file endpoints
+        for name, func in container_file_endpoints.items():
+            setattr(self, name, self.factory_function(func, call_type=name))  # type: ignore[arg-type]
 
     def _initialize_skills_endpoints(self):
         """Initialize Anthropic Skills API endpoints."""
@@ -3841,6 +3848,12 @@ class Router:
             "retrieve_container",
             "adelete_container",
             "delete_container",
+            "alist_container_files",
+            "list_container_files",
+            "aretrieve_container_file",
+            "retrieve_container_file",
+            "adelete_container_file",
+            "delete_container_file",
             "acreate_skill",
             "alist_skills",
             "aget_skill",
@@ -3976,6 +3989,10 @@ class Router:
                 "alist_containers",
                 "aretrieve_container",
                 "adelete_container",
+                "alist_container_files",
+                "aretrieve_container_file",
+                "adelete_container_file",
+                "aretrieve_container_file_content",
             ):
                 return await self._init_containers_api_endpoints(
                     original_function=original_function,
