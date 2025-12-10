@@ -743,6 +743,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return;
     }
 
+    // Require model selection for Responses API
+    if (endpointType === EndpointType.RESPONSES && !selectedModel) {
+      NotificationsManager.fromBackend("Please select a model before sending a request");
+      return;
+    }
+
     if (!token || !userRole || !userID) {
       return;
     }
@@ -1399,9 +1405,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 />
               </div>
 
-              {/* Code Interpreter - Only show for Responses endpoint */}
+              {/* Code Interpreter Toggle - Only for Responses endpoint */}
               {endpointType === EndpointType.RESPONSES && (
-                <div className="mb-4">
+                <div>
                   <CodeInterpreterTool
                     accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
                     enabled={codeInterpreter.enabled}
@@ -1813,8 +1819,17 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 <div className="mb-2 space-y-2">
                   <div className="px-3 py-2 bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg border border-blue-200 flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <CodeOutlined className="text-blue-500" />
-                      <span className="text-sm text-blue-700 font-medium">Code Interpreter Active</span>
+                      {isLoading ? (
+                        <>
+                          <LoadingOutlined className="text-blue-500" spin />
+                          <span className="text-sm text-blue-700 font-medium">Running Python code...</span>
+                        </>
+                      ) : (
+                        <>
+                          <CodeOutlined className="text-blue-500" />
+                          <span className="text-sm text-blue-700 font-medium">Code Interpreter Active</span>
+                        </>
+                      )}
                     </div>
                     <button
                       className="text-xs text-blue-500 hover:text-blue-700"
@@ -1823,22 +1838,24 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       Disable
                     </button>
                   </div>
-                  {/* Sample prompts */}
-                  <div className="flex flex-wrap gap-2">
-                    {[
-                      "Generate sample sales data CSV and create a chart",
-                      "Write Python to calculate fibonacci sequence",
-                      "Create a pie chart of browser market share",
-                    ].map((prompt, idx) => (
-                      <button
-                        key={idx}
-                        className="text-xs px-3 py-1.5 bg-white border border-gray-200 rounded-full hover:bg-blue-50 hover:border-blue-300 hover:text-blue-600 transition-colors"
-                        onClick={() => setInputMessage(prompt)}
-                      >
-                        {prompt}
-                      </button>
-                    ))}
-                  </div>
+                  {/* Sample prompts - only show when not loading */}
+                  {!isLoading && (
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        "Generate sample sales data CSV and create a chart",
+                        "Create a PNG bar chart comparing AI gateway providers including LiteLLM",
+                        "Generate a CSV of LLM pricing data and visualize it as a line chart",
+                      ].map((prompt, idx) => (
+                        <button
+                          key={idx}
+                          className="text-xs px-3 py-1.5 bg-white border border-gray-200 rounded-full hover:bg-blue-50 hover:border-blue-300 hover:text-blue-600 transition-colors"
+                          onClick={() => setInputMessage(prompt)}
+                        >
+                          {prompt}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 
