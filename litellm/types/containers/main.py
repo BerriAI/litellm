@@ -124,9 +124,9 @@ class ContainerListOptionalRequestParams(TypedDict, total=False):
 class ContainerFileObject(BaseModel):
     """Represents a container file object."""
     id: str
-    object: Literal["container_file"]
+    object: Literal["container.file", "container_file"]  # OpenAI returns "container.file"
     container_id: str
-    bytes: int
+    bytes: Optional[int] = None  # Can be null for some files
     created_at: int
     path: str
     source: str
