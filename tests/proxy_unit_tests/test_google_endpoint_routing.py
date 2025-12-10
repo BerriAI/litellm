@@ -82,19 +82,22 @@ async def test_google_generate_content_with_slashes_in_model_name(
     with open(config_fp, "w") as f:
         yaml.dump(config, f)
 
-    await initialize(config=config_fp)
+    try:
+        await initialize(config=config_fp)
 
-    with patch("litellm.proxy.proxy_server.llm_router.agenerate_content", new_callable=AsyncMock) as mock_agenerate_content:
-        mock_agenerate_content.return_value = ModelResponse()
-        
-        await google_generate_content(
-            request=mock_request,
-            model_name="bedrock/claude-sonnet-3.7",
-            fastapi_response=mock_response,
-            user_api_key_dict=mock_user_api_key_dict,
-        )
+        with patch("litellm.proxy.proxy_server.llm_router.agenerate_content", new_callable=AsyncMock) as mock_agenerate_content:
+            mock_agenerate_content.return_value = ModelResponse()
+            
+            await google_generate_content(
+                request=mock_request,
+                model_name="bedrock/claude-sonnet-3.7",
+                fastapi_response=mock_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
 
-        mock_agenerate_content.assert_called_once()
-        _, call_kwargs = mock_agenerate_content.call_args
-        assert call_kwargs["model"] == "bedrock/claude-sonnet-3.7"
-        os.remove(config_fp)
+            mock_agenerate_content.assert_called_once()
+            _, call_kwargs = mock_agenerate_content.call_args
+            assert call_kwargs["model"] == "bedrock/claude-sonnet-3.7"
+    finally:
+        if os.path.exists(config_fp):
+            os.remove(config_fp)
