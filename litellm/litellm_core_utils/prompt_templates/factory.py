@@ -1623,7 +1623,8 @@ def convert_function_to_anthropic_tool_invoke(
 
 def convert_to_anthropic_tool_invoke(
     tool_calls: List[ChatCompletionAssistantToolCall],
-) -> List[AnthropicMessagesToolUseParam]:
+    web_search_results: Optional[List[Any]] = None,
+) -> List[Union[AnthropicMessagesToolUseParam, Dict[str, Any]]]:
     """
     OpenAI tool invokes:
     {
@@ -1659,38 +1660,68 @@ def convert_to_anthropic_tool_invoke(
         }
       ]
     }
+
+    For server-side tools (web_search), we need to reconstruct:
+    - server_tool_use blocks (id starts with "srvtoolu_")
+    - web_search_tool_result blocks (from provider_specific_fields)
+
+    Fixes: https://github.com/BerriAI/litellm/issues/17737
     """
-    anthropic_tool_invoke = []
+    anthropic_tool_invoke: List[Union[AnthropicMessagesToolUseParam, Dict[str, Any]]] = []
 
     for tool in tool_calls:
         if not get_attribute_or_key(tool, "type") == "function":
             continue
 
-        _anthropic_tool_use_param = AnthropicMessagesToolUseParam(
-            type="tool_use",
-            id=cast(str, get_attribute_or_key(tool, "id")),
-            name=cast(
-                str,
-                get_attribute_or_key(get_attribute_or_key(tool, "function"), "name"),
-            ),
-            input=json.loads(
-                get_attribute_or_key(
-                    get_attribute_or_key(tool, "function"), "arguments"
-                )
-            ),
+        tool_id = cast(str, get_attribute_or_key(tool, "id"))
+        tool_name = cast(
+            str,
+            get_attribute_or_key(get_attribute_or_key(tool, "function"), "name"),
+        )
+        tool_input = json.loads(
+            get_attribute_or_key(
+                get_attribute_or_key(tool, "function"), "arguments"
+            )
         )
 
-        _content_element = add_cache_control_to_content(
-            anthropic_content_element=_anthropic_tool_use_param,
-            original_content_element=dict(tool),
-        )
+        # Check if this is a server-side tool (web_search, tool_search, etc.)
+        # Server tool IDs start with "srvtoolu_"
+        if tool_id.startswith("srvtoolu_"):
+            # Create server_tool_use block instead of tool_use
+            _anthropic_server_tool_use: Dict[str, Any] = {
+                "type": "server_tool_use",
+                "id": tool_id,
+                "name": tool_name,
+                "input": tool_input,
+            }
+            anthropic_tool_invoke.append(_anthropic_server_tool_use)
 
-        if "cache_control" in _content_element:
-            _anthropic_tool_use_param["cache_control"] = _content_element[
-                "cache_control"
-            ]
+            # Add corresponding web_search_tool_result if available
+            if web_search_results:
+                for result in web_search_results:
+                    if result.get("tool_use_id") == tool_id:
+                        anthropic_tool_invoke.append(result)
+                        break
+        else:
+            # Regular tool_use
+            _anthropic_tool_use_param = AnthropicMessagesToolUseParam(
+                type="tool_use",
+                id=tool_id,
+                name=tool_name,
+                input=tool_input,
+            )
 
-        anthropic_tool_invoke.append(_anthropic_tool_use_param)
+            _content_element = add_cache_control_to_content(
+                anthropic_content_element=_anthropic_tool_use_param,
+                original_content_element=dict(tool),
+            )
+
+            if "cache_control" in _content_element:
+                _anthropic_tool_use_param["cache_control"] = _content_element[
+                    "cache_control"
+                ]
+
+            anthropic_tool_invoke.append(_anthropic_tool_use_param)
 
     return anthropic_tool_invoke
 
@@ -2052,8 +2083,15 @@ def anthropic_messages_pt(  # noqa: PLR0915
             if (
                 assistant_tool_calls is not None
             ):  # support assistant tool invoke conversion
+                # Get web_search_results from provider_specific_fields for server_tool_use reconstruction
+                # Fixes: https://github.com/BerriAI/litellm/issues/17737
+                _provider_specific_fields = assistant_content_block.get("provider_specific_fields") or {}
+                _web_search_results = _provider_specific_fields.get("web_search_results")
                 assistant_content.extend(
-                    convert_to_anthropic_tool_invoke(assistant_tool_calls)
+                    convert_to_anthropic_tool_invoke(
+                        assistant_tool_calls,
+                        web_search_results=_web_search_results,
+                    )
                 )
 
             assistant_function_call = assistant_content_block.get("function_call")
@@ -3446,8 +3484,25 @@ class BedrockConverseMessagesProcessor:
     @staticmethod
     def _initial_message_setup(
         messages: List,
+        model: str,
+        llm_provider: str,
         user_continue_message: Optional[ChatCompletionUserMessage] = None,
     ) -> List:
+        # gracefully handle base case of no messages at all
+        if len(messages) == 0:
+            if user_continue_message is not None:
+                messages.append(user_continue_message)
+            elif litellm.modify_params:
+                messages.append(DEFAULT_USER_CONTINUE_MESSAGE)
+            else:
+                raise litellm.BadRequestError(
+                    message=BAD_MESSAGE_ERROR_STR
+                    + "bedrock requires at least one non-system message",
+                    model=model,
+                    llm_provider=llm_provider,
+                )
+
+        # if initial message is assistant message
         if messages[0].get("role") is not None and messages[0]["role"] == "assistant":
             if user_continue_message is not None:
                 messages.insert(0, user_continue_message)
@@ -3475,18 +3530,8 @@ class BedrockConverseMessagesProcessor:
         contents: List[BedrockMessageBlock] = []
         msg_i = 0
 
-        ## BASE CASE ##
-        if len(messages) == 0:
-            raise litellm.BadRequestError(
-                message=BAD_MESSAGE_ERROR_STR
-                + "bedrock requires at least one non-system message",
-                model=model,
-                llm_provider=llm_provider,
-            )
-
-        # if initial message is assistant message
         messages = BedrockConverseMessagesProcessor._initial_message_setup(
-            messages, user_continue_message
+            messages, model, llm_provider, user_continue_message
         )
 
         while msg_i < len(messages):
@@ -3847,28 +3892,9 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
     contents: List[BedrockMessageBlock] = []
     msg_i = 0
 
-    ## BASE CASE ##
-    if len(messages) == 0:
-        raise litellm.BadRequestError(
-            message=BAD_MESSAGE_ERROR_STR
-            + "bedrock requires at least one non-system message",
-            model=model,
-            llm_provider=llm_provider,
-        )
-
-    # if initial message is assistant message
-    if messages[0].get("role") is not None and messages[0]["role"] == "assistant":
-        if user_continue_message is not None:
-            messages.insert(0, user_continue_message)
-        elif litellm.modify_params:
-            messages.insert(0, DEFAULT_USER_CONTINUE_MESSAGE)
-
-    # if final message is assistant message
-    if messages[-1].get("role") is not None and messages[-1]["role"] == "assistant":
-        if user_continue_message is not None:
-            messages.append(user_continue_message)
-        elif litellm.modify_params:
-            messages.append(DEFAULT_USER_CONTINUE_MESSAGE)
+    messages = BedrockConverseMessagesProcessor._initial_message_setup(
+        messages, model, llm_provider, user_continue_message
+    )
 
     while msg_i < len(messages):
         user_content: List[BedrockContentBlock] = []

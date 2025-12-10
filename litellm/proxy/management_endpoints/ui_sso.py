@@ -435,9 +435,9 @@ async def add_missing_team_member(
     - Get missing teams (diff b/w user_info.team_ids and sso_teams)
     - Add missing user to missing teams
     """
-    if user_info.teams is None:
-        return
-    missing_teams = set(sso_teams) - set(user_info.teams)
+    # Handle None as empty list for new users
+    user_teams = user_info.teams if user_info.teams is not None else []
+    missing_teams = set(sso_teams) - set(user_teams)
     missing_teams_list = list(missing_teams)
     tasks = []
     tasks = [
@@ -562,7 +562,7 @@ def _should_use_role_from_sso_response(sso_role: Optional[str]) -> bool:
     """returns true if SSO upsert should use the 'role' defined on the SSO response"""
     if sso_role is None:
         return False
-    
+
     if not is_valid_litellm_user_role(sso_role):
         verbose_proxy_logger.debug(
             f"SSO role '{sso_role}' is not a valid LiteLLM user role. "
@@ -571,6 +571,41 @@ def _should_use_role_from_sso_response(sso_role: Optional[str]) -> bool:
         return False
     return True
 
+
+def _build_sso_user_update_data(
+    result: Optional[Union["CustomOpenID", OpenID, dict]],
+    user_email: Optional[str],
+    user_id: Optional[str],
+) -> dict:
+    """
+    Build the update data dictionary for SSO user upsert.
+
+    Args:
+        result: The SSO response containing user information
+        user_email: The user's email from SSO
+        user_id: The user's ID for logging purposes
+
+    Returns:
+        dict: Update data containing user_email and optionally user_role if valid
+    """
+    update_data: dict = {"user_email": user_email}
+
+    # Get SSO role from result and include if valid
+    sso_role = getattr(result, "user_role", None)
+    if sso_role is not None:
+        # Convert enum to string if needed
+        sso_role_str = (
+            sso_role.value if isinstance(sso_role, LitellmUserRoles) else sso_role
+        )
+
+        # Only include if it's a valid LiteLLM role
+        if _should_use_role_from_sso_response(sso_role_str):
+            update_data["user_role"] = sso_role_str
+            verbose_proxy_logger.info(
+                f"Updating user {user_id} role from SSO: {sso_role_str}"
+            )
+
+    return update_data
 
 
 def apply_user_info_values_to_sso_user_defined_values(
@@ -1253,7 +1288,8 @@ class SSOAuthenticationHandler:
         Priority order:
         1. CLI state (if provided)
         2. GENERIC_CLIENT_STATE environment variable
-        3. Generated UUID for Okta (if Okta endpoint detected)
+        3. Generated UUID (required by Okta and most OAuth providers)
+
 
         Args:
             state: Optional state parameter (e.g., CLI state)
@@ -1275,13 +1311,8 @@ class SSOAuthenticationHandler:
             generic_client_state = os.getenv("GENERIC_CLIENT_STATE", None)
             if generic_client_state:
                 redirect_params["state"] = generic_client_state
-            elif (
-                generic_authorization_endpoint
-                and "okta" in generic_authorization_endpoint
-            ):
-                redirect_params["state"] = (
-                    uuid.uuid4().hex
-                )  # set state param for okta - required
+            else:
+                redirect_params["state"] = uuid.uuid4().hex
 
         # Handle PKCE (Proof Key for Code Exchange) if enabled
         # Set GENERIC_CLIENT_USE_PKCE=true to enable PKCE for enhanced OAuth security
@@ -1345,14 +1376,20 @@ class SSOAuthenticationHandler:
         """
         Connects the SSO Users to the User Table in LiteLLM DB
 
-        - If user on LiteLLM DB, update the user_email with the SSO user_email
+        - If user on LiteLLM DB, update the user_email and user_role (if SSO provides valid role) with the SSO values
         - If user not on LiteLLM DB, insert the user into LiteLLM DB
         """
         try:
             if user_info is not None:
                 user_id = user_info.user_id
+                update_data = _build_sso_user_update_data(
+                    result=result,
+                    user_email=user_email,
+                    user_id=user_id,
+                )
+
                 await prisma_client.db.litellm_usertable.update_many(
-                    where={"user_id": user_id}, data={"user_email": user_email}
+                    where={"user_id": user_id}, data=update_data
                 )
             else:
                 verbose_proxy_logger.info(

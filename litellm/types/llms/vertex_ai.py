@@ -32,7 +32,6 @@ class FileDataType(TypedDict):
 class BlobType(TypedDict, total=False):
     mime_type: Required[str]
     data: Required[str]
-    media_resolution: Literal["low", "medium", "high"]
 
 
 class PartType(TypedDict, total=False):
@@ -43,6 +42,7 @@ class PartType(TypedDict, total=False):
     function_response: FunctionResponse
     thought: bool
     thoughtSignature: str
+    media_resolution: Literal["low", "medium", "high"]
 
 
 class HttpxFunctionCall(TypedDict):
@@ -63,7 +63,6 @@ class HttpxCodeExecutionResult(TypedDict):
 class HttpxBlobType(TypedDict, total=False):
     mimeType: str
     data: str
-    mediaResolution: Literal["low", "medium", "high"]
 
 
 class HttpxPartType(TypedDict, total=False):
@@ -76,6 +75,7 @@ class HttpxPartType(TypedDict, total=False):
     codeExecutionResult: HttpxCodeExecutionResult
     thought: bool
     thoughtSignature: str
+    mediaResolution: Literal["low", "medium", "high"]
 
 
 class HttpxContentType(TypedDict, total=False):

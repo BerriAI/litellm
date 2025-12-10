@@ -148,7 +148,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             if role == "system":
                 # Extract system message as instructions
                 if isinstance(content, str):
-                    instructions = content
+                    if instructions:
+                        # Concatenate multiple system prompts with a space
+                        instructions = f"{instructions} {content}"
+                    else:
+                        instructions = content
                 else:
                     input_items.append(
                         {
@@ -363,49 +367,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     reasoning_content = None  # flush reasoning content
                     index += 1
             elif isinstance(item, ResponseFunctionToolCall):
-
-                provider_specific_fields = getattr(
-                    item, "provider_specific_fields", None
+                from litellm.responses.litellm_completion_transformation.transformation import (
+                    LiteLLMCompletionResponsesConfig,
                 )
-                if provider_specific_fields and not isinstance(
-                    provider_specific_fields, dict
-                ):
-                    provider_specific_fields = (
-                        dict(provider_specific_fields)
-                        if hasattr(provider_specific_fields, "__dict__")
-                        else {}
-                    )
-                elif hasattr(item, "get") and callable(item.get):  # type: ignore
-                    provider_fields = item.get("provider_specific_fields")  # type: ignore
-                    if provider_fields:
-                        provider_specific_fields = (
-                            provider_fields
-                            if isinstance(provider_fields, dict)
-                            else (
-                                dict(provider_fields)  # type: ignore
-                                if hasattr(provider_fields, "__dict__")
-                                else {}
-                            )
-                        )
 
-                function_dict: Dict[str, Any] = {
-                    "name": item.name,
-                    "arguments": item.arguments,
-                }
-
-                if provider_specific_fields:
-                    function_dict["provider_specific_fields"] = provider_specific_fields
-
-                tool_call_dict: Dict[str, Any] = {
-                    "id": item.call_id,
-                    "function": function_dict,
-                    "type": "function",
-                }
-
-                if provider_specific_fields:
-                    tool_call_dict["provider_specific_fields"] = (
-                        provider_specific_fields
-                    )
+                tool_call_dict = LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
+                    tool_call_item=item,
+                    index=index,
+                )
 
                 msg = Message(
                     content=None,
@@ -663,6 +632,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             return Reasoning(effort="none")  # type: ignore
         elif reasoning_effort == "high":
             return Reasoning(effort="high")
+        elif reasoning_effort == "xhigh":
+            return Reasoning(effort="xhigh")  # type: ignore[typeddict-item]
         elif reasoning_effort == "medium":
             return Reasoning(effort="medium")
         elif reasoning_effort == "low":
@@ -714,17 +685,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     }
                 }
             elif format_type == "json_object":
-                return {
-                    "format": {
-                        "type": "json_object"
-                    }
-                }
+                return {"format": {"type": "json_object"}}
             elif format_type == "text":
-                return {
-                    "format": {
-                        "type": "text"
-                    }
-                }
+                return {"format": {"type": "text"}}
 
         return None
 
@@ -910,8 +873,10 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                     usage=None,
                 )
             elif output_item.get("type") == "message":
+                # Don't emit is_finished=True here - there may be more output items
+                # (e.g., tool_calls) coming after the message. Wait for response.completed.
                 return GenericStreamingChunk(
-                    finish_reason="stop", is_finished=True, usage=None, text=""
+                    finish_reason="", is_finished=False, usage=None, text=""
                 )
 
         elif event_type == "response.output_text.delta":
@@ -944,6 +909,12 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         )
                     ]
                 )
+        elif event_type == "response.completed":
+            # Response is fully complete - now we can signal is_finished=True
+            # This ensures we don't prematurely end the stream before tool_calls arrive
+            return GenericStreamingChunk(
+                text="", tool_use=None, is_finished=True, finish_reason="stop", usage=None
+            )
         else:
             pass
         # For any unhandled event types, create a minimal valid chunk or skip

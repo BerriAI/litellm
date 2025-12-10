@@ -1,5 +1,6 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fetchAvailableModelsForTeamOrKey } from "./key_team_helpers/fetch_available_models_team_key";
 import { teamCreateCall } from "./networking";
 import OldTeams from "./OldTeams";
 
@@ -21,6 +22,28 @@ vi.mock("./molecules/notifications_manager", () => ({
     error: vi.fn(),
     fromBackend: vi.fn(),
   },
+}));
+
+vi.mock("./key_team_helpers/fetch_available_models_team_key", () => ({
+  fetchAvailableModelsForTeamOrKey: vi.fn(),
+  getModelDisplayName: vi.fn((model: string) => model),
+  unfurlWildcardModelsInList: vi.fn((teamModels: string[], allModels: string[]) => {
+    const wildcardDisplayNames: string[] = [];
+    const expandedModels: string[] = [];
+
+    teamModels.forEach((teamModel) => {
+      if (teamModel.endsWith("/*")) {
+        const provider = teamModel.replace("/*", "");
+        const matchingModels = allModels.filter((model) => model.startsWith(provider + "/"));
+        expandedModels.push(...matchingModels);
+        wildcardDisplayNames.push(teamModel);
+      } else {
+        expandedModels.push(teamModel);
+      }
+    });
+
+    return [...wildcardDisplayNames, ...expandedModels].filter((item, index, array) => array.indexOf(item) === index);
+  }),
 }));
 
 describe("OldTeams - handleCreate organization handling", () => {
@@ -236,7 +259,7 @@ describe("OldTeams - handleCreate organization handling", () => {
   });
 
   it("should clear the delete modal when the cancel button is clicked", async () => {
-    const { getByRole, getByTestId } = render(
+    render(
       <OldTeams
         teams={[
           {
@@ -261,7 +284,7 @@ describe("OldTeams - handleCreate organization handling", () => {
         organizations={[]}
       />,
     );
-    const deleteTeamButton = getByTestId("delete-team-button");
+    const deleteTeamButton = screen.getByTestId("delete-team-button");
     act(() => {
       fireEvent.click(deleteTeamButton);
     });
@@ -275,7 +298,7 @@ describe("OldTeams - empty state", () => {
   });
 
   it("should display empty state message when teams array is empty", () => {
-    const { getByText } = render(
+    render(
       <OldTeams
         teams={[]}
         searchParams={{}}
@@ -287,12 +310,12 @@ describe("OldTeams - empty state", () => {
       />,
     );
 
-    expect(getByText("No teams found")).toBeInTheDocument();
-    expect(getByText("Adjust your filters or create a new team")).toBeInTheDocument();
+    expect(screen.getByText("No teams found")).toBeInTheDocument();
+    expect(screen.getByText("Adjust your filters or create a new team")).toBeInTheDocument();
   });
 
   it("should display empty state message when teams is null", () => {
-    const { getByText } = render(
+    render(
       <OldTeams
         teams={null}
         searchParams={{}}
@@ -304,12 +327,12 @@ describe("OldTeams - empty state", () => {
       />,
     );
 
-    expect(getByText("No teams found")).toBeInTheDocument();
-    expect(getByText("Adjust your filters or create a new team")).toBeInTheDocument();
+    expect(screen.getByText("No teams found")).toBeInTheDocument();
+    expect(screen.getByText("Adjust your filters or create a new team")).toBeInTheDocument();
   });
 
   it("should not display empty state when teams array has items", () => {
-    const { queryByText, getByText } = render(
+    render(
       <OldTeams
         teams={[
           {
@@ -335,9 +358,9 @@ describe("OldTeams - empty state", () => {
       />,
     );
 
-    expect(queryByText("No teams found")).not.toBeInTheDocument();
-    expect(queryByText("Adjust your filters or create a new team")).not.toBeInTheDocument();
-    expect(getByText("Test Team")).toBeInTheDocument();
+    expect(screen.queryByText("No teams found")).not.toBeInTheDocument();
+    expect(screen.queryByText("Adjust your filters or create a new team")).not.toBeInTheDocument();
+    expect(screen.getByText("Test Team")).toBeInTheDocument();
   });
 });
 
@@ -473,7 +496,7 @@ describe("OldTeams - Default Team Settings tab visibility", () => {
   });
 
   it("should show Default Team Settings tab for Admin role", () => {
-    const { getByRole } = render(
+    render(
       <OldTeams
         teams={[
           {
@@ -499,11 +522,11 @@ describe("OldTeams - Default Team Settings tab visibility", () => {
       />,
     );
 
-    expect(getByRole("tab", { name: "Default Team Settings" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Default Team Settings" })).toBeInTheDocument();
   });
 
   it("should show Default Team Settings tab for proxy_admin role", () => {
-    const { getByRole } = render(
+    render(
       <OldTeams
         teams={[
           {
@@ -529,11 +552,11 @@ describe("OldTeams - Default Team Settings tab visibility", () => {
       />,
     );
 
-    expect(getByRole("tab", { name: "Default Team Settings" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Default Team Settings" })).toBeInTheDocument();
   });
 
   it("should not show Default Team Settings tab for proxy_admin_viewer role", () => {
-    const { queryByRole } = render(
+    render(
       <OldTeams
         teams={[
           {
@@ -559,11 +582,11 @@ describe("OldTeams - Default Team Settings tab visibility", () => {
       />,
     );
 
-    expect(queryByRole("tab", { name: "Default Team Settings" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Default Team Settings" })).not.toBeInTheDocument();
   });
 
   it("should not show Default Team Settings tab for Admin Viewer role", () => {
-    const { queryByRole } = render(
+    render(
       <OldTeams
         teams={[
           {
@@ -589,6 +612,44 @@ describe("OldTeams - Default Team Settings tab visibility", () => {
       />,
     );
 
-    expect(queryByRole("tab", { name: "Default Team Settings" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Default Team Settings" })).not.toBeInTheDocument();
+  });
+});
+
+describe("OldTeams - all-proxy-models dropdown visibility", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4", "gpt-3.5-turbo"]);
+  });
+
+  it("should not show all-proxy-models option when user has no access to it", async () => {
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4", "gpt-3.5-turbo"]);
+
+    render(
+      <OldTeams
+        teams={[]}
+        searchParams={{}}
+        accessToken="test-token"
+        setTeams={vi.fn()}
+        userID="user-123"
+        userRole="Admin"
+        organizations={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(fetchAvailableModelsForTeamOrKey).toHaveBeenCalled();
+    });
+
+    const createButton = screen.getByRole("button", { name: /create new team/i });
+    act(() => {
+      fireEvent.click(createButton);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/models/i)).toBeInTheDocument();
+    });
+    const allProxyModelsOption = screen.queryByText("All Proxy Models");
+    expect(allProxyModelsOption).not.toBeInTheDocument();
   });
 });

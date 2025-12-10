@@ -185,7 +185,7 @@ def test_extract_response_content_with_citations():
         },
     }
 
-    _, citations, _, _, _ = config.extract_response_content(completion_response)
+    _, citations, _, _, _, _ = config.extract_response_content(completion_response)
     assert citations == [
         [
             {
@@ -284,6 +284,204 @@ def test_web_search_tool_transformation_with_search_context_size(
     assert anthropic_web_search_tool["user_location"]["type"] == "approximate"
     assert anthropic_web_search_tool["user_location"]["city"] == "San Francisco"
     assert anthropic_web_search_tool["max_uses"] == expected_max_uses
+
+
+def test_web_search_tool_result_extraction():
+    """
+    Test that web_search_tool_result blocks are correctly extracted and preserved.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/17737
+    - web_search_tool_result was being dropped entirely from the response
+    - This caused multi-turn conversations to fail because the web search results
+      were not available for reconstruction
+    """
+    config = AnthropicConfig()
+
+    # Simulating actual Anthropic API response with web search
+    completion_response = {
+        "id": "msg_web_search_test",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+            {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01ABC123",
+                "name": "web_search",
+                "input": {"query": "average weight african elephant kg"}
+            },
+            {
+                "type": "web_search_tool_result",
+                "tool_use_id": "srvtoolu_01ABC123",
+                "content": [
+                    {
+                        "type": "web_search_result",
+                        "url": "https://example.com/elephants",
+                        "title": "African Elephant Facts",
+                        "encrypted_content": "encrypted_data_here",
+                        "page_age": "2024-01-15",
+                        "snippet": "Adult African elephants weigh between 4,000-6,000 kg..."
+                    }
+                ]
+            },
+            {
+                "type": "text",
+                "text": "Based on my search, African elephants weigh around 5,000 kg."
+            },
+            {
+                "type": "tool_use",
+                "id": "toolu_01XYZ789",
+                "name": "add_numbers",
+                "input": {"a": 5000, "b": 100}
+            }
+        ],
+        "stop_reason": "tool_use",
+        "usage": {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "server_tool_use": {"web_search_requests": 1}
+        }
+    }
+
+    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results = config.extract_response_content(
+        completion_response
+    )
+
+    # Verify text extraction
+    assert "Based on my search" in text
+    assert "5,000 kg" in text
+
+    # Verify tool calls (should have both server_tool_use and tool_use)
+    assert len(tool_calls) == 2
+    assert tool_calls[0]["id"] == "srvtoolu_01ABC123"
+    assert tool_calls[0]["function"]["name"] == "web_search"
+    assert tool_calls[1]["id"] == "toolu_01XYZ789"
+    assert tool_calls[1]["function"]["name"] == "add_numbers"
+
+    # Verify web_search_results is extracted (THIS WAS THE BUG - it was None before the fix)
+    assert web_search_results is not None
+    assert len(web_search_results) == 1
+    assert web_search_results[0]["type"] == "web_search_tool_result"
+    assert web_search_results[0]["tool_use_id"] == "srvtoolu_01ABC123"
+    assert len(web_search_results[0]["content"]) == 1
+    assert web_search_results[0]["content"][0]["url"] == "https://example.com/elephants"
+    assert web_search_results[0]["content"][0]["title"] == "African Elephant Facts"
+
+
+def test_web_search_tool_result_in_provider_specific_fields():
+    """
+    Test that web_search_results is included in provider_specific_fields.
+
+    This ensures users can access the web search results via:
+    response.choices[0].message.provider_specific_fields["web_search_results"]
+    """
+    import httpx
+    from litellm.types.utils import ModelResponse
+
+    config = AnthropicConfig()
+
+    completion_response = {
+        "id": "msg_web_search_provider_fields",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5-20250929",
+        "content": [
+            {
+                "type": "server_tool_use",
+                "id": "srvtoolu_provider_test",
+                "name": "web_search",
+                "input": {"query": "test query"}
+            },
+            {
+                "type": "web_search_tool_result",
+                "tool_use_id": "srvtoolu_provider_test",
+                "content": [
+                    {
+                        "type": "web_search_result",
+                        "url": "https://example.com/test",
+                        "title": "Test Result",
+                        "snippet": "Test snippet content"
+                    }
+                ]
+            },
+            {
+                "type": "text",
+                "text": "Here is the result."
+            }
+        ],
+        "stop_reason": "end_turn",
+        "usage": {
+            "input_tokens": 50,
+            "output_tokens": 25,
+            "server_tool_use": {"web_search_requests": 1}
+        }
+    }
+
+    raw_response = httpx.Response(status_code=200, headers={})
+    model_response = ModelResponse()
+
+    result = config.transform_parsed_response(
+        completion_response=completion_response,
+        raw_response=raw_response,
+        model_response=model_response,
+        json_mode=False,
+        prefix_prompt=None,
+    )
+
+    # Verify web_search_results is in provider_specific_fields
+    provider_fields = result.choices[0].message.provider_specific_fields
+    assert provider_fields is not None
+    assert "web_search_results" in provider_fields
+    assert len(provider_fields["web_search_results"]) == 1
+    assert provider_fields["web_search_results"][0]["type"] == "web_search_tool_result"
+    assert provider_fields["web_search_results"][0]["tool_use_id"] == "srvtoolu_provider_test"
+
+
+def test_multiple_web_search_tool_results():
+    """
+    Test that multiple web_search_tool_result blocks are all extracted.
+    """
+    config = AnthropicConfig()
+
+    completion_response = {
+        "content": [
+            {
+                "type": "server_tool_use",
+                "id": "srvtoolu_search1",
+                "name": "web_search",
+                "input": {"query": "african elephant weight"}
+            },
+            {
+                "type": "web_search_tool_result",
+                "tool_use_id": "srvtoolu_search1",
+                "content": [{"type": "web_search_result", "url": "https://example1.com", "title": "Result 1", "snippet": "First result"}]
+            },
+            {
+                "type": "server_tool_use",
+                "id": "srvtoolu_search2",
+                "name": "web_search",
+                "input": {"query": "asian elephant weight"}
+            },
+            {
+                "type": "web_search_tool_result",
+                "tool_use_id": "srvtoolu_search2",
+                "content": [{"type": "web_search_result", "url": "https://example2.com", "title": "Result 2", "snippet": "Second result"}]
+            },
+            {
+                "type": "text",
+                "text": "Found information about both elephants."
+            }
+        ]
+    }
+
+    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results = config.extract_response_content(
+        completion_response
+    )
+
+    # Verify both web_search_tool_results are extracted
+    assert web_search_results is not None
+    assert len(web_search_results) == 2
+    assert web_search_results[0]["tool_use_id"] == "srvtoolu_search1"
+    assert web_search_results[1]["tool_use_id"] == "srvtoolu_search2"
 
 
 def test_add_code_execution_tool():
@@ -693,13 +891,14 @@ def test_server_tool_use_in_response():
         ]
     }
     
-    text, citations, thinking_blocks, reasoning_content, tool_calls = config.extract_response_content(
+    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results = config.extract_response_content(
         completion_response
     )
-    
+
     assert len(tool_calls) == 1
     assert tool_calls[0]["id"] == "srvtoolu_01ABC123"
     assert tool_calls[0]["function"]["name"] == "tool_search_tool_regex"
+    assert web_search_results is None
 
 
 def test_tool_search_usage_tracking():
@@ -820,18 +1019,21 @@ def test_tool_search_complete_response_parsing():
     }
     
     # Extract content
-    text, citations, thinking_blocks, reasoning_content, tool_calls = config.extract_response_content(
+    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results = config.extract_response_content(
         completion_response
     )
-    
+
     # Verify text extraction (should concatenate both text blocks)
     assert "I'll search for weather-related tools" in text
     assert "Great! I found a weather tool" in text
-    
+
     # Verify tool calls (should have both server_tool_use and tool_use)
     assert len(tool_calls) == 2
     assert tool_calls[0]["function"]["name"] == "tool_search_tool_regex"
     assert tool_calls[1]["function"]["name"] == "get_weather"
+
+    # Verify web_search_results is None (this response has tool_search, not web_search)
+    assert web_search_results is None
     
     # Verify usage calculation counts tool_search_requests from content
     usage = config.calculate_usage(
@@ -937,14 +1139,15 @@ def test_caller_field_in_response():
         "usage": {"input_tokens": 100, "output_tokens": 50}
     }
     
-    text, citations, thinking, reasoning, tool_calls = config.extract_response_content(completion_response)
-    
+    text, citations, thinking, reasoning, tool_calls, web_search_results = config.extract_response_content(completion_response)
+
     assert len(tool_calls) == 1
     assert tool_calls[0]["id"] == "toolu_123"
     assert tool_calls[0]["function"]["name"] == "query_database"
     assert "caller" in tool_calls[0]
     assert tool_calls[0]["caller"]["type"] == "code_execution_20250825"
     assert tool_calls[0]["caller"]["tool_id"] == "srvtoolu_abc"
+    assert web_search_results is None
 
 
 def test_code_execution_20250825_tool_type():
@@ -1290,10 +1493,95 @@ def test_effort_with_other_features():
         litellm_params={},
         headers={}
     )
-    
+
     # Verify all features are present
     assert "output_config" in result
     assert result["output_config"]["effort"] == "low"
     assert "tools" in result
     assert len(result["tools"]) > 0
     assert "thinking" in result
+
+
+def test_translate_system_message_skips_empty_string_content():
+    """
+    Test that translate_system_message skips system messages with empty string content.
+
+    Fixes: Vertex AI Anthropic API error "messages: text content blocks must be non-empty"
+    """
+    config = AnthropicConfig()
+
+    # Test empty string content - should not produce any anthropic system message content
+    messages = [
+        {"role": "system", "content": ""},
+        {"role": "user", "content": "Hello"},
+    ]
+
+    result = config.translate_system_message(messages)
+
+    # Empty system message should produce no anthropic content blocks
+    assert len(result) == 0
+
+
+def test_translate_system_message_skips_empty_list_content():
+    """
+    Test that translate_system_message skips empty text blocks in list content.
+
+    Fixes: Vertex AI Anthropic API error "messages: text content blocks must be non-empty"
+    """
+    config = AnthropicConfig()
+
+    # Test list content with empty text block
+    messages = [
+        {"role": "system", "content": [
+            {"type": "text", "text": ""},
+            {"type": "text", "text": "Valid content"},
+            {"type": "text", "text": ""},
+        ]},
+        {"role": "user", "content": "Hello"},
+    ]
+
+    result = config.translate_system_message(messages)
+
+    # Only non-empty text blocks should be included
+    assert len(result) == 1
+    assert result[0]["text"] == "Valid content"
+
+
+def test_translate_system_message_preserves_valid_content():
+    """
+    Test that translate_system_message preserves valid system message content.
+    """
+    config = AnthropicConfig()
+
+    # Test valid string content
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Hello"},
+    ]
+
+    result = config.translate_system_message(messages)
+
+    assert len(result) == 1
+    assert result[0]["type"] == "text"
+    assert result[0]["text"] == "You are a helpful assistant."
+
+
+def test_translate_system_message_preserves_cache_control():
+    """
+    Test that translate_system_message preserves cache_control on valid content.
+    """
+    config = AnthropicConfig()
+
+    # Test list content with cache_control
+    messages = [
+        {"role": "system", "content": [
+            {"type": "text", "text": "Cached content", "cache_control": {"type": "ephemeral"}},
+        ]},
+        {"role": "user", "content": "Hello"},
+    ]
+
+    result = config.translate_system_message(messages)
+
+    assert len(result) == 1
+    assert result[0]["text"] == "Cached content"
+    assert result[0]["cache_control"] == {"type": "ephemeral"}

@@ -143,6 +143,14 @@ async def common_checks(
         valid_token=valid_token,
     )
 
+    # 3.1. If organization is in budget
+    await _organization_max_budget_check(
+        valid_token=valid_token,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
     await _tag_max_budget_check(
         request_body=request_body,
         prisma_client=prisma_client,
@@ -182,7 +190,18 @@ async def common_checks(
         general_settings.get("enforce_user_param", None) is not None
         and general_settings["enforce_user_param"] is True
     ):
-        if RouteChecks.is_llm_api_route(route=route) and "user" not in request_body:
+        # Get HTTP method from request
+        http_method = request.method if hasattr(request, 'method') else None
+        
+        # Check if it's a POST request and if it's an OpenAI route but not MCP
+        is_post_method = http_method and http_method.upper() == "POST"
+        is_openai_route = RouteChecks.is_llm_api_route(route=route)
+        is_mcp_route = route in LiteLLMRoutes.mcp_routes.value or RouteChecks.check_route_access(
+            route=route, allowed_routes=LiteLLMRoutes.mcp_routes.value
+        )
+        
+        # Enforce user param only for POST requests on OpenAI routes (excluding MCP routes)
+        if is_post_method and is_openai_route and not is_mcp_route and "user" not in request_body:
             raise Exception(
                 f"'user' param not passed in. 'enforce_user_param'={general_settings['enforce_user_param']}"
             )
@@ -383,13 +402,14 @@ def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
     - user_route: str - the route the user is trying to call
     - allowed_routes: List[str|LiteLLMRoutes] - the list of allowed routes for the user.
     """
+    from starlette.routing import compile_path
 
     for allowed_route in allowed_routes:
-        if (
-            allowed_route in LiteLLMRoutes.__members__
-            and user_route in LiteLLMRoutes[allowed_route].value
-        ):
-            return True
+        if allowed_route in LiteLLMRoutes.__members__:
+            for template in LiteLLMRoutes[allowed_route].value:
+                regex, _, _ = compile_path(template)
+                if regex.match(user_route):
+                    return True
         elif allowed_route == user_route:
             return True
     return False
@@ -1893,6 +1913,7 @@ async def _virtual_key_max_budget_check(
             max_budget=valid_token.max_budget,
             user_id=valid_token.user_id,
             team_id=valid_token.team_id,
+            organization_id=valid_token.org_id,
             user_email=user_email,
             key_alias=valid_token.key_alias,
             event_group=Litellm_EntityType.KEY,
@@ -1939,6 +1960,7 @@ async def _virtual_key_soft_budget_check(
             user_id=valid_token.user_id,
             team_id=valid_token.team_id,
             team_alias=valid_token.team_alias,
+            organization_id=valid_token.org_id,
             user_email=None,
             key_alias=valid_token.key_alias,
             event_group=Litellm_EntityType.KEY,
@@ -1977,6 +1999,7 @@ async def _team_max_budget_check(
                 user_id=valid_token.user_id,
                 team_id=valid_token.team_id,
                 team_alias=valid_token.team_alias,
+                organization_id=valid_token.org_id,
                 event_group=Litellm_EntityType.TEAM,
             )
             asyncio.create_task(
@@ -1991,6 +2014,65 @@ async def _team_max_budget_check(
             max_budget=team_object.max_budget,
             message=f"Budget has been exceeded! Team={team_object.team_id} Current cost: {team_object.spend}, Max budget: {team_object.max_budget}",
         )
+
+
+async def _organization_max_budget_check(
+    valid_token: Optional[UserAPIKeyAuth],
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+    proxy_logging_obj: ProxyLogging,
+):
+    """
+    Check if the organization is over its max budget.
+
+    Raises:
+        BudgetExceededError if the organization is over its max budget.
+        Triggers a budget alert if the organization is over its max budget.
+    """
+    # Only check if token has organization info and organization_max_budget is set
+    if (
+        valid_token is None
+        or valid_token.org_id is None
+        or valid_token.organization_max_budget is None
+        or valid_token.organization_max_budget <= 0
+    ):
+        return
+
+    # Get organization object to check current spend
+    if prisma_client is not None:
+        org_table = await get_org_object(
+            org_id=valid_token.org_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
+
+        if (
+            org_table is not None
+            and org_table.spend >= valid_token.organization_max_budget
+        ):
+            # Trigger budget alert
+            call_info = CallInfo(
+                token=valid_token.token,
+                spend=org_table.spend,
+                max_budget=valid_token.organization_max_budget,
+                user_id=valid_token.user_id,
+                team_id=valid_token.team_id,
+                team_alias=valid_token.team_alias,
+                organization_id=valid_token.org_id,
+                event_group=Litellm_EntityType.ORGANIZATION,
+            )
+            asyncio.create_task(
+                proxy_logging_obj.budget_alerts(
+                    type="organization_budget",
+                    user_info=call_info,
+                )
+            )
+
+            raise litellm.BudgetExceededError(
+                current_cost=org_table.spend,
+                max_budget=valid_token.organization_max_budget,
+                message=f"Budget has been exceeded! Organization={valid_token.org_id} Current cost: {org_table.spend}, Max budget: {valid_token.organization_max_budget}",
+            )
 
 
 async def _tag_max_budget_check(

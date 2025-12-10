@@ -20,6 +20,9 @@ from typing import (
     Literal,
     get_args,
     TYPE_CHECKING,
+    Tuple,
+    overload,
+    Type,
 )
 from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
 from litellm.types.integrations.datadog import DatadogInitParams
@@ -148,6 +151,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "mlflow",
     "langfuse",
     "langfuse_otel",
+    "weave_otel",
     "pagerduty",
     "humanloop",
     "gcs_pubsub",
@@ -174,6 +178,7 @@ _known_custom_logger_compatible_callbacks: List = list(
 callbacks: List[
     Union[Callable, _custom_logger_compatible_callbacks_literal, CustomLogger]
 ] = []
+callback_settings: Dict[str, Dict[str, Any]] = {}
 initialized_langfuse_clients: int = 0
 langfuse_default_tags: Optional[List[str]] = None
 langsmith_batch_size: Optional[int] = None
@@ -260,6 +265,8 @@ heroku_key: Optional[str] = None
 cometapi_key: Optional[str] = None
 ovhcloud_key: Optional[str] = None
 lemonade_key: Optional[str] = None
+sap_service_key: Optional[str] = None
+amazon_nova_api_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
@@ -515,6 +522,7 @@ perplexity_models: Set = set()
 watsonx_models: Set = set()
 gemini_models: Set = set()
 xai_models: Set = set()
+zai_models: Set = set()
 deepseek_models: Set = set()
 runwayml_models: Set = set()
 azure_ai_models: Set = set()
@@ -530,6 +538,7 @@ featherless_ai_models: Set = set()
 palm_models: Set = set()
 groq_models: Set = set()
 azure_models: Set = set()
+azure_anthropic_models: Set = set()
 azure_text_models: Set = set()
 anyscale_models: Set = set()
 cerebras_models: Set = set()
@@ -550,6 +559,7 @@ deepgram_models: Set = set()
 elevenlabs_models: Set = set()
 dashscope_models: Set = set()
 moonshot_models: Set = set()
+publicai_models: Set = set()
 v0_models: Set = set()
 morph_models: Set = set()
 lambda_ai_models: Set = set()
@@ -564,6 +574,7 @@ ovhcloud_models: Set = set()
 ovhcloud_embedding_models: Set = set()
 lemonade_models: Set = set()
 docker_model_runner_models: Set = set()
+amazon_nova_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -704,6 +715,8 @@ def add_known_models():
             text_completion_codestral_models.add(key)
         elif value.get("litellm_provider") == "xai":
             xai_models.add(key)
+        elif value.get("litellm_provider") == "zai":
+            zai_models.add(key)
         elif value.get("litellm_provider") == "fal_ai":
             fal_ai_models.add(key)
         elif value.get("litellm_provider") == "deepseek":
@@ -734,6 +747,8 @@ def add_known_models():
             groq_models.add(key)
         elif value.get("litellm_provider") == "azure":
             azure_models.add(key)
+        elif value.get("litellm_provider") == "azure_anthropic":
+            azure_anthropic_models.add(key)
         elif value.get("litellm_provider") == "anyscale":
             anyscale_models.add(key)
         elif value.get("litellm_provider") == "cerebras":
@@ -774,6 +789,8 @@ def add_known_models():
             dashscope_models.add(key)
         elif value.get("litellm_provider") == "moonshot":
             moonshot_models.add(key)
+        elif value.get("litellm_provider") == "publicai":
+            publicai_models.add(key)
         elif value.get("litellm_provider") == "v0":
             v0_models.add(key)
         elif value.get("litellm_provider") == "morph":
@@ -800,6 +817,8 @@ def add_known_models():
             lemonade_models.add(key)
         elif value.get("litellm_provider") == "docker_model_runner":
             docker_model_runner_models.add(key)
+        elif value.get("litellm_provider") == "amazon_nova":
+            amazon_nova_models.add(key)
 
 
 add_known_models()
@@ -861,6 +880,7 @@ model_list = list(
     | gemini_models
     | text_completion_codestral_models
     | xai_models
+    | zai_models
     | fal_ai_models
     | deepseek_models
     | azure_ai_models
@@ -873,6 +893,7 @@ model_list = list(
     | palm_models
     | groq_models
     | azure_models
+    | azure_anthropic_models
     | anyscale_models
     | cerebras_models
     | galadriel_models
@@ -891,6 +912,7 @@ model_list = list(
     | elevenlabs_models
     | dashscope_models
     | moonshot_models
+    | publicai_models
     | v0_models
     | morph_models
     | lambda_ai_models
@@ -947,6 +969,7 @@ models_by_provider: dict = {
     "aleph_alpha": aleph_alpha_models,
     "text-completion-codestral": text_completion_codestral_models,
     "xai": xai_models,
+    "zai": zai_models,
     "fal_ai": fal_ai_models,
     "deepseek": deepseek_models,
     "runwayml": runwayml_models,
@@ -962,6 +985,7 @@ models_by_provider: dict = {
     "palm": palm_models,
     "groq": groq_models,
     "azure": azure_models | azure_text_models,
+    "azure_anthropic": azure_anthropic_models,
     "azure_text": azure_text_models,
     "anyscale": anyscale_models,
     "cerebras": cerebras_models,
@@ -983,6 +1007,7 @@ models_by_provider: dict = {
     "heroku": heroku_models,
     "dashscope": dashscope_models,
     "moonshot": moonshot_models,
+    "publicai": publicai_models,
     "v0": v0_models,
     "morph": morph_models,
     "lambda_ai": lambda_ai_models,
@@ -995,6 +1020,7 @@ models_by_provider: dict = {
     "ovhcloud": ovhcloud_models | ovhcloud_embedding_models,
     "lemonade": lemonade_models,
     "clarifai": clarifai_models,
+    "amazon_nova": amazon_nova_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1039,62 +1065,13 @@ openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 openai_video_generation_models = ["sora-2"]
 
 from .timeout import timeout
-from .cost_calculator import completion_cost
-from litellm.litellm_core_utils.litellm_logging import Logging, modify_integration
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
 from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
-from .utils import (
-    client,
-    exception_type,
-    get_optional_params,
-    get_response_string,
-    token_counter,
-    create_pretrained_tokenizer,
-    create_tokenizer,
-    supports_function_calling,
-    supports_web_search,
-    supports_url_context,
-    supports_response_schema,
-    supports_parallel_function_calling,
-    supports_vision,
-    supports_audio_input,
-    supports_audio_output,
-    supports_system_messages,
-    supports_reasoning,
-    get_litellm_params,
-    acreate,
-    get_max_tokens,
-    get_model_info,
-    register_prompt_template,
-    validate_environment,
-    check_valid_key,
-    register_model,
-    encode,
-    decode,
-    _calculate_retry_after,
-    _should_retry,
-    get_supported_openai_params,
-    get_api_base,
-    get_first_chars_messages,
-    ModelResponse,
-    ModelResponseStream,
-    EmbeddingResponse,
-    ImageResponse,
-    TranscriptionResponse,
-    TextCompletionResponse,
-    get_provider_fields,
-    ModelResponseListIterator,
-    get_valid_models,
-)
-
-ALL_LITELLM_RESPONSE_TYPES = [
-    ModelResponse,
-    EmbeddingResponse,
-    ImageResponse,
-    TranscriptionResponse,
-    TextCompletionResponse,
-]
+# client must be imported immediately as it's used as a decorator at function definition time
+from .utils import client
+# Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py
+# (which imports tiktoken) at import time
 
 from .llms.bytez.chat.transformation import BytezChatConfig
 from .llms.custom_llm import CustomLLM
@@ -1113,7 +1090,7 @@ from .llms.openrouter.chat.transformation import OpenrouterConfig
 from .llms.datarobot.chat.transformation import DataRobotConfig
 from .llms.anthropic.chat.transformation import AnthropicConfig
 from .llms.anthropic.common_utils import AnthropicModelInfo
-from .llms.azure.anthropic.transformation import AzureAnthropicConfig
+from .llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
 from .llms.groq.stt.transformation import GroqSTTConfig
 from .llms.anthropic.completion.transformation import AnthropicTextConfig
 from .llms.triton.completion.transformation import TritonConfig
@@ -1134,7 +1111,10 @@ from .llms.jina_ai.rerank.transformation import JinaAIRerankConfig
 from .llms.deepinfra.rerank.transformation import DeepinfraRerankConfig
 from .llms.hosted_vllm.rerank.transformation import HostedVLLMRerankConfig
 from .llms.nvidia_nim.rerank.transformation import NvidiaNimRerankConfig
+from .llms.nvidia_nim.rerank.ranking_transformation import NvidiaNimRankingConfig
 from .llms.vertex_ai.rerank.transformation import VertexAIRerankConfig
+from .llms.fireworks_ai.rerank.transformation import FireworksAIRerankConfig
+from .llms.voyage.rerank.transformation import VoyageRerankConfig
 from .llms.clarifai.chat.transformation import ClarifaiConfig
 from .llms.ai21.chat.transformation import AI21ChatConfig, AI21ChatConfig as AI21Config
 from .llms.meta_llama.chat.transformation import LlamaAPIConfig
@@ -1198,6 +1178,9 @@ from .llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation import
 from .llms.bedrock.chat.invoke_transformations.amazon_nova_transformation import (
     AmazonInvokeNovaConfig,
 )
+from .llms.bedrock.chat.invoke_transformations.amazon_qwen2_transformation import (
+    AmazonQwen2Config,
+)
 from .llms.bedrock.chat.invoke_transformations.amazon_qwen3_transformation import (
     AmazonQwen3Config,
 )
@@ -1222,6 +1205,9 @@ from .llms.bedrock.chat.invoke_transformations.amazon_mistral_transformation imp
 from .llms.bedrock.chat.invoke_transformations.amazon_titan_transformation import (
     AmazonTitanConfig,
 )
+from .llms.bedrock.chat.invoke_transformations.amazon_twelvelabs_pegasus_transformation import (
+    AmazonTwelveLabsPegasusConfig,
+)
 from .llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
@@ -1245,6 +1231,9 @@ from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConf
 from .llms.bedrock.embed.twelvelabs_marengo_transformation import (
     TwelveLabsMarengoEmbeddingConfig,
 )
+from .llms.bedrock.embed.amazon_nova_transformation import (
+    AmazonNovaEmbeddingConfig,
+)
 from .llms.openai.openai import OpenAIConfig, MistralEmbeddingConfig
 from .llms.openai.image_variations.transformation import OpenAIImageVariationConfig
 from .llms.deepinfra.chat.transformation import DeepInfraConfig
@@ -1255,6 +1244,7 @@ from .llms.topaz.common_utils import TopazModelInfo
 from .llms.topaz.image_variations.transformation import TopazImageVariationConfig
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 from .llms.groq.chat.transformation import GroqChatConfig
+from .llms.sap.chat.transformation import GenAIHubOrchestrationConfig
 from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig
 from .llms.voyage.embedding.transformation_contextual import (
     VoyageContextualEmbeddingConfig,
@@ -1325,6 +1315,7 @@ from .llms.friendliai.chat.transformation import FriendliaiChatConfig
 from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
 from .llms.xai.chat.transformation import XAIChatConfig
 from .llms.xai.common_utils import XAIModelInfo
+from .llms.zai.chat.transformation import ZAIChatConfig
 from .llms.aiml.chat.transformation import AIMLChatConfig
 from .llms.volcengine.chat.transformation import (
     VolcEngineChatConfig as VolcEngineConfig,
@@ -1352,18 +1343,25 @@ from .llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
 from .llms.watsonx.completion.transformation import IBMWatsonXAIConfig
 from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
 from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
+from .llms.sap.embed.transformation import GenAIHubEmbeddingConfig
+from .llms.watsonx.audio_transcription.transformation import (
+    IBMWatsonXAudioTranscriptionConfig,
+)
 from .llms.github_copilot.chat.transformation import GithubCopilotConfig
 from .llms.github_copilot.responses.transformation import (
     GithubCopilotResponsesAPIConfig,
 )
+from .llms.github_copilot.embedding.transformation import GithubCopilotEmbeddingConfig
 from .llms.nebius.chat.transformation import NebiusConfig
 from .llms.wandb.chat.transformation import WandbConfig
 from .llms.dashscope.chat.transformation import DashScopeChatConfig
 from .llms.moonshot.chat.transformation import MoonshotChatConfig
+# PublicAI now uses JSON-based configuration (see litellm/llms/openai_like/providers.json)
 from .llms.docker_model_runner.chat.transformation import DockerModelRunnerChatConfig
 from .llms.v0.chat.transformation import V0ChatConfig
 from .llms.oci.chat.transformation import OCIChatConfig
 from .llms.morph.chat.transformation import MorphChatConfig
+from .llms.ragflow.chat.transformation import RAGFlowConfig
 from .llms.lambda_ai.chat.transformation import LambdaAIChatConfig
 from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig
 from .llms.vercel_ai_gateway.chat.transformation import VercelAIGatewayConfig
@@ -1372,6 +1370,7 @@ from .llms.ovhcloud.embedding.transformation import OVHCloudEmbeddingConfig
 from .llms.cometapi.embed.transformation import CometAPIEmbeddingConfig
 from .llms.lemonade.chat.transformation import LemonadeChatConfig
 from .llms.snowflake.embedding.transformation import SnowflakeEmbeddingConfig
+from .llms.amazon_nova.chat.transformation import AmazonNovaChatConfig
 from .main import *  # type: ignore
 
 # Skills API
@@ -1454,7 +1453,6 @@ from .vector_store_files.main import (
     update as vector_store_file_update,
 )
 from .scheduler import *
-from .cost_calculator import response_cost_calculator, cost_per_token
 
 ### ADAPTERS ###
 from .types.adapter import AdapterItem
@@ -1512,3 +1510,94 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
     """Set global BitBucket configuration for prompt management."""
     global global_gitlab_config
     global_gitlab_config = config
+
+
+# Lazy loading system for heavy modules to reduce initial import time and memory usage
+
+if TYPE_CHECKING:
+    from litellm.types.utils import ModelInfo as _ModelInfoType
+
+    # Cost calculator functions
+    cost_per_token: Callable[..., Tuple[float, float]]
+    completion_cost: Callable[..., float]
+    response_cost_calculator: Any
+    modify_integration: Any
+
+    # Utils functions - type stubs for truly lazy loaded functions only
+    # (functions NOT imported via "from .main import *")
+    get_response_string: Callable[..., str]
+    supports_function_calling: Callable[..., bool]
+    supports_web_search: Callable[..., bool]
+    supports_url_context: Callable[..., bool]
+    supports_response_schema: Callable[..., bool]
+    supports_parallel_function_calling: Callable[..., bool]
+    supports_vision: Callable[..., bool]
+    supports_audio_input: Callable[..., bool]
+    supports_audio_output: Callable[..., bool]
+    supports_system_messages: Callable[..., bool]
+    supports_reasoning: Callable[..., bool]
+    acreate: Callable[..., Any]
+    get_max_tokens: Callable[..., int]
+    get_model_info: Callable[..., _ModelInfoType]
+    register_prompt_template: Callable[..., None]
+    validate_environment: Callable[..., dict]
+    check_valid_key: Callable[..., bool]
+    register_model: Callable[..., None]
+    encode: Callable[..., list]
+    decode: Callable[..., str]
+    _calculate_retry_after: Callable[..., float]
+    _should_retry: Callable[..., bool]
+    get_supported_openai_params: Callable[..., Optional[list]]
+    get_api_base: Callable[..., Optional[str]]
+    get_first_chars_messages: Callable[..., str]
+    get_provider_fields: Callable[..., List]
+    get_valid_models: Callable[..., list]
+
+    # Response types - truly lazy loaded only (not in main.py or elsewhere)
+    ModelResponseListIterator: Type[Any]
+
+
+def __getattr__(name: str) -> Any:
+    """Lazy import handler for cost_calculator and litellm_logging functions."""
+    # Lazy load cost_calculator functions
+    _cost_calculator_names = (
+        "completion_cost",
+        "cost_per_token",
+        "response_cost_calculator",
+    )
+    if name in _cost_calculator_names:
+        from ._lazy_imports import _lazy_import_cost_calculator
+        return _lazy_import_cost_calculator(name)
+
+    # Lazy load litellm_logging functions
+    _litellm_logging_names = (
+        "Logging",
+        "modify_integration",
+    )
+    if name in _litellm_logging_names:
+        from ._lazy_imports import _lazy_import_litellm_logging
+        return _lazy_import_litellm_logging(name)
+
+    # Lazy load utils functions
+    _utils_names = (
+        "exception_type", "get_optional_params", "get_response_string", "token_counter",
+        "create_pretrained_tokenizer", "create_tokenizer", "supports_function_calling",
+        "supports_web_search", "supports_url_context", "supports_response_schema",
+        "supports_parallel_function_calling", "supports_vision", "supports_audio_input",
+        "supports_audio_output", "supports_system_messages", "supports_reasoning",
+        "get_litellm_params", "acreate", "get_max_tokens", "get_model_info",
+        "register_prompt_template", "validate_environment", "check_valid_key",
+        "register_model", "encode", "decode", "_calculate_retry_after", "_should_retry",
+        "get_supported_openai_params", "get_api_base", "get_first_chars_messages",
+        "ModelResponse", "ModelResponseStream", "EmbeddingResponse", "ImageResponse",
+        "TranscriptionResponse", "TextCompletionResponse", "get_provider_fields",
+        "ModelResponseListIterator", "get_valid_models",
+    )
+    if name in _utils_names:
+        from ._lazy_imports import _lazy_import_utils
+        return _lazy_import_utils(name)
+    
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+# ALL_LITELLM_RESPONSE_TYPES is lazy-loaded via __getattr__ to avoid loading utils at import time

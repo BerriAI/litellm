@@ -819,3 +819,24 @@ async def test_vertex_ai_anthropic_token_counting():
         assert response.original_response is not None
         assert "input_tokens" in response.original_response
         assert response.original_response["input_tokens"] == 15
+
+@pytest.mark.parametrize("vertex_location", ["global", "us-central1"])
+def test_vertex_ai_partner_models_token_counting_endpoint(vertex_location):
+    """
+    Test that the VertexAIPartnerModelsTokenCounter builds the correct endpoint URL
+    for different vertex locations, including the special 'global' location.
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import (
+        VertexAIPartnerModelsTokenCounter,
+    )
+
+    endpoint = VertexAIPartnerModelsTokenCounter()._build_count_tokens_endpoint(
+        model="claude-3-5-sonnet-20241022",
+        project_id="test-project",
+        vertex_location=vertex_location,
+        api_base=None,
+    )
+    if vertex_location == "global":
+        assert endpoint.startswith("https://aiplatform.googleapis.com")
+    else:
+        assert endpoint.startswith(f"https://{vertex_location}-aiplatform.googleapis.com")
