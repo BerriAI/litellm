@@ -5,9 +5,11 @@ from .endpoint_factory import (
     adelete_container_file,
     alist_container_files,
     aretrieve_container_file,
+    aretrieve_container_file_content,
     delete_container_file,
     list_container_files,
     retrieve_container_file,
+    retrieve_container_file_content,
 )
 from .main import (
     acreate_container,
@@ -34,8 +36,10 @@ __all__ = [
     "adelete_container_file",
     "alist_container_files",
     "aretrieve_container_file",
+    "aretrieve_container_file_content",
     "delete_container_file",
     "list_container_files",
     "retrieve_container_file",
+    "retrieve_container_file_content",
 ]
 

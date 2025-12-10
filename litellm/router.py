@@ -3995,6 +3995,7 @@ class Router:
                 "alist_container_files",
                 "aretrieve_container_file",
                 "adelete_container_file",
+                "aretrieve_container_file_content",
             ):
                 return await self._init_containers_api_endpoints(
                     original_function=original_function,
