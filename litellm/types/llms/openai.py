@@ -343,18 +343,18 @@ class OpenAIFileObject(BaseModel):
             return self.dict()
 
 
-CREATE_FILE_REQUESTS_PURPOSE = Literal["assistants", "batch", "fine-tune"]
+CREATE_FILE_REQUESTS_PURPOSE = Literal["assistants", "batch", "fine-tune", "messages"]
 
 
-# OpenAI Files Types
+# Files Types
 class CreateFileRequest(TypedDict, total=False):
     """
     CreateFileRequest
-    Used by Assistants API, Batches API, and Fine-Tunes API
+    Used by Assistants API, Batches API, Fine-Tunes API, and Messages API (Anthropic)
 
     Required Params:
         file: FileTypes
-        purpose: Literal['assistants', 'batch', 'fine-tune']
+        purpose: Literal['assistants', 'batch', 'fine-tune', 'messages']
 
     Optional Params:
         extra_headers: Optional[Dict[str, str]]

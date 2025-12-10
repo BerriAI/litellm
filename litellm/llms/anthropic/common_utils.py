@@ -385,6 +385,24 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return api_key or get_secret_str("ANTHROPIC_API_KEY")
 
     @staticmethod
+    def get_api_credentials(
+        api_base: Optional[str] = None,
+        api_key: Optional[str] = None,
+    ) -> tuple:
+        """
+        Returns (api_base, api_key) for Anthropic API calls.
+        Falls back to litellm.api_base/api_key if not provided.
+        Raises ValueError if api_key is missing.
+        """
+        import litellm as litellm_module
+
+        base = AnthropicModelInfo.get_api_base(api_base or litellm_module.api_base)
+        key = AnthropicModelInfo.get_api_key(api_key or litellm_module.api_key)
+        if key is None:
+            raise ValueError("ANTHROPIC_API_KEY is required")
+        return base, key
+
+    @staticmethod
     def get_base_model(model: Optional[str] = None) -> Optional[str]:
         return model.replace("anthropic/", "") if model else None
 

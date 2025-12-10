@@ -7608,6 +7608,10 @@ class ProviderConfigManager:
             from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
             return BedrockFilesConfig()
+        elif LlmProviders.ANTHROPIC == provider:
+            from litellm.llms.anthropic.files.transformation import AnthropicFilesConfig
+
+            return AnthropicFilesConfig()
         return None
 
     @staticmethod
