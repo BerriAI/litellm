@@ -429,6 +429,7 @@ const sidebars = {
           ]
         },
         "containers",
+        "container_files",
         {
           type: "category",
           label: "/chat/completions",
@@ -794,6 +795,7 @@ const sidebars = {
         "completion/vision",
         "exception_mapping",
         "completion/batching",
+        "guides/code_interpreter",
         "guides/finetuned_models",
         "guides/security_settings",
         "proxy/veo_video_generation",

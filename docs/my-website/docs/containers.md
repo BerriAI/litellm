@@ -463,3 +463,8 @@ Currently, only OpenAI supports container management for code interpreter sessio
 
 :::
 
+## Related
+
+- [Container Files API](/docs/container_files) - Manage files within containers
+- [Code Interpreter Guide](/docs/guides/code_interpreter) - Using Code Interpreter with LiteLLM
+
