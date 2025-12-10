@@ -292,3 +292,8 @@ curl -X DELETE "http://localhost:4000/v1/containers/cntr_123.../files/cfile_456.
 | Provider | Status |
 |----------|--------|
 | OpenAI | ✅ Supported |
+
+## Related
+
+- [Containers API](/docs/containers) - Manage containers
+- [Code Interpreter Guide](/docs/guides/code_interpreter) - Using Code Interpreter with LiteLLM
