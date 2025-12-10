@@ -89,6 +89,23 @@ $ litellm --model gpt-3.5-turbo
 # Server running on http://0.0.0.0:4000
 ```
 </TabItem>
+<TabItem value="api" label="API">
+
+Add models dynamically to a running proxy via the `/model/new` API.
+
+```bash
+curl -X POST "http://0.0.0.0:4000/model/new" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <your-master-key>" \
+  -d '{
+    "model_name": "gpt-3.5-turbo",
+    "litellm_params": {
+      "model": "openai/gpt-3.5-turbo",
+      "api_key": "os.environ/OPENAI_API_KEY"
+    }
+  }'
+```
+</TabItem>
 
 </Tabs>
 
