@@ -394,8 +394,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             "messages": [],
         }
 
-    def test_log_langfuse_v2_propagates_standard_trace_id_when_enabled(self):
-        self.logger.langfuse_propagate_trace_id = True
+    def test_log_langfuse_v2_uses_standard_trace_id_when_available(self):
         payload = self._build_standard_logging_payload(trace_id="std-trace-id")
         kwargs = self._build_langfuse_kwargs(payload)
         self.last_trace_kwargs = {}
@@ -422,9 +421,8 @@ class TestLangfuseUsageDetails(unittest.TestCase):
 
         assert self.last_trace_kwargs.get("id") == "std-trace-id"
 
-    def test_log_langfuse_v2_defaults_to_call_id_when_propagation_disabled(self):
-        self.logger.langfuse_propagate_trace_id = False
-        payload = self._build_standard_logging_payload(trace_id="std-trace-id")
+    def test_log_langfuse_v2_defaults_to_call_id_without_standard_trace_id(self):
+        payload = self._build_standard_logging_payload()
         kwargs = self._build_langfuse_kwargs(payload)
         self.last_trace_kwargs = {}
 
