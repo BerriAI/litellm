@@ -6,6 +6,7 @@ Module responsible for
 """
 
 import asyncio
+import copy
 import json
 import os
 import random
@@ -162,14 +163,14 @@ class DBSpendUpdateWriter:
             asyncio.create_task(
                 self._update_tag_db(
                     response_cost=response_cost,
-                    request_tags=payload.get("request_tags"),
+                    request_tags=copy.deepcopy(payload.get("request_tags")),
                     prisma_client=prisma_client,
                 )
             )
 
             if disable_spend_logs is False:
                 await self._insert_spend_log_to_db(
-                    payload=payload,
+                    payload=copy.deepcopy(payload),
                     prisma_client=prisma_client,
                 )
             else:
@@ -179,34 +180,34 @@ class DBSpendUpdateWriter:
 
             asyncio.create_task(
                 self.add_spend_log_transaction_to_daily_user_transaction(
-                    payload=payload,
+                    payload=copy.deepcopy(payload),
                     prisma_client=prisma_client,
                 )
             )
 
             asyncio.create_task(
                 self.add_spend_log_transaction_to_daily_end_user_transaction(
-                    payload=payload,
+                    payload=copy.deepcopy(payload),
                     prisma_client=prisma_client,
                 )
             )
 
             asyncio.create_task(
                 self.add_spend_log_transaction_to_daily_team_transaction(
-                    payload=payload,
+                    payload=copy.deepcopy(payload),
                     prisma_client=prisma_client,
                 )
             )
             asyncio.create_task(
                 self.add_spend_log_transaction_to_daily_org_transaction(
-                    payload=payload,
+                    payload=copy.deepcopy(payload),
                     org_id=org_id,
                     prisma_client=prisma_client,
                 )
             )
             asyncio.create_task(
                 self.add_spend_log_transaction_to_daily_tag_transaction(
-                    payload=payload,
+                    payload=copy.deepcopy(payload),
                     prisma_client=prisma_client,
                 )
             )
