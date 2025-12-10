@@ -10,7 +10,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-
+from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.guardrails import GenericGuardrailAPIInputs
 from urllib.parse import urlparse
@@ -180,12 +180,17 @@ class HiddenlayerGuardrail(CustomGuardrail):
             response.raise_for_status()
             result = response.json()
 
+            verbose_proxy_logger.debug(f"Hiddenlayer reponse: {result}")
+
             return result
         except HTTPStatusError as e:
             # Try the request again by refreshing the jwt if we get 401
             # since the Hiddenlayer jwt timeout is an hour and this is
             # a long lived session application
             if e.response.status_code == 401 and self.jwt_token is not None:
+                verbose_proxy_logger.debug(
+                    "Unable to authenticate to Hiddenlayer, JWT token is invalid or expired, trying to refresh the token."
+                )
                 self.jwt_token = self.refresh_jwt_func()
                 headers["Authorization"] = f"Bearer {self.jwt_token}"
                 response = await self._http_client.post(
@@ -199,6 +204,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
             response.raise_for_status()
             result = response.json()
 
+            verbose_proxy_logger.debug(f"Hiddenlayer reponse: {result}")
             return result
 
     @staticmethod
