@@ -21,7 +21,7 @@ else:
 class AnthropicBatchesConfig(BaseBatchesConfig):
     def __init__(self):
         from ..chat.transformation import AnthropicConfig
-        from ..common_utils import AnthropicError, AnthropicModelInfo
+        from ..common_utils import AnthropicModelInfo
 
         self.anthropic_chat_config = AnthropicConfig()  # initialize once
         self.anthropic_model_info = AnthropicModelInfo()
