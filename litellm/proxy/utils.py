@@ -66,7 +66,6 @@ from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_a
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     AlertType,
@@ -835,12 +834,12 @@ class ProxyLogging:
         call_type: CallTypesLiteral,
     ) -> None:
         """Process prompt template if applicable."""
-        from litellm.utils import get_non_default_completion_params
         from litellm.proxy.prompts.prompt_endpoints import (
             construct_versioned_prompt_id,
             get_latest_version_prompt_id,
         )
         from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+        from litellm.utils import get_non_default_completion_params
 
         if prompt_version is None:
             lookup_prompt_id = get_latest_version_prompt_id(
@@ -3510,7 +3509,10 @@ async def _monitor_spend_logs_queue(
         db_writer_client: Optional HTTP handler for external spend logs endpoint
         proxy_logging_obj: Proxy logging object
     """
-    from litellm.constants import SPEND_LOG_QUEUE_SIZE_THRESHOLD, SPEND_LOG_QUEUE_POLL_INTERVAL
+    from litellm.constants import (
+        SPEND_LOG_QUEUE_POLL_INTERVAL,
+        SPEND_LOG_QUEUE_SIZE_THRESHOLD,
+    )
     
     threshold = SPEND_LOG_QUEUE_SIZE_THRESHOLD
     base_interval = SPEND_LOG_QUEUE_POLL_INTERVAL
