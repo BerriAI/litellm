@@ -1,4 +1,5 @@
 import inspect
+import json
 import os
 import sys
 from typing import cast
@@ -11,6 +12,7 @@ sys.path.insert(
 )
 
 from litellm.llms.ollama.chat.transformation import OllamaChatConfig
+import litellm.llms.ollama_chat as ollama_chat_module
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import get_optional_params
 
@@ -328,3 +330,10 @@ class TestOllamaChatConfigResponseFormat:
         # and the code checks "if images is not None", an empty list will still be set
         assert "images" in result["messages"][0]
         assert result["messages"][0]["images"] == []
+
+    def test_coerce_content_to_json_string_handles_mixed_text(self):
+        """Ensure best-effort JSON coercion works when model returns mixed natural text + JSON."""
+        raw = 'Sure, here you go:\\n{"reasoning": "ok", "accept": true}\\nThanks!'
+        coerced = ollama_chat_module._coerce_content_to_json_string(raw)
+        assert coerced is not None
+        assert json.loads(coerced) == {"reasoning": "ok", "accept": True}

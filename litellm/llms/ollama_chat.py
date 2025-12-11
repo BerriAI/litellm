@@ -1,4 +1,5 @@
 import json
+import re
 import time
 from litellm._uuid import uuid
 from typing import Any, List, Optional, Union
@@ -166,6 +167,13 @@ def get_ollama_response(  # noqa: PLR0915
 
     response_json = response.json()
 
+    if data.get("format") is not None and function_name is None:
+        coerced = _coerce_content_to_json_string(
+            response_json.get("message", {}).get("content")
+        )
+        if coerced is not None:
+            response_json["message"]["content"] = coerced
+
     ## RESPONSE OBJECT
     model_response.choices[0].finish_reason = "stop"
     if data.get("format", "") == "json" and function_name is not None:
@@ -206,6 +214,35 @@ def get_ollama_response(  # noqa: PLR0915
         ),
     )
     return model_response
+
+
+def _coerce_content_to_json_string(raw_content: Any) -> Optional[str]:
+    """
+    Best-effort conversion of Ollama /api/chat content to a JSON string when structured
+    output is requested but the model responds with natural language or mixed output.
+    """
+    if raw_content is None:
+        return None
+    if isinstance(raw_content, (dict, list)):
+        return json.dumps(raw_content)
+    if not isinstance(raw_content, str):
+        return None
+
+    # Try direct parse
+    try:
+        parsed = json.loads(raw_content)
+        return json.dumps(parsed)
+    except Exception:
+        pass
+
+    # Fallback: extract first JSON-like block
+    for match in re.finditer(r"(\{.*?\}|\[.*?\])", raw_content, re.S):
+        try:
+            parsed = json.loads(match.group())
+            return json.dumps(parsed)
+        except Exception:
+            continue
+    return None
 
 
 def ollama_completion_stream(url, api_key, data, logging_obj):
@@ -395,6 +432,13 @@ async def ollama_acompletion(
 
             ## RESPONSE OBJECT
             model_response.choices[0].finish_reason = "stop"
+
+            if data.get("format") is not None and function_name is None:
+                coerced = _coerce_content_to_json_string(
+                    response_json.get("message", {}).get("content")
+                )
+                if coerced is not None:
+                    response_json["message"]["content"] = coerced
 
             if data.get("format", "") == "json" and function_name is not None:
                 function_call = json.loads(response_json["message"]["content"])
