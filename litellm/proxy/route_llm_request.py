@@ -245,6 +245,7 @@ async def route_request(
                 "adelete_responses",
                 "acancel_responses",
                 "alist_input_items",
+                "aresponses_compact",
                 "avector_store_create",
                 "avector_store_search",
                 "avector_store_file_create",

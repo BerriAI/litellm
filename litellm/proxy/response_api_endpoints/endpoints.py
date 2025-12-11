@@ -179,6 +179,16 @@ async def responses_api(
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses", "compact"],
 )
+@router.post(
+    "/responses/compact",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses", "compact"],
+)
+@router.post(
+    "/openai/v1/responses/compact",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses", "compact"],
+)
 async def responses_compact_api(
     request: Request,
     fastapi_response: Response,
