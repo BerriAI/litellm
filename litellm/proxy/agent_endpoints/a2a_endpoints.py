@@ -6,7 +6,7 @@ The A2A SDK can point to LiteLLM's URL and invoke agents registered with LiteLLM
 """
 
 import json
-from typing import Any, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse

@@ -418,9 +418,11 @@ class DBSpendUpdateWriter:
             )
         )
         if prisma_client is not None and spend_logs_url is not None:
-            prisma_client.spend_log_transactions.append(payload)
+            async with prisma_client._spend_log_transactions_lock:
+                prisma_client.spend_log_transactions.append(payload)
         elif prisma_client is not None:
-            prisma_client.spend_log_transactions.append(payload)
+            async with prisma_client._spend_log_transactions_lock:
+                prisma_client.spend_log_transactions.append(payload)
         else:
             verbose_proxy_logger.debug(
                 "prisma_client is None. Skipping writing spend logs to db."

@@ -26,7 +26,6 @@ if TYPE_CHECKING:
         AgentCard,
         SendMessageRequest,
         SendStreamingMessageRequest,
-        SendStreamingMessageResponse,
     )
 
 # Runtime imports with availability check
@@ -219,6 +218,9 @@ async def asend_message(
             raise ValueError("Either a2a_client or api_base is required for standard A2A flow")
         a2a_client = await create_a2a_client(base_url=api_base)
 
+    # Type assertion: a2a_client is guaranteed to be non-None here
+    assert a2a_client is not None
+
     agent_name = _get_a2a_model_info(a2a_client, kwargs)
 
     verbose_logger.info(f"A2A send_message request_id={request.id}, agent={agent_name}")
@@ -365,11 +367,12 @@ async def asend_message_streaming(
             raise ValueError("Either a2a_client or api_base is required for standard A2A flow")
         a2a_client = await create_a2a_client(base_url=api_base)
 
+    # Type assertion: a2a_client is guaranteed to be non-None here
+    assert a2a_client is not None
+
     verbose_logger.info(f"A2A send_message_streaming request_id={request.id}")
 
     # Track for logging
-    import datetime
-
     start_time = datetime.datetime.now()
     stream = a2a_client.send_message_streaming(request)
 
