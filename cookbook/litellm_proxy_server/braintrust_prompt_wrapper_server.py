@@ -67,22 +67,24 @@ def transform_braintrust_response(
 
     Braintrust response format:
     {
-        "id": "prompt_id",
-        "prompt_data": {
-            "prompt": {
-                "type": "chat",
-                "messages": [...],
-                "tools": "..."
-            },
-            "options": {
-                "model": "gpt-4",
-                "params": {
-                    "temperature": 0.7,
-                    "max_tokens": 100,
-                    ...
+        "objects": [{
+            "id": "prompt_id",
+            "prompt_data": {
+                "prompt": {
+                    "type": "chat",
+                    "messages": [...],
+                    "tools": "..."
+                },
+                "options": {
+                    "model": "gpt-4",
+                    "params": {
+                        "temperature": 0.7,
+                        "max_tokens": 100,
+                        ...
+                    }
                 }
             }
-        }
+        }]
     }
 
     LiteLLM format:
@@ -93,7 +95,13 @@ def transform_braintrust_response(
         "prompt_template_optional_params": {...}
     }
     """
-    prompt_data = braintrust_response.get("prompt_data", {})
+    # Extract the first object from the objects array if it exists
+    if "objects" in braintrust_response and len(braintrust_response["objects"]) > 0:
+        prompt_object = braintrust_response["objects"][0]
+    else:
+        prompt_object = braintrust_response
+
+    prompt_data = prompt_object.get("prompt_data", {})
     prompt_info = prompt_data.get("prompt", {})
     options = prompt_data.get("options", {})
 
@@ -147,7 +155,7 @@ def transform_braintrust_response(
         optional_params["tool_functions"] = prompt_data["tool_functions"]
 
     return {
-        "prompt_id": braintrust_response.get("id"),
+        "prompt_id": prompt_object.get("id"),
         "prompt_template": transformed_messages,
         "prompt_template_model": model,
         "prompt_template_optional_params": optional_params if optional_params else None,
@@ -215,9 +223,11 @@ async def get_prompt(
             detail=f"Failed to parse Braintrust API response: {str(e)}",
         )
 
+    print(f"braintrust_data: {braintrust_data}")
     # Transform the response
     try:
         transformed_data = transform_braintrust_response(braintrust_data)
+        print(f"transformed_data: {transformed_data}")
         return JSONResponse(content=transformed_data)
     except Exception as e:
         raise HTTPException(

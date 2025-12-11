@@ -834,6 +834,7 @@ class ProxyLogging:
         call_type: CallTypesLiteral,
     ) -> None:
         """Process prompt template if applicable."""
+
         from litellm.proxy.prompts.prompt_endpoints import (
             construct_versioned_prompt_id,
             get_latest_version_prompt_id,
@@ -861,6 +862,7 @@ class ProxyLogging:
             data.pop("prompt_id", None)
 
         if custom_logger and prompt_spec is not None:
+
             (
                 model,
                 messages,
@@ -876,7 +878,6 @@ class ProxyLogging:
                 prompt_label=data.pop("prompt_label", None) or {},
                 prompt_version=data.pop("prompt_version", None) or {},
             )
-
 
             data.update(optional_params)
             data["model"] = model

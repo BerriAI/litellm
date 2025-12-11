@@ -51,6 +51,15 @@ def prompt_initializer(
             api_key=api_key,
             prompt_id=prompt_id,
             additional_provider_specific_query_params=provider_specific_query_params,
+            **litellm_params.model_dump(
+                exclude_none=True,
+                exclude={
+                    "prompt_id",
+                    "api_key",
+                    "provider_specific_query_params",
+                    "api_base",
+                },
+            ),
         )
 
         return generic_prompt_manager

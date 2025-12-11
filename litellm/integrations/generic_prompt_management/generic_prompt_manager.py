@@ -58,6 +58,7 @@ class GenericPromptManager(CustomPromptManagement):
         timeout: int = 30,
         prompt_id: Optional[str] = None,
         additional_provider_specific_query_params: Optional[Dict[str, Any]] = None,
+        **kwargs,
     ):
         """
         Initialize the Generic Prompt Manager.
@@ -68,6 +69,7 @@ class GenericPromptManager(CustomPromptManagement):
             timeout: Request timeout in seconds (default: 30)
             prompt_id: Optional prompt ID to pre-load
         """
+        super().__init__(**kwargs)
         self.api_base = api_base.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
@@ -323,6 +325,7 @@ class GenericPromptManager(CustomPromptManagement):
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
     ) -> PromptManagementClient:
+
         # Check cache first
         cached_prompt = self._common_caching_logic(
             prompt_id=prompt_id,
@@ -337,6 +340,7 @@ class GenericPromptManager(CustomPromptManagement):
 
         try:
             # Fetch from API
+
             api_response = await self.async_fetch_prompt_from_api(
                 prompt_id=prompt_id, prompt_spec=prompt_spec
             )
