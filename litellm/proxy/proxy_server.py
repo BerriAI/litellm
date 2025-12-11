@@ -4452,7 +4452,7 @@ class ProxyStartupEvent:
         ### MONITOR SPEND LOGS QUEUE (queue-size-based job) ###
         if general_settings.get("disable_spend_logs", False) is False:
             from litellm.proxy.utils import _monitor_spend_logs_queue
-
+            
             # Start background task to monitor spend logs queue size
             asyncio.create_task(
                 _monitor_spend_logs_queue(
@@ -5144,14 +5144,16 @@ async def completion(  # noqa: PLR0915
 
         if _data.get("stream", None) is not None and _data["stream"] is True:
             _text_response = litellm.ModelResponse()
-            _text_response.choices[0].text = e.message  # type: ignore[attr-defined]
+            # Set text attribute dynamically for text completion format
+            setattr(_text_response.choices[0], "text", e.message)
             _text_response.model = e.model  # type: ignore[assignment]
             _usage = litellm.Usage(
                 prompt_tokens=0,
                 completion_tokens=0,
                 total_tokens=0,
             )
-            _text_response.usage = _usage  # type: ignore[assignment]
+            # Set usage attribute dynamically (ModelResponse accepts usage in __init__ but it's not in type definition)
+            setattr(_text_response, "usage", _usage)
             _iterator = litellm.utils.ModelResponseIterator(
                 model_response=_text_response, convert_to_delta=True
             )
