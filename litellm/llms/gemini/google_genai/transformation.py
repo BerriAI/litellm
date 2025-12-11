@@ -106,7 +106,10 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         Returns:
             Mapped parameters for the provider
         """
-        from litellm.llms.vertex_ai.gemini.transformation import _snake_to_camel, _camel_to_snake
+        from litellm.llms.vertex_ai.gemini.transformation import (
+            _camel_to_snake,
+            _snake_to_camel,
+        )
         
         _generate_content_config_dict: Dict[str, Any] = {}
         supported_google_genai_params = (
