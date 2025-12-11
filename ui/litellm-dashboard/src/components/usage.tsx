@@ -49,7 +49,7 @@ import {
   adminGlobalActivityPerModel,
   getProxyUISettings,
 } from "./networking";
-import TopKeyView from "./top_key_view";
+import TopKeyView from "./Usage/components/EntityUsage/top_key_view";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 console.log("process.env.NODE_ENV", process.env.NODE_ENV);
 

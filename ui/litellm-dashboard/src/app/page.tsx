@@ -18,7 +18,7 @@ import { MCPServers } from "@/components/mcp_tools";
 import ModelHubTable from "@/components/model_hub_table";
 import Navbar from "@/components/navbar";
 import { getUiConfig, Organization, proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
-import NewUsagePage from "@/components/new_usage";
+import NewUsagePage from "@/components/Usage/components/new_usage";
 import OldTeams from "@/components/OldTeams";
 import { fetchUserModels } from "@/components/organisms/create_key_button";
 import Organizations, { fetchOrganizations } from "@/components/organizations";

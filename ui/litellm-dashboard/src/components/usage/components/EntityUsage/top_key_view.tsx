@@ -1,13 +1,13 @@
 import React, { useState } from "react";
 import { BarChart } from "@tremor/react";
-import KeyInfoView from "./templates/key_info_view";
-import { keyInfoV1Call } from "./networking";
-import { transformKeyInfo } from "../components/key_team_helpers/transform_key_info";
-import { DataTable } from "./view_logs/table";
+import KeyInfoView from "../../../templates/key_info_view";
+import { keyInfoV1Call } from "../../../networking";
+import { transformKeyInfo } from "../../../key_team_helpers/transform_key_info";
+import { DataTable } from "../../../view_logs/table";
 import { Tooltip } from "antd";
 import { Button } from "@tremor/react";
-import { formatNumberWithCommas } from "../utils/dataUtils";
-import { TagUsage } from "./usage/types";
+import { formatNumberWithCommas } from "../../../../utils/dataUtils";
+import { TagUsage } from "../../types";
 import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/outline";
 
 interface TopKeyViewProps {

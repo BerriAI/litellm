@@ -1,8 +1,8 @@
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import NewUsagePage from "./new_usage";
-import type { Organization } from "./networking";
-import * as networking from "./networking";
+import type { Organization } from "../../networking";
+import * as networking from "../../networking";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 
