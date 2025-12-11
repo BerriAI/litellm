@@ -14,7 +14,7 @@ from litellm.proxy.proxy_server import (
 )
 from . import zx_config_endpoints
 
-user_email_key_hashed_token_cache = DualCache(
+user_key_hashed_token_cache = DualCache(
     default_in_memory_ttl = 24 * 60 * 60
 )
 
@@ -27,14 +27,16 @@ async def user_api_key_auth(
         if api_key.startswith("sk-zx-u-"):
             signature = api_key[8:]
 
-            key = f'user_email_key_hashed_token:{signature}'
-            hashed_token: Optional[str] = await user_email_key_hashed_token_cache.async_get_cache(key=key)
+            key = f'user_key_hashed_token:{signature}'
+            hashed_token: Optional[str] = await user_key_hashed_token_cache.async_get_cache(key=key)
             if hashed_token is None:
                 client_id = request.headers.get('zx_client_id')
+                client_app_id = request.headers.get('zx_client_app_id')
                 email = request.headers.get('zx_user_email')
+                data = email or client_app_id
                 timestamp  = request.headers.get('zx_timestamp')
-                if client_id is None or email is None or timestamp is None:
-                    raise Exception("Invalid API key: client_id or email or timestamp not found")
+                if client_id is None or data is None or timestamp is None:
+                    raise Exception("Invalid API key: client_id or client_app_id or email or timestamp not found")
                 try:
                     int_num = int(timestamp)
                 except ValueError as e:
@@ -43,7 +45,7 @@ async def user_api_key_auth(
                 if time.time() - int_num > 1800:
                     raise Exception(f"Invalid API key: timestamp[{timestamp}] expired")
 
-                if not zx_config_endpoints.security_validator.validate(client_id, signature, f"{email}:{timestamp}"):
+                if not zx_config_endpoints.security_validator.validate(client_id, signature, f"{data}:{timestamp}"):
                     raise Exception("Invalid API key: signature error")
             
                 global tmp_prisma_client
@@ -52,10 +54,11 @@ async def user_api_key_auth(
                     tmp_prisma_client = prisma_client
 
                 if tmp_prisma_client:
-                    response = await tmp_prisma_client.get_generic_data(key='key_alias', value=email, table_name='keys')
+                    key_alias = email or f"{client_id}_{client_app_id}"
+                    response = await tmp_prisma_client.get_generic_data(key='key_alias', value=key_alias, table_name='keys')
                     hashed_token = getattr(response, 'token', None)
                     if hashed_token:
-                        await user_email_key_hashed_token_cache.async_set_cache(
+                        await user_key_hashed_token_cache.async_set_cache(
                             key=key,
                             value=hashed_token,
                             local_only=True
