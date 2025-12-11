@@ -54,6 +54,7 @@ import {
   deleteAllowedIP,
   getSSOSettings,
 } from "./networking";
+import UISettings from "./Settings/AdminSettings/UISettings/UISettings";
 
 const AdminPanel: React.FC<AdminPanelProps> = ({
   searchParams,
@@ -100,7 +101,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
   // Extract the SSO configuration check logic into a separate function for reuse
   const checkSSOConfiguration = async () => {
-    if (accessToken && premiumUser) {
+    if (accessToken) {
       try {
         const ssoData = await getSSOSettings(accessToken);
         console.log("SSO data:", ssoData);
@@ -497,6 +498,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         <TabList>
           <Tab>Security Settings</Tab>
           <Tab>SCIM</Tab>
+          <Tab>UI Settings</Tab>
         </TabList>
         <TabPanels>
           <TabPanel>
@@ -512,12 +514,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                 }}
               >
                 <div>
-                  <Button
-                    style={{ width: "150px" }}
-                    onClick={() =>
-                      setIsAddSSOModalVisible(true)
-                    }
-                  >
+                  <Button style={{ width: "150px" }} onClick={() => setIsAddSSOModalVisible(true)}>
                     {ssoConfigured ? "Edit SSO Settings" : "Add SSO"}
                   </Button>
                 </div>
@@ -652,6 +649,9 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
           </TabPanel>
           <TabPanel>
             <SCIMConfig accessToken={accessToken} userID={userID} proxySettings={proxySettings} />
+          </TabPanel>
+          <TabPanel>
+            <UISettings />
           </TabPanel>
         </TabPanels>
       </TabGroup>

@@ -1,4 +1,5 @@
 #### CRUD ENDPOINTS for UI Settings #####
+import json
 from typing import Any, Dict, List, Union, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
@@ -61,6 +62,25 @@ class UIThemeSettingsResponse(SettingsResponse):
     """Response model for UI theme settings"""
 
     pass
+
+
+class UISettings(BaseModel):
+    """Configuration for UI-specific flags"""
+
+    disable_model_add_for_internal_users: bool = Field(
+        default=False,
+        description="If true, internal users cannot add models from the UI",
+    )
+
+
+class UISettingsResponse(SettingsResponse):
+    """Response model for UI settings"""
+
+    pass
+
+
+# Allowlist of UI settings that can be stored
+ALLOWED_UI_SETTINGS_FIELDS = {"disable_model_add_for_internal_users"}
 
 
 @router.get(
@@ -390,40 +410,47 @@ async def update_default_team_settings(settings: DefaultTeamSSOParams):
 )
 async def get_sso_settings():
     """
-    Get all SSO configuration settings from the environment variables.
+    Get all SSO configuration settings from the dedicated SSO table.
     Returns a structured object with values and descriptions for UI display.
     """
-    import os
 
-    from litellm.proxy.proxy_server import proxy_config
+    from litellm.proxy.proxy_server import prisma_client, proxy_config
 
-    # Load existing config to get both environment variables and general settings
-    config = await proxy_config.get_config()
-    general_settings = config.get("general_settings", {}) or {}
-    environment_variables = config.get("environment_variables", {}) or {}
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected. Please connect a database."},
+        )
 
-    # Get user_email from general_settings
-    proxy_admin_email = general_settings.get("proxy_admin_email", None)
+    # Get SSO config from dedicated table
+    sso_db_record = await prisma_client.db.litellm_ssoconfig.find_unique(
+        where={"id": "sso_config"}
+    )
 
-    # Helper function to get env var value (first from config, then from environment)
-    def get_env_value(env_var_name: str):
-        return environment_variables.get(env_var_name) or os.getenv(env_var_name)
+    # Initialize with defaults
+    sso_settings_dict = {}
+    
+    if sso_db_record and sso_db_record.sso_settings:
+        # Load settings from database
+        sso_settings_dict = dict(sso_db_record.sso_settings)
+    
+    decrypted_sso_settings_dict = proxy_config._decrypt_and_set_db_env_variables(environment_variables=sso_settings_dict)
 
-    # Get current environment variables for SSO
+    # Build SSO config with database values or environment fallback
     sso_config = SSOConfig(
-        google_client_id=get_env_value("GOOGLE_CLIENT_ID"),
-        google_client_secret=get_env_value("GOOGLE_CLIENT_SECRET"),
-        microsoft_client_id=get_env_value("MICROSOFT_CLIENT_ID"),
-        microsoft_client_secret=get_env_value("MICROSOFT_CLIENT_SECRET"),
-        microsoft_tenant=get_env_value("MICROSOFT_TENANT"),
-        generic_client_id=get_env_value("GENERIC_CLIENT_ID"),
-        generic_client_secret=get_env_value("GENERIC_CLIENT_SECRET"),
-        generic_authorization_endpoint=get_env_value("GENERIC_AUTHORIZATION_ENDPOINT"),
-        generic_token_endpoint=get_env_value("GENERIC_TOKEN_ENDPOINT"),
-        generic_userinfo_endpoint=get_env_value("GENERIC_USERINFO_ENDPOINT"),
-        proxy_base_url=get_env_value("PROXY_BASE_URL"),
-        user_email=proxy_admin_email,  # Get from config instead of environment
-        ui_access_mode=general_settings.get("ui_access_mode", None),
+        google_client_id=decrypted_sso_settings_dict.get("google_client_id", None),
+        google_client_secret=decrypted_sso_settings_dict.get("google_client_secret", None),
+        microsoft_client_id=decrypted_sso_settings_dict.get("microsoft_client_id", None),
+        microsoft_client_secret=decrypted_sso_settings_dict.get("microsoft_client_secret", None),
+        microsoft_tenant=decrypted_sso_settings_dict.get("microsoft_tenant", None),
+        generic_client_id=decrypted_sso_settings_dict.get("generic_client_id", None),
+        generic_client_secret=decrypted_sso_settings_dict.get("generic_client_secret", None),
+        generic_authorization_endpoint=decrypted_sso_settings_dict.get("generic_authorization_endpoint", None),
+        generic_token_endpoint=decrypted_sso_settings_dict.get("generic_token_endpoint", None),
+        generic_userinfo_endpoint=decrypted_sso_settings_dict.get("generic_userinfo_endpoint", None),
+        proxy_base_url=decrypted_sso_settings_dict.get("proxy_base_url", None),
+        user_email=decrypted_sso_settings_dict.get("user_email"),
+        ui_access_mode=decrypted_sso_settings_dict.get("ui_access_mode"),
     )
 
     # Get the schema for UI display
@@ -460,11 +487,26 @@ async def get_sso_settings():
 )
 async def update_sso_settings(sso_config: SSOConfig):
     """
-    Update SSO configuration by saving to both environment variables and config file.
+    Update SSO configuration by saving to the dedicated SSO table.
     """
     import os
+    import json
 
-    from litellm.proxy.proxy_server import proxy_config
+    from litellm.proxy.proxy_server import prisma_client, store_model_in_db, proxy_config
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected. Please connect a database."},
+        )
+
+    if store_model_in_db is not True:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
+            },
+        )
 
     # Update environment variables
     env_var_mapping = {
@@ -495,39 +537,29 @@ async def update_sso_settings(sso_config: SSOConfig):
     # Update environment variables in config and in memory
     sso_data = sso_config.model_dump()
     for field_name, value in sso_data.items():
-        if field_name == "user_email":
-            if value:
-                # Store user_email in general_settings instead of environment variables
-                config["general_settings"]["proxy_admin_email"] = value
-            else:
-                # Clear user_email if null/empty
-                config["general_settings"].pop("proxy_admin_email", None)
-        elif field_name == "ui_access_mode":
-            if value:
-                config["general_settings"]["ui_access_mode"] = value
-            else:
-                # Clear ui_access_mode if null/empty
-                config["general_settings"].pop("ui_access_mode", None)
-        elif field_name in env_var_mapping and value:
+        if field_name in env_var_mapping:
             env_var_name = env_var_mapping[field_name]
-            # Update in config
-            config["environment_variables"][env_var_name] = value
-            # Update in runtime environment
-            os.environ[env_var_name] = value
-        elif field_name in env_var_mapping:
-            # Clear environment variable if value is null/empty
-            env_var_name = env_var_mapping[field_name]
-            config["environment_variables"].pop(env_var_name, None)
-            os.environ.pop(env_var_name, None)
+            if value:
+                os.environ[env_var_name] = value
+            else:
+                # Clear environment variable if value is null/empty
+                os.environ.pop(env_var_name, None)
 
-    stored_config = config
-    if len(config["environment_variables"]) > 0:
+    encrypted_sso_data = proxy_config._encrypt_env_variables(environment_variables=sso_data)
 
-        stored_config["environment_variables"] = proxy_config._encrypt_env_variables(
-            environment_variables=config["environment_variables"]
-        )
-    # Save the updated config
-    await proxy_config.save_config(new_config=stored_config)
+    # Save to dedicated SSO table
+    await prisma_client.db.litellm_ssoconfig.upsert(
+        where={"id": "sso_config"},
+        data={
+            "create": {
+                "id": "sso_config",
+                "sso_settings": json.dumps(encrypted_sso_data),
+            },
+            "update": {
+                "sso_settings": json.dumps(encrypted_sso_data),
+            },
+        },
+    )
 
     return {
         "message": "SSO settings updated successfully",
@@ -635,6 +667,110 @@ async def update_ui_theme_settings(theme_config: UIThemeConfig):
         "theme_config": theme_data,
     }
 
+
+@router.get(
+    "/get/ui_settings",
+    tags=["UI Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=UISettingsResponse,
+)
+async def get_ui_settings():
+    """
+    Get UI-specific configuration flags.
+    All authenticated users can fetch these settings for client-side behavior.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected. Please connect a database."},
+        )
+
+    ui_settings: Dict[str, Any] = {}
+
+    db_record = await prisma_client.db.litellm_uisettings.find_unique(
+        where={"id": "ui_settings"}
+    )
+
+    if db_record and db_record.ui_settings:
+        ui_settings_json = db_record.ui_settings
+        if isinstance(ui_settings_json, str):
+            ui_settings = json.loads(ui_settings_json)
+        else:
+            ui_settings = dict(ui_settings_json)
+
+    # Sanitize any unexpected keys from persisted config before returning
+    ui_settings = {k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
+
+    # Build config-like object for schema helper
+    config: Dict[str, Any] = {"litellm_settings": {"ui_settings": ui_settings}}
+
+    return await _get_settings_with_schema(
+        settings_key="ui_settings",
+        settings_class=UISettings,
+        config=config,
+    )
+
+
+@router.patch(
+    "/update/ui_settings",
+    tags=["UI Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_ui_settings(
+    settings: UISettings, user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)
+):
+    """
+    Update UI-specific configuration flags.
+    Only proxy admins are allowed to modify these settings.
+    """
+    from litellm.proxy.proxy_server import prisma_client, store_model_in_db
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403, detail="Only proxy admins can update UI settings."
+        )
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected. Please connect a database."},
+        )
+
+    if store_model_in_db is not True:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
+            },
+        )
+
+    settings_dict = settings.model_dump(exclude_none=True)
+
+    # Enforce allowlist and drop anything unexpected
+    ui_settings = {
+        k: v for k, v in settings_dict.items() if k in ALLOWED_UI_SETTINGS_FIELDS
+    }
+
+    await prisma_client.db.litellm_uisettings.upsert(
+        where={"id": "ui_settings"},
+        data={
+            "create": {
+                "id": "ui_settings",
+                "ui_settings": json.dumps(ui_settings),
+            },
+            "update": {
+                "ui_settings": json.dumps(ui_settings),
+            },
+        },
+    )
+
+    return {
+        "message": "UI settings updated successfully",
+        "status": "success",
+        "settings": ui_settings,
+    }
 
 @router.post(
     "/upload/logo",

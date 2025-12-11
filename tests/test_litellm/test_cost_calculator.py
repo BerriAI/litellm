@@ -19,6 +19,7 @@ from litellm.cost_calculator import (
 )
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
+from litellm.utils import TranscriptionResponse
 
 
 def test_cost_calculator_with_response_cost_in_additional_headers():
@@ -75,6 +76,54 @@ def test_cost_calculator_with_usage():
     )
 
     assert result == expected_cost, f"Got {result}, Expected {expected_cost}"
+
+
+def test_transcription_cost_uses_token_pricing():
+    from litellm import completion_cost
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    usage = Usage(
+        prompt_tokens=14,
+        completion_tokens=45,
+        total_tokens=59,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=0, audio_tokens=14
+        ),
+    )
+    response = TranscriptionResponse(text="demo text")
+    response.usage = usage
+
+    cost = completion_cost(
+        completion_response=response,
+        model="gpt-4o-transcribe",
+        custom_llm_provider="openai",
+        call_type="atranscription",
+    )
+
+    expected_cost = (14 * 6e-06) + (45 * 1e-05)
+    assert pytest.approx(cost, rel=1e-6) == expected_cost
+
+
+def test_transcription_cost_falls_back_to_duration():
+    from litellm import completion_cost
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    response = TranscriptionResponse(text="demo text")
+    response.duration = 10.0
+
+    cost = completion_cost(
+        completion_response=response,
+        model="whisper-1",
+        custom_llm_provider="openai",
+        call_type="atranscription",
+    )
+
+    expected_cost = 10.0 * 0.0001
+    assert pytest.approx(cost, rel=1e-6) == expected_cost
 
 
 def test_handle_realtime_stream_cost_calculation():
@@ -161,7 +210,7 @@ def test_custom_pricing_with_router_model_id():
             {
                 "model_name": "prod/claude-3-5-sonnet-20240620",
                 "litellm_params": {
-                    "model": "anthropic/claude-3-5-sonnet-20240620",
+                    "model": "anthropic/claude-sonnet-4-5-20250929",
                     "api_key": "test_api_key",
                 },
                 "model_info": {
@@ -175,7 +224,7 @@ def test_custom_pricing_with_router_model_id():
             {
                 "model_name": "claude-3-5-sonnet-20240620",
                 "litellm_params": {
-                    "model": "anthropic/claude-3-5-sonnet-20240620",
+                    "model": "anthropic/claude-sonnet-4-5-20250929",
                     "api_key": "test_api_key",
                 },
                 "model_info": {
@@ -204,7 +253,7 @@ def test_custom_pricing_with_router_model_id():
     )
 
     model_info = router.get_deployment_model_info(
-        model_id="my-unique-model-id", model_name="anthropic/claude-3-5-sonnet-20240620"
+        model_id="my-unique-model-id", model_name="anthropic/claude-sonnet-4-5-20250929"
     )
     assert model_info is not None
     assert model_info["input_cost_per_token"] == 0.000006
@@ -461,18 +510,18 @@ def test_gemini_25_implicit_caching_cost():
         model="gemini/gemini-2.5-flash",
     )
 
-    # From the issue:
-    # input: $0.15 / 1000000 tokens
-    # output: $0.60 / 1000000 tokens
-    # With caching: 0.15*0.25*(14316/1000000)+0.15*((15033-14316)/1000000)+0.6*(17/1000000) = 0.0006546
+    # Current pricing for gemini/gemini-2.5-flash:
+    # input: $0.30 / 1M tokens (3e-07 per token)
+    # cache_read: $0.03 / 1M tokens (3e-08 per token)
+    # output: $2.50 / 1M tokens (2.5e-06 per token)
 
     # Breakdown:
-    # - Cached tokens: 14316 * 0.15/1M * 0.25 = 0.00053685
-    # - Non-cached tokens: (15033-14316) * 0.15/1M = 717 * 0.15/1M = 0.00010755
-    # - Output tokens: 17 * 0.6/1M = 0.00001020
-    # Total: 0.00053685 + 0.00010755 + 0.00001020 = 0.0006546
+    # - Cached tokens: 14316 * 3e-08 = 0.00042948
+    # - Non-cached tokens: (15033-14316) * 3e-07 = 717 * 3e-07 = 0.00021510
+    # - Output tokens: 17 * 2.5e-06 = 0.00004250
+    # Total: 0.00042948 + 0.00021510 + 0.00004250 = 0.00068708
 
-    expected_cost = 0.0013312999999999999
+    expected_cost = 0.00068708
 
     # Allow for small floating point differences
     assert (
@@ -697,7 +746,7 @@ def test_cost_discount_vertex_ai():
 
     # Save original config
     original_discount_config = litellm.cost_discount_config.copy()
-    
+
     # Create mock response
     response = ModelResponse(
         id="test-id",
@@ -705,13 +754,9 @@ def test_cost_discount_vertex_ai():
         created=1234567890,
         model="gemini-pro",
         object="chat.completion",
-        usage=Usage(
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150
-        )
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
     )
-    
+
     # Calculate cost without discount
     litellm.cost_discount_config = {}
     cost_without_discount = completion_cost(
@@ -719,24 +764,24 @@ def test_cost_discount_vertex_ai():
         model="vertex_ai/gemini-pro",
         custom_llm_provider="vertex_ai",
     )
-    
+
     # Set 5% discount for vertex_ai
     litellm.cost_discount_config = {"vertex_ai": 0.05}
-    
+
     # Calculate cost with discount
     cost_with_discount = completion_cost(
         completion_response=response,
         model="vertex_ai/gemini-pro",
         custom_llm_provider="vertex_ai",
     )
-    
+
     # Restore original config
     litellm.cost_discount_config = original_discount_config
-    
+
     # Verify discount is applied (5% off means 95% of original cost)
     expected_cost = cost_without_discount * 0.95
     assert cost_with_discount == pytest.approx(expected_cost, rel=1e-9)
-    
+
     print(f"✓ Cost discount test passed:")
     print(f"  - Original cost: ${cost_without_discount:.6f}")
     print(f"  - Discounted cost (5% off): ${cost_with_discount:.6f}")
@@ -752,7 +797,7 @@ def test_cost_discount_not_applied_to_other_providers():
 
     # Save original config
     original_discount_config = litellm.cost_discount_config.copy()
-    
+
     # Create mock response for OpenAI
     response = ModelResponse(
         id="test-id",
@@ -760,23 +805,19 @@ def test_cost_discount_not_applied_to_other_providers():
         created=1234567890,
         model="gpt-4",
         object="chat.completion",
-        usage=Usage(
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150
-        )
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
     )
-    
+
     # Set discount only for vertex_ai (not openai)
     litellm.cost_discount_config = {"vertex_ai": 0.05}
-    
+
     # Calculate cost for OpenAI - should NOT have discount applied
     cost_with_selective_discount = completion_cost(
         completion_response=response,
         model="gpt-4",
         custom_llm_provider="openai",
     )
-    
+
     # Clear discount config
     litellm.cost_discount_config = {}
     cost_without_discount = completion_cost(
@@ -784,13 +825,244 @@ def test_cost_discount_not_applied_to_other_providers():
         model="gpt-4",
         custom_llm_provider="openai",
     )
-    
+
     # Restore original config
     litellm.cost_discount_config = original_discount_config
-    
+
     # Costs should be the same (no discount applied to OpenAI)
     assert cost_with_selective_discount == cost_without_discount
-    
+
     print(f"✓ Selective discount test passed:")
     print(f"  - OpenAI cost (no discount configured): ${cost_without_discount:.6f}")
     print(f"  - Cost remains unchanged: ${cost_with_selective_discount:.6f}")
+
+
+def test_azure_image_generation_cost_calculator():
+    from unittest.mock import MagicMock
+
+    from litellm.types.utils import (
+        ImageObject,
+        ImageResponse,
+        ImageUsage,
+        ImageUsageInputTokensDetails,
+    )
+
+    response_cost_calculator_kwargs = {
+        "response_object": ImageResponse(
+            created=1761785270,
+            background=None,
+            data=[
+                ImageObject(
+                    b64_json=None,
+                    revised_prompt="A futuristic, techno-inspired green duck wearing cool modern sunglasses. The duck has a sleek, metallic appearance with glowing neon green accents, standing on a high-tech urban background with holographic billboards and illuminated city lights in the distance. The duck's feathers have a glossy, high-tech sheen, resembling a robotic design but still maintaining its avian features. The scene has a vibrant, cyberpunk aesthetic with a neon color palette.",
+                    url="https://dalleprodsec.blob.core.windows.net/private/images/caa17dc4-357d-4257-8938-eeea9baa8d0a/generated_00.png?se=2025-10-31T00%3A47%3A59Z&sig=KHRjLz3vMahbw94JtxL02S6t2AueeRMaiqj4z35HKDM%3D&ske=2025-11-05T00%3A26%3A20Z&skoid=e52d5ed7-0657-4f62-bc12-7e5dbb260a96&sks=b&skt=2025-10-29T00%3A26%3A20Z&sktid=33e01921-4d64-4f8c-a055-5bdaffd5e33d&skv=2020-10-02&sp=r&spr=https&sr=b&sv=2020-10-02",
+                )
+            ],
+            output_format=None,
+            quality="hd",
+            size=None,
+            usage=ImageUsage(
+                input_tokens=0,
+                input_tokens_details=ImageUsageInputTokensDetails(
+                    image_tokens=0, text_tokens=0
+                ),
+                output_tokens=0,
+                total_tokens=0,
+            ),
+        ),
+        "model": "azure/dall-e-3",
+        "cache_hit": False,
+        "custom_llm_provider": "azure",
+        "base_model": "azure/dall-e-3",
+        "call_type": "aimage_generation",
+        "optional_params": {},
+        "custom_pricing": False,
+        "prompt": "",
+        "standard_built_in_tools_params": {
+            "web_search_options": None,
+            "file_search": None,
+        },
+        "router_model_id": "6738c432ffc9b733597c6b86613ca20dc5f49bde591fd3d03e7cd6aa25bb241e",
+        "litellm_logging_obj": MagicMock(),
+        "service_tier": None,
+    }
+
+    cost = response_cost_calculator(**response_cost_calculator_kwargs)
+    assert cost > 0.079
+
+
+def test_completion_cost_extracts_service_tier_from_response():
+    """Test that completion_cost extracts service_tier from completion_response object."""
+    from litellm import completion_cost
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    # Test with gpt-5-nano which has flex pricing
+    model = "gpt-5-nano"
+    
+    # Create usage object
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500
+    )
+    
+    # Create ModelResponse with service_tier in the response object
+    response_with_service_tier = ModelResponse(
+        usage=usage,
+        model=model,
+    )
+    # Set service_tier as an attribute on the response
+    setattr(response_with_service_tier, "service_tier", "flex")
+    
+    # Test that flex pricing is used when service_tier is in response
+    flex_cost = completion_cost(
+        completion_response=response_with_service_tier,
+        model=model,
+        custom_llm_provider="openai",
+    )
+    
+    # Create ModelResponse without service_tier (should use standard pricing)
+    response_without_service_tier = ModelResponse(
+        usage=usage,
+        model=model,
+    )
+    
+    # Test that standard pricing is used when service_tier is not in response
+    standard_cost = completion_cost(
+        completion_response=response_without_service_tier,
+        model=model,
+        custom_llm_provider="openai",
+    )
+    
+    # Flex should be approximately 50% of standard
+    assert flex_cost > 0, "Flex cost should be greater than 0"
+    assert standard_cost > 0, "Standard cost should be greater than 0"
+    assert flex_cost < standard_cost, "Flex cost should be less than standard cost"
+    
+    flex_ratio = flex_cost / standard_cost
+    assert 0.45 <= flex_ratio <= 0.55, f"Flex pricing should be ~50% of standard, got {flex_ratio:.2f}"
+
+
+def test_completion_cost_extracts_service_tier_from_usage():
+    """Test that completion_cost extracts service_tier from usage object."""
+    from litellm import completion_cost
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    # Test with gpt-5-nano which has flex pricing
+    model = "gpt-5-nano"
+    
+    # Create usage object with service_tier
+    usage_with_service_tier = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500
+    )
+    # Set service_tier as an attribute on the usage object
+    setattr(usage_with_service_tier, "service_tier", "flex")
+    
+    # Create ModelResponse with usage containing service_tier
+    response = ModelResponse(
+        usage=usage_with_service_tier,
+        model=model,
+    )
+    
+    # Test that flex pricing is used when service_tier is in usage
+    flex_cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="openai",
+    )
+    
+    # Create usage object without service_tier
+    usage_without_service_tier = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500
+    )
+    
+    # Create ModelResponse with usage without service_tier
+    response_standard = ModelResponse(
+        usage=usage_without_service_tier,
+        model=model,
+    )
+    
+    # Test that standard pricing is used when service_tier is not in usage
+    standard_cost = completion_cost(
+        completion_response=response_standard,
+        model=model,
+        custom_llm_provider="openai",
+    )
+    
+    # Flex should be approximately 50% of standard
+    assert flex_cost > 0, "Flex cost should be greater than 0"
+    assert standard_cost > 0, "Standard cost should be greater than 0"
+    assert flex_cost < standard_cost, "Flex cost should be less than standard cost"
+    
+    flex_ratio = flex_cost / standard_cost
+    assert 0.45 <= flex_ratio <= 0.55, f"Flex pricing should be ~50% of standard, got {flex_ratio:.2f}"
+
+
+def test_completion_cost_service_tier_priority():
+    """Test that service_tier extraction follows priority: optional_params > completion_response > usage."""
+    from litellm import completion_cost
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    # Test with gpt-5-nano which has flex pricing
+    model = "gpt-5-nano"
+    
+    # Create usage object with service_tier="flex"
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500
+    )
+    setattr(usage, "service_tier", "flex")
+    
+    # Create response with service_tier="priority"
+    response = ModelResponse(
+        usage=usage,
+        model=model,
+    )
+    setattr(response, "service_tier", "priority")
+    
+    # Test that optional_params takes priority over response and usage
+    cost_from_params = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="openai",
+        optional_params={"service_tier": "flex"},
+    )
+    
+    # Test that response takes priority over usage when optional_params is not provided
+    cost_from_response = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="openai",
+    )
+    
+    # Test that usage is used when neither optional_params nor response have service_tier
+    # Create a new response without service_tier attribute
+    response_no_tier = ModelResponse(
+        usage=usage,
+        model=model,
+    )
+    # Don't set service_tier on response, so it will fall back to usage
+    
+    cost_from_usage = completion_cost(
+        completion_response=response_no_tier,
+        model=model,
+        custom_llm_provider="openai",
+    )
+    
+    # All should use flex pricing (from different sources)
+    assert cost_from_params > 0, "Cost from params should be greater than 0"
+    assert cost_from_usage > 0, "Cost from usage should be greater than 0"
+    
+    # Costs should be similar (all using flex)
+    assert abs(cost_from_params - cost_from_usage) < 1e-6, "Costs from params and usage should be similar (both flex)"

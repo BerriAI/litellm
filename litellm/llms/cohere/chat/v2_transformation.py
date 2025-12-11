@@ -6,7 +6,12 @@ import httpx
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.cohere import CohereV2ChatResponse
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
+from litellm.types.llms.openai import (
+    AllMessageValues, 
+    ChatCompletionToolCallChunk,
+    ChatCompletionAnnotation,
+    ChatCompletionAnnotationURLCitation,
+)
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.utils import ModelResponse, Usage
 
@@ -207,9 +212,15 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
                 ]
             )
 
-        ## ADD CITATIONS
-        if "citations" in cohere_v2_chat_response:
-            setattr(model_response, "citations", cohere_v2_chat_response["citations"])
+        ## ADD CITATIONS AS ANNOTATIONS
+        annotations: Optional[List[ChatCompletionAnnotation]] = None
+        citations = None
+        
+        if "message" in cohere_v2_chat_response and "citations" in cohere_v2_chat_response["message"]:
+            citations = cohere_v2_chat_response["message"]["citations"]
+            
+        if citations:
+            annotations = self._translate_citations_to_openai_annotations(citations)
 
         ## Tool calling response
         cohere_tools_response = cohere_v2_chat_response["message"].get("tool_calls", [])
@@ -225,8 +236,13 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
             _message = litellm.Message(
                 tool_calls=tool_calls,
                 content=None,
+                annotations=annotations,
             )
             model_response.choices[0].message = _message  # type: ignore
+        else:
+            if annotations:
+                current_message = model_response.choices[0].message  # type: ignore
+                current_message.annotations = annotations
 
         ## CALCULATING USAGE - use cohere `billed_units` for returning usage
         token_usage = cohere_v2_chat_response["usage"].get("tokens", {})
@@ -276,3 +292,66 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
         return CohereError(status_code=status_code, message=error_message)
+
+    def _translate_citations_to_openai_annotations(self, citations: List[dict]) -> List[ChatCompletionAnnotation]:
+        """
+        Transform Cohere citations to OpenAI annotations format.
+        
+        Creates separate annotations for each source in a citation, allowing multiple
+        annotations with the same start/end index if they reference different sources.
+        
+        Args:
+            citations: List of Cohere citation objects with format:
+                {
+                    "start": int,
+                    "end": int,
+                    "text": str,
+                    "sources": [
+                        {
+                            "type": "document",
+                            "document": {
+                                "title": str,
+                                "snippet": str,
+                                ...
+                            },
+                            "id": str
+                        }
+                    ]
+                }
+        
+        Returns:
+            List of OpenAI ChatCompletionAnnotation objects (one per source)
+        """
+        annotations: List[ChatCompletionAnnotation] = []
+        
+        for citation in citations:
+            start_index = citation.get("start", 0)
+            end_index = citation.get("end", 0)
+            
+            # Extract source information - loop through all sources
+            sources = citation.get("sources", [])
+            if not sources:
+                continue
+                
+            # Create an annotation for each source
+            for source in sources:
+                if source.get("type") == "document" and "document" in source:
+                    document = source["document"]
+                    title = document.get("title", "")
+                    url = source.get("url") or f"source:{source.get('id', 'unknown')}"
+                    
+                    url_citation: ChatCompletionAnnotationURLCitation = {
+                        "start_index": start_index,
+                        "end_index": end_index,
+                        "title": title,
+                        "url": url,
+                    }
+                    
+                    annotation: ChatCompletionAnnotation = {
+                        "type": "url_citation",
+                        "url_citation": url_citation,
+                    }
+                    
+                    annotations.append(annotation)
+        
+        return annotations

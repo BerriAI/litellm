@@ -238,6 +238,30 @@ def test_transform_tool_call_with_cache_control():
     assert "cachePoint" in transformed_cache_msg
     assert transformed_cache_msg["cachePoint"]["type"] == "default"
 
+
+def test_reasoning_with_forced_tool_choice_switches_to_auto():
+    config = AmazonConverseConfig()
+
+    non_default_params = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": "get_current_weather", "parameters": {}},
+            }
+        ],
+        "tool_choice": "required",
+        "reasoning_effort": "low",
+    }
+
+    optional_params = config.map_openai_params(
+        model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        non_default_params=non_default_params,
+        optional_params={},
+        drop_params=False,
+    )
+
+    assert optional_params["tool_choice"] == {"auto": {}}
+
 def test_get_supported_openai_params():
     config = AmazonConverseConfig()
     supported_params = config.get_supported_openai_params(
@@ -2584,3 +2608,130 @@ def test_request_metadata_not_provided():
 
     # requestMetadata should not be in the request
     assert "requestMetadata" not in request_data
+
+
+def test_empty_assistant_message_handling():
+    """
+    Test that empty assistant messages are handled correctly by replacing
+    empty or whitespace-only content with a placeholder to prevent AWS Bedrock
+    Converse API 400 Bad Request errors.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
+
+    # Test case 1: Empty string content - test with modify_params=True to prevent merging
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": ""},  # Empty content
+        {"role": "user", "content": "How are you?"}
+    ]
+    
+    # Enable modify_params to prevent consecutive user message merging
+    original_modify_params = litellm.modify_params
+    litellm.modify_params = True
+    
+    try:
+        result = _bedrock_converse_messages_pt(
+            messages=messages,
+            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+            llm_provider="bedrock_converse"
+        )
+        
+        # Should have 3 messages: user, assistant (with placeholder), user
+        assert len(result) == 3
+        assert result[0]["role"] == "user"
+        assert result[1]["role"] == "assistant"
+        assert result[2]["role"] == "user"
+        
+        # Assistant message should have placeholder text instead of empty content
+        assert len(result[1]["content"]) == 1
+        assert result[1]["content"][0]["text"] == "Please continue."
+        
+        # Test case 2: Whitespace-only content
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "   "},  # Whitespace-only content
+            {"role": "user", "content": "How are you?"}
+        ]
+        
+        result = _bedrock_converse_messages_pt(
+            messages=messages,
+            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+            llm_provider="bedrock_converse"
+        )
+        
+        # Assistant message should have placeholder text instead of whitespace
+        assert len(result[1]["content"]) == 1
+        assert result[1]["content"][0]["text"] == "Please continue."
+        
+        # Test case 3: Empty list content
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": [{"type": "text", "text": ""}]},  # Empty text in list
+            {"role": "user", "content": "How are you?"}
+        ]
+        
+        result = _bedrock_converse_messages_pt(
+            messages=messages,
+            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+            llm_provider="bedrock_converse"
+        )
+        
+        # Assistant message should have placeholder text instead of empty text
+        assert len(result[1]["content"]) == 1
+        assert result[1]["content"][0]["text"] == "Please continue."
+        
+        # Test case 4: Normal content should not be affected
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "I'm doing well, thank you!"},  # Normal content
+            {"role": "user", "content": "How are you?"}
+        ]
+        
+        result = _bedrock_converse_messages_pt(
+            messages=messages,
+            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+            llm_provider="bedrock_converse"
+        )
+        
+        # Assistant message should keep original content
+        assert len(result[1]["content"]) == 1
+        assert result[1]["content"][0]["text"] == "I'm doing well, thank you!"
+        
+    finally:
+        # Restore original modify_params setting
+        litellm.modify_params = original_modify_params
+
+
+def test_is_nova_lite_2_model():
+    """Test the _is_nova_lite_2_model() method for detecting Nova 2 models."""
+    config = AmazonConverseConfig()
+    
+    # Test with amazon.nova-2-lite-v1:0
+    assert config._is_nova_lite_2_model("amazon.nova-2-lite-v1:0") is True
+    
+    # Test with regional variants
+    assert config._is_nova_lite_2_model("us.amazon.nova-2-lite-v1:0") is True
+    assert config._is_nova_lite_2_model("eu.amazon.nova-2-lite-v1:0") is True
+    assert config._is_nova_lite_2_model("apac.amazon.nova-2-lite-v1:0") is True
+    
+    # Test with other Nova 2 variants (pro, micro)
+    assert config._is_nova_lite_2_model("amazon.nova-pro-1-5-v1:0") is False
+    assert config._is_nova_lite_2_model("amazon.nova-micro-1-5-v1:0") is False
+    assert config._is_nova_lite_2_model("us.amazon.nova-pro-1-5-v1:0") is False
+    assert config._is_nova_lite_2_model("eu.amazon.nova-micro-1-5-v1:0") is False
+    
+    # Test with non-Nova-1.5 lite models (should return False)
+    assert config._is_nova_lite_2_model("amazon.nova-lite-v1:0") is False
+    assert config._is_nova_lite_2_model("amazon.nova-pro-v1:0") is False
+    assert config._is_nova_lite_2_model("amazon.nova-micro-v1:0") is False
+    
+    # Test with Nova v1:0 models (should return False)
+    assert config._is_nova_lite_2_model("us.amazon.nova-lite-v1:0") is False
+    assert config._is_nova_lite_2_model("eu.amazon.nova-pro-v1:0") is False
+    
+    # Test with completely different models (should return False)
+    assert config._is_nova_lite_2_model("anthropic.claude-3-5-sonnet-20240620-v1:0") is False
+    assert config._is_nova_lite_2_model("meta.llama3-70b-instruct-v1:0") is False
+    assert config._is_nova_lite_2_model("mistral.mistral-7b-instruct-v0:2") is False

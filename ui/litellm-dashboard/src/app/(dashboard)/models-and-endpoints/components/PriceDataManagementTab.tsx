@@ -25,7 +25,7 @@ const PriceDataManagementTab = ({ setModelMap }: PriceDataManagementPanelProps) 
           onReloadSuccess={() => {
             // Refresh the model map after successful reload
             const fetchModelMap = async () => {
-              const data = await modelCostMap(accessToken);
+              const data = await modelCostMap();
               setModelMap(data);
             };
             fetchModelMap();

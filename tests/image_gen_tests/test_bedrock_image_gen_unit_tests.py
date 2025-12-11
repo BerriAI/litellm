@@ -119,6 +119,20 @@ def test_transform_response_dict_to_openai_response():
     assert [img.b64_json for img in result.data] == response_dict["images"]
 
 
+def test_transform_response_dict_to_openai_response_from_stability_3_models_with_no_null_finish_reason():
+    # Create a mock response
+    response_dict = {"finish_reasons": ["Filter reason: prompt"]}
+    model_response = ImageResponse()
+
+    with pytest.raises(BedrockError) as exc_info:
+        AmazonStability3Config.transform_response_dict_to_openai_response(
+            model_response, response_dict
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.message == "Filter reason: prompt"
+
+
 def test_amazon_stability_get_supported_openai_params():
     result = AmazonStabilityConfig.get_supported_openai_params()
     assert result == ["size"]
@@ -432,6 +446,9 @@ def test_get_request_body_nova_canvas_inference_profile_arn():
     # Since we can't mock the actual model lookup, we'll test a simpler nova model instead
     # that we know the current logic can handle
     nova_model = "us.amazon.nova-canvas-v1:0"
+    
+    # Get the provider using the method from the handler
+    bedrock_provider = handler.get_bedrock_invoke_provider(model=nova_model)
 
     result = handler._get_request_body(
         model=nova_model, prompt=prompt, optional_params=optional_params
@@ -484,7 +501,7 @@ def test_get_request_body_cross_region_inference_profile():
     optional_params = {}
     # Cross-region inference profile format
     model = "us.amazon.nova-canvas-v1:0"
-
+    
     # This should work after the fix - cross-region format should be detected as 'nova'
     result = handler._get_request_body(
         model=model, prompt=prompt, optional_params=optional_params

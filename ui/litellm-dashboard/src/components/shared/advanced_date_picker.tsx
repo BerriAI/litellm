@@ -273,9 +273,8 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   };
 
   return (
-    <div>
-      {label && <Text className="mb-2">{label}</Text>}
-
+    <div className="flex items-center gap-3">
+      {label && <Text className="text-sm font-medium text-gray-700 whitespace-nowrap">{label}</Text>}
       <div className="relative" ref={dropdownRef}>
         {/* Main input display */}
         <div
@@ -305,7 +304,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
               {/* Left side - Relative time options */}
               <div className="w-1/2 border-r border-gray-200">
                 <div className="p-3 border-b border-gray-200">
-                  <span className="text-sm font-semibold text-gray-900">Relative time (today, 7d, 30d, MTD, YTD)</span>
+                  <span className="text-sm font-semibold text-gray-900">Relative time</span>
                 </div>
                 <div className="h-[350px] overflow-y-auto">
                   {relativeTimeOptions.map((option) => {
@@ -322,7 +321,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                           {option.label}
                         </span>
                         <span
-                          className={`text-xs px-2 py-1 rounded ${
+                          className={`text-xs px-2 py-1 rounded capitalize ${
                             isSelected ? "text-blue-700 bg-blue-100" : "text-gray-500 bg-gray-100"
                           }`}
                         >
@@ -391,11 +390,17 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                     </div>
                   )}
 
-                  {/* Current selection preview */}
+                  {/* Current selection time range */}
                   {tempValue.from && tempValue.to && validation.isValid && (
-                    <div className="bg-blue-50 p-3 rounded-md">
-                      <div className="text-xs text-blue-700 font-medium">Preview:</div>
-                      <div className="text-sm text-blue-800">{formatDisplayRange(tempValue.from, tempValue.to)}</div>
+                    <div className="bg-blue-50 p-3 rounded-md space-y-1">
+                      <div className="text-xs text-blue-800">
+                        <span className="font-medium">From:</span>{" "}
+                        {moment(tempValue.from).format("MMM D, YYYY [at] HH:mm:ss")}
+                      </div>
+                      <div className="text-xs text-blue-800">
+                        <span className="font-medium">To:</span>{" "}
+                        {moment(tempValue.to).format("MMM D, YYYY [at] HH:mm:ss")}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -415,14 +420,6 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
           </div>
         )}
       </div>
-
-      {/* Time range display below */}
-      {showTimeRange && value.from && value.to && (
-        <Text className="mt-2 text-xs text-gray-500">
-          {moment(value.from).format("MMM D, YYYY [at] HH:mm:ss")} -{" "}
-          {moment(value.to).format("MMM D, YYYY [at] HH:mm:ss")}
-        </Text>
-      )}
     </div>
   );
 };

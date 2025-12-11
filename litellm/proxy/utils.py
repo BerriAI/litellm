@@ -33,7 +33,7 @@ from litellm.proxy._types import (
     SpendLogsPayload,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, CallTypesLiteral
 
 try:
     import backoff
@@ -65,7 +65,7 @@ from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_a
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     AlertType,
     CallInfo,
@@ -398,41 +398,17 @@ class ProxyLogging:
         litellm.logging_callback_manager.add_litellm_callback(self.service_logging_obj)  # type: ignore
         for callback in litellm.callbacks:
             if isinstance(callback, str):
+
                 callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
                     cast(_custom_logger_compatible_callbacks_literal, callback),
                     internal_usage_cache=self.internal_usage_cache.dual_cache,
                     llm_router=llm_router,
                 )
+
                 if callback is None:
                     continue
-            if callback not in litellm.input_callback:
-                litellm.input_callback.append(callback)  # type: ignore
-            if callback not in litellm.success_callback:
-                litellm.logging_callback_manager.add_litellm_success_callback(callback)  # type: ignore
-            if callback not in litellm.failure_callback:
-                litellm.logging_callback_manager.add_litellm_failure_callback(callback)  # type: ignore
-            if callback not in litellm._async_success_callback:
-                litellm.logging_callback_manager.add_litellm_async_success_callback(callback)  # type: ignore
-            if callback not in litellm._async_failure_callback:
-                litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)  # type: ignore
-            if callback not in litellm.service_callback:
-                litellm.service_callback.append(callback)  # type: ignore
 
-        if (
-            len(litellm.input_callback) > 0
-            or len(litellm.success_callback) > 0
-            or len(litellm.failure_callback) > 0
-        ):
-            callback_list = list(
-                set(
-                    litellm.input_callback
-                    + litellm.success_callback
-                    + litellm.failure_callback
-                )
-            )
-            litellm.litellm_core_utils.litellm_logging.set_callbacks(
-                callback_list=callback_list
-            )
+            litellm.logging_callback_manager.add_litellm_callback(callback)
 
     async def update_request_status(
         self, litellm_call_id: str, status: Literal["success", "fail"]
@@ -796,18 +772,7 @@ class ProxyLogging:
         callback: CustomGuardrail,
         data: dict,
         user_api_key_dict: Optional[UserAPIKeyAuth],
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Optional[dict]:
         """
         Process a guardrail callback during pre-call hook.
@@ -859,24 +824,112 @@ class ProxyLogging:
 
         return data
 
+    def _process_prompt_template(
+        self,
+        data: dict,
+        litellm_logging_obj: Any,
+        prompt_id: Any,
+        prompt_version: Any,
+        call_type: CallTypesLiteral,
+    ) -> None:
+        """Process prompt template if applicable."""
+        from litellm.proxy.prompts.prompt_endpoints import (
+            construct_versioned_prompt_id,
+            get_latest_version_prompt_id,
+        )
+        from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+        from litellm.utils import get_non_default_completion_params
+
+        if prompt_version is None:
+            lookup_prompt_id = get_latest_version_prompt_id(
+                prompt_id=prompt_id,
+                all_prompt_ids=IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS,
+            )
+        else:
+            lookup_prompt_id = construct_versioned_prompt_id(
+                prompt_id=prompt_id, version=prompt_version
+            )
+
+        custom_logger = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id(
+            lookup_prompt_id
+        )
+        prompt_spec = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(lookup_prompt_id)
+        litellm_prompt_id: Optional[str] = None
+        if prompt_spec is not None:
+            litellm_prompt_id = prompt_spec.litellm_params.prompt_id
+
+        if custom_logger and litellm_prompt_id is not None:
+            (
+                model,
+                messages,
+                optional_params,
+            ) = litellm_logging_obj.get_chat_completion_prompt(
+                model=data.get("model", ""),
+                messages=data.get("messages", []),
+                non_default_params=get_non_default_completion_params(kwargs=data),
+                prompt_id=litellm_prompt_id,
+                prompt_management_logger=custom_logger,
+                prompt_variables=data.get("prompt_variables", None),
+                prompt_label=data.get("prompt_label", None),
+                prompt_version=data.get("prompt_version", None),
+            )
+
+            data.update(optional_params)
+            data["model"] = model
+            data["messages"] = messages
+            # prevent re-processing the prompt template
+            data.pop("prompt_id", None)
+            data.pop("prompt_variables", None)
+            data.pop("prompt_label", None)
+            data.pop("prompt_version", None)
+
+    def _process_guardrail_metadata(self, data: dict) -> None:
+        """Process guardrails from metadata and add to applied_guardrails."""
+        from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_to_applied_guardrails_header,
+        )
+
+        metadata_standard = data.get("metadata") or {}
+        metadata_litellm = data.get("litellm_metadata") or {}
+
+        guardrails_in_metadata = []
+        if isinstance(metadata_standard, dict) and "guardrails" in metadata_standard:
+            guardrails_in_metadata = metadata_standard.get("guardrails", [])
+        elif isinstance(metadata_litellm, dict) and "guardrails" in metadata_litellm:
+            guardrails_in_metadata = metadata_litellm.get("guardrails", [])
+
+        if guardrails_in_metadata and isinstance(guardrails_in_metadata, list):
+            applied_guardrails = []
+            if (
+                isinstance(metadata_standard, dict)
+                and "applied_guardrails" in metadata_standard
+            ):
+                applied_guardrails = metadata_standard.get("applied_guardrails", [])
+            elif (
+                isinstance(metadata_litellm, dict)
+                and "applied_guardrails" in metadata_litellm
+            ):
+                applied_guardrails = metadata_litellm.get("applied_guardrails", [])
+
+            if not isinstance(applied_guardrails, list):
+                applied_guardrails = []
+
+            for guardrail_name in guardrails_in_metadata:
+                if (
+                    isinstance(guardrail_name, str)
+                    and guardrail_name not in applied_guardrails
+                ):
+                    add_guardrail_to_applied_guardrails_header(
+                        request_data=data, guardrail_name=guardrail_name
+                    )
+
     # The actual implementation of the function
     @overload
     async def pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         data: None,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> None:
         pass
 
@@ -885,18 +938,7 @@ class ProxyLogging:
         self,
         user_api_key_dict: UserAPIKeyAuth,
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> dict:
         pass
 
@@ -904,18 +946,7 @@ class ProxyLogging:
         self,
         user_api_key_dict: UserAPIKeyAuth,
         data: Optional[dict],
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Optional[dict]:
         """
         Allows users to modify/reject the incoming request to the proxy, without having to deal with parsing Request body.
@@ -925,8 +956,6 @@ class ProxyLogging:
         2. /embeddings
         3. /image/generation
         """
-        from litellm.utils import get_non_default_completion_params
-
         verbose_proxy_logger.debug("Inside Proxy Logging Pre-call hook!")
 
         self._init_response_taking_too_long_task(data=data)
@@ -938,42 +967,23 @@ class ProxyLogging:
             Optional["LiteLLMLoggingObj"], data.get("litellm_logging_obj", None)
         )
         prompt_id = data.get("prompt_id", None)
+        prompt_version = data.get("prompt_version", None)
 
         ## PROMPT TEMPLATE CHECK ##
+
         if (
             litellm_logging_obj is not None
             and prompt_id is not None
             and (call_type == "completion" or call_type == "acompletion")
         ):
-            from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
 
-            custom_logger = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id(
-                prompt_id
+            self._process_prompt_template(
+                data=data,
+                litellm_logging_obj=litellm_logging_obj,
+                prompt_id=prompt_id,
+                prompt_version=prompt_version,
+                call_type=call_type,
             )
-            prompt_spec = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(prompt_id)
-            litellm_prompt_id: Optional[str] = None
-            if prompt_spec is not None:
-                litellm_prompt_id = prompt_spec.litellm_params.prompt_id
-
-            if custom_logger and litellm_prompt_id is not None:
-                (
-                    model,
-                    messages,
-                    optional_params,
-                ) = litellm_logging_obj.get_chat_completion_prompt(
-                    model=data.get("model", ""),
-                    messages=data.get("messages", []),
-                    non_default_params=get_non_default_completion_params(kwargs=data),
-                    prompt_id=litellm_prompt_id,
-                    prompt_management_logger=custom_logger,
-                    prompt_variables=data.get("prompt_variables", None),
-                    prompt_label=data.get("prompt_label", None),
-                    prompt_version=data.get("prompt_version", None),
-                )
-
-                data.update(optional_params)
-                data["model"] = model
-                data["messages"] = messages
 
         try:
             for callback in litellm.callbacks:
@@ -985,10 +995,14 @@ class ProxyLogging:
                     )
                 else:
                     _callback = callback  # type: ignore
-                if _callback is not None and isinstance(_callback, CustomGuardrail):
+                if (
+                    _callback is not None
+                    and isinstance(_callback, CustomGuardrail)
+                    and data is not None
+                ):
                     result = await self._process_guardrail_callback(
                         callback=_callback,
-                        data=data,
+                        data=data,  # type: ignore
                         user_api_key_dict=user_api_key_dict,
                         call_type=call_type,
                     )
@@ -1010,7 +1024,7 @@ class ProxyLogging:
                         user_api_key_dict=user_api_key_dict,
                         cache=self.call_details["user_api_key_cache"],
                         data=data,  # type: ignore
-                        call_type=call_type,
+                        call_type=call_type,  # type: ignore
                     )
                     if response is not None:
                         data = await self.process_pre_call_hook_response(
@@ -1030,6 +1044,10 @@ class ProxyLogging:
                         start_time=start_time,
                         end_time=end_time,
                     )
+
+            if data is not None:
+                self._process_guardrail_metadata(data)
+
             return data
         except Exception as e:
             raise e
@@ -1038,62 +1056,74 @@ class ProxyLogging:
         self,
         data: dict,
         user_api_key_dict: Optional[UserAPIKeyAuth],
-        call_type: Literal[
-            "completion",
-            "responses",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "mcp_call",
-        ],
+        call_type: CallTypesLiteral,
     ):
         """
-        Runs the CustomGuardrail's async_moderation_hook()
+        Runs the CustomGuardrail's async_moderation_hook() in parallel
         """
+        # Step 1: Collect all guardrail tasks to run in parallel
+        guardrail_tasks = []
+
         for callback in litellm.callbacks:
-            try:
-                if isinstance(callback, CustomGuardrail):
-                    ################################################################
-                    # Check if guardrail should be run for GuardrailEventHooks.during_call hook
-                    ################################################################
+            if isinstance(callback, CustomGuardrail):
+                ################################################################
+                # Check if guardrail should be run for GuardrailEventHooks.during_call hook
+                ################################################################
 
-                    # V1 implementation - backwards compatibility
-                    if callback.event_hook is None and hasattr(
-                        callback, "moderation_check"
-                    ):
-                        if callback.moderation_check == "pre_call":  # type: ignore
-                            return
-                    else:
-                        # Main - V2 Guardrails implementation
-                        from litellm.types.guardrails import GuardrailEventHooks
+                # V1 implementation - backwards compatibility
+                if callback.event_hook is None and hasattr(
+                    callback, "moderation_check"
+                ):
+                    if callback.moderation_check == "pre_call":  # type: ignore
+                        return
+                else:
+                    # Main - V2 Guardrails implementation
+                    from litellm.types.guardrails import GuardrailEventHooks
 
-                        event_type = GuardrailEventHooks.during_call
-                        if call_type == "mcp_call":
-                            event_type = GuardrailEventHooks.during_mcp_call
-
-                        if (
-                            callback.should_run_guardrail(
-                                data=data, event_type=event_type
-                            )
-                            is not True
-                        ):
-                            continue
-                    # Convert user_api_key_dict to proper format for async_moderation_hook
+                    event_type = GuardrailEventHooks.during_call
                     if call_type == "mcp_call":
-                        user_api_key_auth_dict = (
-                            self._convert_user_api_key_auth_to_dict(user_api_key_dict)
-                        )
-                    else:
-                        user_api_key_auth_dict = user_api_key_dict
+                        event_type = GuardrailEventHooks.during_mcp_call
 
-                    await callback.async_moderation_hook(
+                    if (
+                        callback.should_run_guardrail(data=data, event_type=event_type)
+                        is not True
+                    ):
+                        continue
+                # Convert user_api_key_dict to proper format for async_moderation_hook
+                if call_type == "mcp_call":
+                    user_api_key_auth_dict = self._convert_user_api_key_auth_to_dict(
+                        user_api_key_dict
+                    )
+                else:
+                    user_api_key_auth_dict = user_api_key_dict
+                # Add task to list for parallel execution
+                if (
+                    "apply_guardrail" in type(callback).__dict__
+                    and user_api_key_dict is not None
+                ):
+                    data["guardrail_to_apply"] = callback
+                    guardrail_task = unified_guardrail.async_moderation_hook(
+                        user_api_key_dict=user_api_key_dict,
                         data=data,
-                        user_api_key_dict=user_api_key_auth_dict,  # type: ignore
                         call_type=call_type,
                     )
+                else:
+
+                    guardrail_task = callback.async_moderation_hook(
+                        data=data,
+                        user_api_key_dict=user_api_key_auth_dict,  # type: ignore
+                        call_type=call_type,  # type: ignore
+                    )
+                guardrail_tasks.append(guardrail_task)
+
+        # Step 2: Run all guardrail tasks in parallel
+        if guardrail_tasks:
+            try:
+                await asyncio.gather(*guardrail_tasks)
             except Exception as e:
+                # If any guardrail raises an exception, it will propagate here
                 raise e
+
         return data
 
     async def failed_tracking_alert(
@@ -1117,6 +1147,7 @@ class ProxyLogging:
             "user_budget",
             "soft_budget",
             "team_budget",
+            "organization_budget",
             "proxy_budget",
             "projected_limit_exceeded",
         ],
@@ -1461,6 +1492,7 @@ class ProxyLogging:
         3. /image/generation
         4. /files
         """
+
         from litellm.types.guardrails import GuardrailEventHooks
 
         guardrail_callbacks: List[CustomGuardrail] = []
@@ -1494,22 +1526,30 @@ class ProxyLogging:
                 ):
                     continue
 
+                guardrail_response: Optional[Any] = None
+
                 if "apply_guardrail" in type(callback).__dict__:
                     data["guardrail_to_apply"] = callback
-                    response = await unified_guardrail.async_post_call_success_hook(
-                        user_api_key_dict=user_api_key_dict,
-                        data=data,
-                        response=response,
+                    guardrail_response = (
+                        await unified_guardrail.async_post_call_success_hook(
+                            user_api_key_dict=user_api_key_dict,
+                            data=data,
+                            response=response,
+                        )
                     )
                 else:
-                    response = await callback.async_post_call_success_hook(
+                    guardrail_response = await callback.async_post_call_success_hook(
                         user_api_key_dict=user_api_key_dict,
                         data=data,
                         response=response,
                     )
 
+                if guardrail_response is not None:
+                    response = guardrail_response
+
             ############ Handle CustomLogger ###############################
             #################################################################
+
             for callback in other_callbacks:
                 await callback.async_post_call_success_hook(
                     user_api_key_dict=user_api_key_dict, data=data, response=response
@@ -1584,7 +1624,7 @@ class ProxyLogging:
                     raise e
         return response
 
-    def async_post_call_streaming_iterator_hook(
+    async def async_post_call_streaming_iterator_hook(
         self,
         response,
         user_api_key_dict: UserAPIKeyAuth,
@@ -1597,7 +1637,10 @@ class ProxyLogging:
         Covers:
         1. /chat/completions
         """
+        current_response = response
+
         for callback in litellm.callbacks:
+
             _callback: Optional[CustomLogger] = None
             if isinstance(callback, str):
                 _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
@@ -1611,12 +1654,27 @@ class ProxyLogging:
                 ) or _callback.should_run_guardrail(
                     data=request_data, event_type=GuardrailEventHooks.post_call
                 ):
-                    response = _callback.async_post_call_streaming_iterator_hook(
-                        user_api_key_dict=user_api_key_dict,
-                        response=response,
-                        request_data=request_data,
-                    )
-        return response
+                    if "apply_guardrail" in type(callback).__dict__:
+                        request_data["guardrail_to_apply"] = callback
+                        current_response = (
+                            unified_guardrail.async_post_call_streaming_iterator_hook(
+                                user_api_key_dict=user_api_key_dict,
+                                request_data=request_data,
+                                response=current_response,
+                            )
+                        )
+                    else:
+                        current_response = (
+                            _callback.async_post_call_streaming_iterator_hook(
+                                user_api_key_dict=user_api_key_dict,
+                                response=current_response,
+                                request_data=request_data,
+                            )
+                        )
+
+        # Actually iterate through the chained async generator and yield chunks
+        async for chunk in current_response:
+            yield chunk
 
     def _init_response_taking_too_long_task(self, data: Optional[dict] = None):
         """
@@ -2220,6 +2278,7 @@ class PrismaClient:
                             t.team_alias AS team_alias,
                             t.metadata AS team_metadata,
                             t.members_with_roles AS team_members_with_roles,
+                            t.object_permission_id AS team_object_permission_id,
                             t.organization_id as org_id,
                             tm.spend AS team_member_spend,
                             m.aliases AS team_model_aliases,
@@ -3105,8 +3164,16 @@ class PrismaClient:
             # Group by model_name and get the latest for each
             latest_checks = {}
             for check in all_checks:
-                if check.model_name not in latest_checks:
-                    latest_checks[check.model_name] = check
+                # Create a unique key: prefer model_id if available, otherwise use model_name
+                # This ensures we get the latest check for each unique model
+                if check.model_id:
+                    key = (check.model_id, check.model_name)
+                else:
+                    key = (None, check.model_name)
+
+                # Only add if we haven't seen this key yet (since checks are ordered by checked_at desc)
+                if key not in latest_checks:
+                    latest_checks[key] = check
 
             return list(latest_checks.values())
         except Exception as e:
@@ -3282,14 +3349,14 @@ class ProxyUpdateSpend:
     async def update_spend_logs(
         n_retry_times: int,
         prisma_client: PrismaClient,
-        db_writer_client: Optional[HTTPHandler],
+        db_writer_client: Optional[AsyncHTTPHandler],
         proxy_logging_obj: ProxyLogging,
     ):
-        BATCH_SIZE = 100  # Preferred size of each batch to write to the database
+        BATCH_SIZE = 1000  # Preferred size of each batch to write to the database
         MAX_LOGS_PER_INTERVAL = (
-            1000  # Maximum number of logs to flush in a single interval
+            10000  # Maximum number of logs to flush in a single interval
         )
-        # Get initial logs to process
+        # Get initial logs to proces
         logs_to_process = prisma_client.spend_log_transactions[:MAX_LOGS_PER_INTERVAL]
         start_time = time.time()
         try:
@@ -3304,11 +3371,13 @@ class ProxyUpdateSpend:
                         if not base_url.endswith("/"):
                             base_url += "/"
                         verbose_proxy_logger.debug("base_url: {}".format(base_url))
+                        json_data = json.dumps(logs_to_process)
                         response = await db_writer_client.post(
                             url=base_url + "spend/update",
-                            data=json.dumps(logs_to_process),
+                            data=json_data,
                             headers={"Content-Type": "application/json"},
                         )
+                        del json_data
                         if response.status_code == 200:
                             prisma_client.spend_log_transactions = (
                                 prisma_client.spend_log_transactions[
@@ -3328,12 +3397,15 @@ class ProxyUpdateSpend:
                             verbose_proxy_logger.debug(
                                 f"Flushed {len(batch)} logs to the DB."
                             )
+                            # Explicitly clear batch memory
+                            del batch, batch_with_dates
 
                         prisma_client.spend_log_transactions = (
                             prisma_client.spend_log_transactions[len(logs_to_process) :]
                         )
+                        remaining_count = len(prisma_client.spend_log_transactions)
                         verbose_proxy_logger.debug(
-                            f"{len(logs_to_process)} logs processed. Remaining in queue: {len(prisma_client.spend_log_transactions)}"
+                            f"{len(logs_to_process)} logs processed. Remaining in queue: {remaining_count}"
                         )
                     break
                 except DB_CONNECTION_ERROR_TYPES:
@@ -3349,6 +3421,9 @@ class ProxyUpdateSpend:
             _raise_failed_update_spend_exception(
                 e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
             )
+        finally:
+            # Clean up logs_to_process after all processing is complete
+            del logs_to_process
 
     @staticmethod
     def disable_spend_updates() -> bool:
@@ -3365,7 +3440,7 @@ class ProxyUpdateSpend:
 
 async def update_spend(  # noqa: PLR0915
     prisma_client: PrismaClient,
-    db_writer_client: Optional[HTTPHandler],
+    db_writer_client: Optional[AsyncHTTPHandler],
     proxy_logging_obj: ProxyLogging,
 ):
     """
@@ -3391,13 +3466,104 @@ async def update_spend(  # noqa: PLR0915
         "Spend Logs transactions: {}".format(len(prisma_client.spend_log_transactions))
     )
 
-    if len(prisma_client.spend_log_transactions) > 0:
-        await ProxyUpdateSpend.update_spend_logs(
-            n_retry_times=n_retry_times,
-            prisma_client=prisma_client,
-            proxy_logging_obj=proxy_logging_obj,
-            db_writer_client=db_writer_client,
-        )
+    # Spend log transactions are now processed by a separate queue-size-based job
+    # See update_spend_logs_job and _monitor_spend_logs_queue
+
+
+async def update_spend_logs_job(
+    prisma_client: PrismaClient,
+    db_writer_client: Optional[AsyncHTTPHandler],
+    proxy_logging_obj: ProxyLogging,
+):
+    """
+    Job to process spend_log_transactions queue.
+
+    This job is triggered based on queue size rather than time.
+    Processes spend log transactions when the queue reaches a threshold.
+    """
+    n_retry_times = 3
+
+    queue_size = len(prisma_client.spend_log_transactions)
+
+    if queue_size == 0:
+        return
+
+    await ProxyUpdateSpend.update_spend_logs(
+        n_retry_times=n_retry_times,
+        prisma_client=prisma_client,
+        proxy_logging_obj=proxy_logging_obj,
+        db_writer_client=db_writer_client,
+    )
+
+
+async def _monitor_spend_logs_queue(
+    prisma_client: PrismaClient,
+    db_writer_client: Optional[AsyncHTTPHandler],
+    proxy_logging_obj: ProxyLogging,
+):
+    """
+    Background task that monitors the spend_log_transactions queue size
+    and triggers processing when the threshold is reached.
+
+    Args:
+        prisma_client: Prisma client instance
+        db_writer_client: Optional HTTP handler for external spend logs endpoint
+        proxy_logging_obj: Proxy logging object
+    """
+    from litellm.constants import (
+        SPEND_LOG_QUEUE_POLL_INTERVAL,
+        SPEND_LOG_QUEUE_SIZE_THRESHOLD,
+    )
+
+    threshold = SPEND_LOG_QUEUE_SIZE_THRESHOLD
+    base_interval = SPEND_LOG_QUEUE_POLL_INTERVAL
+    max_backoff = 30.0  # Maximum backoff interval in seconds
+    backoff_multiplier = 1.5  # Exponential backoff multiplier
+    current_interval = base_interval
+
+    verbose_proxy_logger.info(
+        f"Starting spend logs queue monitor (threshold: {threshold}, poll_interval: {base_interval}s)"
+    )
+
+    while True:
+        try:
+            queue_size = len(prisma_client.spend_log_transactions)
+
+            if queue_size > 0:
+                if queue_size >= threshold:
+                    verbose_proxy_logger.debug(
+                        f"Spend logs queue size ({queue_size}) reached threshold ({threshold}), triggering processing"
+                    )
+                    # Reset to base interval when threshold is reached
+                    current_interval = base_interval
+                else:
+                    verbose_proxy_logger.debug(
+                        f"Spend logs queue size ({queue_size}) below threshold ({threshold}), processing with backoff"
+                    )
+                    # Exponential backoff when below threshold but still processing
+                    current_interval = min(
+                        current_interval * backoff_multiplier, max_backoff
+                    )
+
+                await update_spend_logs_job(
+                    prisma_client=prisma_client,
+                    db_writer_client=db_writer_client,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            else:
+                # Exponential backoff when no logs to process
+                current_interval = min(
+                    current_interval * backoff_multiplier, max_backoff
+                )
+
+            await asyncio.sleep(current_interval)
+        except Exception as e:
+            verbose_proxy_logger.error(
+                f"Error in spend logs queue monitor: {str(e)}\n{traceback.format_exc()}"
+            )
+            # Continue monitoring even if there's an error, with exponential backoff
+            current_interval = min(current_interval * backoff_multiplier, max_backoff)
+            await asyncio.sleep(current_interval)
 
 
 def _raise_failed_update_spend_exception(
@@ -3689,6 +3855,16 @@ def is_known_model(model: Optional[str], llm_router: Optional[Router]) -> bool:
         is_in_list = True
 
     return is_in_list
+
+
+def is_known_vector_store_index(index_name: str) -> bool:
+    """
+    Returns True if the vector store index is in the llm_router vector store indexes
+    """
+
+    if litellm.vector_store_index_registry is None:
+        return False
+    return index_name in litellm.vector_store_index_registry.get_vector_store_indexes()
 
 
 def join_paths(base_path: str, route: str) -> str:
@@ -4054,3 +4230,178 @@ def validate_model_access(
                 model_id
             ),
         )
+
+
+def _path_matches_pattern(path: str, pattern: str) -> bool:
+    """Check if a path matches a pattern (supporting * wildcard for list indices)."""
+    path_parts = path.split(".")
+    pattern_parts = pattern.split(".")
+
+    if len(path_parts) != len(pattern_parts):
+        return False
+
+    for path_part, pattern_part in zip(path_parts, pattern_parts):
+        if pattern_part == "*":
+            # Wildcard matches any numeric index
+            if not path_part.isdigit():
+                return False
+        elif path_part != pattern_part:
+            return False
+
+    return True
+
+
+def _build_preserved_paths(
+    data: Any, current_path: str, preserve_fields: List[str], preserved_paths: set
+) -> None:
+    """Iteratively build set of paths that should be preserved."""
+    # Use a stack to avoid recursion: (data, path)
+    stack = [(data, current_path)]
+
+    while stack:
+        current_data, current_path_str = stack.pop()
+
+        if isinstance(current_data, dict):
+            for key, value in current_data.items():
+                new_path = f"{current_path_str}.{key}" if current_path_str else key
+
+                # Check if this path matches any preserve pattern
+                for pattern in preserve_fields:
+                    if _path_matches_pattern(new_path, pattern):
+                        preserved_paths.add(new_path)
+
+                if isinstance(value, (dict, list)):
+                    stack.append((value, new_path))
+
+        elif isinstance(current_data, list):
+            for idx, item in enumerate(current_data):
+                new_path = f"{current_path_str}.{idx}" if current_path_str else str(idx)
+                if isinstance(item, (dict, list)):
+                    stack.append((item, new_path))
+
+
+def _remove_none_except_preserved(
+    data: Any, current_path: str, preserved_paths: set
+) -> Any:
+    """Iteratively remove None values except for preserved paths."""
+    if not isinstance(data, (dict, list)):
+        return data
+
+    # Use a stack for iterative processing: (data, path, is_first_visit)
+    # We'll process in a way that allows us to build the result bottom-up
+    stack = [(data, current_path, True)]  # (data, path, is_first_visit)
+    results_map: dict[int, Any] = {}  # Maps id(data) -> processed result
+
+    while stack:
+        current_data, current_path_str, is_first_visit = stack.pop()
+
+        if is_first_visit:
+            # First visit - mark for revisit and add children to stack
+            stack.append((current_data, current_path_str, False))
+
+            if isinstance(current_data, dict):
+                # Add children in reverse order so they're processed in correct order
+                for key in reversed(list(current_data.keys())):
+                    value = current_data[key]
+                    new_path = f"{current_path_str}.{key}" if current_path_str else key
+
+                    if isinstance(value, (dict, list)):
+                        stack.append((value, new_path, True))
+
+            elif isinstance(current_data, list):
+                # Add children in reverse order
+                for idx in reversed(range(len(current_data))):
+                    item = current_data[idx]
+                    new_path = (
+                        f"{current_path_str}.{idx}" if current_path_str else str(idx)
+                    )
+
+                    if isinstance(item, (dict, list)):
+                        stack.append((item, new_path, True))
+        else:
+            # Second visit - children are processed, build result
+            result: Union[dict[str, Any], list[Any]]
+            if isinstance(current_data, dict):
+                result = {}
+                for key, value in current_data.items():
+                    new_path = f"{current_path_str}.{key}" if current_path_str else key
+
+                    if value is None:
+                        if new_path in preserved_paths:
+                            result[key] = None
+                    elif isinstance(value, (dict, list)):
+                        processed = results_map.get(id(value))
+                        if (
+                            processed is not None
+                            and processed != {}
+                            and processed != []
+                        ):
+                            result[key] = processed
+                    else:
+                        result[key] = value
+
+                results_map[id(current_data)] = result
+
+            elif isinstance(current_data, list):
+                result = []
+                for idx, item in enumerate(current_data):
+                    new_path = (
+                        f"{current_path_str}.{idx}" if current_path_str else str(idx)
+                    )
+
+                    if item is None:
+                        if new_path in preserved_paths:
+                            result.append(None)
+                    elif isinstance(item, (dict, list)):
+                        processed = results_map.get(id(item))
+                        if processed is not None:
+                            result.append(processed)
+                    else:
+                        result.append(item)
+
+                results_map[id(current_data)] = result
+
+    return results_map.get(id(data), data)
+
+
+def model_dump_with_preserved_fields(
+    obj: Any,
+    preserve_fields: Optional[List[str]] = None,
+    exclude_unset: bool = True,
+) -> Dict[str, Any]:
+    """
+    Serialize a Pydantic model to a dictionary while preserving specific fields even if they are None.
+
+    This function is useful when you need to maintain API compatibility where certain fields
+    must always be present in the response (e.g., message.content in OpenAI API responses).
+
+    Args:
+        obj: The Pydantic BaseModel instance to serialize
+        preserve_fields: List of field paths to preserve even if None (e.g., ["choices.*.message.content"])
+        exclude_unset: Whether to exclude fields that were not explicitly set
+
+    Returns:
+        Dictionary representation with None values excluded except for preserved fields
+
+    Example:
+        >>> result = model_dump_with_preserved_fields(
+        ...     response,
+        ...     preserve_fields=["choices.*.message.content", "choices.*.message.role"]
+        ... )
+    """
+    if preserve_fields is None:
+        preserve_fields = [
+            "choices.*.message.content",
+            "choices.*.message.role",
+            "choices.*.delta.content",
+        ]
+
+    # First, get the full dump without excluding None values
+    full_dump = obj.model_dump(exclude_none=False, exclude_unset=exclude_unset)
+
+    # Build the set of preserved paths
+    preserved_paths: set = set()
+    _build_preserved_paths(full_dump, "", preserve_fields, preserved_paths)
+
+    # Remove None values except for preserved paths
+    return _remove_none_except_preserved(full_dump, "", preserved_paths)

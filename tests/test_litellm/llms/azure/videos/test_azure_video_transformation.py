@@ -65,8 +65,13 @@ class TestAzureVideoConfig:
         assert result["size"] == "1280x720"
         assert result["user"] == "test_user"
 
-    def test_validate_environment_with_api_key(self):
-        """Test environment validation with provided API key."""
+    @patch('litellm.llms.azure.common_utils.litellm')
+    def test_validate_environment_with_api_key(self, mock_litellm):
+        """Test environment validation with provided API key - should use api-key header for Azure."""
+        # Since validate_environment passes litellm_params=None, it relies on litellm.api_key or litellm.azure_key
+        mock_litellm.api_key = self.api_key
+        mock_litellm.azure_key = None
+        
         headers = {"Content-Type": "application/json"}
         
         result_headers = self.config.validate_environment(
@@ -75,14 +80,15 @@ class TestAzureVideoConfig:
             api_key=self.api_key
         )
         
-        assert "Authorization" in result_headers
-        assert result_headers["Authorization"] == f"Bearer {self.api_key}"
+        # Azure uses "api-key" header, not "Authorization: Bearer"
+        assert "api-key" in result_headers
+        assert result_headers["api-key"] == self.api_key
         assert result_headers["Content-Type"] == "application/json"
 
-    @patch('litellm.llms.azure.videos.transformation.get_secret_str')
-    @patch('litellm.llms.azure.videos.transformation.litellm')
+    @patch('litellm.llms.azure.common_utils.get_secret_str')
+    @patch('litellm.llms.azure.common_utils.litellm')
     def test_validate_environment_without_api_key(self, mock_litellm, mock_get_secret):
-        """Test environment validation without provided API key."""
+        """Test environment validation without provided API key - should fallback to secret manager."""
         mock_litellm.api_key = None
         mock_litellm.azure_key = None
         mock_get_secret.return_value = "secret-api-key"
@@ -95,8 +101,8 @@ class TestAzureVideoConfig:
             api_key=None
         )
         
-        assert "Authorization" in result_headers
-        assert result_headers["Authorization"] == "Bearer secret-api-key"
+        assert "api-key" in result_headers
+        assert result_headers["api-key"] == "secret-api-key"
 
     def test_get_complete_url(self):
         """Test URL construction for Azure video API."""
@@ -129,10 +135,12 @@ class TestAzureVideoConfig:
         )
         
         headers = {"Authorization": f"Bearer {self.api_key}"}
+        api_base = f"{self.api_base}/openai/v1/videos"
         
-        data, files = self.config.transform_video_create_request(
+        data, files, url = self.config.transform_video_create_request(
             model=self.model,
             prompt="A cinematic shot of a city at night",
+            api_base=api_base,
             video_create_optional_request_params=video_params,
             litellm_params=litellm_params,
             headers=headers
@@ -142,6 +150,8 @@ class TestAzureVideoConfig:
         assert data["seconds"] == 8
         assert data["size"] == "720x1280"
         assert data["model"] == self.model
+        # URL should be returned as-is for Azure
+        assert url == api_base
 
     def test_transform_video_create_response(self):
         """Test video creation response transformation."""
@@ -183,7 +193,6 @@ class TestAzureVideoConfig:
         logging_obj = MagicMock()
         
         result = self.config.transform_video_remix_response(
-            model=self.model,
             raw_response=mock_response,
             logging_obj=logging_obj
         )
@@ -208,7 +217,6 @@ class TestAzureVideoConfig:
         logging_obj = MagicMock()
         
         result = self.config.transform_video_delete_response(
-            model=self.model,
             raw_response=mock_response,
             logging_obj=logging_obj
         )
@@ -226,7 +234,6 @@ class TestAzureVideoConfig:
         logging_obj = MagicMock()
         
         result = self.config.transform_video_content_response(
-            model=self.model,
             raw_response=mock_response,
             logging_obj=logging_obj
         )
@@ -278,13 +285,15 @@ class TestAzureVideoConfig:
         )
         
         headers = {"Authorization": f"Bearer {self.api_key}"}
+        api_base = f"{self.api_base}/openai/v1/videos"
         
         # Mock file existence
         with patch('os.path.exists', return_value=True):
             with patch('builtins.open', mock_open(read_data=b"fake image data")):
-                data, files = self.config.transform_video_create_request(
+                data, files, url = self.config.transform_video_create_request(
                     model=self.model,
                     prompt="A video with reference image",
+                    api_base=api_base,
                     video_create_optional_request_params=video_params,
                     litellm_params=litellm_params,
                     headers=headers
@@ -294,6 +303,7 @@ class TestAzureVideoConfig:
         assert data["seconds"] == 10
         assert len(files) == 1
         assert files[0][0] == "input_reference"
+        assert url == api_base
 
     def test_error_handling_in_response_transformation(self):
         """Test error handling in response transformation methods."""
@@ -316,23 +326,24 @@ class TestAzureVideoConfig:
                 logging_obj=logging_obj
             )
 
-    def test_azure_specific_environment_validation(self):
+    @patch('litellm.llms.azure.common_utils.litellm')
+    def test_azure_specific_environment_validation(self, mock_litellm):
         """Test Azure-specific environment validation with different key sources."""
+        # Test with azure_key
+        mock_litellm.api_key = None
+        mock_litellm.azure_key = "azure-test-key"
+        mock_litellm.openai_key = None
+        
         headers = {"Content-Type": "application/json"}
         
-        # Test with azure_key
-        with patch('litellm.llms.azure.videos.transformation.litellm') as mock_litellm:
-            mock_litellm.api_key = None
-            mock_litellm.azure_key = "azure-test-key"
-            mock_litellm.openai_key = None
-            
-            result_headers = self.config.validate_environment(
-                headers=headers,
-                model=self.model,
-                api_key=None
-            )
-            
-            assert result_headers["Authorization"] == "Bearer azure-test-key"
+        result_headers = self.config.validate_environment(
+            headers=headers,
+            model=self.model,
+            api_key=None
+        )
+        
+        assert "api-key" in result_headers
+        assert result_headers["api-key"] == "azure-test-key"
 
     def test_usage_data_creation_in_video_create(self):
         """Test that usage data is created correctly in video create response."""
@@ -374,7 +385,6 @@ class TestAzureVideoConfig:
         logging_obj = MagicMock()
         
         result = self.config.transform_video_remix_response(
-            model=self.model,
             raw_response=mock_response,
             logging_obj=logging_obj
         )

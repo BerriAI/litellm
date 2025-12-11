@@ -13,7 +13,7 @@ import TabItem from '@theme/TabItem';
 | Description | The fastest and most efficient inference engine to build production-ready, compound AI systems. |
 | Provider Route on LiteLLM | `fireworks_ai/` |
 | Provider Doc | [Fireworks AI ↗](https://docs.fireworks.ai/getting-started/introduction) |
-| Supported OpenAI Endpoints | `/chat/completions`, `/embeddings`, `/completions`, `/audio/transcriptions` |
+| Supported OpenAI Endpoints | `/chat/completions`, `/embeddings`, `/completions`, `/audio/transcriptions`, `/rerank` |
 
 
 ## Overview
@@ -204,7 +204,7 @@ from litellm import completion
 import os
 
 os.environ["FIREWORKS_AI_API_KEY"] = "YOUR_API_KEY"
-os.environ["FIREWORKS_AI_API_BASE"] = "https://audio-prod.us-virginia-1.direct.fireworks.ai/v1"
+os.environ["FIREWORKS_AI_API_BASE"] = "https://audio-prod.api.fireworks.ai/v1"
 
 completion = litellm.completion(
     model="fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct",
@@ -343,7 +343,7 @@ from litellm import transcription
 import os
 
 os.environ["FIREWORKS_AI_API_KEY"] = "YOUR_API_KEY"
-os.environ["FIREWORKS_AI_API_BASE"] = "https://audio-prod.us-virginia-1.direct.fireworks.ai/v1"
+os.environ["FIREWORKS_AI_API_BASE"] = "https://audio-prod.api.fireworks.ai/v1"
 
 response = transcription(
     model="fireworks_ai/whisper-v3",
@@ -363,7 +363,7 @@ model_list:
   - model_name: whisper-v3
     litellm_params:
       model: fireworks_ai/whisper-v3
-      api_base: https://audio-prod.us-virginia-1.direct.fireworks.ai/v1
+      api_base: https://audio-prod.api.fireworks.ai/v1
       api_key: os.environ/FIREWORKS_API_KEY
     model_info:
       mode: audio_transcription
@@ -387,3 +387,86 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/audio/transcriptions' \
 
 </TabItem>
 </Tabs>
+
+## Rerank
+
+### Quick Start
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import rerank
+import os
+
+os.environ["FIREWORKS_AI_API_KEY"] = "YOUR_API_KEY"
+
+query = "What is the capital of France?"
+documents = [
+    "Paris is the capital and largest city of France, home to the Eiffel Tower and the Louvre Museum.",
+    "France is a country in Western Europe known for its wine, cuisine, and rich history.",
+    "The weather in Europe varies significantly between northern and southern regions.",
+    "Python is a popular programming language used for web development and data science.",
+]
+
+response = rerank(
+    model="fireworks_ai/fireworks/qwen3-reranker-8b",
+    query=query,
+    documents=documents,
+    top_n=3,
+    return_documents=True,
+)
+print(response)
+```
+
+[Pass API Key/API Base in `.rerank`](../set_keys.md#passing-args-to-completion)
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: qwen3-reranker-8b
+    litellm_params:
+      model: fireworks_ai/fireworks/qwen3-reranker-8b
+      api_key: os.environ/FIREWORKS_API_KEY
+    model_info:
+      mode: rerank
+```
+
+2. Start Proxy
+
+```
+litellm --config config.yaml
+```
+
+3. Test it
+
+```bash
+curl http://0.0.0.0:4000/rerank \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3-reranker-8b",
+    "query": "What is the capital of France?",
+    "documents": [
+        "Paris is the capital and largest city of France, home to the Eiffel Tower and the Louvre Museum.",
+        "France is a country in Western Europe known for its wine, cuisine, and rich history.",
+        "The weather in Europe varies significantly between northern and southern regions.",
+        "Python is a popular programming language used for web development and data science."
+    ],
+    "top_n": 3,
+    "return_documents": true
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+### Supported Models
+
+| Model Name | Function Call |
+|------------|---------------|
+| fireworks/qwen3-reranker-8b | `rerank(model="fireworks_ai/fireworks/qwen3-reranker-8b", query=query, documents=documents)` |

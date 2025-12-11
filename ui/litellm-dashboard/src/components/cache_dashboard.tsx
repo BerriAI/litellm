@@ -24,6 +24,7 @@ import { adminGlobalCacheActivity, cachingHealthCheckCall } from "./networking";
 
 // Import the new component
 import { CacheHealthTab } from "./cache_health";
+import CacheSettings from "./cache_settings";
 
 const formatDateWithoutTZ = (date: Date | undefined) => {
   if (!date) return undefined;
@@ -273,6 +274,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
           <Tab>
             <pre>Cache Health</pre>
           </Tab>
+          <Tab>Cache Settings</Tab>
         </div>
 
         <div className="flex items-center space-x-2">
@@ -291,7 +293,11 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
           <Card>
             <Grid numItems={3} className="gap-4 mt-4">
               <Col>
-                <MultiSelect placeholder="Select API Keys" value={selectedApiKeys} onValueChange={setSelectedApiKeys}>
+                <MultiSelect
+                  placeholder="Select Virtual Keys"
+                  value={selectedApiKeys}
+                  onValueChange={setSelectedApiKeys}
+                >
                   {uniqueApiKeys.map((key) => (
                     <MultiSelectItem key={key} value={key}>
                       {key}
@@ -384,6 +390,9 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
             healthCheckResponse={healthCheckResponse}
             runCachingHealthCheck={runCachingHealthCheck}
           />
+        </TabPanel>
+        <TabPanel>
+          <CacheSettings accessToken={accessToken} userRole={userRole} userID={userID} />
         </TabPanel>
       </TabPanels>
     </TabGroup>

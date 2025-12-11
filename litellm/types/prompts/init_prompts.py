@@ -11,6 +11,7 @@ class SupportedPromptIntegrations(str, Enum):
     CUSTOM = "custom"
     BITBUCKET = "bitbucket"
     GITLAB = "gitlab"
+    ARIZE_PHOENIX = "arize_phoenix"
 
 
 class PromptInfo(BaseModel):
@@ -22,6 +23,13 @@ class PromptInfo(BaseModel):
 class PromptLiteLLMParams(BaseModel):
     prompt_id: str
     prompt_integration: str
+    api_key: Optional[str] = None
+    api_base: Optional[str] = None
+
+    dotprompt_content: Optional[str] = None
+    """
+    allows saving the dotprompt file content
+    """
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
@@ -32,6 +40,7 @@ class PromptSpec(BaseModel):
     prompt_info: PromptInfo
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    version: Optional[int] = None  # Version number for version history
 
     def __init__(self, **data):
         if "prompt_info" not in data:

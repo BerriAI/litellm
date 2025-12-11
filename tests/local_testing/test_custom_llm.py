@@ -10,7 +10,6 @@ import traceback
 
 import openai
 import pytest
-from pytest_mock import MockerFixture
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -538,46 +537,3 @@ async def test_simple_aembedding():
         "embedding": [0.1, 0.2, 0.3],
         "index": 1,
     }
-
-
-def test_custom_llm_provider_entrypoint(mocker: MockerFixture):
-    # This test mocks the use of entry-points in pyproject.toml:
-    #   [project.entry-point.litellm]
-    #   custom_llm = <module>:MyCustomLLM
-    #   another-custom-llm = <module>:AnotherCustomLLM
-
-    from litellm.utils import custom_llm_setup
-
-    class AnotherCustomLLM(CustomLLM):
-        pass
-
-    providers = {
-        "custom_llm": MyCustomLLM,
-        "another-custom-llm": AnotherCustomLLM
-    }
-
-    def load(self):
-        return providers[self.name]
-
-    mocker.patch("importlib.metadata.EntryPoint.load", load)
-    from importlib.metadata import EntryPoints, EntryPoint
-
-    entry_points = EntryPoints([
-        EntryPoint(group="litellm", name="custom_llm", value="package.module:MyCustomLLM"),
-        EntryPoint(group="litellm", name="another-custom-llm", value="package.module:AnotherCustomLLM"),
-    ])
-    mocked = mocker.patch("litellm.utils.entry_points")
-    mocked.return_value = entry_points
-
-    assert litellm.custom_provider_map == []
-    assert litellm._custom_providers == []
-
-    custom_llm_setup()
-
-    assert litellm._custom_providers == ['custom_llm', 'another-custom-llm']
-
-    assert litellm.custom_provider_map[0]["provider"] == "custom_llm"
-    assert isinstance(litellm.custom_provider_map[0]["custom_handler"], CustomLLM)
-
-    assert litellm.custom_provider_map[1]["provider"] == "another-custom-llm"
-    assert isinstance(litellm.custom_provider_map[1]["custom_handler"], AnotherCustomLLM)

@@ -37,6 +37,7 @@ export interface KeyResponse {
   budget_duration: string;
   budget_reset_at: string;
   allowed_cache_controls: string[];
+  allowed_routes: string[];
   permissions: Record<string, unknown>;
   model_spend: Record<string, number>;
   model_max_budget: Record<string, number>;
@@ -82,6 +83,8 @@ export interface KeyResponse {
     mcp_access_groups?: string[];
     mcp_tool_permissions?: Record<string, string[]>;
     vector_stores: string[];
+    agents?: string[];
+    agent_access_groups?: string[];
   };
   auto_rotate?: boolean;
   rotation_interval?: string;

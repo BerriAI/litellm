@@ -353,6 +353,10 @@ class BaseAWSLLM:
             model_id = BaseAWSLLM._get_model_id_from_model_with_spec(
                 model_id, spec="deepseek_r1"
             )
+        elif provider == "openai" and "openai/" in model_id:
+            model_id = BaseAWSLLM._get_model_id_from_model_with_spec(
+                model_id, spec="openai"
+            )
         return model_id
 
     @staticmethod
@@ -387,9 +391,16 @@ class BaseAWSLLM:
         Handles scenarios like:
         1. model=cohere.embed-english-v3:0 -> Returns `cohere`
         2. model=amazon.titan-embed-text-v1 -> Returns `amazon`
-        3. model=us.twelvelabs.marengo-embed-2-7-v1:0 -> Returns `twelvelabs`
-        4. model=twelvelabs.marengo-embed-2-7-v1:0 -> Returns `twelvelabs`
+        3. model=amazon.nova-2-multimodal-embeddings-v1:0 -> Returns `nova`
+        4. model=us.twelvelabs.marengo-embed-2-7-v1:0 -> Returns `twelvelabs`
+        5. model=twelvelabs.marengo-embed-2-7-v1:0 -> Returns `twelvelabs`
         """
+        # Special case: Check for "nova" in model name first (before "amazon")
+        # This handles amazon.nova-* models
+        if "nova" in model.lower():
+            if "nova" in get_args(BEDROCK_EMBEDDING_PROVIDERS_LITERAL):
+                return cast(BEDROCK_EMBEDDING_PROVIDERS_LITERAL, "nova")
+        
         # Handle regional models like us.twelvelabs.marengo-embed-2-7-v1:0
         if "." in model:
             parts = model.split(".")
@@ -901,7 +912,7 @@ class BaseAWSLLM:
         api_base: Optional[str],
         aws_bedrock_runtime_endpoint: Optional[str],
         aws_region_name: str,
-        endpoint_type: Optional[Literal["runtime", "agent"]] = "runtime",
+        endpoint_type: Optional[Literal["runtime", "agent", "agentcore"]] = "runtime",
     ) -> Tuple[str, str]:
         env_aws_bedrock_runtime_endpoint = get_secret("AWS_BEDROCK_RUNTIME_ENDPOINT")
         if api_base is not None:
@@ -935,7 +946,7 @@ class BaseAWSLLM:
         return endpoint_url, proxy_endpoint_url
 
     def _select_default_endpoint_url(
-        self, endpoint_type: Optional[Literal["runtime", "agent"]], aws_region_name: str
+        self, endpoint_type: Optional[Literal["runtime", "agent", "agentcore"]], aws_region_name: str
     ) -> str:
         """
         Select the default endpoint url based on the endpoint type
@@ -944,6 +955,8 @@ class BaseAWSLLM:
         """
         if endpoint_type == "agent":
             return f"https://bedrock-agent-runtime.{aws_region_name}.amazonaws.com"
+        elif endpoint_type == "agentcore":
+            return f"https://bedrock-agentcore.{aws_region_name}.amazonaws.com"
         else:
             return f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
 
@@ -1091,7 +1104,7 @@ class BaseAWSLLM:
 
     def _sign_request(
         self,
-        service_name: Literal["bedrock", "sagemaker"],
+        service_name: Literal["bedrock", "sagemaker", "bedrock-agentcore"],
         headers: dict,
         optional_params: dict,
         request_data: dict,
