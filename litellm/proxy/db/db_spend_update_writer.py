@@ -180,14 +180,10 @@ class DBSpendUpdateWriter:
                 except Exception:
                     user_email = user_id
 
-            # PRINT DEBUG: Always show what's happening
             if is_free_model:
-                print(f"[FREE_MODELS] SPEND COUNTER SKIPPED - User: {user_email}, PayloadModel: {_payload_model}, RequestModel: {_request_model}, LiteLLMModel: {_litellm_model}, MatchedModel: {matched_free_model}, Cost: ${response_cost or 0.0:.6f} (analytics still recorded)")
                 verbose_proxy_logger.info(
                     f"FREE_MODELS: Skipping spend counter updates for user={user_email}, matched_model={matched_free_model}, cost=${response_cost or 0.0:.4f}. Analytics (spend logs + daily tables) will still be recorded."
                 )
-            else:
-                print(f"[PAID_MODEL] SPEND COUNTER UPDATED - User: {user_email}, PayloadModel: {_payload_model}, RequestModel: {_request_model}, LiteLLMModel: {_litellm_model}, Cost: ${response_cost or 0.0:.6f}")
 
             if team_id is not None and team_id != "":
                 payload["team_id"] = team_id
@@ -214,7 +210,6 @@ class DBSpendUpdateWriter:
             # user/key/team/org/tag budgets are not consumed by free-tier traffic.
             # Analytics (spend logs + daily tables) still land via _insert_spend_log_to_db above.
             if not is_free_model:
-                print(f"[DB_QUEUE_ADD] PAID MODEL - Adding to database queue - User: {user_email}, Cost: ${response_cost or 0.0:.6f}")
                 asyncio.create_task(
                     self._batch_database_updates(
                         response_cost=response_cost,
@@ -230,8 +225,6 @@ class DBSpendUpdateWriter:
                         request_tags=request_tags,
                     )
                 )
-            else:
-                print(f"[DB_QUEUE_SKIP] FREE MODEL - NOT adding to database queue - User: {user_email}, Cost: ${response_cost or 0.0:.6f}")
 
             self._enqueue_tool_registry_upsert(
                 kwargs=kwargs,
