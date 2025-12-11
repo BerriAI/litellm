@@ -3467,8 +3467,17 @@ async def update_spend(  # noqa: PLR0915
         "Spend Logs transactions: {}".format(len(prisma_client.spend_log_transactions))
     )
 
-    # Spend log transactions are now processed by a separate queue-size-based job
-    # See update_spend_logs_job and _monitor_spend_logs_queue
+    # Process spend log transactions when called directly.
+    # This keeps backwards compatibility with the old behavior.
+    # See update_spend_logs_job and _monitor_spend_logs_queue for the new behavior.
+    # Safe to keep: under high concurrency this can take up to ~30s to run,
+    # so it's unlikely to overlap with monitor_spend_logs_queue.
+    if len(prisma_client.spend_log_transactions) > 0:
+        await update_spend_logs_job(
+            prisma_client=prisma_client,
+            db_writer_client=db_writer_client,
+            proxy_logging_obj=proxy_logging_obj,
+        )
 
 
 async def update_spend_logs_job(
