@@ -460,3 +460,55 @@ def test_apply_masking_function_with_list():
     result = LangFuseLogger._apply_masking_function(input_list, mask_ssn)
     assert result[0] == "SSN: [SSN]"
     assert result[1] == "No sensitive data here"
+
+
+def test_masking_function_isolated_from_other_loggers():
+    """
+    Test that langfuse_masking_function is extracted from metadata and stored separately.
+    This ensures the callable doesn't leak to other logging integrations.
+    """
+    from litellm.litellm_core_utils.litellm_logging import scrub_sensitive_keys_in_metadata
+
+    def my_masking_fn(data):
+        return data
+
+    # Simulate litellm_params with masking function in metadata
+    litellm_params = {
+        "metadata": {
+            "langfuse_masking_function": my_masking_fn,
+            "other_key": "other_value",
+        }
+    }
+
+    # Scrub should extract the function
+    result = scrub_sensitive_keys_in_metadata(litellm_params)
+
+    # Function should be removed from metadata (won't leak to other loggers)
+    assert "langfuse_masking_function" not in result["metadata"]
+
+    # Function should be stored in dedicated key for Langfuse to access
+    assert result.get("_langfuse_masking_function") == my_masking_fn
+
+    # Other metadata should remain intact
+    assert result["metadata"]["other_key"] == "other_value"
+
+
+def test_masking_function_not_in_metadata_when_not_provided():
+    """
+    Test that scrub_sensitive_keys_in_metadata works normally when no masking function is provided.
+    """
+    from litellm.litellm_core_utils.litellm_logging import scrub_sensitive_keys_in_metadata
+
+    litellm_params = {
+        "metadata": {
+            "some_key": "some_value",
+        }
+    }
+
+    result = scrub_sensitive_keys_in_metadata(litellm_params)
+
+    # No _langfuse_masking_function should be added
+    assert "_langfuse_masking_function" not in result
+
+    # Original metadata should be unchanged
+    assert result["metadata"]["some_key"] == "some_value"
