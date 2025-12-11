@@ -1795,11 +1795,11 @@ class MCPServerManager:
         # For OpenAPI servers, call the tool handler directly instead of via MCP client
         if mcp_server.spec_path:
             verbose_logger.debug(
-                f"Calling OpenAPI tool {original_tool_name} server[{mcp_server.name}]  directly via HTTP handler"
+                f"Calling OpenAPI tool {prefixed_tool_name} server[{mcp_server.name}]  directly via HTTP handler"
             )
             tasks.append(
                 asyncio.create_task(
-                    self._call_openapi_tool_handler(mcp_server, original_tool_name, arguments)
+                    self._call_openapi_tool_handler(mcp_server, prefixed_tool_name, arguments)
                 )
             )
         else:
