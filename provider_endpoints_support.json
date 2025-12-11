@@ -239,6 +239,23 @@
         "ocr": true
       }
     },
+    "azure_ai/agents": {
+      "display_name": "Azure AI Foundry Agents (`azure_ai/agents`)",
+      "url": "https://docs.litellm.ai/docs/providers/azure_ai_agents",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true
+      }
+    },
     "azure_text": {
       "display_name": "Azure Text (`azure_text`)",
       "url": "https://docs.litellm.ai/docs/providers/azure",

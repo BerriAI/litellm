@@ -28,6 +28,7 @@ import {
   tagDailyActivityCall,
   teamDailyActivityCall,
   customerDailyActivityCall,
+  agentDailyActivityCall,
 } from "./networking";
 import TopKeyView from "./top_key_view";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -143,6 +144,15 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       setSpendData(data);
     } else if (entityType === "customer") {
       const data = await customerDailyActivityCall(
+        accessToken,
+        startTime,
+        endTime,
+        1,
+        selectedTags.length > 0 ? selectedTags : null,
+      );
+      setSpendData(data);
+    } else if (entityType === "agent") {
+      const data = await agentDailyActivityCall(
         accessToken,
         startTime,
         endTime,
