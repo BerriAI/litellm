@@ -2677,6 +2677,7 @@ class SpendLogsPayload(TypedDict):
     model_id: Optional[str]
     model_group: Optional[str]
     mcp_namespaced_tool_name: Optional[str]
+    agent_id: Optional[str]
     api_base: str
     user: str
     metadata: str  # json str
