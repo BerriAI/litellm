@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
 from litellm.a2a_protocol.utils import A2ARequestUtils
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.thread_pool_executor import executor
@@ -115,11 +116,17 @@ class A2AStreamingIterator:
 
             # Set usage on logging obj
             self.logging_obj.model_call_details["usage"] = usage
+            # Mark stream flag for downstream callbacks
+            self.logging_obj.model_call_details["stream"] = False
+
+            # Calculate cost using A2ACostCalculator
+            response_cost = A2ACostCalculator.calculate_a2a_cost(self.logging_obj)
+            self.logging_obj.model_call_details["response_cost"] = response_cost
 
             # Build result for logging
             result = self._build_logging_result(usage)
 
-            # Call success handlers
+            # Call success handlers - they will build standard_logging_object
             asyncio.create_task(
                 self.logging_obj.async_success_handler(
                     result=result,
@@ -139,7 +146,8 @@ class A2AStreamingIterator:
 
             verbose_logger.info(
                 f"A2A streaming completed: prompt_tokens={prompt_tokens}, "
-                f"completion_tokens={completion_tokens}, total_tokens={total_tokens}"
+                f"completion_tokens={completion_tokens}, total_tokens={total_tokens}, "
+                f"response_cost={response_cost}"
             )
 
         except Exception as e:
