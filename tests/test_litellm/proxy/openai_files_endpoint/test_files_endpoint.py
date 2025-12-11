@@ -18,6 +18,7 @@ from litellm.proxy._types import LiteLLM_UserTableFiltered, UserAPIKeyAuth
 from litellm.proxy.hooks import get_proxy_hook
 from litellm.proxy.management_endpoints.internal_user_endpoints import ui_view_users
 from litellm.proxy.proxy_server import app
+from litellm.types.llms.openai import OpenAIFileObject
 
 client = TestClient(app)
 from litellm.caching.caching import DualCache
@@ -223,6 +224,97 @@ def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: 
             openai_call_found = True
             break
     assert openai_call_found, "OpenAI call not found with expected parameters"
+
+
+def test_target_storage_invokes_storage_backend(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """
+    Ensure target_storage is parsed and invokes the storage backend service.
+    """
+    setup_proxy_logging_object(monkeypatch, llm_router)
+
+    async_mock = mocker.AsyncMock(
+        return_value=OpenAIFileObject(
+            id="file-test",
+            object="file",
+            purpose="user_data",
+            created_at=0,
+            bytes=3,
+            filename="abc.txt",
+            status="uploaded",
+        )
+    )
+    mocker.patch(
+        "litellm.proxy.openai_files_endpoints.files_endpoints.StorageBackendFileService.upload_file_to_storage_backend",
+        new=async_mock,
+    )
+
+    test_file_content = b"abc"
+    test_file = ("abc.txt", test_file_content, "text/plain")
+
+    response = client.post(
+        "/v1/files",
+        files={"file": test_file},
+        data={
+            "purpose": "user_data",
+            "target_storage": "azure_storage",
+        },
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200
+    async_mock.assert_awaited_once()
+    called_kwargs = async_mock.call_args.kwargs
+    assert called_kwargs["target_storage"] == "azure_storage"
+    assert called_kwargs["target_model_names"] == []
+    assert called_kwargs["purpose"] == "user_data"
+
+
+def test_target_storage_with_target_models(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """
+    Ensure target_storage and target_model_names are parsed and passed through.
+    """
+    setup_proxy_logging_object(monkeypatch, llm_router)
+
+    async_mock = mocker.AsyncMock(
+        return_value=OpenAIFileObject(
+            id="file-test",
+            object="file",
+            purpose="user_data",
+            created_at=0,
+            bytes=3,
+            filename="abc.txt",
+            status="uploaded",
+        )
+    )
+    mocker.patch(
+        "litellm.proxy.openai_files_endpoints.files_endpoints.StorageBackendFileService.upload_file_to_storage_backend",
+        new=async_mock,
+    )
+
+    test_file_content = b"abc"
+    test_file = ("abc.txt", test_file_content, "text/plain")
+
+    response = client.post(
+        "/v1/files",
+        files={"file": test_file},
+        data={
+            "purpose": "user_data",
+            "target_storage": "azure_storage",
+            "target_model_names": "gemini-2.0-flash",
+        },
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200
+    async_mock.assert_awaited_once()
+    called_kwargs = async_mock.call_args.kwargs
+    assert called_kwargs["target_storage"] == "azure_storage"
+    assert called_kwargs["target_model_names"] == ["gemini-2.0-flash"]
+    assert called_kwargs["purpose"] == "user_data"
 
 
 @pytest.mark.skip(reason="mock respx fails on ci/cd - unclear why")

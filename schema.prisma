@@ -573,6 +573,8 @@ model LiteLLM_ManagedFileTable {
   file_object Json? // Stores the OpenAIFileObject
   model_mappings Json
   flat_model_file_ids String[]  @default([]) // Flat list of model file id's - for faster querying of model id -> unified file id
+  storage_backend String? // Storage backend name (e.g., "azure_storage", "gcs", "default")
+  storage_url String? // The actual storage URL where the file is stored
   created_at DateTime @default(now())
   created_by String? 
   updated_at DateTime @updatedAt
