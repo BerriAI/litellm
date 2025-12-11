@@ -172,6 +172,9 @@ try:
     from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
         ResendEmailLogger,
     )
+    from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import (
+        SendGridEmailLogger,
+    )
     from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (
         SMTPEmailLogger,
     )
@@ -190,6 +193,7 @@ except Exception as e:
     )
     GenericAPILogger = CustomLogger  # type: ignore
     ResendEmailLogger = CustomLogger  # type: ignore
+    SendGridEmailLogger = CustomLogger  # type: ignore
     SMTPEmailLogger = CustomLogger  # type: ignore
     PagerDutyAlerting = CustomLogger  # type: ignore
     EnterpriseCallbackControls = None  # type: ignore
@@ -3904,6 +3908,13 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             resend_email_logger = ResendEmailLogger()
             _in_memory_loggers.append(resend_email_logger)
             return resend_email_logger  # type: ignore
+        elif logging_integration == "sendgrid_email":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, SendGridEmailLogger):
+                    return callback
+            sendgrid_email_logger = SendGridEmailLogger()
+            _in_memory_loggers.append(sendgrid_email_logger)
+            return sendgrid_email_logger  # type: ignore
         elif logging_integration == "smtp_email":
             for callback in _in_memory_loggers:
                 if isinstance(callback, SMTPEmailLogger):
@@ -4143,6 +4154,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "resend_email":
             for callback in _in_memory_loggers:
                 if isinstance(callback, ResendEmailLogger):
+                    return callback
+        elif logging_integration == "sendgrid_email":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, SendGridEmailLogger):
                     return callback
         elif logging_integration == "smtp_email":
             for callback in _in_memory_loggers:
