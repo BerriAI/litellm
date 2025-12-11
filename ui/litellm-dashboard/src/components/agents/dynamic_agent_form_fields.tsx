@@ -26,14 +26,6 @@ const DynamicAgentFormFields: React.FC<DynamicAgentFormFieldsProps> = ({
       </Form.Item>
 
       <Form.Item
-        label="Display Name"
-        name="display_name"
-        tooltip="Human-readable name shown in the UI"
-      >
-        <Input placeholder="e.g., My LangGraph Agent" />
-      </Form.Item>
-
-      <Form.Item
         label="Description"
         name="description"
         tooltip="Brief description of what this agent does"
