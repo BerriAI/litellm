@@ -325,3 +325,132 @@ def test_stream_chunk_builder_litellm_usage_chunks():
     assert usage.prompt_tokens == 50
     assert usage.completion_tokens == 27
     assert usage.total_tokens == 77
+
+
+# =============================================================================
+# Tests for _validate_and_repair_tool_arguments()
+# =============================================================================
+
+from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
+    _validate_and_repair_tool_arguments,
+)
+
+
+class TestValidateAndRepairToolArguments:
+    """Tests for _validate_and_repair_tool_arguments() function.
+
+    This function uses JSONDecoder.raw_decode() to handle malformed JSON
+    from streaming providers like Gemini that may send duplicate/overlapping chunks.
+    """
+
+    # --- Valid JSON (should pass through unchanged) ---
+
+    def test_valid_simple_json(self):
+        """Valid JSON should pass through unchanged."""
+        valid = '{"address": "123 Main St"}'
+        assert _validate_and_repair_tool_arguments(valid) == valid
+
+    def test_valid_nested_json(self):
+        """Deeply nested JSON should work correctly."""
+        valid = '{"outer": {"inner": {"deep": {"value": 123}}}}'
+        assert _validate_and_repair_tool_arguments(valid) == valid
+
+    def test_valid_json_with_arrays(self):
+        """JSON with arrays should work correctly."""
+        valid = '{"data": [1, 2, {"nested": [3, 4]}]}'
+        assert _validate_and_repair_tool_arguments(valid) == valid
+
+    def test_valid_json_with_escaped_quotes(self):
+        """JSON with escaped quotes in strings should work."""
+        valid = '{"text": "He said \\"hello\\""}'
+        assert _validate_and_repair_tool_arguments(valid) == valid
+
+    def test_valid_json_with_unicode(self):
+        """JSON with unicode characters should work."""
+        valid = '{"city": "東京", "greeting": "Привет"}'
+        assert _validate_and_repair_tool_arguments(valid) == valid
+
+    # --- Malformed JSON (duplicate/concatenated chunks) ---
+
+    def test_duplicate_simple_json(self):
+        """Duplicate JSON objects should extract the first one."""
+        malformed = '{"address": "School"}{"address": "School"}'
+        expected = '{"address": "School"}'
+        assert _validate_and_repair_tool_arguments(malformed) == expected
+
+    def test_duplicate_nested_json(self):
+        """Duplicate nested JSON should extract the first one."""
+        malformed = '{"a": {"b": 1}}{"a": {"b": 1}}'
+        expected = '{"a": {"b": 1}}'
+        assert _validate_and_repair_tool_arguments(malformed) == expected
+
+    def test_different_concatenated_json(self):
+        """Different JSON objects concatenated should return first."""
+        malformed = '{"first": true}{"second": false}'
+        expected = '{"first": true}'
+        assert _validate_and_repair_tool_arguments(malformed) == expected
+
+    def test_json_with_extra_garbage(self):
+        """JSON followed by garbage data should extract valid JSON."""
+        malformed = '{"valid": true}garbage data here'
+        expected = '{"valid": true}'
+        assert _validate_and_repair_tool_arguments(malformed) == expected
+
+    # --- Edge cases ---
+
+    def test_empty_string(self):
+        """Empty string should return empty object."""
+        assert _validate_and_repair_tool_arguments("") == "{}"
+
+    def test_valid_empty_object(self):
+        """Empty JSON object should work."""
+        assert _validate_and_repair_tool_arguments("{}") == "{}"
+
+    def test_completely_invalid_json(self):
+        """Completely invalid JSON should return as-is with warning."""
+        invalid = "not json at all"
+        result = _validate_and_repair_tool_arguments(invalid)
+        assert result == invalid  # Returns as-is
+
+    # --- Long/complex JSON ---
+
+    def test_long_json_object(self):
+        """Long JSON with many keys should work correctly."""
+        keys = {f"key_{i}": f"value_{i}" for i in range(100)}
+        valid = json.dumps(keys)
+        assert _validate_and_repair_tool_arguments(valid) == valid
+
+    def test_deeply_nested_10_levels(self):
+        """10 levels of nesting should work correctly."""
+        nested = '{"l1": {"l2": {"l3": {"l4": {"l5": {"l6": {"l7": {"l8": {"l9": {"l10": "deep"}}}}}}}}}}'
+        assert _validate_and_repair_tool_arguments(nested) == nested
+
+    def test_large_array_in_json(self):
+        """JSON with large array should work correctly."""
+        large = json.dumps({"numbers": list(range(1000))})
+        assert _validate_and_repair_tool_arguments(large) == large
+
+    # --- Gemini-specific patterns ---
+
+    def test_gemini_geocode_duplicate_pattern(self):
+        """Simulate the actual Gemini geocoding duplicate pattern."""
+        # This is the actual pattern causing the bug
+        malformed = '{"address": "Cotham Brow School BS6 6DT", "country_code": "GB"}{"address": "Cotham Brow School BS6 6DT", "country_code": "GB"}'
+        expected = '{"address": "Cotham Brow School BS6 6DT", "country_code": "GB"}'
+        assert _validate_and_repair_tool_arguments(malformed) == expected
+
+    def test_json_with_braces_in_strings(self):
+        """Braces inside string values should not confuse parser."""
+        valid = '{"regex": "^\\\\{[a-z]+\\\\}$", "note": "contains { and }"}'
+        assert _validate_and_repair_tool_arguments(valid) == valid
+
+    def test_json_with_newlines_in_strings(self):
+        """JSON with newline characters in strings should work."""
+        valid = '{"text": "line1\\nline2\\nline3"}'
+        assert _validate_and_repair_tool_arguments(valid) == valid
+
+    def test_triple_concatenation(self):
+        """Three concatenated JSON objects should return first."""
+        malformed = '{"a": 1}{"b": 2}{"c": 3}'
+        expected = '{"a": 1}'
+        assert _validate_and_repair_tool_arguments(malformed) == expected
