@@ -4975,6 +4975,23 @@ def get_standard_logging_object_payload(
         ) and kwargs.get("stream") is True:
             stream = True
 
+        # Reconstruct full model name with provider prefix for logging
+        # This ensures Bedrock models like "us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+        # are logged as "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+        model_name = kwargs.get("model", "") or ""
+        custom_llm_provider = cast(Optional[str], kwargs.get("custom_llm_provider"))
+        
+        # Check if deployment model name from router metadata is available (has original prefix)
+        deployment_model_name = metadata.get("deployment")
+        if deployment_model_name and "/" in deployment_model_name:
+            # Use the deployment model name which preserves the original provider prefix
+            model_name = deployment_model_name
+        elif custom_llm_provider and model_name and "/" not in model_name:
+            # Only add prefix for Bedrock (not for direct Anthropic API)
+            # This ensures Bedrock models get the prefix while direct Anthropic models don't
+            if custom_llm_provider == "bedrock":
+                model_name = f"{custom_llm_provider}/{model_name}"
+
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),
             trace_id=StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
@@ -4992,13 +5009,13 @@ def get_standard_logging_object_payload(
                 ),
                 error_str=error_str,
             ),
-            custom_llm_provider=cast(Optional[str], kwargs.get("custom_llm_provider")),
+            custom_llm_provider=custom_llm_provider,
             saved_cache_cost=saved_cache_cost,
             startTime=start_time_float,
             endTime=end_time_float,
             completionStartTime=completion_start_time_float,
             response_time=response_time,
-            model=kwargs.get("model", "") or "",
+            model=model_name,
             metadata=clean_metadata,
             cache_key=clean_hidden_params["cache_key"],
             response_cost=response_cost,
