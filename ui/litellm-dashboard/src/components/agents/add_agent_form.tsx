@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { Modal, Form, Button as AntButton, message } from "antd";
+import { Modal, Form, message, Select } from "antd";
+import { Button } from "@tremor/react";
 import { createAgentCall, getAgentCreateMetadata, AgentCreateInfo } from "../networking";
 import AgentFormFields from "./agent_form_fields";
 import DynamicAgentFormFields, { buildDynamicAgentData } from "./dynamic_agent_form_fields";
@@ -85,119 +86,103 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
     form.resetFields();
   };
 
+  // Get the logo for the selected agent type for the header
+  const selectedLogo = selectedAgentTypeInfo?.logo_url || agentTypeMetadata.find(a => a.agent_type === "a2a")?.logo_url;
 
   return (
     <Modal
-      title="Add New Agent"
+      title={
+        <div className="flex items-center space-x-3 pb-4 border-b border-gray-100">
+          {selectedLogo && (
+            <img
+              src={selectedLogo}
+              alt="Agent"
+              className="w-6 h-6 object-contain"
+            />
+          )}
+          <h2 className="text-xl font-semibold text-gray-900">Add New Agent</h2>
+        </div>
+      }
       open={visible}
       onCancel={handleCancel}
       footer={null}
-      width={600}
+      width={900}
+      className="top-8"
+      styles={{
+        body: { padding: "24px" },
+        header: { padding: "24px 24px 0 24px", border: "none" },
+      }}
     >
-      <Form
-        form={form}
-        layout="vertical"
-        onFinish={handleSubmit}
-        initialValues={agentType === "a2a" ? getDefaultFormValues() : {}}
-      >
-        {/* Agent Type Selection */}
-        <Form.Item
-          label="Agent Type"
-          required
-          tooltip="Select the type of agent you want to create"
+      <div className="mt-4">
+        <Form
+          form={form}
+          layout="vertical"
+          onFinish={handleSubmit}
+          initialValues={agentType === "a2a" ? getDefaultFormValues() : {}}
+          className="space-y-4"
         >
-          <div style={{ display: "flex", gap: "16px", flexWrap: "wrap" }}>
-            {/* A2A Standard Option */}
-            <div
-              onClick={() => handleAgentTypeChange("a2a")}
-              style={{
-                border: agentType === "a2a" ? "2px solid #1890ff" : "1px solid #d9d9d9",
-                borderRadius: "8px",
-                padding: "16px 20px",
-                cursor: "pointer",
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                justifyContent: "center",
-                minWidth: "130px",
-                minHeight: "110px",
-                backgroundColor: agentType === "a2a" ? "#e6f7ff" : "white",
-                transition: "all 0.2s ease",
-              }}
+          {/* Agent Type Selection */}
+          <Form.Item
+            label={<span className="text-sm font-medium text-gray-700">Agent Type</span>}
+            required
+            tooltip="Select the type of agent you want to create"
+          >
+            <Select
+              value={agentType}
+              onChange={handleAgentTypeChange}
+              size="large"
+              style={{ width: "100%" }}
+              optionLabelProp="label"
             >
-              <img
-                src={A2A_LOGO}
-                alt="A2A"
-                style={{ width: "40px", height: "40px", marginBottom: "10px", objectFit: "contain" }}
-              />
-              <span style={{ fontWeight: agentType === "a2a" ? 600 : 400, fontSize: "14px" }}>
-                A2A Standard
-              </span>
-              <span style={{ fontSize: "11px", color: "#666", textAlign: "center", marginTop: "4px" }}>
-                Standard A2A protocol
-              </span>
-            </div>
+              {agentTypeMetadata.map((info) => (
+                <Select.Option 
+                  key={info.agent_type} 
+                  value={info.agent_type}
+                  label={
+                    <div className="flex items-center gap-2">
+                      <img src={info.logo_url || ""} alt="" className="w-4 h-4 object-contain" />
+                      <span>{info.agent_type_display_name}</span>
+                    </div>
+                  }
+                >
+                  <div className="flex items-center gap-3 py-1">
+                    <img
+                      src={info.logo_url || ""}
+                      alt={info.agent_type_display_name}
+                      className="w-5 h-5 object-contain"
+                    />
+                    <div>
+                      <div className="font-medium">{info.agent_type_display_name}</div>
+                      {info.description && (
+                        <div className="text-xs text-gray-500">{info.description}</div>
+                      )}
+                    </div>
+                  </div>
+                </Select.Option>
+              ))}
+            </Select>
+          </Form.Item>
 
-            {/* Dynamic Agent Types from API */}
-            {agentTypeMetadata.map((info) => (
-              <div
-                key={info.agent_type}
-                onClick={() => handleAgentTypeChange(info.agent_type)}
-                style={{
-                  border: agentType === info.agent_type ? "2px solid #1890ff" : "1px solid #d9d9d9",
-                  borderRadius: "8px",
-                  padding: "16px 20px",
-                  cursor: "pointer",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  minWidth: "130px",
-                  minHeight: "110px",
-                  backgroundColor: agentType === info.agent_type ? "#e6f7ff" : "white",
-                  transition: "all 0.2s ease",
-                }}
-              >
-                <img
-                  src={info.logo_url || A2A_LOGO}
-                  alt={info.agent_type_display_name}
-                  style={{ width: "40px", height: "40px", marginBottom: "10px", objectFit: "contain" }}
-                />
-                <span style={{ fontWeight: agentType === info.agent_type ? 600 : 400, fontSize: "14px" }}>
-                  {info.agent_type_display_name}
-                </span>
-                {info.description && (
-                  <span style={{ fontSize: "11px", color: "#666", textAlign: "center", marginTop: "4px" }}>
-                    {info.description.length > 35 ? `${info.description.slice(0, 35)}...` : info.description}
-                  </span>
-                )}
-              </div>
-            ))}
+          {/* Conditional Form Fields */}
+          <div className="mt-6">
+            {agentType === "a2a" ? (
+              <AgentFormFields showAgentName={true} />
+            ) : selectedAgentTypeInfo ? (
+              <DynamicAgentFormFields agentTypeInfo={selectedAgentTypeInfo} />
+            ) : null}
           </div>
-        </Form.Item>
 
-        {/* Conditional Form Fields */}
-        {agentType === "a2a" ? (
-          <AgentFormFields showAgentName={true} />
-        ) : selectedAgentTypeInfo ? (
-          <DynamicAgentFormFields agentTypeInfo={selectedAgentTypeInfo} />
-        ) : null}
-
-        <Form.Item style={{ marginBottom: 0, marginTop: "24px" }}>
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
-            <AntButton onClick={handleCancel}>
+          {/* Footer Buttons */}
+          <div className="flex items-center justify-end space-x-3 pt-6 border-t border-gray-100 mt-6">
+            <Button variant="secondary" onClick={handleCancel}>
               Cancel
-            </AntButton>
-            <AntButton
-              htmlType="submit"
-              loading={isSubmitting}
-              type="primary"
-            >
-              Create Agent
-            </AntButton>
+            </Button>
+            <Button variant="primary" loading={isSubmitting}>
+              {isSubmitting ? "Creating..." : "Create Agent"}
+            </Button>
           </div>
-        </Form.Item>
-      </Form>
+        </Form>
+      </div>
     </Modal>
   );
 };
