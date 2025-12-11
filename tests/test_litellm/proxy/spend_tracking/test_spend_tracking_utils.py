@@ -594,3 +594,41 @@ async def test_api_key_preserved_through_failure_hook_to_database():
     print("- Both SpendLogs AND DailyUserSpend will have correct api_key")
     print("="*80 + "\n")
 
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_includes_agent_id_from_kwargs():
+    """
+    Test that get_logging_payload extracts agent_id from kwargs and includes it in the payload.
+    """
+    test_agent_id = "agent-uuid-12345"
+
+    kwargs = {
+        "model": "a2a_agent/test-agent",
+        "custom_llm_provider": "a2a_agent",
+        "agent_id": test_agent_id,
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "sk-test-key",
+            }
+        },
+    }
+
+    response_obj = {
+        "id": "test-response-123",
+        "jsonrpc": "2.0",
+        "result": {"status": "completed"},
+    }
+
+    start_time = datetime.datetime.now(timezone.utc)
+    end_time = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    assert payload["agent_id"] == test_agent_id, f"Expected agent_id '{test_agent_id}', got '{payload.get('agent_id')}'"
+

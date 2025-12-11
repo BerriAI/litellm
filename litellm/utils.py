@@ -97,6 +97,10 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.default_encoding import encoding
+from litellm.litellm_core_utils.dot_notation_indexing import (
+    delete_nested_value,
+    is_nested_path,
+)
 from litellm.litellm_core_utils.exception_mapping_utils import (
     _get_response_headers,
     exception_type,
@@ -4148,6 +4152,13 @@ def get_optional_params(  # noqa: PLR0915
         non_default_params=non_default_params,
         allowed_openai_params=allowed_openai_params,
     )
+
+    # Apply nested drops from additional_drop_params
+    if additional_drop_params:
+        nested_paths = [p for p in additional_drop_params if is_nested_path(p)]
+        for path in nested_paths:
+            optional_params = delete_nested_value(optional_params, path)
+
     return optional_params
 
 
@@ -7277,6 +7288,10 @@ class ProviderConfigManager:
             return litellm.OVHCloudChatConfig()
         elif litellm.LlmProviders.AMAZON_NOVA == provider:
             return litellm.AmazonNovaChatConfig()
+        elif litellm.LlmProviders.LANGGRAPH == provider:
+            from litellm.llms.langgraph.chat.transformation import LangGraphConfig
+
+            return LangGraphConfig()
         return None
 
     @staticmethod
@@ -7375,6 +7390,8 @@ class ProviderConfigManager:
             return litellm.VertexAIRerankConfig()
         elif litellm.LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIRerankConfig()
+        elif litellm.LlmProviders.VOYAGE == provider:
+            return litellm.VoyageRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod

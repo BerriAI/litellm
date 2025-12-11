@@ -836,6 +836,22 @@ def completion_cost(  # noqa: PLR0915
         if service_tier is None and optional_params is not None:
             service_tier = optional_params.get("service_tier")
 
+        # Extract service_tier from completion_response if not provided
+        if service_tier is None and completion_response is not None:
+            if isinstance(completion_response, BaseModel):
+                service_tier = getattr(completion_response, "service_tier", None)
+            elif isinstance(completion_response, dict):
+                service_tier = completion_response.get("service_tier")
+
+        # Extract service_tier from usage object if not provided
+        if service_tier is None and cost_per_token_usage_object is not None:
+            if isinstance(cost_per_token_usage_object, BaseModel):
+                service_tier = getattr(
+                    cost_per_token_usage_object, "service_tier", None
+                )
+            elif isinstance(cost_per_token_usage_object, dict):
+                service_tier = cost_per_token_usage_object.get("service_tier")
+
         selected_model = _select_model_name_for_cost_calc(
             model=model,
             completion_response=completion_response,

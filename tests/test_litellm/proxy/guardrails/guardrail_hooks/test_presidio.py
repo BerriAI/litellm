@@ -18,7 +18,9 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.presidio import (
     _OPTIONAL_PresidioPIIMasking,
 )
-from litellm.types.guardrails import PiiAction, PiiEntityType
+from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
+from litellm.types.utils import Choices, Message, ModelResponse
+import litellm
 
 
 @pytest.fixture
@@ -604,6 +606,7 @@ async def test_request_data_flows_to_apply_guardrail():
     presidio = _OPTIONAL_PresidioPIIMasking(
         guardrail_name="test_presidio",
         output_parse_pii=True,
+        mock_testing=True,
     )
 
     request_data = {
@@ -632,6 +635,109 @@ async def test_request_data_flows_to_apply_guardrail():
         assert request_data["metadata"].get("test_flag") == "passed_correctly"
 
     print("✓ request_data correctly passed to apply_guardrail")
+
+
+@pytest.mark.asyncio
+async def test_output_masking_apply_to_output_only(mock_user_api_key):
+    """
+    Ensure output masking runs when apply_to_output is enabled.
+    """
+
+    presidio = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        pii_entities_config={PiiEntityType.CREDIT_CARD: PiiAction.MASK},
+    )
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("4111-1111-1111-1111", "[CREDIT_CARD]")
+
+    presidio.check_pii = mock_check_pii
+
+    response = ModelResponse(
+        id="1",
+        object="chat.completion",
+        created=0,
+        model="gpt-test",
+        choices=[
+            Choices(
+                message=Message(
+                    role="assistant",
+                    content="Card is 4111-1111-1111-1111",
+                ),
+                index=0,
+                finish_reason="stop",
+            )
+        ],
+    )
+
+    result = await presidio.async_post_call_success_hook(
+        data={},
+        user_api_key_dict=mock_user_api_key,
+        response=response,
+    )
+
+    assert "[CREDIT_CARD]" in result.choices[0].message.content
+    assert "4111-1111-1111-1111" not in result.choices[0].message.content
+
+
+@pytest.mark.asyncio
+async def test_presidio_filter_scope_initializer(monkeypatch):
+    """
+    Ensure initializer respects presidio_filter_scope for input/output/both.
+    """
+
+    created = []
+
+    class DummyGuardrail:
+        def __init__(self, apply_to_output: bool = False, event_hook=None, **kwargs):
+            self.apply_to_output = apply_to_output
+            self.event_hook = event_hook
+            created.append(self)
+
+        def update_in_memory_litellm_params(self, litellm_params):
+            pass
+
+    class DummyManager:
+        def __init__(self):
+            self.added = []
+
+        def add_litellm_callback(self, cb):
+            self.added.append(cb)
+
+    mgr = DummyManager()
+    monkeypatch.setattr(litellm, "logging_callback_manager", mgr, raising=False)
+    import litellm.proxy.guardrails.guardrail_initializers as gi
+    import litellm.proxy.guardrails.guardrail_hooks.presidio as presidio_mod
+    monkeypatch.setattr(
+        presidio_mod, "_OPTIONAL_PresidioPIIMasking", DummyGuardrail, raising=False
+    )
+    monkeypatch.setattr(gi, "_OPTIONAL_PresidioPIIMasking", DummyGuardrail, raising=False)
+
+    # input-only
+    created.clear()
+    from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
+
+    params_input = LitellmParams(guardrail="presidio", mode="pre_call", presidio_filter_scope="input")
+    guardrail_dict = {"guardrail_name": "g1"}
+    cb = initialize_presidio(params_input, guardrail_dict)
+    assert cb is created[0]
+    assert created[0].apply_to_output is False
+
+    # output-only
+    created.clear()
+    params_output = LitellmParams(guardrail="presidio", mode="pre_call", presidio_filter_scope="output")
+    cb = initialize_presidio(params_output, guardrail_dict)
+    assert len(created) == 1
+    assert created[0].apply_to_output is True
+
+    # both -> expect two callbacks (input + output)
+    created.clear()
+    params_both = LitellmParams(guardrail="presidio", mode="pre_call", presidio_filter_scope="both")
+    cb = initialize_presidio(params_both, guardrail_dict)
+    assert len(created) == 2
+    assert any(not c.apply_to_output for c in created)
+    assert any(c.apply_to_output for c in created)
 
 
 @pytest.mark.asyncio
@@ -856,21 +962,175 @@ async def test_tool_calling_complete_scenario(presidio_guardrail, mock_user_api_
     print("✓ Tool calling complete scenario test passed")
 
 
-if __name__ == "__main__":
-    # Run tests
-    asyncio.run(
-        test_multimodal_message_format_completion_call_type(
-            _OPTIONAL_PresidioPIIMasking(
-                mock_testing=True,
-                output_parse_pii=False,
-                pii_entities_config={
-                    PiiEntityType.CREDIT_CARD: PiiAction.MASK,
-                    PiiEntityType.EMAIL_ADDRESS: PiiAction.MASK,
-                    PiiEntityType.PHONE_NUMBER: PiiAction.MASK,
-                },
-            ),
-            UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
-            MagicMock(spec=DualCache),
-        )
+def test_filter_drops_low_score_detection():
+    """
+    Detections below the configured score threshold should be removed.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        presidio_score_thresholds={PiiEntityType.CREDIT_CARD: 0.8},
     )
-    print("\n✅ All Presidio tests passed!")
+    analyze_results = [
+        {"entity_type": PiiEntityType.CREDIT_CARD, "score": 0.7, "start": 0, "end": 4}
+    ]
+
+    filtered = guardrail.filter_analyze_results_by_score(analyze_results)
+    assert filtered == []
+
+
+def test_filter_preserves_high_score_detection():
+    """
+    Detections meeting the score threshold should be preserved.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        presidio_score_thresholds={PiiEntityType.CREDIT_CARD: 0.8},
+    )
+    analyze_results = [
+        {"entity_type": PiiEntityType.CREDIT_CARD, "score": 0.9, "start": 0, "end": 4}
+    ]
+
+    filtered = guardrail.filter_analyze_results_by_score(analyze_results)
+    assert len(filtered) == 1
+    assert filtered[0]["entity_type"] == PiiEntityType.CREDIT_CARD
+
+
+def test_no_thresholds_returns_all():
+    """
+    With no thresholds configured, all detections are kept.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    analyze_results = [
+        {"entity_type": PiiEntityType.CREDIT_CARD, "score": 0.1, "start": 0, "end": 4},
+        {"entity_type": PiiEntityType.EMAIL_ADDRESS, "score": 0.2, "start": 5, "end": 9},
+    ]
+
+    filtered = guardrail.filter_analyze_results_by_score(analyze_results)
+    assert len(filtered) == 2
+
+
+def test_entity_specific_threshold_only_applies_to_that_entity():
+    """
+    Entity-specific thresholds do not affect other entity types.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        presidio_score_thresholds={PiiEntityType.CREDIT_CARD: 0.8},
+    )
+    analyze_results = [
+        {"entity_type": PiiEntityType.CREDIT_CARD, "score": 0.7, "start": 0, "end": 4},
+        {"entity_type": PiiEntityType.EMAIL_ADDRESS, "score": 0.1, "start": 5, "end": 9},
+    ]
+
+    filtered = guardrail.filter_analyze_results_by_score(analyze_results)
+    # CREDIT_CARD is filtered, EMAIL_ADDRESS is kept because no threshold
+    assert len(filtered) == 1
+    assert filtered[0]["entity_type"] == PiiEntityType.EMAIL_ADDRESS
+
+
+def test_filter_uses_default_all_threshold():
+    """
+    Default ALL threshold applies to any entity without a specific override.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        presidio_score_thresholds={"ALL": 0.75},
+    )
+    analyze_results = [
+        {"entity_type": PiiEntityType.CREDIT_CARD, "score": 0.7, "start": 0, "end": 4},
+        {"entity_type": PiiEntityType.EMAIL_ADDRESS, "score": 0.8, "start": 5, "end": 9},
+    ]
+
+    filtered = guardrail.filter_analyze_results_by_score(analyze_results)
+    assert len(filtered) == 1
+    assert filtered[0]["entity_type"] == PiiEntityType.EMAIL_ADDRESS
+
+
+def test_entity_specific_overrides_default_threshold():
+    """
+    Entity-specific threshold should override the ALL default.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        presidio_score_thresholds={
+            "ALL": 0.8,
+            PiiEntityType.CREDIT_CARD: 0.6,
+        },
+    )
+    analyze_results = [
+        {"entity_type": PiiEntityType.CREDIT_CARD, "score": 0.65, "start": 0, "end": 4},
+        {"entity_type": PiiEntityType.EMAIL_ADDRESS, "score": 0.75, "start": 5, "end": 9},
+    ]
+
+    filtered = guardrail.filter_analyze_results_by_score(analyze_results)
+    # CREDIT_CARD passes due to override, EMAIL_ADDRESS dropped by ALL threshold
+    assert len(filtered) == 1
+    assert filtered[0]["entity_type"] == PiiEntityType.CREDIT_CARD
+
+
+@pytest.mark.asyncio
+async def test_anonymize_skips_when_no_detections_after_filter():
+    """
+    When all detections are filtered out, anonymize_text should return the original text.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        presidio_score_thresholds={PiiEntityType.CREDIT_CARD: 0.8},
+    )
+    masked_entity_count = {}
+    text = "4111"
+
+    filtered = guardrail.filter_analyze_results_by_score(
+        [{"entity_type": PiiEntityType.CREDIT_CARD, "score": 0.7, "start": 0, "end": 4}]
+    )
+
+    result = await guardrail.anonymize_text(
+        text=text,
+        analyze_results=filtered,
+        output_parse_pii=False,
+        masked_entity_count=masked_entity_count,
+    )
+
+    assert result == text
+    assert masked_entity_count == {}
+
+
+def test_blocking_respects_threshold_filter():
+    """
+    Entities filtered out by score should not trigger blocking, but high-score detections should.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        pii_entities_config={PiiEntityType.CREDIT_CARD: PiiAction.BLOCK},
+        presidio_score_thresholds={PiiEntityType.CREDIT_CARD: 0.9},
+    )
+
+    low_score_results = [
+        {"entity_type": PiiEntityType.CREDIT_CARD, "score": 0.7, "start": 0, "end": 4}
+    ]
+    filtered = guardrail.filter_analyze_results_by_score(low_score_results)
+    guardrail.raise_exception_if_blocked_entities_detected(filtered)
+
+    high_score_results = [
+        {"entity_type": PiiEntityType.CREDIT_CARD, "score": 0.95, "start": 0, "end": 4}
+    ]
+    filtered_high = guardrail.filter_analyze_results_by_score(high_score_results)
+    with pytest.raises(Exception):
+        guardrail.raise_exception_if_blocked_entities_detected(filtered_high)
+
+
+def test_update_in_memory_applies_score_thresholds():
+    """
+    update_in_memory_litellm_params should refresh score thresholds.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    assert guardrail.presidio_score_thresholds == {}
+
+    params = LitellmParams(
+        guardrail="presidio",
+        mode="pre_call",
+        presidio_score_thresholds={PiiEntityType.CREDIT_CARD: 0.85},
+    )
+    guardrail.update_in_memory_litellm_params(params)
+
+    assert guardrail.presidio_score_thresholds == {PiiEntityType.CREDIT_CARD: 0.85}

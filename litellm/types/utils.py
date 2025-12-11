@@ -319,6 +319,8 @@ class CallTypes(str, Enum):
     aretrieve_container = "aretrieve_container"
     delete_container = "delete_container"
     adelete_container = "adelete_container"
+    list_container_files = "list_container_files"
+    alist_container_files = "alist_container_files"
 
     acancel_fine_tuning_job = "acancel_fine_tuning_job"
     cancel_fine_tuning_job = "cancel_fine_tuning_job"
@@ -3006,6 +3008,7 @@ class LlmProviders(str, Enum):
     LEMONADE = "lemonade"
     AMAZON_NOVA = "amazon_nova"
     A2A_AGENT = "a2a_agent"
+    LANGGRAPH = "langgraph"
 
 
 # Create a set of all provider values for quick lookup
