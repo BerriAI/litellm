@@ -65,7 +65,7 @@ from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_a
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.proxy._types import (
     AlertType,
     CallInfo,
