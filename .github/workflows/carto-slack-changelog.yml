@@ -24,6 +24,8 @@ on:
   pull_request:
     types: [closed]
     branches: [carto/main]
+  release:
+    types: [created]
 
 permissions:
   contents: write
@@ -32,8 +34,8 @@ permissions:
 jobs:
   post-changelog:
     runs-on: ubuntu-latest
-    # Only run if PR was merged (not just closed) OR if push event
-    if: github.event.pull_request.merged == true || github.event_name == 'push'
+    # Run on: PR merged, direct push, or new release created
+    if: github.event.pull_request.merged == true || github.event_name == 'push' || github.event_name == 'release'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -157,6 +159,92 @@ jobs:
             echo "::endgroup::"
             echo "::endgroup::"
 
+          elif [[ "${{ github.event_name }}" == "release" ]]; then
+            # === RELEASE MODE ===
+            echo "::group::Release Mode - Gathering data for release"
+            echo "mode=release" >> $GITHUB_OUTPUT
+
+            RELEASE_TAG="${{ github.event.release.tag_name }}"
+            RELEASE_NAME="${{ github.event.release.name }}"
+            RELEASE_URL="${{ github.event.release.html_url }}"
+            RELEASE_AUTHOR="${{ github.event.release.author.login }}"
+            RELEASE_BODY="${{ github.event.release.body }}"
+
+            echo "release_tag=${RELEASE_TAG}" >> $GITHUB_OUTPUT
+            echo "release_name=${RELEASE_NAME}" >> $GITHUB_OUTPUT
+            echo "release_url=${RELEASE_URL}" >> $GITHUB_OUTPUT
+            echo "pr_author=${RELEASE_AUTHOR}" >> $GITHUB_OUTPUT
+
+            echo "[Release] Tag: ${RELEASE_TAG}"
+            echo "[Release] Name: ${RELEASE_NAME}"
+            echo "[Release] Author: ${RELEASE_AUTHOR}"
+
+            # === A. PRIMARY DATA ===
+            echo "::group::Primary Data"
+
+            # 1. Release body (release notes)
+            echo "$RELEASE_BODY" > /tmp/pr_body.txt
+            echo "Release body: $(wc -c < /tmp/pr_body.txt) chars"
+
+            # 2. Get commits since previous release tag
+            PREV_TAG=$(git tag -l "v*-carto.*" | sort -V | grep -v "^${RELEASE_TAG}$" | tail -n 1 || echo "")
+            echo "Previous tag: ${PREV_TAG:-none}"
+            echo "previous_tag=${PREV_TAG}" >> $GITHUB_OUTPUT
+
+            if [ -n "$PREV_TAG" ]; then
+              git diff "${PREV_TAG}..${RELEASE_TAG}" --patch 2>/dev/null | head -1000 > /tmp/pr_diff.txt || echo "" > /tmp/pr_diff.txt
+              git log "${PREV_TAG}..${RELEASE_TAG}" --oneline > /tmp/pr_commits_full.txt 2>/dev/null || echo "" > /tmp/pr_commits_full.txt
+              git diff "${PREV_TAG}..${RELEASE_TAG}" --stat > /tmp/pr_stats.txt 2>/dev/null || echo "" > /tmp/pr_stats.txt
+              COMMIT_COUNT=$(wc -l < /tmp/pr_commits_full.txt | tr -d ' ')
+            else
+              git log -30 --oneline > /tmp/pr_commits_full.txt 2>/dev/null || echo "" > /tmp/pr_commits_full.txt
+              echo "" > /tmp/pr_diff.txt
+              echo "" > /tmp/pr_stats.txt
+              COMMIT_COUNT="30+"
+            fi
+            echo "commit_count=${COMMIT_COUNT}" >> $GITHUB_OUTPUT
+            echo "Commits in release: ${COMMIT_COUNT}"
+
+            echo "::endgroup::"
+
+            # === B. RELEASE CONTEXT ===
+            echo "::group::Release Context"
+
+            # Release JSON metadata
+            cat << 'RELEASE_EOF' > /tmp/release_meta.json
+            {
+              "tag": "${{ github.event.release.tag_name }}",
+              "name": "${{ github.event.release.name }}",
+              "author": "${{ github.event.release.author.login }}",
+              "url": "${{ github.event.release.html_url }}",
+              "prerelease": ${{ github.event.release.prerelease }},
+              "draft": ${{ github.event.release.draft }}
+            }
+            RELEASE_EOF
+
+            # Recent releases
+            gh release list --limit 5 > /tmp/recent_releases.txt 2>/dev/null || echo "" > /tmp/recent_releases.txt
+            echo "Recent releases: $(wc -l < /tmp/recent_releases.txt | tr -d ' ')"
+
+            # CARTO documentation
+            cp CARTO_CLAUDE.md /tmp/carto_context.md 2>/dev/null || echo "No CARTO_CLAUDE.md found" > /tmp/carto_context.md
+
+            # Mode file
+            echo "mode=release" > /tmp/mode.txt
+
+            # Change scope (from release commits)
+            > /tmp/change_scope.txt
+            if [ -n "$PREV_TAG" ]; then
+              git diff "${PREV_TAG}..${RELEASE_TAG}" --name-only 2>/dev/null | grep -q "litellm/llms/" && echo "scope_providers=true" >> /tmp/change_scope.txt
+              git diff "${PREV_TAG}..${RELEASE_TAG}" --name-only 2>/dev/null | grep -q "litellm/proxy/" && echo "scope_proxy=true" >> /tmp/change_scope.txt
+              git diff "${PREV_TAG}..${RELEASE_TAG}" --name-only 2>/dev/null | grep -q ".github/" && echo "scope_ci=true" >> /tmp/change_scope.txt
+              git diff "${PREV_TAG}..${RELEASE_TAG}" --name-only 2>/dev/null | grep -q "Dockerfile" && echo "scope_docker=true" >> /tmp/change_scope.txt
+            fi
+            cat /tmp/change_scope.txt
+
+            echo "::endgroup::"
+            echo "::endgroup::"
+
           else
             # === DIRECT PUSH MODE ===
             echo "::group::Direct Push Mode"
@@ -248,6 +336,11 @@ jobs:
             ${{ steps.context.outputs.mode == 'pr_merge' && format('- PR Number: {0}', steps.context.outputs.pr_number) || '' }}
             ${{ steps.context.outputs.mode == 'pr_merge' && format('- PR URL: {0}', steps.context.outputs.pr_url) || '' }}
             ${{ steps.context.outputs.mode == 'direct_push' && format('- Commits: {0}', steps.context.outputs.commit_count) || '' }}
+            ${{ steps.context.outputs.mode == 'release' && format('- Release Tag: {0}', steps.context.outputs.release_tag) || '' }}
+            ${{ steps.context.outputs.mode == 'release' && format('- Release Name: {0}', steps.context.outputs.release_name) || '' }}
+            ${{ steps.context.outputs.mode == 'release' && format('- Release URL: {0}', steps.context.outputs.release_url) || '' }}
+            ${{ steps.context.outputs.mode == 'release' && format('- Previous Tag: {0}', steps.context.outputs.previous_tag) || '' }}
+            ${{ steps.context.outputs.mode == 'release' && format('- Commits in Release: {0}', steps.context.outputs.commit_count) || '' }}
             - Author: ${{ steps.context.outputs.pr_author }}
             - Upstream Version: ${{ steps.context.outputs.upstream_version }}
             - Latest CARTO Tag: ${{ steps.context.outputs.latest_tag }}
@@ -306,7 +399,8 @@ jobs:
             ## 1. Main Message → `slack_message.txt`
 
             ${{ steps.context.outputs.mode == 'pr_merge' && '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            :rocket:  *LiteLLM Fork Update*' || '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            :rocket:  *LiteLLM Fork Update*' || steps.context.outputs.mode == 'release' && '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            :tada:  *LiteLLM CARTO Release*' || '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             :zap:  *LiteLLM Direct Push*' }}
 
             *[GROUNDED 1-line summary with specific evidence]*
@@ -320,7 +414,7 @@ jobs:
             :bulb: *Key Insight*
             [GROUNDED analysis - MUST reference specific evidence from diff/history]
 
-            ${{ steps.context.outputs.mode == 'pr_merge' && format(':link: <{0}|PR #{1}>  •  @{2}', steps.context.outputs.pr_url, steps.context.outputs.pr_number, steps.context.outputs.pr_author) || format(':link: <https://github.com/CartoDB/litellm/commit/{0}|Commit `{0}`>  •  @{1}  •  _{2} commit(s)_', github.sha, steps.context.outputs.pr_author, steps.context.outputs.commit_count) }}
+            ${{ steps.context.outputs.mode == 'pr_merge' && format(':link: <{0}|PR #{1}>  •  @{2}', steps.context.outputs.pr_url, steps.context.outputs.pr_number, steps.context.outputs.pr_author) || steps.context.outputs.mode == 'release' && format(':link: <{0}|Release {1}>  •  @{2}  •  _{3} commit(s)_', steps.context.outputs.release_url, steps.context.outputs.release_tag, steps.context.outputs.pr_author, steps.context.outputs.commit_count) || format(':link: <https://github.com/CartoDB/litellm/commit/{0}|Commit `{0}`>  •  @{1}  •  _{2} commit(s)_', github.sha, steps.context.outputs.pr_author, steps.context.outputs.commit_count) }}
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
             ## 2. Thread Reply → `slack_thread.txt`

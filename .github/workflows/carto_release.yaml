@@ -7,12 +7,23 @@ name: CARTO - Create Release
 # This workflow creates CARTO releases with AI-powered, product-focused
 # release notes that automatically filter out infrastructure changes.
 #
+# Release Types:
+# - patch:         Bug fixes and small improvements (CARTO-specific)
+# - feature:       New features and capabilities (CARTO-specific)
+# - upstream_sync: Release after merging an upstream sync PR
+#
+# Workflow Integration:
+# 1. carto-upstream-sync.yml runs weekly → creates PR to carto/main
+# 2. Human reviews and merges upstream sync PR
+# 3. Trigger this workflow with release_type="upstream_sync"
+#
+# For CARTO-only releases (no upstream changes), use "patch" or "feature"
+#
 # Features:
 # - Security verification: Only authorized users can trigger releases
-# - Intelligent release notes: Uses Claude Code to analyze commits and
-#   generate user-friendly release notes that exclude CI/CD, sync automation,
-#   and dev tooling changes
-# - Automatic versioning: Detects version from commits or uses manual input
+# - Intelligent release notes: Uses Claude Code to analyze commits
+# - Explicit release type selection (no auto-detection)
+# - Displays latest release info and pending upstream sync PRs
 # - Docker build: Creates and pushes non-root Docker image
 #
 # Security measures:
@@ -26,16 +37,20 @@ name: CARTO - Create Release
 on:
   workflow_dispatch:
     inputs:
-      bump_type:
-        description: 'Version bump type (leave "auto" to detect from commits)'
+      release_type:
+        description: 'Type of release (patch=bug fixes, feature=new features, upstream_sync=after merging upstream)'
         required: true
         type: choice
         options:
-          - auto
           - patch
-          - minor
-          - major
-        default: 'auto'
+          - feature
+          - upstream_sync
+        default: 'patch'
+      branch:
+        description: 'Branch to release from (default: carto/main)'
+        required: true
+        type: string
+        default: 'carto/main'
 
 env:
   REGISTRY: ghcr.io
@@ -94,7 +109,57 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.inputs.branch }}
           fetch-depth: 0  # Fetch all history for tags
+
+      - name: Display release context
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+
+          echo "::group::Release Context"
+
+          echo "📋 **Release Configuration:**"
+          echo "   Release Type: ${{ github.event.inputs.release_type }}"
+          echo "   Branch: ${{ github.event.inputs.branch }}"
+          echo "   Actor: ${{ github.actor }}"
+          echo ""
+
+          # Get latest CARTO release
+          echo "📦 **Latest CARTO Release:**"
+          LATEST_RELEASE=$(gh release list --limit 1 --json tagName,publishedAt,name 2>/dev/null | jq -r '.[0] // empty')
+
+          if [ -n "$LATEST_RELEASE" ]; then
+            TAG=$(echo "$LATEST_RELEASE" | jq -r '.tagName')
+            DATE=$(echo "$LATEST_RELEASE" | jq -r '.publishedAt')
+            echo "   Tag: ${TAG}"
+            echo "   Published: ${DATE}"
+          else
+            echo "   No previous CARTO releases found"
+          fi
+          echo ""
+
+          # Get current pyproject.toml version
+          CURRENT_VERSION=$(grep -E "^version\s*=" pyproject.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "📋 **Current Upstream Version (pyproject.toml):** ${CURRENT_VERSION}"
+          echo ""
+
+          # Check for pending upstream sync PRs
+          echo "🔄 **Pending Upstream Sync PRs:**"
+          SYNC_PRS=$(gh pr list --label "upstream-sync" --state open --json number,title 2>/dev/null || true)
+
+          if [ -n "$SYNC_PRS" ] && [ "$SYNC_PRS" != "[]" ]; then
+            echo "   ⚠️ PENDING UPSTREAM SYNC PRs DETECTED:"
+            gh pr list --label "upstream-sync" --state open
+            echo ""
+            echo "   💡 If you're releasing after merging an upstream sync PR,"
+            echo "      make sure you selected release_type='upstream_sync'"
+          else
+            echo "   ✅ No pending upstream sync PRs"
+          fi
+
+          echo "::endgroup::"
 
       - name: Detect upstream version from pyproject.toml
         id: detect-upstream
@@ -126,47 +191,6 @@ jobs:
             echo "Current CARTO version: ${CARTO_VERSION}"
           fi
 
-      - name: Auto-detect bump type from commits
-        id: semver
-        if: github.event.inputs.bump_type == 'auto'
-        run: |
-          UPSTREAM_VERSION="${{ steps.detect-upstream.outputs.upstream_version }}"
-          LATEST_TAG="${{ steps.get-latest-tag.outputs.latest_tag }}"
-
-          echo "::group::Analyzing commits for version bump"
-
-          # Get commit range to analyze
-          if [ -z "$LATEST_TAG" ]; then
-            echo "No previous tag found - analyzing last 30 commits"
-            COMMITS=$(git log --oneline --no-merges -30)
-          else
-            echo "Analyzing commits since ${LATEST_TAG}"
-            COMMITS=$(git log ${LATEST_TAG}..HEAD --oneline --no-merges)
-          fi
-
-          # Count commits by type
-          BREAKING_COUNT=$(echo "$COMMITS" | grep -iE "^[a-f0-9]+ (BREAKING CHANGE:|breaking:|major:)" | wc -l || echo 0)
-          FEAT_COUNT=$(echo "$COMMITS" | grep -iE "^[a-f0-9]+ (feat:|feature:)" | wc -l || echo 0)
-          FIX_COUNT=$(echo "$COMMITS" | grep -iE "^[a-f0-9]+ (fix:|bugfix:)" | wc -l || echo 0)
-
-          # Determine bump type
-          if [ "$BREAKING_COUNT" -gt 0 ]; then
-            BUMP_TYPE="major"
-            echo "🔴 Detected $BREAKING_COUNT breaking changes → MAJOR bump"
-          elif [ "$FEAT_COUNT" -gt 0 ]; then
-            BUMP_TYPE="minor"
-            echo "🟡 Detected $FEAT_COUNT features → MINOR bump"
-          elif [ "$FIX_COUNT" -gt 0 ]; then
-            BUMP_TYPE="patch"
-            echo "🟢 Detected $FIX_COUNT fixes → PATCH bump"
-          else
-            BUMP_TYPE="patch"
-            echo "⚪ No conventional commits detected → Default PATCH bump"
-          fi
-
-          echo "bump_type=${BUMP_TYPE}" >> $GITHUB_OUTPUT
-          echo "::endgroup::"
-
       - name: Calculate next CARTO version
         id: calc-version
         run: |
@@ -186,22 +210,26 @@ jobs:
           # Extract CARTO version from tag for display
           CARTO_VERSION=$(echo "$RELEASE_TAG" | sed -E 's/.*-carto\.([0-9]+\.[0-9]+\.[0-9]+)/\1/')
 
-          # Detect if this is an upstream sync (first release for this upstream version)
-          if [ -z "$LATEST_TAG" ]; then
-            echo "First release for upstream v${UPSTREAM_VERSION} - this is an upstream sync"
+          # Use release type from workflow input (explicit, not auto-detected)
+          RELEASE_TYPE="${{ github.event.inputs.release_type }}"
+          echo "Release type (from input): ${RELEASE_TYPE}"
+
+          if [ "$RELEASE_TYPE" = "upstream_sync" ]; then
             IS_UPSTREAM_SYNC="true"
-            PREVIOUS_UPSTREAM="unknown"
-          else
-            # Extract upstream version from previous tag
-            PREVIOUS_UPSTREAM=$(echo "$LATEST_TAG" | sed -E 's/v([0-9]+\.[0-9]+\.[0-9]+)-carto\..*/\1/')
-            if [ "$PREVIOUS_UPSTREAM" != "$UPSTREAM_VERSION" ]; then
-              echo "Upstream version changed: ${PREVIOUS_UPSTREAM} → ${UPSTREAM_VERSION}"
-              echo "This is an upstream sync release"
-              IS_UPSTREAM_SYNC="true"
+            # Try to get previous upstream version from last tag for comparison display
+            if [ -n "$LATEST_TAG" ]; then
+              PREVIOUS_UPSTREAM=$(echo "$LATEST_TAG" | sed -E 's/v([0-9]+\.[0-9]+\.[0-9]+)-carto\..*/\1/')
             else
-              echo "Same upstream version: ${UPSTREAM_VERSION}"
-              echo "This is a CARTO-only release"
-              IS_UPSTREAM_SYNC="false"
+              PREVIOUS_UPSTREAM="unknown"
+            fi
+            echo "🔄 Upstream Sync release (v${PREVIOUS_UPSTREAM} → v${UPSTREAM_VERSION})"
+          else
+            IS_UPSTREAM_SYNC="false"
+            PREVIOUS_UPSTREAM="${UPSTREAM_VERSION}"
+            if [ "$RELEASE_TYPE" = "feature" ]; then
+              echo "✨ Feature release (CARTO-specific)"
+            else
+              echo "🔧 Patch release (CARTO-specific)"
             fi
           fi
 
@@ -210,12 +238,14 @@ jobs:
           echo "carto_version=${CARTO_VERSION}" >> $GITHUB_OUTPUT
           echo "is_upstream_sync=${IS_UPSTREAM_SYNC}" >> $GITHUB_OUTPUT
           echo "previous_upstream=${PREVIOUS_UPSTREAM}" >> $GITHUB_OUTPUT
+          echo "release_type=${RELEASE_TYPE}" >> $GITHUB_OUTPUT
 
           echo "::endgroup::"
 
           echo "📦 Release tag: ${RELEASE_TAG}"
           echo "   CARTO version: ${CARTO_VERSION}"
-          echo "   Upstream sync: ${IS_UPSTREAM_SYNC}"
+          echo "   Release type: ${RELEASE_TYPE}"
+          echo "   Is upstream sync: ${IS_UPSTREAM_SYNC}"
 
       - name: Generate intelligent release notes with Claude
         id: release-notes
@@ -232,6 +262,7 @@ jobs:
             Generate product-focused release notes for LiteLLM CARTO fork that separates CARTO-specific changes from upstream LiteLLM improvements.
 
             ## Context
+            - **Release Type**: ${{ steps.calc-version.outputs.release_type }} (patch/feature/upstream_sync)
             - **Current Upstream Version**: ${{ steps.detect-upstream.outputs.upstream_version }}
             - **Is Upstream Sync**: ${{ steps.calc-version.outputs.is_upstream_sync }}
             - **Previous Upstream Version**: ${{ steps.calc-version.outputs.previous_upstream }}
@@ -241,11 +272,13 @@ jobs:
 
             ## Step 1: Determine Release Type
 
-            **Upstream Sync:** ${{ steps.calc-version.outputs.is_upstream_sync }}
+            **Release Type:** ${{ steps.calc-version.outputs.release_type }}
+            **Is Upstream Sync:** ${{ steps.calc-version.outputs.is_upstream_sync }}
 
             ```bash
-            if [ "${{ steps.calc-version.outputs.is_upstream_sync }}" = "true" ]; then
-              echo "🔄 UPSTREAM SYNC DETECTED"
+            RELEASE_TYPE="${{ steps.calc-version.outputs.release_type }}"
+            if [ "$RELEASE_TYPE" = "upstream_sync" ]; then
+              echo "🔄 UPSTREAM SYNC RELEASE"
               echo "From: v${{ steps.calc-version.outputs.previous_upstream }}"
               echo "To: v${{ steps.detect-upstream.outputs.upstream_version }}"
 
@@ -254,8 +287,12 @@ jobs:
               gh release list --repo BerriAI/litellm --limit 50 | \
                 grep "stable" | \
                 head -10
+            elif [ "$RELEASE_TYPE" = "feature" ]; then
+              echo "✨ CARTO FEATURE RELEASE"
+              echo "Base: LiteLLM v${{ steps.detect-upstream.outputs.upstream_version }}"
             else
-              echo "📝 Regular CARTO release (not an upstream sync)"
+              echo "🔧 CARTO PATCH RELEASE"
+              echo "Base: LiteLLM v${{ steps.detect-upstream.outputs.upstream_version }}"
             fi
             ```
 
@@ -525,29 +562,60 @@ jobs:
           RELEASE_TAG="${{ steps.calc-version.outputs.release_tag }}"
           CARTO_VERSION="${{ steps.calc-version.outputs.carto_version }}"
           UPSTREAM_VERSION="${{ steps.detect-upstream.outputs.upstream_version }}"
-          IS_UPSTREAM_SYNC="${{ steps.calc-version.outputs.is_upstream_sync }}"
+          RELEASE_TYPE="${{ steps.calc-version.outputs.release_type }}"
+          PREVIOUS_UPSTREAM="${{ steps.calc-version.outputs.previous_upstream }}"
           RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/${RELEASE_TAG}"
           DOCKER_IMAGE="ghcr.io/${{ github.repository }}-non_root:carto-stable"
 
-          # Determine release type
-          if [ "$IS_UPSTREAM_SYNC" = "true" ]; then
-            PREVIOUS_UPSTREAM="${{ steps.calc-version.outputs.previous_upstream }}"
-            TYPE_LABEL="Upstream Sync (v${PREVIOUS_UPSTREAM} → v${UPSTREAM_VERSION})"
-            EMOJI=":arrows_counterclockwise:"
-          else
-            TYPE_LABEL="CARTO Customization"
-            EMOJI=":rocket:"
+          # Determine release type label and emoji
+          case "$RELEASE_TYPE" in
+            upstream_sync)
+              TYPE_LABEL="Upstream Sync"
+              VERSION_CHANGE="v${PREVIOUS_UPSTREAM} → v${UPSTREAM_VERSION}"
+              EMOJI=":arrows_counterclockwise:"
+              ;;
+            feature)
+              TYPE_LABEL="Feature Release"
+              VERSION_CHANGE=""
+              EMOJI=":sparkles:"
+              ;;
+            patch)
+              TYPE_LABEL="Patch Release"
+              VERSION_CHANGE=""
+              EMOJI=":wrench:"
+              ;;
+            *)
+              TYPE_LABEL="Release"
+              VERSION_CHANGE=""
+              EMOJI=":rocket:"
+              ;;
+          esac
+
+          # Extract key highlights from release notes (first 3 bullet points from Features/Fixes sections)
+          HIGHLIGHTS=""
+          if [ -f "release_notes.md" ]; then
+            # Get CARTO-specific features and fixes (limit to 3 most important)
+            FEATURES=$(grep -A 5 "### ✨" release_notes.md 2>/dev/null | grep "^-" | head -2 | sed 's/^- /• /' || echo "")
+            FIXES=$(grep -A 5 "### 🐛" release_notes.md 2>/dev/null | grep "^-" | head -1 | sed 's/^- /• /' || echo "")
+
+            if [ -n "$FEATURES" ] || [ -n "$FIXES" ]; then
+              HIGHLIGHTS=$'\n\n*Key Highlights:*\n'
+              [ -n "$FEATURES" ] && HIGHLIGHTS+="${FEATURES}"$'\n'
+              [ -n "$FIXES" ] && HIGHLIGHTS+="${FIXES}"
+            fi
           fi
 
-          # Build Slack message with context
-          MESSAGE="${EMOJI} *LiteLLM CARTO Release* - ${RELEASE_TAG}
+          # Build concise Slack message
+          MESSAGE="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          ${EMOJI} *LiteLLM CARTO Release* \`${RELEASE_TAG}\`
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-          *Release Details:*
-          - Type: ${TYPE_LABEL}
-          - CARTO Version: ${CARTO_VERSION}
-          - Upstream Base: LiteLLM v${UPSTREAM_VERSION}
-          - Release Notes: ${RELEASE_URL}
-          - Docker Image: ${DOCKER_IMAGE}"
+          :label: *Type:* ${TYPE_LABEL}${VERSION_CHANGE:+ ($VERSION_CHANGE)}
+          :package: *CARTO Version:* ${CARTO_VERSION}
+          :gear: *Upstream Base:* LiteLLM v${UPSTREAM_VERSION}${HIGHLIGHTS}
+
+          :link: <${RELEASE_URL}|View Release Notes>
+          :whale: \`${DOCKER_IMAGE}\`"
 
           echo "[Slack] Sending notification to channel ${SLACK_CHANNEL}"
           echo "::endgroup::"
