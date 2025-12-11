@@ -20,7 +20,7 @@ from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import Choices, LLMResponseTypes, ModelResponse, StreamingChoices
+from litellm.types.utils import Choices, LLMResponseTypes, ModelResponse
 
 
 class GraySwanGuardrailMissingSecrets(Exception):
