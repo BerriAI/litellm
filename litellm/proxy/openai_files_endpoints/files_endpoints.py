@@ -7,7 +7,7 @@
 
 import asyncio
 import traceback
-from typing import Optional, cast, get_args
+from typing import Any, Optional, cast, get_args
 
 import httpx
 from fastapi import (
@@ -46,10 +46,12 @@ from litellm.types.llms.openai import (
 from .common_utils import (
     _is_base64_encoded_unified_file_id,
     encode_file_id_with_model,
+    extract_file_creation_params,
     get_credentials_for_model,
     handle_model_based_routing,
     prepare_data_with_credentials,
 )
+from .storage_backend_service import StorageBackendFileService
 
 router = APIRouter()
 
@@ -135,16 +137,37 @@ async def route_create_file(
     router_model: Optional[str],
     custom_llm_provider: str,
     model: Optional[str] = None,
+    target_storage: Optional[str] = "default",
 ) -> OpenAIFileObject:
     """
     Route file creation request to the appropriate provider.
     
     Priority:
-    1. If model parameter provided -> use model credentials and encode ID
-    2. If enable_loadbalancing_on_batch_endpoints -> deprecated loadbalancing
-    3. If target_model_names_list -> managed files (requires DB)
-    4. Else -> use custom_llm_provider with files_settings
+    1. If target_storage is specified and not "default" -> use storage backend
+    2. If model parameter provided -> use model credentials and encode ID
+    3. If enable_loadbalancing_on_batch_endpoints -> deprecated loadbalancing
+    4. If target_model_names_list -> managed files (requires DB)
+    5. Else -> use custom_llm_provider with files_settings
     """
+    
+    # Handle custom storage backend
+    if target_storage and target_storage != "default":
+        from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
+        
+        # Extract file data
+        file_data = extract_file_data(cast(Any, _create_file_request.get("file")))
+        
+        # Use storage backend service to handle upload
+        file_object = await StorageBackendFileService.upload_file_to_storage_backend(
+            file_data=file_data,
+            target_storage=target_storage,
+            target_model_names=target_model_names_list,
+            purpose=purpose,
+            proxy_logging_obj=proxy_logging_obj,
+            user_api_key_dict=user_api_key_dict,
+        )
+        
+        return file_object
     
     # NEW: Handle model-based routing (no DB required)
     if model is not None:
@@ -254,6 +277,7 @@ async def create_file(
     fastapi_response: Response,
     purpose: str = Form(...),
     target_model_names: str = Form(default=""),
+    target_storage: str = Form(default="default"),
     provider: Optional[str] = None,
     custom_llm_provider: str = Form(default="openai"),
     file: UploadFile = File(...),
@@ -297,18 +321,18 @@ async def create_file(
             or "openai"
         )
 
-        # NEW: Extract model parameter for multi-account routing
+        # Extract file creation parameters using utility function
         request_body = await _read_request_body(request=request) or {}
-        model_param = (
-            request_body.get("model")
-            or request.query_params.get("model")
-            or request.headers.get("x-litellm-model")
+        file_params = await extract_file_creation_params(
+            request=request,
+            request_body=request_body,
+            target_model_names_form=target_model_names,
+            target_storage_form=target_storage,
         )
-
-        target_model_names_list = (
-            target_model_names.split(",") if target_model_names else []
-        )
-        target_model_names_list = [model.strip() for model in target_model_names_list]
+        
+        target_storage = file_params.target_storage
+        target_model_names_list = file_params.target_model_names
+        model_param = file_params.model
         # Prepare the data for forwarding
 
         # Replace with:
@@ -368,6 +392,7 @@ async def create_file(
             router_model=router_model,
             custom_llm_provider=custom_llm_provider,
             model=model_param,
+            target_storage=target_storage,
         )
 
         if response is None:
@@ -447,7 +472,7 @@ async def create_file(
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
 )
-async def get_file_content(
+async def get_file_content(  # noqa: PLR0915
     request: Request,
     fastapi_response: Response,
     file_id: str,
@@ -525,6 +550,38 @@ async def get_file_content(
                     param="None",
                     code=500,
                 )
+            
+            # Check if file is stored in a storage backend (check DB)
+            if hasattr(managed_files_obj, "prisma_client") and managed_files_obj.prisma_client:
+                db_file = await managed_files_obj.prisma_client.db.litellm_managedfiletable.find_first(
+                    where={"unified_file_id": file_id}
+                )
+                if db_file and db_file.storage_backend and db_file.storage_url:
+                    # File is stored in a storage backend, download it
+                    from litellm.llms.base_llm.files.storage_backend_factory import get_storage_backend
+                    
+                    storage_backend_name = db_file.storage_backend
+                    storage_url = db_file.storage_url
+                    
+                    try:
+                        # Get storage backend (uses same env vars as callback)
+                        storage_backend = get_storage_backend(storage_backend_name)
+                        file_content = await storage_backend.download_file(storage_url)
+                        
+                        # Return file content
+                        from fastapi.responses import Response as FastAPIResponse
+                        return FastAPIResponse(
+                            content=file_content,
+                            media_type="application/octet-stream",
+                        )
+                    except ValueError as e:
+                        raise ProxyException(
+                            message=f"Storage backend error: {str(e)}",
+                            type="invalid_request_error",
+                            param="file_id",
+                            code=400,
+                        )
+            
             model = cast(Optional[str], data.get("model"))
             if model:
                 response = await llm_router.afile_content(

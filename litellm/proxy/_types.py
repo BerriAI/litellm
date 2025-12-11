@@ -3680,6 +3680,8 @@ class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
     flat_model_file_ids: List[str]
     created_by: Optional[str]
     updated_by: Optional[str]
+    storage_backend: Optional[str] = None  
+    storage_url: Optional[str] = None 
 
 
 class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
