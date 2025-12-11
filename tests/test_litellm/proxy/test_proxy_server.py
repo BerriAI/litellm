@@ -5,6 +5,7 @@ import os
 import socket
 import subprocess
 import sys
+from pathlib import Path
 from datetime import datetime
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
@@ -160,6 +161,39 @@ def test_sso_key_generate_shows_deprecation_banner(client_no_auth, monkeypatch):
     html = response.text
     assert '<div class="deprecation-banner">' in html
     assert "Deprecated:" in html
+
+
+def test_restructure_ui_html_files_handles_nested_routes(tmp_path):
+    from litellm.proxy import proxy_server
+
+    ui_root = tmp_path / "ui"
+    ui_root.mkdir()
+
+    def write_file(path: Path, content: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+
+    write_file(ui_root / "home.html", "home")
+    write_file(ui_root / "mcp" / "oauth" / "callback.html", "callback")
+    write_file(ui_root / "existing" / "index.html", "keep")
+    write_file(ui_root / "_next" / "ignore.html", "asset")
+    write_file(ui_root / "litellm-asset-prefix" / "ignore.html", "asset")
+
+    proxy_server._restructure_ui_html_files(str(ui_root))
+
+    assert not (ui_root / "home.html").exists()
+    assert (ui_root / "home" / "index.html").read_text() == "home"
+    assert not (ui_root / "mcp" / "oauth" / "callback.html").exists()
+    assert (
+        (ui_root / "mcp" / "oauth" / "callback" / "index.html").read_text()
+        == "callback"
+    )
+    assert (ui_root / "existing" / "index.html").read_text() == "keep"
+    assert (ui_root / "_next" / "ignore.html").read_text() == "asset"
+    assert (
+        (ui_root / "litellm-asset-prefix" / "ignore.html").read_text()
+        == "asset"
+    )
 
 
 @pytest.mark.asyncio
@@ -2791,4 +2825,3 @@ def test_get_image_root_case_uses_current_dir(monkeypatch):
 
         # Verify FileResponse was called
         assert mock_file_response.called, "FileResponse should be called"
-

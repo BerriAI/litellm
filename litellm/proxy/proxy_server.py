@@ -1022,21 +1022,33 @@ try:
 
     app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 
+    def _restructure_ui_html_files(ui_root: str) -> None:
+        """Ensure each exported HTML route is available as <route>/index.html."""
+
+        for current_root, _, files in os.walk(ui_root):
+            rel_root = os.path.relpath(current_root, ui_root)
+            first_segment = "" if rel_root == "." else rel_root.split(os.sep)[0]
+
+            # Ignore Next.js asset directories
+            if first_segment in {"_next", "litellm-asset-prefix"}:
+                continue
+
+            for filename in files:
+                if not filename.endswith(".html") or filename == "index.html":
+                    continue
+
+                file_path = os.path.join(current_root, filename)
+                target_dir = os.path.splitext(file_path)[0]
+                target_path = os.path.join(target_dir, "index.html")
+
+                os.makedirs(target_dir, exist_ok=True)
+                os.replace(file_path, target_path)
+
     # Handle HTML file restructuring
     # Skip this for non-root Docker since it's done at build time
     # Support both "true" and "True" for case-insensitive comparison
     if os.getenv("LITELLM_NON_ROOT", "").lower() != "true":
-        for filename in os.listdir(ui_path):
-            if filename.endswith(".html") and filename != "index.html":
-                # Create a folder with the same name as the HTML file
-                folder_name = os.path.splitext(filename)[0]
-                folder_path = os.path.join(ui_path, folder_name)
-                os.makedirs(folder_path, exist_ok=True)
-
-                # Move the HTML file into the folder and rename it to 'index.html'
-                src = os.path.join(ui_path, filename)
-                dst = os.path.join(folder_path, "index.html")
-                os.rename(src, dst)
+        _restructure_ui_html_files(ui_path)
     else:
         verbose_proxy_logger.info(
             "Skipping runtime HTML restructuring for non-root Docker (already done at build time)"
