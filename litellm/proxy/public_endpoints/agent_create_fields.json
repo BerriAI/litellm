@@ -1,5 +1,13 @@
 [
   {
+    "agent_type": "a2a",
+    "agent_type_display_name": "A2A Standard",
+    "description": "Standard A2A protocol",
+    "logo_url": "/assets/logos/a2a_agent.png",
+    "credential_fields": [],
+    "litellm_params_template": {}
+  },
+  {
     "agent_type": "langgraph",
     "agent_type_display_name": "LangGraph",
     "description": "Connect to LangGraph agents via the LangGraph Platform API",

@@ -12,12 +12,6 @@ interface AddAgentFormProps {
   onSuccess: () => void;
 }
 
-// Local logo paths for agent types
-const AGENT_TYPE_LOGOS: Record<string, string> = {
-  langgraph: "/assets/logos/langgraph.png",
-  a2a: "/assets/logos/a2a_agent.png",
-};
-
 const AddAgentForm: React.FC<AddAgentFormProps> = ({
   visible,
   onClose,
@@ -91,9 +85,6 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
     form.resetFields();
   };
 
-  const getLogoForAgentType = (agentTypeKey: string, fallbackUrl?: string | null): string => {
-    return AGENT_TYPE_LOGOS[agentTypeKey] || fallbackUrl || AGENT_TYPE_LOGOS.a2a;
-  };
 
   return (
     <Modal
@@ -135,7 +126,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
               }}
             >
               <img
-                src={AGENT_TYPE_LOGOS.a2a}
+                src={A2A_LOGO}
                 alt="A2A"
                 style={{ width: "40px", height: "40px", marginBottom: "10px", objectFit: "contain" }}
               />
@@ -168,7 +159,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
                 }}
               >
                 <img
-                  src={getLogoForAgentType(info.agent_type, info.logo_url)}
+                  src={info.logo_url || A2A_LOGO}
                   alt={info.agent_type_display_name}
                   style={{ width: "40px", height: "40px", marginBottom: "10px", objectFit: "contain" }}
                 />
