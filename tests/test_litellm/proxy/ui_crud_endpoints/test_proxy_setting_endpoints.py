@@ -646,6 +646,53 @@ class TestProxySettingEndpoints:
             where={"id": "ui_settings"}
         )
 
+    @pytest.mark.parametrize(
+        "user_role",
+        [
+            LitellmUserRoles.INTERNAL_USER,
+            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        ],
+    )
+    def test_get_ui_settings_allows_internal_roles(self, monkeypatch, user_role):
+        """Ensure internal users and viewers can fetch UI settings"""
+        from unittest.mock import AsyncMock, MagicMock
+        from litellm.proxy.ui_crud_endpoints import proxy_setting_endpoints
+
+        mock_prisma = MagicMock()
+        mock_db_record = MagicMock()
+        mock_db_record.ui_settings = {"disable_model_add_for_internal_users": False}
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(
+            return_value=mock_db_record
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        class MockUser:
+            def __init__(self, role):
+                self.user_role = role
+                self.team_id = "litellm-dashboard"
+                self.allowed_routes = []
+
+        async def mock_user_api_key_auth():
+            return MockUser(user_role)
+
+        app.dependency_overrides[
+            proxy_setting_endpoints.user_api_key_auth
+        ] = mock_user_api_key_auth
+
+        try:
+            response = client.get("/get/ui_settings")
+        finally:
+            app.dependency_overrides.pop(
+                proxy_setting_endpoints.user_api_key_auth, None
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["values"]["disable_model_add_for_internal_users"] is False
+        mock_prisma.db.litellm_uisettings.find_unique.assert_called_once_with(
+            where={"id": "ui_settings"}
+        )
+
     def test_update_ui_settings_allowlisted_value(
         self, mock_auth, monkeypatch
     ):
