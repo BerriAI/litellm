@@ -57,7 +57,8 @@ class A2ACompletionBridgeHandler:
         model = litellm_params.get("model", "agent")
 
         # Build full model string if provider specified
-        if custom_llm_provider:
+        # Skip prepending if model already starts with the provider prefix
+        if custom_llm_provider and not model.startswith(f"{custom_llm_provider}/"):
             full_model = f"{custom_llm_provider}/{model}"
         else:
             full_model = model
@@ -128,7 +129,8 @@ class A2ACompletionBridgeHandler:
         model = litellm_params.get("model", "agent")
 
         # Build full model string if provider specified
-        if custom_llm_provider:
+        # Skip prepending if model already starts with the provider prefix
+        if custom_llm_provider and not model.startswith(f"{custom_llm_provider}/"):
             full_model = f"{custom_llm_provider}/{model}"
         else:
             full_model = model
