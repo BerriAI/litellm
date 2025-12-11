@@ -297,16 +297,16 @@ class AzureAIAgentsConfig(BaseConfig):
     @staticmethod
     def completion(
         model: str,
-        messages: List[Dict[str, Any]],
+        messages: List,
         api_base: str,
-        api_key: str,
+        api_key: Optional[str],
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         litellm_params: dict,
-        timeout: float,
+        timeout: Union[float, int, Any],
         acompletion: bool,
-        stream: bool = False,
+        stream: Optional[bool] = False,
         headers: Optional[dict] = None,
     ) -> Any:
         """
@@ -317,6 +317,8 @@ class AzureAIAgentsConfig(BaseConfig):
         """
         from litellm.llms.azure_ai.agents.handler import azure_ai_agents_handler
 
+        if api_key is None:
+            raise ValueError("api_key is required for Azure AI Agents")
         if acompletion:
             if stream:
                 # Native async streaming via SSE - return the async generator directly
