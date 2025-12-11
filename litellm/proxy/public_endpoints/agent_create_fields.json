@@ -12,7 +12,18 @@
     "agent_type_display_name": "LangGraph",
     "description": "Connect to LangGraph agents via the LangGraph Platform API",
     "logo_url": "/assets/logos/langgraph.png",
+    "model_template": "langgraph/{assistant_id}",
     "credential_fields": [
+      {
+        "key": "assistant_id",
+        "label": "Assistant ID",
+        "placeholder": "agent",
+        "tooltip": "The assistant/agent ID from your LangGraph deployment",
+        "required": true,
+        "field_type": "text",
+        "default_value": "agent",
+        "include_in_litellm_params": false
+      },
       {
         "key": "api_base",
         "label": "LangGraph API Base",
@@ -20,7 +31,8 @@
         "tooltip": "The base URL for your LangGraph server (e.g., http://localhost:2024 or your deployed LangGraph Cloud URL)",
         "required": true,
         "field_type": "text",
-        "default_value": "http://localhost:2024"
+        "default_value": "http://localhost:2024",
+        "include_in_litellm_params": true
       },
       {
         "key": "api_key",
@@ -29,7 +41,8 @@
         "tooltip": "API key for authenticating with your LangGraph server (optional for local development)",
         "required": false,
         "field_type": "password",
-        "default_value": null
+        "default_value": null,
+        "include_in_litellm_params": true
       }
     ],
     "litellm_params_template": {
@@ -42,6 +55,7 @@
     "description": "Connect to Amazon Bedrock AgentCore hosted agent runtimes",
     "logo_url": "/assets/logos/bedrock.svg",
     "inherit_credentials_from_provider": "Bedrock",
+    "model_template": "bedrock/agentcore/{agent_runtime_arn}",
     "credential_fields": [
       {
         "key": "agent_runtime_arn",
@@ -50,7 +64,8 @@
         "tooltip": "The ARN of your Bedrock AgentCore runtime. Find this in your AWS Bedrock console under AgentCore.",
         "required": true,
         "field_type": "text",
-        "default_value": null
+        "default_value": null,
+        "include_in_litellm_params": false
       }
     ],
     "litellm_params_template": {

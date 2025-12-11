@@ -204,6 +204,7 @@ export interface AgentCredentialFieldMetadata {
   field_type?: "text" | "password" | "select" | "upload" | "textarea";
   options?: string[] | null;
   default_value?: string | null;
+  include_in_litellm_params?: boolean;
 }
 
 export interface AgentCreateInfo {
@@ -213,7 +214,7 @@ export interface AgentCreateInfo {
   logo_url?: string | null;
   credential_fields: AgentCredentialFieldMetadata[];
   litellm_params_template?: Record<string, string> | null;
-  inherit_credentials_from_provider?: string | null;
+  model_template?: string | null;
 }
 
 export interface PublicModelHubInfo {

@@ -73,18 +73,45 @@ const DynamicAgentFormFields: React.FC<DynamicAgentFormFieldsProps> = ({
 
 /**
  * Builds agent data from form values for dynamic agent types.
+ * Uses configuration from agentTypeInfo to determine which fields to include.
  */
 export const buildDynamicAgentData = (
   values: any,
   agentTypeInfo: AgentCreateInfo
 ) => {
+  // Build litellm_params from template
+  const litellmParams: Record<string, any> = {
+    ...(agentTypeInfo.litellm_params_template || {}),
+  };
+
+  // Add credential fields marked with include_in_litellm_params
+  for (const field of agentTypeInfo.credential_fields) {
+    const value = values[field.key];
+    if (value && field.include_in_litellm_params !== false) {
+      litellmParams[field.key] = value;
+    }
+  }
+
+  // Apply model_template if defined (e.g., "bedrock/agentcore/{agent_runtime_arn}")
+  if (agentTypeInfo.model_template) {
+    let model = agentTypeInfo.model_template;
+    // Replace {field_key} placeholders with actual values
+    for (const field of agentTypeInfo.credential_fields) {
+      const placeholder = `{${field.key}}`;
+      if (model.includes(placeholder) && values[field.key]) {
+        model = model.replace(placeholder, values[field.key]);
+      }
+    }
+    litellmParams.model = model;
+  }
+
   return {
     agent_name: values.agent_name,
     agent_card_params: {
       protocolVersion: "1.0",
       name: values.display_name || values.agent_name,
       description: values.description || `${agentTypeInfo.agent_type_display_name} agent`,
-      url: values.api_base,
+      url: values.api_base || "",
       version: "1.0.0",
       defaultInputModes: ["text"],
       defaultOutputModes: ["text"],
@@ -98,11 +125,7 @@ export const buildDynamicAgentData = (
         tags: ["chat", "conversation"],
       }],
     },
-    litellm_params: {
-      ...(agentTypeInfo.litellm_params_template || {}),
-      ...(values.api_key && { api_key: values.api_key }),
-      ...(values.model && { model: values.model }),
-    },
+    litellm_params: litellmParams,
   };
 };
 
