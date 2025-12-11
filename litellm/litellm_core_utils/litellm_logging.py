@@ -4806,6 +4806,63 @@ def _get_status_fields(
     )
 
 
+def _extract_response_obj_and_hidden_params(
+    init_response_obj: Union[Any, BaseModel, dict],
+    original_exception: Optional[Exception],
+) -> Tuple[dict, Optional[dict]]:
+    """Extract response_obj and hidden_params from init_response_obj."""
+    hidden_params: Optional[dict] = None
+    if init_response_obj is None:
+        response_obj = {}
+    elif isinstance(init_response_obj, BaseModel):
+        response_obj = init_response_obj.model_dump()
+        hidden_params = getattr(init_response_obj, "_hidden_params", None)
+    elif isinstance(init_response_obj, dict):
+        response_obj = init_response_obj
+    else:
+        response_obj = {}
+
+    if original_exception is not None and hidden_params is None:
+        response_headers = _get_response_headers(original_exception)
+        if response_headers is not None:
+            hidden_params = dict(
+                StandardLoggingHiddenParams(
+                    additional_headers=StandardLoggingPayloadSetup.get_additional_headers(
+                        dict(response_headers)
+                    ),
+                    model_id=None,
+                    cache_key=None,
+                    api_base=None,
+                    response_cost=None,
+                    litellm_overhead_time_ms=None,
+                    batch_models=None,
+                    litellm_model_name=None,
+                    usage_object=None,
+                )
+            )
+
+    return response_obj, hidden_params
+
+
+def _reconstruct_model_name(
+    model_name: str,
+    custom_llm_provider: Optional[str],
+    metadata: dict,
+) -> str:
+    """Reconstruct full model name with provider prefix for logging."""
+    # Check if deployment model name from router metadata is available (has original prefix)
+    deployment_model_name = metadata.get("deployment")
+    if deployment_model_name and "/" in deployment_model_name:
+        # Use the deployment model name which preserves the original provider prefix
+        return deployment_model_name
+    elif custom_llm_provider and model_name and "/" not in model_name:
+        # Only add prefix for Bedrock (not for direct Anthropic API)
+        # This ensures Bedrock models get the prefix while direct Anthropic models don't
+        if custom_llm_provider == "bedrock":
+            return f"{custom_llm_provider}/{model_name}"
+    return model_name
+
+
 def get_standard_logging_object_payload(
     kwargs: Optional[dict],
     init_response_obj: Union[Any, BaseModel, dict],
@@ -4820,35 +4877,9 @@ def get_standard_logging_object_payload(
     try:
         kwargs = kwargs or {}
 
-        hidden_params: Optional[dict] = None
-        if init_response_obj is None:
-            response_obj = {}
-        elif isinstance(init_response_obj, BaseModel):
-            response_obj = init_response_obj.model_dump()
-            hidden_params = getattr(init_response_obj, "_hidden_params", None)
-        elif isinstance(init_response_obj, dict):
-            response_obj = init_response_obj
-        else:
-            response_obj = {}
-
-        if original_exception is not None and hidden_params is None:
-            response_headers = _get_response_headers(original_exception)
-            if response_headers is not None:
-                hidden_params = dict(
-                    StandardLoggingHiddenParams(
-                        additional_headers=StandardLoggingPayloadSetup.get_additional_headers(
-                            dict(response_headers)
-                        ),
-                        model_id=None,
-                        cache_key=None,
-                        api_base=None,
-                        response_cost=None,
-                        litellm_overhead_time_ms=None,
-                        batch_models=None,
-                        litellm_model_name=None,
-                        usage_object=None,
-                    )
-                )
+        response_obj, hidden_params = _extract_response_obj_and_hidden_params(
+            init_response_obj, original_exception
+        )
 
         # standardize this function to be used across, s3, dynamoDB, langfuse logging
         litellm_params = kwargs.get("litellm_params", {}) or {}
@@ -4963,19 +4994,10 @@ def get_standard_logging_object_payload(
         # Reconstruct full model name with provider prefix for logging
         # This ensures Bedrock models like "us.anthropic.claude-3-5-sonnet-20240620-v1:0"
         # are logged as "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
-        model_name = kwargs.get("model", "") or ""
         custom_llm_provider = cast(Optional[str], kwargs.get("custom_llm_provider"))
-        
-        # Check if deployment model name from router metadata is available (has original prefix)
-        deployment_model_name = metadata.get("deployment")
-        if deployment_model_name and "/" in deployment_model_name:
-            # Use the deployment model name which preserves the original provider prefix
-            model_name = deployment_model_name
-        elif custom_llm_provider and model_name and "/" not in model_name:
-            # Only add prefix for Bedrock (not for direct Anthropic API)
-            # This ensures Bedrock models get the prefix while direct Anthropic models don't
-            if custom_llm_provider == "bedrock":
-                model_name = f"{custom_llm_provider}/{model_name}"
+        model_name = _reconstruct_model_name(
+            kwargs.get("model", "") or "", custom_llm_provider, metadata
+        )
 
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),
