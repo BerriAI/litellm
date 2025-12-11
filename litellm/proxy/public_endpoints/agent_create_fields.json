@@ -3,7 +3,7 @@
     "agent_type": "langgraph",
     "agent_type_display_name": "LangGraph",
     "description": "Connect to LangGraph agents via the LangGraph Platform API",
-    "logo_url": "https://avatars.githubusercontent.com/u/126733545?s=200&v=4",
+    "logo_url": "/assets/logos/langgraph.png",
     "credential_fields": [
       {
         "key": "api_base",
