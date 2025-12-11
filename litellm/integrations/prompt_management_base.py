@@ -93,6 +93,8 @@ class PromptManagementBase(ABC):
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
     ) -> Tuple[str, List[AllMessageValues], dict]:
 
         if prompt_id is None:
@@ -117,13 +119,20 @@ class PromptManagementBase(ABC):
             prompt_template["prompt_template_optional_params"] or {}
         )
 
-        updated_non_default_params = {
-            **non_default_params,
-            **prompt_template_optional_params,
-        }
+        if not ignore_prompt_manager_optional_params:
+            updated_non_default_params = {
+                **non_default_params,
+                **prompt_template_optional_params,
+            }
+        else:
+            updated_non_default_params = non_default_params
 
-        model = self._get_model_from_prompt(
-            prompt_management_client=prompt_template, model=model
-        )
+        if not ignore_prompt_manager_model:
+            model = self._get_model_from_prompt(
+                prompt_management_client=prompt_template, model=model
+            )
+        else:
+            model = model
+
 
         return model, completed_messages, updated_non_default_params

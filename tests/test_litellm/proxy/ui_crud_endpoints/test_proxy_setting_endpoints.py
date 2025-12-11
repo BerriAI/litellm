@@ -622,6 +622,109 @@ class TestProxySettingEndpoints:
         assert "UI_LOGO_PATH" in updated_config["environment_variables"]
         assert mock_proxy_config["save_call_count"]() == 1
 
+    def test_get_ui_settings(self, mock_auth, monkeypatch):
+        """Test retrieving UI settings with allowlist sanitization"""
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_prisma = MagicMock()
+        mock_db_record = MagicMock()
+        mock_db_record.ui_settings = {
+            "disable_model_add_for_internal_users": True,
+            "unexpected_flag": True,
+        }
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=mock_db_record)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        response = client.get("/get/ui_settings")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["values"]["disable_model_add_for_internal_users"] is True
+        assert "unexpected_flag" not in data["values"]
+        assert "disable_model_add_for_internal_users" in data["field_schema"]["properties"]
+        mock_prisma.db.litellm_uisettings.find_unique.assert_called_once_with(
+            where={"id": "ui_settings"}
+        )
+
+    def test_update_ui_settings_allowlisted_value(
+        self, mock_auth, monkeypatch
+    ):
+        """Test updating UI settings with an allowlisted field"""
+        from unittest.mock import AsyncMock, MagicMock
+
+        class MockUser:
+            def __init__(self, user_role):
+                self.user_role = user_role
+
+        async def mock_admin_auth():
+            return MockUser(LitellmUserRoles.PROXY_ADMIN)
+
+        monkeypatch.setattr(
+            "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.user_api_key_auth",
+            mock_admin_auth,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        payload = {"disable_model_add_for_internal_users": True}
+
+        response = client.patch("/update/ui_settings", json=payload)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        assert data["settings"]["disable_model_add_for_internal_users"] is True
+
+        assert mock_prisma.db.litellm_uisettings.upsert.called
+        call_args = mock_prisma.db.litellm_uisettings.upsert.call_args
+        assert call_args.kwargs["where"]["id"] == "ui_settings"
+        create_data = call_args.kwargs["data"]["create"]
+        stored_settings = json.loads(create_data["ui_settings"])
+        assert stored_settings["disable_model_add_for_internal_users"] is True
+
+    def test_update_ui_settings_ignores_non_allowlisted_value(
+        self, mock_auth, monkeypatch
+    ):
+        """Test non-allowlisted UI settings are ignored on update"""
+        from unittest.mock import AsyncMock, MagicMock
+
+        class MockUser:
+            def __init__(self, user_role):
+                self.user_role = user_role
+
+        async def mock_admin_auth():
+            return MockUser(LitellmUserRoles.PROXY_ADMIN)
+
+        monkeypatch.setattr(
+            "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.user_api_key_auth",
+            mock_admin_auth,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        payload = {
+            "disable_model_add_for_internal_users": False,
+            "unsupported_flag": True,
+        }
+
+        response = client.patch("/update/ui_settings", json=payload)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        assert "unsupported_flag" not in data["settings"]
+        assert data["settings"]["disable_model_add_for_internal_users"] is False
+
+        assert mock_prisma.db.litellm_uisettings.upsert.called
+        call_args = mock_prisma.db.litellm_uisettings.upsert.call_args
+        stored_settings = json.loads(call_args.kwargs["data"]["create"]["ui_settings"])
+        assert "unsupported_flag" not in stored_settings
+        assert stored_settings["disable_model_add_for_internal_users"] is False
+
     def test_get_sso_settings_from_database(self, mock_proxy_config, mock_auth, monkeypatch):
         """Test getting SSO settings from the dedicated database table"""
         import json

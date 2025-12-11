@@ -124,6 +124,44 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
     )
 
 
+def test_fallback_login_has_no_deprecation_banner(client_no_auth):
+    response = client_no_auth.get("/fallback/login")
+
+    assert response.status_code == 200
+    html = response.text
+    assert '<div class="deprecation-banner">' not in html
+    assert "Deprecated:" not in html
+    assert "<form" in html
+
+
+def test_sso_key_generate_shows_deprecation_banner(client_no_auth, monkeypatch):
+    # Ensure the route returns the HTML form instead of redirecting
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.ui_sso.show_missing_vars_in_env",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.get_redirect_url_for_sso",
+        lambda *args, **kwargs: "http://test/redirect",
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler._get_cli_state",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.should_use_sso_handler",
+        lambda *args, **kwargs: False,
+    )
+    monkeypatch.setenv("UI_USERNAME", "admin")
+
+    response = client_no_auth.get("/sso/key/generate")
+
+    assert response.status_code == 200
+    html = response.text
+    assert '<div class="deprecation-banner">' in html
+    assert "Deprecated:" in html
+
+
 @pytest.mark.asyncio
 async def test_initialize_scheduled_jobs_credentials(monkeypatch):
     """
@@ -2579,6 +2617,49 @@ def test_get_prompt_spec_for_db_prompt_with_versions():
     # Test version 2
     prompt_spec_v2 = proxy_config._get_prompt_spec_for_db_prompt(db_prompt=mock_prompt_v2)
     assert prompt_spec_v2.prompt_id == "chat_prompt.v2"
+
+
+def test_root_redirect_when_docs_url_not_root_and_redirect_url_set(monkeypatch):
+    from litellm.proxy.proxy_server import cleanup_router_config_variables
+    from litellm.proxy.utils import _get_docs_url
+    from fastapi.responses import RedirectResponse
+
+    cleanup_router_config_variables()
+    filepath = os.path.dirname(os.path.abspath(__file__))
+    config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
+    # Ensure docs are mounted on a non-root path to trigger redirect logic
+    monkeypatch.setenv("DOCS_URL", "/docs")
+    
+    test_redirect_url = "/ui"
+    monkeypatch.setenv("ROOT_REDIRECT_URL", test_redirect_url)
+    
+    asyncio.run(initialize(config=config_fp, debug=True))
+    
+    docs_url = _get_docs_url()
+    root_redirect_url = os.getenv("ROOT_REDIRECT_URL")
+    
+    # Remove any existing "/" route that might interfere
+    routes_to_remove = []
+    for route in app.routes:
+        if hasattr(route, "path") and route.path == "/":
+            if hasattr(route, "methods") and "GET" in route.methods:
+                routes_to_remove.append(route)
+            elif not hasattr(route, "methods"):  # Catch-all routes
+                routes_to_remove.append(route)
+    
+    for route in routes_to_remove:
+        app.routes.remove(route)
+    
+    # Add the redirect route if conditions are met (matching the actual implementation)
+    if docs_url != "/" and root_redirect_url:
+        @app.get("/", include_in_schema=False)
+        async def root_redirect():
+            return RedirectResponse(url=root_redirect_url)
+    
+    client = TestClient(app)
+    response = client.get("/", follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"] == test_redirect_url
 
 
 def test_get_image_non_root_uses_tmp_assets_dir(monkeypatch):

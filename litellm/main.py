@@ -195,6 +195,7 @@ from .llms.predibase.chat.handler import PredibaseChatCompletion
 from .llms.replicate.chat.handler import completion as replicate_chat_completion
 from .llms.sagemaker.chat.handler import SagemakerChatHandler
 from .llms.sagemaker.completion.handler import SagemakerLLM
+from .llms.sap.chat.handler import GenAIHubOrchestration
 from .llms.vertex_ai import vertex_ai_non_gemini
 from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from .llms.vertex_ai.gemini_embeddings.batch_embed_content_handler import (
@@ -255,6 +256,8 @@ openai_text_completions = OpenAITextCompletion()
 openai_audio_transcriptions = OpenAIAudioTranscription()
 openai_image_variations = OpenAIImageVariationsHandler()
 groq_chat_completions = GroqChatCompletion()
+sap_gen_ai_hub_chat_completions = GenAIHubOrchestration()
+sap_gen_ai_hub_emb = GenAIHubOrchestration()
 azure_ai_embedding = AzureAIEmbedding()
 anthropic_chat_completions = AnthropicChatCompletion()
 azure_anthropic_chat_completions = AzureAnthropicChatCompletion()
@@ -2092,6 +2095,34 @@ def completion(  # type: ignore # noqa: PLR0915
                 api_key=api_key,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
                 client=client,
+            )
+        elif custom_llm_provider == "sap":
+            headers = headers or litellm.headers
+            ## LOAD CONFIG - if set
+            config = litellm.GenAIHubOrchestrationConfig.get_config()
+            for k, v in config.items():
+                if (
+                        k not in optional_params
+                ):  # completion(top_k=3) > openai_config(top_k=3) <- allows for dynamic variables to be passed in
+                    optional_params[k] = v
+
+            response = sap_gen_ai_hub_chat_completions.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                timeout=timeout,  # type: ignore
+                shared_session=shared_session,
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+                encoding=encoding,
+                api_key=api_key,
+                api_base=api_base,
+                stream=stream,
             )
         elif custom_llm_provider == "aiohttp_openai":
             # NEW aiohttp provider for 10-100x higher RPS
@@ -3932,6 +3963,39 @@ def completion(  # type: ignore # noqa: PLR0915
                     logging_obj=logging,
                 )
 
+        elif custom_llm_provider == "langgraph":
+            # LangGraph - Agent Runtime Provider
+            from litellm.llms.langgraph.chat.transformation import LangGraphConfig
+
+            (
+                api_base,
+                api_key,
+            ) = LangGraphConfig()._get_openai_compatible_provider_info(
+                api_base=api_base or litellm.api_base,
+                api_key=api_key or litellm.api_key,
+            )
+
+            headers = headers or litellm.headers
+
+            response = base_llm_http_handler.completion(
+                model=model,
+                stream=stream,
+                messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                shared_session=shared_session,
+                custom_llm_provider=custom_llm_provider,
+                timeout=timeout,
+                headers=headers,
+                encoding=encoding,
+                api_key=api_key,
+                logging_obj=logging,
+                client=client,
+            )
+
         else:
             raise LiteLLMUnknownProvider(
                 model=model, custom_llm_provider=custom_llm_provider
@@ -4855,6 +4919,21 @@ def embedding(  # noqa: PLR0915
                 timeout=timeout,
                 model_response=EmbeddingResponse(),
                 optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+            )
+        elif custom_llm_provider == "sap":
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                litellm_params={},
                 client=client,
                 aembedding=aembedding,
             )

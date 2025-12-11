@@ -170,6 +170,7 @@ from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
 )
 from litellm.exceptions import RejectedRequestError
+from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.core_helpers import (
@@ -236,7 +237,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
-from litellm.proxy.common_utils.html_forms.ui_login import html_form
+from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     check_file_size_under_limit,
@@ -1082,6 +1083,14 @@ def mount_swagger_ui():
 
 
 mount_swagger_ui()
+
+docs_url = _get_docs_url()
+root_redirect_url: Optional[str] = os.getenv("ROOT_REDIRECT_URL")
+if docs_url != "/" and root_redirect_url is not None:
+
+    @app.get("/", include_in_schema=False)
+    async def root_redirect():
+        return RedirectResponse(url=root_redirect_url)  # type: ignore[arg-type]
 
 from typing import Dict
 
@@ -4428,6 +4437,19 @@ class ProxyStartupEvent:
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
         )
 
+        ### MONITOR SPEND LOGS QUEUE (queue-size-based job) ###
+        if general_settings.get("disable_spend_logs", False) is False:
+            from litellm.proxy.utils import _monitor_spend_logs_queue
+
+            # Start background task to monitor spend logs queue size
+            asyncio.create_task(
+                _monitor_spend_logs_queue(
+                    prisma_client=prisma_client,
+                    db_writer_client=db_writer_client,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            )
+
         ### ADD NEW MODELS ###
         store_model_in_db = (
             get_secret_bool("STORE_MODEL_IN_DB", store_model_in_db) or store_model_in_db
@@ -4464,63 +4486,12 @@ class ProxyStartupEvent:
                 misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
             await proxy_config.get_credentials(prisma_client=prisma_client)
-        if (
-            proxy_logging_obj is not None
-            and proxy_logging_obj.slack_alerting_instance.alerting is not None
-            and prisma_client is not None
-        ):
-            print("Alerting: Initializing Weekly/Monthly Spend Reports")  # noqa
-            ### Schedule weekly/monthly spend reports ###
-            ### Schedule spend reports ###
-            spend_report_frequency: str = (
-                general_settings.get("spend_report_frequency", "7d") or "7d"
-            )
-
-            # Parse the frequency
-            days = int(spend_report_frequency[:-1])
-            if spend_report_frequency[-1].lower() != "d":
-                raise ValueError(
-                    "spend_report_frequency must be specified in days, e.g., '1d', '7d'"
-                )
-
-            scheduler.add_job(
-                proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report,
-                "interval",
-                days=days,
-                # REMOVED jitter parameter - major cause of memory leak
-                # Use random start time instead for distribution
-                next_run_time=datetime.now()
-                + timedelta(
-                    seconds=10 + random.randint(0, 300)
-                ),  # Random 0-5 min offset
-                args=[spend_report_frequency],
-                id="weekly_spend_report_job",
-                replace_existing=True,
-                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-            )
-
-            scheduler.add_job(
-                proxy_logging_obj.slack_alerting_instance.send_monthly_spend_report,
-                "cron",
-                day=1,
-                id="monthly_spend_report_job",
-                replace_existing=True,
-            )
-
-            # Beta Feature - only used when prometheus api is in .env
-            if os.getenv("PROMETHEUS_URL"):
-                from zoneinfo import ZoneInfo
-
-                scheduler.add_job(
-                    proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus,
-                    "cron",
-                    hour=PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS,
-                    minute=0,
-                    timezone=ZoneInfo("America/Los_Angeles"),  # Pacific Time
-                    id="prometheus_fallback_stats_job",
-                    replace_existing=True,
-                )
-                await proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus()
+        await cls._initialize_slack_alerting_jobs(
+            scheduler=scheduler,
+            general_settings=general_settings,
+            proxy_logging_obj=proxy_logging_obj,
+            prisma_client=prisma_client,
+        )
 
         await cls._initialize_spend_tracking_background_jobs(scheduler=scheduler)
 
@@ -4659,6 +4630,65 @@ class ProxyStartupEvent:
             verbose_proxy_logger.debug(
                 "Key rotation disabled (set LITELLM_KEY_ROTATION_ENABLED=true to enable)"
             )
+
+    @classmethod
+    async def _initialize_slack_alerting_jobs(
+        cls,
+        scheduler: AsyncIOScheduler,
+        general_settings: dict,
+        proxy_logging_obj: ProxyLogging,
+        prisma_client: PrismaClient,
+    ):
+        """Initialize Slack alerting background jobs for spend reports."""
+        if (
+            proxy_logging_obj is not None
+            and proxy_logging_obj.slack_alerting_instance.alerting is not None
+            and prisma_client is not None
+        ):
+            print("Alerting: Initializing Weekly/Monthly Spend Reports")  # noqa
+            spend_report_frequency: str = (
+                general_settings.get("spend_report_frequency", "7d") or "7d"
+            )
+
+            days = int(spend_report_frequency[:-1])
+            if spend_report_frequency[-1].lower() != "d":
+                raise ValueError(
+                    "spend_report_frequency must be specified in days, e.g., '1d', '7d'"
+                )
+
+            scheduler.add_job(
+                proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report,
+                "interval",
+                days=days,
+                next_run_time=datetime.now()
+                + timedelta(seconds=10 + random.randint(0, 300)),
+                args=[spend_report_frequency],
+                id="weekly_spend_report_job",
+                replace_existing=True,
+                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+            )
+
+            scheduler.add_job(
+                proxy_logging_obj.slack_alerting_instance.send_monthly_spend_report,
+                "cron",
+                day=1,
+                id="monthly_spend_report_job",
+                replace_existing=True,
+            )
+
+            if os.getenv("PROMETHEUS_URL"):
+                from zoneinfo import ZoneInfo
+
+                scheduler.add_job(
+                    proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus,
+                    "cron",
+                    hour=PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS,
+                    minute=0,
+                    timezone=ZoneInfo("America/Los_Angeles"),
+                    id="prometheus_fallback_stats_job",
+                    replace_existing=True,
+                )
+                await proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus()
 
     @classmethod
     async def _setup_prisma_client(
@@ -4945,6 +4975,43 @@ async def chat_completion(  # noqa: PLR0915
             return model_dump_with_preserved_fields(result, exclude_unset=True)
         else:
             return result
+    except ModifyResponseException as e:
+        # Guardrail flagged content in passthrough mode - return 200 with violation message
+        _data = e.request_data
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=_data,
+        )
+        _chat_response = litellm.ModelResponse()
+        _chat_response.model = e.model  # type: ignore
+        _chat_response.choices[0].message.content = e.message  # type: ignore
+        _chat_response.choices[0].finish_reason = "content_filter"  # type: ignore
+
+        if data.get("stream", None) is not None and data["stream"] is True:
+            _iterator = litellm.utils.ModelResponseIterator(
+                model_response=_chat_response, convert_to_delta=True
+            )
+            _streaming_response = litellm.CustomStreamWrapper(
+                completion_stream=_iterator,
+                model=e.model,
+                custom_llm_provider="cached_response",
+                logging_obj=data.get("litellm_logging_obj", None),
+            )
+            selected_data_generator = select_data_generator(
+                response=_streaming_response,
+                user_api_key_dict=user_api_key_dict,
+                request_data=_data,
+            )
+
+            return StreamingResponse(
+                selected_data_generator,
+                media_type="text/event-stream",
+                status_code=200,  # Return 200 for passthrough mode
+            )
+        _usage = litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+        _chat_response.usage = _usage  # type: ignore
+        return _chat_response
     except RejectedRequestError as e:
         _data = e.request_data
         await proxy_logging_obj.post_call_failure_hook(
@@ -5054,6 +5121,55 @@ async def completion(  # noqa: PLR0915
             user_api_base=user_api_base,
             version=version,
         )
+    except ModifyResponseException as e:
+        # Guardrail flagged content in passthrough mode - return 200 with violation message
+        _data = e.request_data
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=_data,
+        )
+
+        if _data.get("stream", None) is not None and _data["stream"] is True:
+            _text_response = litellm.ModelResponse()
+            _text_response.choices[0].text = e.message  # type: ignore[attr-defined]
+            _text_response.model = e.model  # type: ignore[assignment]
+            _usage = litellm.Usage(
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_tokens=0,
+            )
+            _text_response.usage = _usage  # type: ignore[assignment]
+            _iterator = litellm.utils.ModelResponseIterator(
+                model_response=_text_response, convert_to_delta=True
+            )
+            _streaming_response = litellm.TextCompletionStreamWrapper(
+                completion_stream=_iterator,
+                model=e.model,
+            )
+
+            selected_data_generator = select_data_generator(
+                response=_streaming_response,
+                user_api_key_dict=user_api_key_dict,
+                request_data=_data,
+            )
+
+            return StreamingResponse(
+                selected_data_generator,
+                media_type="text/event-stream",
+                status_code=200,  # Return 200 for passthrough mode
+            )
+        else:
+            _response = litellm.TextCompletionResponse()
+            _response.choices[0].text = e.message
+            _response.model = e.model  # type: ignore
+            _usage = litellm.Usage(
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_tokens=0,
+            )
+            _response.usage = _usage  # type: ignore
+            return _response
     except RejectedRequestError as e:
         _data = e.request_data
         await proxy_logging_obj.post_call_failure_hook(
@@ -8306,11 +8422,15 @@ async def fallback_login(request: Request):
         # Use UI Credentials set in .env
         from fastapi.responses import HTMLResponse
 
-        return HTMLResponse(content=html_form, status_code=200)
+        return HTMLResponse(
+            content=build_ui_login_form(show_deprecation_banner=False), status_code=200
+        )
     else:
         from fastapi.responses import HTMLResponse
 
-        return HTMLResponse(content=html_form, status_code=200)
+        return HTMLResponse(
+            content=build_ui_login_form(show_deprecation_banner=False), status_code=200
+        )
 
 
 @router.post(
