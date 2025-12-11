@@ -32,6 +32,7 @@ class SendGridEmailLogger(BaseEmailLogger):
             llm_provider=httpxSpecialProvider.LoggingCallback
         )
         self.sendgrid_api_key = os.getenv("SENDGRID_API_KEY")
+        self.sendgrid_sender_email = os.getenv("SENDGRID_SENDER_EMAIL")
         verbose_logger.debug("SendGrid Email Logger initialized.")
 
     async def send_email(
@@ -47,12 +48,13 @@ class SendGridEmailLogger(BaseEmailLogger):
         if not self.sendgrid_api_key:
             raise ValueError("SENDGRID_API_KEY is not set")
 
+        sender_email = self.sendgrid_sender_email or from_email
         verbose_logger.debug(
-            f"Sending email via SendGrid from {from_email} to {to_email} with subject {subject}"
+            f"Sending email via SendGrid from {sender_email} to {to_email} with subject {subject}"
         )
 
         payload = {
-            "from": {"email": from_email},
+            "from": {"email": sender_email},
             "personalizations": [
                 {
                     "to": [{"email": email} for email in to_email],
