@@ -1717,6 +1717,7 @@ def jsonify_object(data: dict) -> dict:
 
 class PrismaClient:
     spend_log_transactions: List = []
+    _spend_log_transactions_lock = asyncio.Lock()
 
     def __init__(
         self,
@@ -3356,8 +3357,13 @@ class ProxyUpdateSpend:
         MAX_LOGS_PER_INTERVAL = (
             10000  # Maximum number of logs to flush in a single interval
         )
-        # Get initial logs to proces
-        logs_to_process = prisma_client.spend_log_transactions[:MAX_LOGS_PER_INTERVAL]
+        # Atomically read and remove logs to process (protected by lock)
+        async with prisma_client._spend_log_transactions_lock:
+            logs_to_process = prisma_client.spend_log_transactions[:MAX_LOGS_PER_INTERVAL]
+            # Remove the logs we're about to process
+            prisma_client.spend_log_transactions = (
+                prisma_client.spend_log_transactions[len(logs_to_process):]
+            )
         start_time = time.time()
         try:
             for i in range(n_retry_times + 1):
@@ -3379,11 +3385,8 @@ class ProxyUpdateSpend:
                         )
                         del json_data
                         if response.status_code == 200:
-                            prisma_client.spend_log_transactions = (
-                                prisma_client.spend_log_transactions[
-                                    len(logs_to_process) :
-                                ]
-                            )
+                            # Items already removed from queue at start of function
+                            pass
                     else:
                         for j in range(0, len(logs_to_process), BATCH_SIZE):
                             batch = logs_to_process[j : j + BATCH_SIZE]
@@ -3400,10 +3403,9 @@ class ProxyUpdateSpend:
                             # Explicitly clear batch memory
                             del batch, batch_with_dates
 
-                        prisma_client.spend_log_transactions = (
-                            prisma_client.spend_log_transactions[len(logs_to_process) :]
-                        )
-                        remaining_count = len(prisma_client.spend_log_transactions)
+                        # Items already removed from queue at start of function
+                        async with prisma_client._spend_log_transactions_lock:
+                            remaining_count = len(prisma_client.spend_log_transactions)
                         verbose_proxy_logger.debug(
                             f"{len(logs_to_process)} logs processed. Remaining in queue: {remaining_count}"
                         )
@@ -3415,9 +3417,11 @@ class ProxyUpdateSpend:
                         raise
                     await asyncio.sleep(2**i)
         except Exception as e:
-            prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[
-                len(logs_to_process) :
-            ]
+            # If processing failed, put the logs back in the queue
+            async with prisma_client._spend_log_transactions_lock:
+                prisma_client.spend_log_transactions = (
+                    logs_to_process + prisma_client.spend_log_transactions
+                )
             _raise_failed_update_spend_exception(
                 e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
             )
@@ -3462,8 +3466,11 @@ async def update_spend(  # noqa: PLR0915
     )
 
     ### UPDATE SPEND LOGS ###
+    # Check queue size with lock protection
+    async with prisma_client._spend_log_transactions_lock:
+        queue_size = len(prisma_client.spend_log_transactions)
     verbose_proxy_logger.debug(
-        "Spend Logs transactions: {}".format(len(prisma_client.spend_log_transactions))
+        "Spend Logs transactions: {}".format(queue_size)
     )
 
     # Process spend log transactions when called directly.
@@ -3471,7 +3478,7 @@ async def update_spend(  # noqa: PLR0915
     # See update_spend_logs_job and _monitor_spend_logs_queue for the new behavior.
     # Safe to keep: under high concurrency this can take up to ~30s to run,
     # so it's unlikely to overlap with monitor_spend_logs_queue.
-    if len(prisma_client.spend_log_transactions) > 0:
+    if queue_size > 0:
         await update_spend_logs_job(
             prisma_client=prisma_client,
             db_writer_client=db_writer_client,
@@ -3492,7 +3499,9 @@ async def update_spend_logs_job(
     """
     n_retry_times = 3
     
-    queue_size = len(prisma_client.spend_log_transactions)
+    # Check queue size with lock protection
+    async with prisma_client._spend_log_transactions_lock:
+        queue_size = len(prisma_client.spend_log_transactions)
     
     if queue_size == 0:
         return
@@ -3533,7 +3542,9 @@ async def _monitor_spend_logs_queue(
     
     while True:
         try:
-            queue_size = len(prisma_client.spend_log_transactions)
+            # Check queue size with lock protection
+            async with prisma_client._spend_log_transactions_lock:
+                queue_size = len(prisma_client.spend_log_transactions)
             
             if queue_size > 0:
                 if queue_size >= threshold:
