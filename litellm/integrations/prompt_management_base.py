@@ -138,6 +138,8 @@ class PromptManagementBase(ABC):
         messages: List[AllMessageValues],
         non_default_params: dict,
         model: str,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
     ):
         completed_messages = prompt_template["completed_messages"] or messages
 
@@ -147,12 +149,19 @@ class PromptManagementBase(ABC):
 
         updated_non_default_params = {
             **non_default_params,
-            **prompt_template_optional_params,
+            **(
+                prompt_template_optional_params
+                if not ignore_prompt_manager_optional_params
+                else {}
+            ),
         }
 
-        model = self._get_model_from_prompt(
-            prompt_management_client=prompt_template, model=model
-        )
+        if not ignore_prompt_manager_model:
+            model = self._get_model_from_prompt(
+                prompt_management_client=prompt_template, model=model
+            )
+        else:
+            model = model
 
         return model, completed_messages, updated_non_default_params
 
@@ -194,6 +203,8 @@ class PromptManagementBase(ABC):
             messages=messages,
             non_default_params=non_default_params,
             model=model,
+            ignore_prompt_manager_model=ignore_prompt_manager_model,
+            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
         )
 
     async def async_get_chat_completion_prompt(
@@ -209,6 +220,8 @@ class PromptManagementBase(ABC):
         tools: Optional[List[Dict]] = None,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         if not self.should_run_prompt_management(
             prompt_id=prompt_id,
@@ -226,25 +239,12 @@ class PromptManagementBase(ABC):
             prompt_label=prompt_label,
             prompt_version=prompt_version,
         )
-        if not ignore_prompt_manager_optional_params:
-            updated_non_default_params = {
-                **non_default_params,
-                **prompt_template_optional_params,
-            }
-        else:
-            updated_non_default_params = non_default_params
-
-        if not ignore_prompt_manager_model:
-            model = self._get_model_from_prompt(
-                prompt_management_client=prompt_template, model=model
-            )
-        else:
-            model = model
-
 
         return self.post_compile_prompt_processing(
             prompt_template=prompt_template,
             messages=messages,
             non_default_params=non_default_params,
             model=model,
+            ignore_prompt_manager_model=ignore_prompt_manager_model,
+            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
         )
