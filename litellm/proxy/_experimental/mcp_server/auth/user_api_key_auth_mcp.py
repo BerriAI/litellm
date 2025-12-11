@@ -7,6 +7,9 @@ from starlette.types import Scope
 from litellm._logging import verbose_logger
 from litellm.proxy._types import LiteLLM_TeamTable, SpecialHeaders, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy._experimental.mcp_server.utils import (
+    split_server_prefix_from_name,
+)
 
 
 class MCPRequestHandler:
@@ -455,11 +458,15 @@ class MCPRequestHandler:
                 if key_obj_perm and key_obj_perm.mcp_tool_permissions
                 else None
             )
+            if key_tools:
+                key_tools = [split_server_prefix_from_name(name)[0] for name in key_tools]
             team_tools = (
                 team_obj_perm.mcp_tool_permissions.get(server_id)
                 if team_obj_perm and team_obj_perm.mcp_tool_permissions
                 else None
             )
+            if team_tools:
+                team_tools = [split_server_prefix_from_name(name)[0] for name in team_tools]
 
             # Apply same inheritance logic as get_allowed_mcp_servers
             if team_tools:

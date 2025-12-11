@@ -706,11 +706,13 @@ class MCPServerManager:
 
             ## HANDLE OPENAPI TOOLS
             if server.spec_path:
-                add_prefix = False
                 _tools = global_mcp_tool_registry.list_tools(tool_prefix=server.name)
                 tools = global_mcp_tool_registry.convert_tools_to_mcp_sdk_tool_type(
                     _tools
                 )
+                for tool in tools:
+                    unprefixed_name, _ = split_server_prefix_from_name(tool.name)
+                    tool.name = unprefixed_name
             else:
                 tools = await self._fetch_tools_with_timeout(client, server.name)
 

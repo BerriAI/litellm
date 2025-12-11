@@ -69,12 +69,12 @@ if MCP_AVAILABLE:
             for tool in tools
         ]
 
-    async def _get_tools_for_single_server(server, server_auth_header):
+    async def _get_tools_for_single_server(server, server_auth_header, add_prefix: bool = False):
         """Helper function to get tools for a single server."""
         tools = await global_mcp_server_manager._get_tools_from_server(
             server=server,
             mcp_auth_header=server_auth_header,
-            add_prefix=False,
+            add_prefix=add_prefix,
         )
 
         # Filter tools based on allowed_tools configuration
@@ -146,7 +146,7 @@ if MCP_AVAILABLE:
 
                 try:
                     list_tools_result = await _get_tools_for_single_server(
-                        server, server_auth_header
+                        server, server_auth_header, True
                     )
                 except Exception as e:
                     verbose_logger.exception(
