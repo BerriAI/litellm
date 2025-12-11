@@ -60,17 +60,15 @@ async def test_azure_ai_agents_acompletion_non_streaming():
 
 
 @pytest.mark.asyncio
-async def test_azure_ai_agents_acompletion_with_stream_param():
+async def test_azure_ai_agents_acompletion_streaming():
     """
-    Test acompletion call to Azure AI Agent Service with stream=True.
-    Note: Azure Agents uses polling internally and does not support native streaming.
-    The stream parameter is accepted but returns a regular ModelResponse.
+    Test native streaming acompletion call to Azure AI Agent Service.
+    Uses the create-thread-and-run endpoint with stream=True for SSE streaming.
     """
     api_base = os.environ.get("AZURE_API_BASE")
     api_key = os.environ.get("AZURE_API_KEY")
     agent_id = os.environ.get("AZURE_AGENTS_AGENT_ID", "asst_shNRIVxMPuvSRVWP5WvVe4jE")
 
-    # Azure Agents doesn't support streaming - it returns a ModelResponse even with stream=True
     response = await litellm.acompletion(
         model=f"azure_ai/agents/{agent_id}",
         messages=[{"role": "user", "content": "Hi Agent, what is 10 + 5?"}],
@@ -79,15 +77,19 @@ async def test_azure_ai_agents_acompletion_with_stream_param():
         stream=True,
     )
 
-    # Response is a regular ModelResponse (not a stream) since Azure Agents doesn't support streaming
-    assert response is not None
-    assert response.choices is not None
-    assert len(response.choices) > 0
-    assert response.choices[0].message is not None
-    assert response.choices[0].message.content is not None
-    assert len(response.choices[0].message.content) > 0
+    # Native streaming - collect chunks from the async iterator
+    chunks = []
+    full_content = ""
+    async for chunk in response:
+        chunks.append(chunk)
+        if hasattr(chunk, "choices") and chunk.choices:
+            delta = chunk.choices[0].delta
+            if hasattr(delta, "content") and delta.content:
+                full_content += delta.content
 
-    print(f"Response: {response.choices[0].message.content}")
+    assert len(chunks) > 0, "Expected at least one streaming chunk"
+    assert len(full_content) > 0, "Expected content from streaming response"
+    print(f"Streamed response ({len(chunks)} chunks): {full_content}")
 
 
 
