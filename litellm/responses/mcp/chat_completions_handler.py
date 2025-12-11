@@ -21,6 +21,62 @@ from litellm.utils import CustomStreamWrapper
 
 CompletionCallable = Callable[..., Awaitable[Union[ModelResponse, CustomStreamWrapper]]]
 
+_CHAT_COMPLETION_CALL_ARG_KEYS = [
+    "model",
+    "messages",
+    "functions",
+    "function_call",
+    "timeout",
+    "temperature",
+    "top_p",
+    "n",
+    "stream",
+    "stream_options",
+    "stop",
+    "max_tokens",
+    "max_completion_tokens",
+    "modalities",
+    "prediction",
+    "audio",
+    "presence_penalty",
+    "frequency_penalty",
+    "logit_bias",
+    "user",
+    "response_format",
+    "seed",
+    "tools",
+    "tool_choice",
+    "parallel_tool_calls",
+    "logprobs",
+    "top_logprobs",
+    "deployment_id",
+    "reasoning_effort",
+    "verbosity",
+    "safety_identifier",
+    "service_tier",
+    "base_url",
+    "api_version",
+    "api_key",
+    "model_list",
+    "extra_headers",
+    "thinking",
+    "web_search_options",
+    "shared_session",
+]
+
+
+def _build_call_args_from_context(call_context: Dict[str, Any]) -> Dict[str, Any]:
+    """Build kwargs for `acompletion` from the `completion` call context."""
+
+    call_args = {
+        key: call_context.get(key)
+        for key in _CHAT_COMPLETION_CALL_ARG_KEYS
+        if key in call_context
+    }
+    additional_kwargs = dict(call_context.get("kwargs") or {})
+    call_args.update(additional_kwargs)
+    return call_args
+
 
 async def _call_acompletion_internal(
     completion_callable: CompletionCallable, **call_args: Any
@@ -34,10 +90,12 @@ async def _call_acompletion_internal(
 
 
 async def handle_chat_completion_with_mcp(
-    call_args: Dict[str, Any],
+    call_context: Dict[str, Any],
     completion_callable: CompletionCallable,
 ) -> Optional[Union[ModelResponse, CustomStreamWrapper]]:
     """Handle MCP-enabled tool execution for chat completion requests."""
+
+    call_args = _build_call_args_from_context(call_context)
 
     tools = call_args.get("tools")
     if not tools:
