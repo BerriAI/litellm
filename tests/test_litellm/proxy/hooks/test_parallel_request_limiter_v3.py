@@ -1663,15 +1663,15 @@ async def test_async_log_success_event_with_dict_usage(monkeypatch, token_rate_l
     )
 
     # Create a mock response object with usage as a dict (Responses API format)
-    mock_response = MagicMock()
+    from litellm.types.utils import BaseLiteLLMOpenAIResponseObject
+    
+    # Use spec to make isinstance checks work correctly with MagicMock
+    mock_response = MagicMock(spec=BaseLiteLLMOpenAIResponseObject)
     mock_response.usage = {
         "prompt_tokens": 25,
         "completion_tokens": 35,
         "total_tokens": 60
     }
-    # Make isinstance check for BaseLiteLLMOpenAIResponseObject return True
-    from litellm.types.utils import BaseLiteLLMOpenAIResponseObject
-    mock_response.__class__ = type('MockResponse', (BaseLiteLLMOpenAIResponseObject,), {})
 
     # Create mock kwargs for the success event
     mock_kwargs = {
