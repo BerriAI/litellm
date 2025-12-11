@@ -182,11 +182,56 @@ class TestAzureAnthropicConfig:
     def test_inherits_anthropic_config_methods(self):
         """Test that AzureAnthropicConfig inherits methods from AnthropicConfig"""
         config = AzureAnthropicConfig()
-        
+
         # Test that it has AnthropicConfig methods
         assert hasattr(config, "get_anthropic_headers")
         assert hasattr(config, "is_cache_control_set")
         assert hasattr(config, "is_computer_tool_used")
         assert hasattr(config, "transform_request")
         assert hasattr(config, "transform_response")
+
+    def test_transform_request_removes_unsupported_params(self):
+        """Test that transform_request removes max_retries, stream_options, and extra_body.
+
+        These parameters are LiteLLM-internal and not supported by Azure AI Anthropic endpoint.
+        See: https://github.com/BerriAI/litellm/issues/XXXX
+        """
+        config = AzureAnthropicConfig()
+
+        messages = [{"role": "user", "content": "Hello"}]
+        optional_params = {
+            "max_tokens": 100,
+        }
+        litellm_params = {"api_key": "test-key"}
+        headers = {"api-key": "test-key", "anthropic-version": "2023-06-01"}
+
+        with patch.object(
+            config.__class__.__bases__[0],  # AnthropicConfig
+            "transform_request",
+            return_value={
+                "model": "claude-sonnet-4-5",
+                "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+                "max_tokens": 100,
+                "max_retries": 3,  # Should be removed
+                "stream_options": {"include_usage": True},  # Should be removed
+                "extra_body": {"custom": "param"},  # Should be removed
+            },
+        ):
+            result = config.transform_request(
+                model="claude-sonnet-4-5",
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            )
+
+        # Verify unsupported params are removed
+        assert "max_retries" not in result
+        assert "stream_options" not in result
+        assert "extra_body" not in result
+
+        # Verify supported params are preserved
+        assert result["model"] == "claude-sonnet-4-5"
+        assert result["max_tokens"] == 100
+        assert "messages" in result
 
