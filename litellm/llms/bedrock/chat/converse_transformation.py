@@ -100,6 +100,7 @@ class AmazonConverseConfig(BaseConfig):
         return {
             "guardrailConfig": GuardrailConfigBlock,
             "performanceConfig": PerformanceConfigBlock,
+            "serviceTier": ServiceTierBlock,
         }
 
     @staticmethod
