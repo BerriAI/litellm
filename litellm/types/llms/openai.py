@@ -437,10 +437,12 @@ class ListBatchRequest(TypedDict, total=False):
     """
 
     after: Union[str, NotGiven]
-    limit: Union[int, NotGiven]
-    extra_headers: Optional[Dict[str, str]]
-    extra_body: Optional[Dict[str, str]]
-    timeout: Optional[float]
+
+
+# OpenAI Batch Result Types
+class OpenAIErrorBody(TypedDict, total=False):
+    """Error body in OpenAI batch response format."""
+    error: Dict[str, str]
 
 
 BatchJobStatus = Literal[
@@ -1822,6 +1824,20 @@ class OpenAIChatCompletionResponse(TypedDict, total=False):
     usage: Required[ChatCompletionUsageBlock]
     system_fingerprint: str
     service_tier: str
+
+
+# OpenAI Batch Result Types (defined after OpenAIChatCompletionResponse for forward reference)
+class OpenAIBatchResponse(TypedDict, total=False):
+    """Response wrapper in OpenAI batch result format."""
+    status_code: int
+    request_id: str
+    body: Union[OpenAIChatCompletionResponse, OpenAIErrorBody]
+
+
+class OpenAIBatchResult(TypedDict, total=False):
+    """OpenAI batch result format."""
+    custom_id: str
+    response: OpenAIBatchResponse
 
 
 OpenAIChatCompletionFinishReason = Literal[

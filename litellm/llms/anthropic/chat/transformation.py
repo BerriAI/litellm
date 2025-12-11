@@ -762,11 +762,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 # For Claude Opus 4.5, map reasoning_effort to output_config
                 if self._is_claude_opus_4_5(model):
                     optional_params["output_config"] = {"effort": value}
-                else:
-                    # For other models, map to thinking parameter
-                    optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
-                        value
-                    )
+
+                # For other models, map to thinking parameter
+                optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
+                    value
+                )
             elif param == "web_search_options" and isinstance(value, dict):
                 hosted_web_search_tool = self.map_web_search_tool(
                     cast(OpenAIWebSearchOptions, value)
@@ -1082,6 +1082,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         ],
         Optional[str],
         List[ChatCompletionToolCallChunk],
+        Optional[List[Any]],
     ]:
         text_content = ""
         citations: Optional[List[Any]] = None
@@ -1092,6 +1093,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         ] = None
         reasoning_content: Optional[str] = None
         tool_calls: List[ChatCompletionToolCallChunk] = []
+        web_search_results: Optional[List[Any]] = None
         for idx, content in enumerate(completion_response["content"]):
             if content["type"] == "text":
                 text_content += content["text"]
@@ -1117,6 +1119,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 # This block contains tool_references that were discovered
                 # We don't need to include this in the response as it's internal metadata
                 pass
+            ## WEB SEARCH TOOL RESULT - preserve web search results for multi-turn conversations
+            elif content["type"] == "web_search_tool_result":
+                if web_search_results is None:
+                    web_search_results = []
+                web_search_results.append(content)
             elif content.get("thinking", None) is not None:
                 if thinking_blocks is None:
                     thinking_blocks = []
@@ -1148,7 +1155,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if thinking_content is not None:
                     reasoning_content += thinking_content
 
-        return text_content, citations, thinking_blocks, reasoning_content, tool_calls
+        return text_content, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results
 
     def calculate_usage(
         self,
@@ -1288,6 +1295,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 thinking_blocks,
                 reasoning_content,
                 tool_calls,
+                web_search_results,
             ) = self.extract_response_content(completion_response=completion_response)
 
             if (
@@ -1307,6 +1315,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             }
             if context_management is not None:
                 provider_specific_fields["context_management"] = context_management
+            if web_search_results is not None:
+                provider_specific_fields["web_search_results"] = web_search_results
 
             _message = litellm.Message(
                 tool_calls=tool_calls,

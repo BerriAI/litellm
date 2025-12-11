@@ -315,6 +315,7 @@ model LiteLLM_SpendLogs {
   session_id          String?
   status              String?
   mcp_namespaced_tool_name String? 
+  agent_id            String?
   proxy_server_request Json?     @default("{}")
   @@index([startTime])
   @@index([end_user])
@@ -686,6 +687,14 @@ model LiteLLM_ManagedVectorStoreIndexTable {
 model LiteLLM_CacheConfig {
   id String @id @default("cache_config")
   cache_settings Json
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}
+
+// UI Settings configuration table
+model LiteLLM_UISettings {
+  id String @id @default("ui_settings")
+  ui_settings Json
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 }
