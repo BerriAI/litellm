@@ -35,6 +35,27 @@
     "litellm_params_template": {
       "custom_llm_provider": "langgraph"
     }
+  },
+  {
+    "agent_type": "bedrock_agentcore",
+    "agent_type_display_name": "Bedrock AgentCore",
+    "description": "Connect to Amazon Bedrock AgentCore hosted agent runtimes",
+    "logo_url": "/assets/logos/bedrock.svg",
+    "inherit_credentials_from_provider": "Bedrock",
+    "credential_fields": [
+      {
+        "key": "agent_runtime_arn",
+        "label": "Agent Runtime ARN",
+        "placeholder": "arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/my-agent-runtime",
+        "tooltip": "The ARN of your Bedrock AgentCore runtime. Find this in your AWS Bedrock console under AgentCore.",
+        "required": true,
+        "field_type": "text",
+        "default_value": null
+      }
+    ],
+    "litellm_params_template": {
+      "custom_llm_provider": "bedrock"
+    }
   }
 ]
 
