@@ -61,6 +61,7 @@ const sidebars = {
           "proxy/guardrails/enkryptai",
           "proxy/guardrails/ibm_guardrails",
           "proxy/guardrails/grayswan",
+          "proxy/guardrails/hiddenlayer",
           "proxy/guardrails/lasso_security",
           "proxy/guardrails/litellm_content_filter",
           "proxy/guardrails/guardrails_ai",
