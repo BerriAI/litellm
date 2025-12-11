@@ -420,10 +420,13 @@ class GenericPromptManager(CustomPromptManagement):
         tools: Optional[List[Dict]] = None,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Get chat completion prompt and return processed model, messages, and parameters.
         """
+
         return await PromptManagementBase.async_get_chat_completion_prompt(
             self,
             model,
@@ -437,6 +440,18 @@ class GenericPromptManager(CustomPromptManagement):
             tools=tools,
             prompt_label=prompt_label,
             prompt_version=prompt_version,
+            ignore_prompt_manager_model=(
+                ignore_prompt_manager_model
+                or prompt_spec.litellm_params.ignore_prompt_manager_model
+                if prompt_spec
+                else False
+            ),
+            ignore_prompt_manager_optional_params=(
+                ignore_prompt_manager_optional_params
+                or prompt_spec.litellm_params.ignore_prompt_manager_optional_params
+                if prompt_spec
+                else False
+            ),
         )
 
     def get_chat_completion_prompt(
@@ -450,6 +465,8 @@ class GenericPromptManager(CustomPromptManagement):
         prompt_spec: Optional[PromptSpec] = None,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Get chat completion prompt and return processed model, messages, and parameters.
@@ -465,6 +482,18 @@ class GenericPromptManager(CustomPromptManagement):
             prompt_spec=prompt_spec,
             prompt_label=prompt_label,
             prompt_version=prompt_version,
+            ignore_prompt_manager_model=(
+                ignore_prompt_manager_model
+                or prompt_spec.litellm_params.ignore_prompt_manager_model
+                if prompt_spec
+                else False
+            ),
+            ignore_prompt_manager_optional_params=(
+                ignore_prompt_manager_optional_params
+                or prompt_spec.litellm_params.ignore_prompt_manager_optional_params
+                if prompt_spec
+                else False
+            ),
         )
 
     def clear_cache(self) -> None:
