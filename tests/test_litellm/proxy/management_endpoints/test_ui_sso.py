@@ -2438,6 +2438,70 @@ class TestGenericResponseConvertorNestedAttributes:
             assert result.display_name == "user-sub-123"  # Top-level attribute works
 
 
+class TestGenericResponseConvertorUserRole:
+    """Test generic_response_convertor user role extraction from SSO token"""
+
+    def test_generic_response_convertor_extracts_valid_user_role(self):
+        """
+        Test that generic_response_convertor extracts a valid LiteLLM user role
+        from the SSO token using the GENERIC_USER_ROLE_ATTRIBUTE env var.
+        """
+        from litellm.proxy._types import LitellmUserRoles
+        from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+
+        mock_jwt_handler = MagicMock(spec=JWTHandler)
+        mock_jwt_handler.get_team_ids_from_jwt.return_value = []
+
+        sso_response = {
+            "preferred_username": "testuser",
+            "email": "test@example.com",
+            "sub": "Test User",
+            "role": "proxy_admin",
+        }
+
+        with patch.dict(
+            os.environ,
+            {"GENERIC_USER_ROLE_ATTRIBUTE": "role"},
+        ):
+            result = generic_response_convertor(
+                response=sso_response,
+                jwt_handler=mock_jwt_handler,
+                sso_jwt_handler=None,
+            )
+
+            assert isinstance(result, CustomOpenID)
+            assert result.user_role == LitellmUserRoles.PROXY_ADMIN
+
+    def test_generic_response_convertor_ignores_invalid_user_role(self):
+        """
+        Test that generic_response_convertor ignores invalid role values
+        and sets user_role to None.
+        """
+        from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+
+        mock_jwt_handler = MagicMock(spec=JWTHandler)
+        mock_jwt_handler.get_team_ids_from_jwt.return_value = []
+
+        sso_response = {
+            "preferred_username": "testuser",
+            "email": "test@example.com",
+            "role": "invalid_role_value",
+        }
+
+        with patch.dict(
+            os.environ,
+            {"GENERIC_USER_ROLE_ATTRIBUTE": "role"},
+        ):
+            result = generic_response_convertor(
+                response=sso_response,
+                jwt_handler=mock_jwt_handler,
+                sso_jwt_handler=None,
+            )
+
+            assert isinstance(result, CustomOpenID)
+            assert result.user_role is None
+
+
 class TestGetGenericSSORedirectParams:
     """Test _get_generic_sso_redirect_params state parameter priority handling"""
 

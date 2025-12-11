@@ -97,6 +97,10 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.default_encoding import encoding
+from litellm.litellm_core_utils.dot_notation_indexing import (
+    delete_nested_value,
+    is_nested_path,
+)
 from litellm.litellm_core_utils.exception_mapping_utils import (
     _get_response_headers,
     exception_type,
@@ -137,10 +141,6 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.redact_messages import (
     LiteLLMLoggingObject,
     redact_message_input_output_from_logging,
-)
-from litellm.litellm_core_utils.dot_notation_indexing import (
-    delete_nested_value,
-    is_nested_path,
 )
 from litellm.litellm_core_utils.rules import Rules
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -7288,6 +7288,10 @@ class ProviderConfigManager:
             return litellm.OVHCloudChatConfig()
         elif litellm.LlmProviders.AMAZON_NOVA == provider:
             return litellm.AmazonNovaChatConfig()
+        elif litellm.LlmProviders.LANGGRAPH == provider:
+            from litellm.llms.langgraph.chat.transformation import LangGraphConfig
+
+            return LangGraphConfig()
         return None
 
     @staticmethod

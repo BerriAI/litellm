@@ -130,6 +130,17 @@ GENERIC_INCLUDE_CLIENT_ID = "false" # some providers enforce that the client_id 
 GENERIC_SCOPE = "openid profile email" # default scope openid is sometimes not enough to retrieve basic user info like first_name and last_name located in profile scope
 ```
 
+**Assigning User Roles via SSO**
+
+Use `GENERIC_USER_ROLE_ATTRIBUTE` to specify which attribute in the SSO token contains the user's role. The role value must be one of the following supported LiteLLM roles:
+
+- `proxy_admin` - Admin over the platform
+- `proxy_admin_viewer` - Can login, view all keys, view all spend (read-only)
+- `internal_user` - Can login, view/create/delete their own keys, view their spend
+- `internal_user_view_only` - Can login, view their own keys, view their own spend
+
+Nested attribute paths are supported (e.g., `claims.role` or `attributes.litellm_role`).
+
 - Set Redirect URI, if your provider requires it
     - Set a redirect url = `<your proxy base url>/sso/callback`
     ```shell
