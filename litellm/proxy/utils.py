@@ -3417,11 +3417,8 @@ class ProxyUpdateSpend:
                         raise
                     await asyncio.sleep(2**i)
         except Exception as e:
-            # If processing failed, put the logs back in the queue
-            async with prisma_client._spend_log_transactions_lock:
-                prisma_client.spend_log_transactions = (
-                    logs_to_process + prisma_client.spend_log_transactions
-                )
+            # Logs already removed from queue at start - don't put them back
+            # This matches the original behavior where logs are removed even on error
             _raise_failed_update_spend_exception(
                 e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
             )
