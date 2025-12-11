@@ -616,13 +616,13 @@ describe("OldTeams - Default Team Settings tab visibility", () => {
   });
 });
 
-describe("OldTeams - all-proxy-models dropdown visibility", () => {
+describe("OldTeams - models dropdown options", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4", "gpt-3.5-turbo"]);
   });
 
-  it("should not show all-proxy-models option when user has no access to it", async () => {
+  it("should not render all-proxy-models option in models select", async () => {
     vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4", "gpt-3.5-turbo"]);
 
     render(
