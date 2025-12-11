@@ -265,6 +265,10 @@ def generic_response_convertor(
         "GENERIC_USER_PROVIDER_ATTRIBUTE", "provider"
     )
 
+    generic_user_role_attribute_name = os.getenv(
+        "GENERIC_USER_ROLE_ATTRIBUTE", "role"
+    )
+
     verbose_proxy_logger.debug(
         f" generic_user_id_attribute_name: {generic_user_id_attribute_name}\n generic_user_email_attribute_name: {generic_user_email_attribute_name}"
     )
@@ -277,6 +281,17 @@ def generic_response_convertor(
     team_ids = jwt_handler.get_team_ids_from_jwt(cast(dict, response))
     all_teams.extend(team_ids)
 
+    # Extract user role from SSO response
+    user_role_from_sso = get_nested_value(response, generic_user_role_attribute_name)
+    user_role: Optional[LitellmUserRoles] = None
+    if user_role_from_sso is not None:
+        role = get_litellm_user_role(user_role_from_sso)
+        if role is not None:
+            user_role = role
+            verbose_proxy_logger.debug(
+                f"Found valid LitellmUserRoles '{role.value}' from SSO attribute '{generic_user_role_attribute_name}'"
+            )
+
     return CustomOpenID(
         id=get_nested_value(response, generic_user_id_attribute_name),
         display_name=get_nested_value(
@@ -287,7 +302,7 @@ def generic_response_convertor(
         last_name=get_nested_value(response, generic_user_last_name_attribute_name),
         provider=get_nested_value(response, generic_provider_attribute_name),
         team_ids=all_teams,
-        user_role=None,
+        user_role=user_role,
     )
 
 
