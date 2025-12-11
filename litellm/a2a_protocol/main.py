@@ -5,7 +5,6 @@ Provides standalone functions with @client decorator for LiteLLM logging integra
 """
 
 import asyncio
-import datetime
 from typing import TYPE_CHECKING, Any, AsyncIterator, Coroutine, Dict, Optional, Union
 
 import litellm
@@ -26,7 +25,6 @@ if TYPE_CHECKING:
         AgentCard,
         SendMessageRequest,
         SendStreamingMessageRequest,
-        SendStreamingMessageResponse,
     )
 
 # Runtime imports with availability check
