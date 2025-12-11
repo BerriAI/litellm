@@ -546,6 +546,7 @@ class LiteLLMRoutes(enum.Enum):
     ui_routes = [
         "/sso",
         "/sso/get/ui_settings",
+        "/get/ui_settings",
         "/login",
         "/key/info",
         "/config",
@@ -3652,6 +3653,9 @@ class DailyEndUserSpendTransaction(BaseDailySpendTransaction):
 class DailyTagSpendTransaction(BaseDailySpendTransaction):
     request_id: Optional[str]
     tag: str
+
+class DailyAgentSpendTransaction(BaseDailySpendTransaction):
+    agent_id: str
 
 
 class DBSpendUpdateTransactions(TypedDict):

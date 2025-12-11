@@ -27,28 +27,3 @@ class TestLangfusePromptManagement:
 
             mock_get_prompt_from_id.assert_called_once()
             assert mock_get_prompt_from_id.call_args.kwargs["prompt_version"] == 4
-
-    def test_trace_id_propagation_flag_from_env(self):
-        with patch.dict(
-            os.environ,
-            {
-                "LANGFUSE_SECRET_KEY": "secret",
-                "LANGFUSE_PUBLIC_KEY": "public",
-                "LANGFUSE_PROPAGATE_TRACE_ID": "True",
-            },
-            clear=True,
-        ):
-            pm = LangfusePromptManagement()
-            assert pm.langfuse_propagate_trace_id is True
-
-        with patch.dict(
-            os.environ,
-            {
-                "LANGFUSE_SECRET_KEY": "secret",
-                "LANGFUSE_PUBLIC_KEY": "public",
-                "LANGFUSE_PROPAGATE_TRACE_ID": "False",
-            },
-            clear=True,
-        ):
-            pm2 = LangfusePromptManagement()
-            assert pm2.langfuse_propagate_trace_id is False

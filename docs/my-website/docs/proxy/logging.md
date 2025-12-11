@@ -371,8 +371,6 @@ export LANGFUSE_PUBLIC_KEY="pk_kk"
 export LANGFUSE_SECRET_KEY="sk_ss"
 # Optional, defaults to https://cloud.langfuse.com
 export LANGFUSE_HOST="https://xxx.langfuse.com"
-# Optional - When True, forwards LiteLLM's logging trace_id to Langfuse
-LANGFUSE_PROPAGATE_TRACE_ID=True
 ```
 
 **Step 4**: Start the proxy, make a test request

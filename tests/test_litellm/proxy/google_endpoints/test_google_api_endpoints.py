@@ -234,3 +234,79 @@ def test_google_stream_generate_content_with_cost_tracking_metadata():
         assert called_data["litellm_metadata"]["user_api_key_team_id"] == "test-team-id"
         # Verify stream is set to True
         assert called_data["stream"] is True
+
+
+def test_google_generate_content_with_system_instruction():
+    """
+    Test that systemInstruction is correctly passed through from the endpoint to the router.
+    
+    This test verifies the fix for systemInstruction being dropped when forwarding
+    requests to Vertex AI through the Google GenAI endpoint.
+    """
+    try:
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy.google_endpoints.endpoints import router as google_router
+    except ImportError as e:
+        pytest.skip(f"Skipping test due to missing dependency: {e}")
+    
+    # Create a FastAPI app and include the router
+    app = FastAPI()
+    app.include_router(google_router)
+    
+    # Create a test client
+    client = TestClient(app)
+    
+    # Mock all required proxy server dependencies
+    with patch("litellm.proxy.proxy_server.llm_router") as mock_router, \
+         patch("litellm.proxy.proxy_server.general_settings", {}), \
+         patch("litellm.proxy.proxy_server.proxy_config") as mock_proxy_config, \
+         patch("litellm.proxy.proxy_server.version", "1.0.0"), \
+         patch("litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request") as mock_add_data:
+        
+        mock_router.agenerate_content = AsyncMock(return_value={"test": "response"})
+        
+        # Mock add_litellm_data_to_request to pass through data unchanged
+        async def mock_add_litellm_data(data, request, user_api_key_dict, proxy_config, general_settings, version):
+            return data
+        
+        mock_add_data.side_effect = mock_add_litellm_data
+        
+        # Define the systemInstruction to test
+        system_instruction = {
+            "parts": [{"text": "Your name is Doodle."}]
+        }
+        
+        # Send a request with systemInstruction
+        response = client.post(
+            "/v1beta/models/gemini-2.5-pro:generateContent",
+            json={
+                "systemInstruction": system_instruction,
+                "contents": [
+                    {
+                        "parts": [{"text": "What is your name?"}],
+                        "role": "user"
+                    }
+                ]
+            },
+            headers={"Authorization": "Bearer sk-test-key"}
+        )
+        
+        # Verify the response
+        assert response.status_code == 200
+        
+        # Verify that agenerate_content was called
+        mock_router.agenerate_content.assert_called_once()
+        call_args = mock_router.agenerate_content.call_args
+        called_data = call_args[1]
+        
+        # Verify that systemInstruction is present in the call arguments
+        assert "systemInstruction" in called_data
+        assert called_data["systemInstruction"] == system_instruction
+        assert called_data["systemInstruction"]["parts"][0]["text"] == "Your name is Doodle."
+        
+        # Verify contents are also present
+        assert "contents" in called_data
+        assert len(called_data["contents"]) == 1
+        assert called_data["contents"][0]["role"] == "user"

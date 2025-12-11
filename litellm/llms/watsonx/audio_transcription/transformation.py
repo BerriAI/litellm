@@ -112,12 +112,6 @@ class IBMWatsonXAudioTranscriptionConfig(
             if key in supported_params and value is not None:
                 form_data[key] = value  # type: ignore
         
-        # Set default response_format for cost calculation
-        if "response_format" not in form_data or (
-            form_data.get("response_format") in ["text", "json"]
-        ):
-            form_data["response_format"] = "verbose_json"
-        
         # Prepare files dict with the audio file
         files = {
             "file": (

@@ -271,7 +271,6 @@ def video_generation(  # noqa: PLR0915
 @client
 def video_content(
     video_id: str,
-    api_base: Optional[str] = None,
     timeout: Optional[float] = None,
     custom_llm_provider: Optional[str] = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
@@ -384,8 +383,6 @@ def video_content(
 @client
 async def avideo_content(
     video_id: str,
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
     timeout: Optional[float] = None,
     custom_llm_provider: Optional[str] = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
@@ -400,8 +397,6 @@ async def avideo_content(
 
     Parameters:
     - `video_id` (str): The identifier of the video whose content to download
-    - `api_key` (Optional[str]): The API key to use for authentication
-    - `api_base` (Optional[str]): The base URL for the API
     - `timeout` (Optional[float]): The timeout for the request in seconds
     - `custom_llm_provider` (Optional[str]): The LLM provider to use
     - `extra_headers` (Optional[Dict[str, Any]]): Additional headers
@@ -425,8 +420,6 @@ async def avideo_content(
         func = partial(
             video_content,
             video_id=video_id,
-            api_key=api_key,
-            api_base=api_base,
             timeout=timeout,
             custom_llm_provider=custom_llm_provider,
             extra_headers=extra_headers,
