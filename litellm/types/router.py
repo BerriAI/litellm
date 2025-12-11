@@ -434,6 +434,7 @@ class DeploymentTypedDict(TypedDict, total=False):
 SPECIAL_MODEL_INFO_PARAMS = [
     "input_cost_per_token",
     "output_cost_per_token",
+    "input_cost_per_request",
     "input_cost_per_character",
     "output_cost_per_character",
 ]
