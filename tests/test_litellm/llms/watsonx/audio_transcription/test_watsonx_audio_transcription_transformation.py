@@ -128,7 +128,8 @@ class TestWatsonXAudioTranscription:
         # OpenAI params should be in form data
         assert data.get("language") == "en"
         assert data.get("temperature") == 0.5
-        assert data.get("response_format") == "verbose_json"  # Default for cost calculation
+        # response_format should NOT be set by default - only send what user specifies
+        assert "response_format" not in data
         
         # Validate file is in files dict (multipart/form-data)
         files = captured_request.get("files", {})
