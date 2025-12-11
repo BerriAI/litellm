@@ -327,3 +327,32 @@ async def test_router_cooldown_event_callback_no_prometheus():
 
     # Assert that the router's get_deployment method was called
     mock_router.get_deployment.assert_called_once_with(model_id="test-deployment")
+
+
+def test_deployment_cooled_down_label_count():
+    """
+    Validate that the litellm_deployment_cooled_down metric label definition
+    matches the increment_deployment_cooled_down method signature.
+    """
+
+    import inspect
+    from litellm.types.integrations.prometheus import PrometheusMetricLabels
+
+    metric_labels = PrometheusMetricLabels.litellm_deployment_cooled_down
+
+    from litellm.integrations.prometheus import PrometheusLogger
+    method_sig = inspect.signature(PrometheusLogger.increment_deployment_cooled_down)
+
+    method_params = [p for p in method_sig.parameters.keys() if p != 'self']
+
+    assert len(metric_labels) == len(method_params), (
+        f"Label count mismatch for litellm_deployment_cooled_down: "
+        f"metric has {len(metric_labels)} labels {metric_labels}, "
+        f"but method expects {len(method_params)} parameters {method_params}"
+    )
+
+    expected_labels = ['litellm_model_name', 'model_id', 'api_base', 'api_provider', 'exception_status']
+    assert metric_labels == expected_labels, (
+        f"Label names don't match expected parameters. "
+        f"Expected: {expected_labels}, Got: {metric_labels}"
+    )
