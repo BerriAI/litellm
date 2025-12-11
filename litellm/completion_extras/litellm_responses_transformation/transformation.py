@@ -165,11 +165,18 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     )
             elif role == "tool":
                 # Convert tool message to function call output format
+                # Transform content if it's multimodal (list with images, etc.)
+                if isinstance(content, list):
+                    transformed_output = self._convert_content_to_responses_format(
+                        content, "tool"
+                    )
+                else:
+                    transformed_output = content
                 input_items.append(
                     {
                         "type": "function_call_output",
                         "call_id": tool_call_id,
-                        "output": content,
+                        "output": transformed_output,
                     }
                 )
             elif role == "assistant" and tool_calls and isinstance(tool_calls, list):
