@@ -537,16 +537,11 @@ class LangFuseLogger:
             session_id = clean_metadata.pop("session_id", None)
             trace_name = cast(Optional[str], clean_metadata.pop("trace_name", None))
             trace_id = clean_metadata.pop("trace_id", None)
-            # Only use standard_logging_object.trace_id if it was explicitly set via litellm_session_id or litellm_trace_id
-            # Otherwise, prefer litellm_call_id as the fallback to match expected test behavior
+            # Use standard_logging_object.trace_id if available (when trace_id from metadata is None)
+            # This allows standard trace_id to be used when provided in standard_logging_object
             if trace_id is None and standard_logging_object is not None:
-                # Check if trace_id was explicitly set via params (not auto-generated)
-                has_explicit_trace_id = (
-                    litellm_params.get("litellm_session_id") is not None
-                    or litellm_params.get("litellm_trace_id") is not None
-                )
-                if has_explicit_trace_id:
-                    trace_id = cast(Optional[str], standard_logging_object.get("trace_id"))
+                trace_id = cast(Optional[str], standard_logging_object.get("trace_id"))
+            # Fallback to litellm_call_id if no trace_id found
             if trace_id is None:
                 trace_id = litellm_call_id
             existing_trace_id = clean_metadata.pop("existing_trace_id", None)
