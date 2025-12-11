@@ -2014,6 +2014,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_alias: Optional[str] = None
     team_tpm_limit: Optional[int] = None
     team_rpm_limit: Optional[int] = None
+    team_max_parallel_requests: Optional[int] = None
     team_max_budget: Optional[float] = None
     team_models: List = []
     team_blocked: bool = False
@@ -2076,6 +2077,7 @@ class UserAPIKeyAuth(
     tpm_limit_per_model: Optional[Dict[str, int]] = None
     user_tpm_limit: Optional[int] = None
     user_rpm_limit: Optional[int] = None
+    user_max_parallel_requests: Optional[int] = None
     user_email: Optional[str] = None
     request_route: Optional[str] = None
 
