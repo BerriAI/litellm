@@ -19,6 +19,8 @@ from litellm.proxy.guardrails.guardrail_hooks.presidio import (
     _OPTIONAL_PresidioPIIMasking,
 )
 from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
+from litellm.types.utils import Choices, Message, ModelResponse
+import litellm
 
 
 @pytest.fixture
@@ -633,6 +635,109 @@ async def test_request_data_flows_to_apply_guardrail():
         assert request_data["metadata"].get("test_flag") == "passed_correctly"
 
     print("✓ request_data correctly passed to apply_guardrail")
+
+
+@pytest.mark.asyncio
+async def test_output_masking_apply_to_output_only(mock_user_api_key):
+    """
+    Ensure output masking runs when apply_to_output is enabled.
+    """
+
+    presidio = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        pii_entities_config={PiiEntityType.CREDIT_CARD: PiiAction.MASK},
+    )
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("4111-1111-1111-1111", "[CREDIT_CARD]")
+
+    presidio.check_pii = mock_check_pii
+
+    response = ModelResponse(
+        id="1",
+        object="chat.completion",
+        created=0,
+        model="gpt-test",
+        choices=[
+            Choices(
+                message=Message(
+                    role="assistant",
+                    content="Card is 4111-1111-1111-1111",
+                ),
+                index=0,
+                finish_reason="stop",
+            )
+        ],
+    )
+
+    result = await presidio.async_post_call_success_hook(
+        data={},
+        user_api_key_dict=mock_user_api_key,
+        response=response,
+    )
+
+    assert "[CREDIT_CARD]" in result.choices[0].message.content
+    assert "4111-1111-1111-1111" not in result.choices[0].message.content
+
+
+@pytest.mark.asyncio
+async def test_presidio_filter_scope_initializer(monkeypatch):
+    """
+    Ensure initializer respects presidio_filter_scope for input/output/both.
+    """
+
+    created = []
+
+    class DummyGuardrail:
+        def __init__(self, apply_to_output: bool = False, event_hook=None, **kwargs):
+            self.apply_to_output = apply_to_output
+            self.event_hook = event_hook
+            created.append(self)
+
+        def update_in_memory_litellm_params(self, litellm_params):
+            pass
+
+    class DummyManager:
+        def __init__(self):
+            self.added = []
+
+        def add_litellm_callback(self, cb):
+            self.added.append(cb)
+
+    mgr = DummyManager()
+    monkeypatch.setattr(litellm, "logging_callback_manager", mgr, raising=False)
+    import litellm.proxy.guardrails.guardrail_initializers as gi
+    import litellm.proxy.guardrails.guardrail_hooks.presidio as presidio_mod
+    monkeypatch.setattr(
+        presidio_mod, "_OPTIONAL_PresidioPIIMasking", DummyGuardrail, raising=False
+    )
+    monkeypatch.setattr(gi, "_OPTIONAL_PresidioPIIMasking", DummyGuardrail, raising=False)
+
+    # input-only
+    created.clear()
+    from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
+
+    params_input = LitellmParams(guardrail="presidio", mode="pre_call", presidio_filter_scope="input")
+    guardrail_dict = {"guardrail_name": "g1"}
+    cb = initialize_presidio(params_input, guardrail_dict)
+    assert cb is created[0]
+    assert created[0].apply_to_output is False
+
+    # output-only
+    created.clear()
+    params_output = LitellmParams(guardrail="presidio", mode="pre_call", presidio_filter_scope="output")
+    cb = initialize_presidio(params_output, guardrail_dict)
+    assert len(created) == 1
+    assert created[0].apply_to_output is True
+
+    # both -> expect two callbacks (input + output)
+    created.clear()
+    params_both = LitellmParams(guardrail="presidio", mode="pre_call", presidio_filter_scope="both")
+    cb = initialize_presidio(params_both, guardrail_dict)
+    assert len(created) == 2
+    assert any(not c.apply_to_output for c in created)
+    assert any(c.apply_to_output for c in created)
 
 
 @pytest.mark.asyncio

@@ -268,6 +268,13 @@ class PresidioPresidioConfigModelUserInterface(BaseModel):
         default=None,
         description="Base URL for the Presidio anonymizer API",
     )
+    presidio_filter_scope: Optional[Literal["input", "output", "both"]] = Field(
+        default=None,
+        description=(
+            "Where to apply Presidio checks: 'input' (user -> model), "
+            "'output' (model -> user), or 'both' (default)."
+        ),
+    )
     output_parse_pii: Optional[bool] = Field(
         default=None,
         description="When True, LiteLLM will replace the masked text with the original text in the response",
@@ -278,6 +285,10 @@ class PresidioPresidioConfigModelUserInterface(BaseModel):
         default="en",
         description="Language code for Presidio PII analysis (e.g., 'en', 'de', 'es', 'fr')",
     )
+    presidio_run_on: Optional[Literal["input", "output", "both"]] = Field(
+        default=None,
+        description="Where to apply Presidio checks: input, output, or both (default).",
+    )
 
 
 class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
@@ -286,7 +297,16 @@ class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
     pii_entities_config: Optional[Dict[Union[PiiEntityType, str], PiiAction]] = Field(
         default=None, description="Configuration for PII entity types and actions"
     )
-    presidio_score_thresholds: Optional[Dict[Union[PiiEntityType, str], float]] = Field(
+    presidio_filter_scope: Literal["input", "output", "both"] = Field(
+        default="both",
+        description=(
+            "Where to apply Presidio checks: 'input' runs on user → model traffic, "
+            "'output' runs on model → user traffic, and 'both' applies to both."
+        ),
+    )
+    presidio_score_thresholds: Optional[
+        Dict[Union[PiiEntityType, str], float]
+    ] = Field(
         default=None,
         description=(
             "Optional per-entity minimum confidence scores for Presidio detections. "
