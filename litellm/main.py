@@ -1098,54 +1098,11 @@ def completion(  # type: ignore # noqa: PLR0915
             handle_chat_completion_with_mcp,
         )
 
-        call_args_for_mcp: Dict[str, Any] = {
-            "model": model,
-            "messages": messages,
-            "functions": functions,
-            "function_call": function_call,
-            "timeout": timeout,
-            "temperature": temperature,
-            "top_p": top_p,
-            "n": n,
-            "stream": stream,
-            "stream_options": stream_options,
-            "stop": stop,
-            "max_tokens": max_tokens,
-            "max_completion_tokens": max_completion_tokens,
-            "modalities": modalities,
-            "prediction": prediction,
-            "audio": audio,
-            "presence_penalty": presence_penalty,
-            "frequency_penalty": frequency_penalty,
-            "logit_bias": logit_bias,
-            "user": user,
-            "response_format": response_format,
-            "seed": seed,
-            "tools": tools,
-            "tool_choice": tool_choice,
-            "parallel_tool_calls": parallel_tool_calls,
-            "logprobs": logprobs,
-            "top_logprobs": top_logprobs,
-            "deployment_id": deployment_id,
-            "reasoning_effort": reasoning_effort,
-            "verbosity": verbosity,
-            "safety_identifier": safety_identifier,
-            "service_tier": service_tier,
-            "base_url": base_url,
-            "api_version": api_version,
-            "api_key": api_key,
-            "model_list": model_list,
-            "extra_headers": extra_headers,
-            "thinking": thinking,
-            "web_search_options": web_search_options,
-            "shared_session": shared_session,
-        }
-        call_args_for_mcp.update(kwargs)
-
+        mcp_handler_context = locals().copy()
         completion_callable = globals().get("acompletion")
         mcp_result = run_async_function(
             handle_chat_completion_with_mcp,
-            call_args_for_mcp,
+            mcp_handler_context,
             completion_callable,
         )
         if mcp_result is not None:

@@ -55,20 +55,31 @@ async def test_handle_chat_completion_without_auto_execution_calls_model(monkeyp
         "_should_auto_execute_tools",
         staticmethod(lambda **_: False),
     )
+    captured_secret_fields = {}
+
+    def mock_extract(**kwargs):
+        captured_secret_fields["value"] = kwargs.get("secret_fields")
+        return (None, None, None, None)
+
     monkeypatch.setattr(
         ResponsesAPIRequestUtils,
         "extract_mcp_headers_from_request",
-        staticmethod(lambda **_: (None, None, None, None)),
+        staticmethod(mock_extract),
     )
 
-    call_args = {"tools": tools, "messages": []}
-    result = await handle_chat_completion_with_mcp(call_args, completion_callable)
+    call_context = {
+        "tools": tools,
+        "messages": [],
+        "kwargs": {"secret_fields": {"api_key": "value"}},
+    }
+    result = await handle_chat_completion_with_mcp(call_context, completion_callable)
 
     assert result == "ok"
     completion_callable.assert_awaited_once()
     kwargs = completion_callable.await_args.kwargs
     assert kwargs.get("_skip_mcp_handler") is True
     assert kwargs.get("tools") == ["openai-tool"]
+    assert captured_secret_fields["value"] == {"api_key": "value"}
 
 
 @pytest.mark.asyncio
@@ -144,8 +155,8 @@ async def test_handle_chat_completion_auto_exec_performs_follow_up(monkeypatch):
         staticmethod(lambda **_: (None, None, None, None)),
     )
 
-    call_args = {"tools": tools, "messages": ["msg"], "stream": True}
-    result = await handle_chat_completion_with_mcp(call_args, completion_callable)
+    call_context = {"tools": tools, "messages": ["msg"], "stream": True}
+    result = await handle_chat_completion_with_mcp(call_context, completion_callable)
 
     assert result is follow_up_response
     assert completion_callable.await_count == 2
