@@ -38,6 +38,7 @@ class AgentCredentialField(BaseModel):
     field_type: Literal["text", "password", "select", "upload", "textarea"] = "text"
     options: Optional[List[str]] = None
     default_value: Optional[str] = None
+    include_in_litellm_params: Optional[bool] = None
 
 
 class AgentCreateInfo(BaseModel):
@@ -47,3 +48,4 @@ class AgentCreateInfo(BaseModel):
     logo_url: Optional[str] = None
     credential_fields: List[AgentCredentialField]
     litellm_params_template: Optional[Dict[str, str]] = None
+    model_template: Optional[str] = None
