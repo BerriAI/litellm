@@ -504,6 +504,14 @@ class ModelResponseIterator:
         self.accumulated_json: str = ""
         self.chunk_type: Literal["valid_json", "accumulated_json"] = "valid_json"
 
+        # Track current content block type to avoid emitting tool calls for non-tool blocks
+        # See: https://github.com/BerriAI/litellm/issues/17254
+        self.current_content_block_type: Optional[str] = None
+
+        # Accumulate web_search_tool_result blocks for multi-turn reconstruction
+        # See: https://github.com/BerriAI/litellm/issues/17737
+        self.web_search_results: List[Dict[str, Any]] = []
+
     def check_empty_tool_call_args(self) -> bool:
         """
         Check if the tool call block so far has been an empty string
@@ -553,18 +561,22 @@ class ModelResponseIterator:
         if "text" in content_block["delta"]:
             text = content_block["delta"]["text"]
         elif "partial_json" in content_block["delta"]:
-            tool_use = cast(
-                ChatCompletionToolCallChunk,
-                {
-                    "id": None,
-                    "type": "function",
-                    "function": {
-                        "name": None,
-                        "arguments": content_block["delta"]["partial_json"],
+            # Only emit tool calls if we're in a tool_use or server_tool_use block
+            # web_search_tool_result blocks also have input_json_delta but should not be treated as tool calls
+            # See: https://github.com/BerriAI/litellm/issues/17254
+            if self.current_content_block_type in ("tool_use", "server_tool_use"):
+                tool_use = cast(
+                    ChatCompletionToolCallChunk,
+                    {
+                        "id": None,
+                        "type": "function",
+                        "function": {
+                            "name": None,
+                            "arguments": content_block["delta"]["partial_json"],
+                        },
+                        "index": self.tool_index,
                     },
-                    "index": self.tool_index,
-                },
-            )
+                )
         elif "citation" in content_block["delta"]:
             provider_specific_fields["citation"] = content_block["delta"]["citation"]
         elif (
@@ -674,6 +686,8 @@ class ModelResponseIterator:
 
                 content_block_start = self.get_content_block_start(chunk=chunk)
                 self.content_blocks = []  # reset content blocks when new block starts
+                # Track current content block type for filtering deltas
+                self.current_content_block_type = content_block_start["content_block"]["type"]
                 if content_block_start["content_block"]["type"] == "text":
                     text = content_block_start["content_block"]["text"]
                 elif content_block_start["content_block"]["type"] == "tool_use":
@@ -714,22 +728,38 @@ class ModelResponseIterator:
                         content_block_start=content_block_start,
                         provider_specific_fields=provider_specific_fields,
                     )
+                elif (
+                    content_block_start["content_block"]["type"]
+                    == "web_search_tool_result"
+                ):
+                    # Capture web_search_tool_result for multi-turn reconstruction
+                    # The full content comes in content_block_start, not in deltas
+                    # See: https://github.com/BerriAI/litellm/issues/17737
+                    self.web_search_results.append(
+                        content_block_start["content_block"]
+                    )
+                    provider_specific_fields["web_search_results"] = (
+                        self.web_search_results
+                    )
             elif type_chunk == "content_block_stop":
                 ContentBlockStop(**chunk)  # type: ignore
-                # check if tool call content block
-                is_empty = self.check_empty_tool_call_args()
-                if is_empty:
-                    tool_use = ChatCompletionToolCallChunk(
-                        id=None,  # type: ignore[typeddict-item]
-                        type="function",
-                        function=ChatCompletionToolCallFunctionChunk(
-                            name=None,  # type: ignore[typeddict-item]
-                            arguments="{}",
-                        ),
-                        index=self.tool_index,
-                    )
+                # check if tool call content block - only for tool_use and server_tool_use blocks
+                if self.current_content_block_type in ("tool_use", "server_tool_use"):
+                    is_empty = self.check_empty_tool_call_args()
+                    if is_empty:
+                        tool_use = ChatCompletionToolCallChunk(
+                            id=None,  # type: ignore[typeddict-item]
+                            type="function",
+                            function=ChatCompletionToolCallFunctionChunk(
+                                name=None,  # type: ignore[typeddict-item]
+                                arguments="{}",
+                            ),
+                            index=self.tool_index,
+                        )
                 # Reset response_format tool tracking when block stops
                 self.is_response_format_tool = False
+                # Reset current content block type
+                self.current_content_block_type = None
             elif type_chunk == "tool_result":
                 # Handle tool_result blocks (for tool search results with tool_reference)
                 # These are automatically handled by Anthropic API, we just pass them through
