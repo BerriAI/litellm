@@ -890,6 +890,79 @@ def test_filter_preserves_high_score_detection():
     assert filtered[0]["entity_type"] == PiiEntityType.CREDIT_CARD
 
 
+def test_no_thresholds_returns_all():
+    """
+    With no thresholds configured, all detections are kept.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    analyze_results = [
+        {"entity_type": PiiEntityType.CREDIT_CARD, "score": 0.1, "start": 0, "end": 4},
+        {"entity_type": PiiEntityType.EMAIL_ADDRESS, "score": 0.2, "start": 5, "end": 9},
+    ]
+
+    filtered = guardrail.filter_analyze_results_by_score(analyze_results)
+    assert len(filtered) == 2
+
+
+def test_entity_specific_threshold_only_applies_to_that_entity():
+    """
+    Entity-specific thresholds do not affect other entity types.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        presidio_score_thresholds={PiiEntityType.CREDIT_CARD: 0.8},
+    )
+    analyze_results = [
+        {"entity_type": PiiEntityType.CREDIT_CARD, "score": 0.7, "start": 0, "end": 4},
+        {"entity_type": PiiEntityType.EMAIL_ADDRESS, "score": 0.1, "start": 5, "end": 9},
+    ]
+
+    filtered = guardrail.filter_analyze_results_by_score(analyze_results)
+    # CREDIT_CARD is filtered, EMAIL_ADDRESS is kept because no threshold
+    assert len(filtered) == 1
+    assert filtered[0]["entity_type"] == PiiEntityType.EMAIL_ADDRESS
+
+
+def test_filter_uses_default_all_threshold():
+    """
+    Default ALL threshold applies to any entity without a specific override.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        presidio_score_thresholds={"ALL": 0.75},
+    )
+    analyze_results = [
+        {"entity_type": PiiEntityType.CREDIT_CARD, "score": 0.7, "start": 0, "end": 4},
+        {"entity_type": PiiEntityType.EMAIL_ADDRESS, "score": 0.8, "start": 5, "end": 9},
+    ]
+
+    filtered = guardrail.filter_analyze_results_by_score(analyze_results)
+    assert len(filtered) == 1
+    assert filtered[0]["entity_type"] == PiiEntityType.EMAIL_ADDRESS
+
+
+def test_entity_specific_overrides_default_threshold():
+    """
+    Entity-specific threshold should override the ALL default.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        presidio_score_thresholds={
+            "ALL": 0.8,
+            PiiEntityType.CREDIT_CARD: 0.6,
+        },
+    )
+    analyze_results = [
+        {"entity_type": PiiEntityType.CREDIT_CARD, "score": 0.65, "start": 0, "end": 4},
+        {"entity_type": PiiEntityType.EMAIL_ADDRESS, "score": 0.75, "start": 5, "end": 9},
+    ]
+
+    filtered = guardrail.filter_analyze_results_by_score(analyze_results)
+    # CREDIT_CARD passes due to override, EMAIL_ADDRESS dropped by ALL threshold
+    assert len(filtered) == 1
+    assert filtered[0]["entity_type"] == PiiEntityType.CREDIT_CARD
+
+
 @pytest.mark.asyncio
 async def test_anonymize_skips_when_no_detections_after_filter():
     """

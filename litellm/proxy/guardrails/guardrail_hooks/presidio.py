@@ -360,11 +360,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             entity_type = item.get("entity_type")
             score = item.get("score")
 
-            if entity_type is None:
-                filtered_results.append(item)
-                continue
+            threshold = None
+            if entity_type is not None:
+                threshold = self.presidio_score_thresholds.get(entity_type)
+            if threshold is None:
+                threshold = self.presidio_score_thresholds.get("ALL")
 
-            threshold = self.presidio_score_thresholds.get(entity_type)
             if threshold is not None:
                 if score is None or score < threshold:
                     continue

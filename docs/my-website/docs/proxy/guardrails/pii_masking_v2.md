@@ -243,8 +243,9 @@ guardrails:
       guardrail: presidio
       mode: "pre_mcp_call"  # Use this mode for MCP requests
       presidio_score_thresholds:
-        CREDIT_CARD: 0.8  # Only keep credit card detections scoring 0.8+
-        EMAIL_ADDRESS: 0.6  # Only keep email detections scoring 0.6+
+        ALL: 0.7            # Default confidence threshold applied to all entities
+        CREDIT_CARD: 0.8    # Override for credit cards
+        EMAIL_ADDRESS: 0.6  # Override for emails
       pii_entities_config:
         CREDIT_CARD: "MASK"  # Will mask credit card numbers
         EMAIL_ADDRESS: "MASK"  # Will mask email addresses
@@ -258,6 +259,12 @@ guardrails:
       pii_entities_config:
         CREDIT_CARD: "BLOCK"  # Will block requests containing credit card numbers
 ```
+
+#### Confidence threshold behavior:
+- No `presidio_score_thresholds`: keep all detections (no thresholds applied)
+- `presidio_score_thresholds.ALL`: apply this confidence threshold to every detection
+- `presidio_score_thresholds.<ENTITY>`: apply only to that entity
+- If both `ALL` and an entity override exist, `ALL` applies globally and the entity override takes precedence for that entity
 
 ### Supported Entity Types
 
