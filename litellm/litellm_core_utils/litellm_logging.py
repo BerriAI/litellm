@@ -85,6 +85,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.mcp import MCPPostCallResponseObject
+from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
     CachingDetails,
@@ -261,6 +262,7 @@ def _get_cached_prometheus_logger():
     global _PrometheusLogger
     if _PrometheusLogger is None:
         from litellm.integrations.prometheus import PrometheusLogger
+
         _PrometheusLogger = PrometheusLogger
     return _PrometheusLogger
 
@@ -597,8 +599,9 @@ class Logging(LiteLLMLoggingBaseClass):
         model: str,
         messages: List[AllMessageValues],
         non_default_params: Dict,
-        prompt_id: Optional[str],
         prompt_variables: Optional[dict],
+        prompt_id: Optional[str] = None,
+        prompt_spec: Optional[PromptSpec] = None,
         prompt_management_logger: Optional[CustomLogger] = None,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
@@ -609,6 +612,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 model=model,
                 non_default_params=non_default_params,
                 prompt_id=prompt_id,
+                prompt_spec=prompt_spec,
                 dynamic_callback_params=self.standard_callback_dynamic_params,
             )
         )
@@ -623,6 +627,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 messages=messages,
                 non_default_params=non_default_params or {},
                 prompt_id=prompt_id,
+                prompt_spec=prompt_spec,
                 prompt_variables=prompt_variables,
                 dynamic_callback_params=self.standard_callback_dynamic_params,
                 prompt_label=prompt_label,
@@ -636,8 +641,9 @@ class Logging(LiteLLMLoggingBaseClass):
         model: str,
         messages: List[AllMessageValues],
         non_default_params: Dict,
-        prompt_id: Optional[str],
         prompt_variables: Optional[dict],
+        prompt_id: Optional[str] = None,
+        prompt_spec: Optional[PromptSpec] = None,
         prompt_management_logger: Optional[CustomLogger] = None,
         tools: Optional[List[Dict]] = None,
         prompt_label: Optional[str] = None,
@@ -650,6 +656,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 tools=tools,
                 non_default_params=non_default_params,
                 prompt_id=prompt_id,
+                prompt_spec=prompt_spec,
                 dynamic_callback_params=self.standard_callback_dynamic_params,
             )
         )
@@ -664,6 +671,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 messages=messages,
                 non_default_params=non_default_params or {},
                 prompt_id=prompt_id,
+                prompt_spec=prompt_spec,
                 prompt_variables=prompt_variables,
                 dynamic_callback_params=self.standard_callback_dynamic_params,
                 litellm_logging_obj=self,
@@ -677,6 +685,7 @@ class Logging(LiteLLMLoggingBaseClass):
     def _auto_detect_prompt_management_logger(
         self,
         prompt_id: str,
+        prompt_spec: Optional[PromptSpec],
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> Optional[CustomLogger]:
         """
@@ -702,6 +711,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 try:
                     if logger.should_run_prompt_management(
                         prompt_id=prompt_id,
+                        prompt_spec=prompt_spec,
                         dynamic_callback_params=dynamic_callback_params,
                     ):
                         self.model_call_details["prompt_integration"] = (
@@ -720,6 +730,7 @@ class Logging(LiteLLMLoggingBaseClass):
         non_default_params: Dict,
         tools: Optional[List[Dict]] = None,
         prompt_id: Optional[str] = None,
+        prompt_spec: Optional[PromptSpec] = None,
         dynamic_callback_params: Optional[StandardCallbackDynamicParams] = None,
     ) -> Optional[CustomLogger]:
         """
@@ -752,6 +763,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if prompt_id and dynamic_callback_params is not None:
             auto_detected_logger = self._auto_detect_prompt_management_logger(
                 prompt_id=prompt_id,
+                prompt_spec=prompt_spec,
                 dynamic_callback_params=dynamic_callback_params,
             )
             if auto_detected_logger is not None:
@@ -3512,7 +3524,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             return _literalai_logger  # type: ignore
         elif logging_integration == "prometheus":
             PrometheusLogger = _get_cached_prometheus_logger()
-            
+
             for callback in _in_memory_loggers:
                 if isinstance(callback, PrometheusLogger):
                     return callback  # type: ignore
@@ -3831,9 +3843,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _in_memory_loggers.append(_otel_logger)
             return _otel_logger  # type: ignore
         elif logging_integration == "weave_otel":
-            from litellm.integrations.opentelemetry import (
-                OpenTelemetryConfig,
-            )
+            from litellm.integrations.opentelemetry import OpenTelemetryConfig
             from litellm.integrations.weave.weave_otel import (
                 WeaveOtelLogger,
                 get_weave_otel_config,
