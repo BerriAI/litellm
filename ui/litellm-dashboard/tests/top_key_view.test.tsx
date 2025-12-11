@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderWithProviders, screen, fireEvent } from "./test-utils";
-import TopKeyView from "../src/components/top_key_view";
-import { TagUsage } from "../src/components/usage/types";
+import TopKeyView from "../src/components/Usage/components/EntityUsage/top_key_view";
+import { TagUsage } from "../src/components/Usage/types";
 
 // Mock the networking module
 vi.mock("../src/components/networking", () => ({
