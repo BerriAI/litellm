@@ -1736,9 +1736,37 @@ def completion(  # type: ignore # noqa: PLR0915
         elif custom_llm_provider == "azure_ai":
             from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
 
+            azure_ai_route = AzureFoundryModelInfo.get_azure_ai_route(model)
+
+            # Check if this is an agents route - model format: azure_ai/agents/<agent_id>
+            if azure_ai_route == "agents":
+                from litellm.llms.azure_ai.agents import AzureAIAgentsConfig
+
+                api_base = AzureFoundryModelInfo.get_api_base(api_base)
+                if api_base is None:
+                    raise ValueError(
+                        "Azure AI Agents requests require an api_base. "
+                        "Set `api_base` or the AZURE_AI_API_BASE env var."
+                    )
+                api_key = AzureFoundryModelInfo.get_api_key(api_key)
+
+                response = AzureAIAgentsConfig.completion(
+                    model=model,
+                    messages=messages,
+                    api_base=api_base,
+                    api_key=api_key,
+                    model_response=model_response,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    timeout=timeout,
+                    acompletion=acompletion,
+                    stream=stream,
+                    headers=headers or litellm.headers,
+                )
+
             # Check if this is a Claude model - route to Azure Anthropic handler
-            model_lower = model.lower()
-            if "claude" in model_lower:
+            elif "claude" in model.lower():
                 # Use Azure Anthropic handler for Claude models
                 api_base = AzureFoundryModelInfo.get_api_base(api_base)
                 if api_base is None:

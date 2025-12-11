@@ -1171,6 +1171,9 @@ When responding to Computer Use tool calls, include the URL and screenshot:
 }
 ```
 
+</TabItem>
+</Tabs>
+
 ### Environment Mapping
 
 | LiteLLM Input | Gemini API Value |
