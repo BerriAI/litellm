@@ -205,8 +205,14 @@ async def get_agent_fields() -> List[AgentCreateInfo]:
         inherit_from = agent.get("inherit_credentials_from_provider")
         if inherit_from and inherit_from in provider_map:
             provider = provider_map[inherit_from]
+            # Copy provider fields and mark them for inclusion in litellm_params
+            inherited_fields = []
+            for field in provider.get("credential_fields", []):
+                field_copy = field.copy()
+                field_copy["include_in_litellm_params"] = True
+                inherited_fields.append(field_copy)
             # Append provider credential fields after agent's own fields
-            agent["credential_fields"] = agent.get("credential_fields", []) + provider.get("credential_fields", [])
+            agent["credential_fields"] = agent.get("credential_fields", []) + inherited_fields
         # Remove the inherit field from response (not needed by frontend)
         agent.pop("inherit_credentials_from_provider", None)
 
