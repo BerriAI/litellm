@@ -52,6 +52,90 @@ def test_convert_chat_completion_messages_to_responses_api_image_input():
     assert response[0]["content"][1]["image_url"] == user_image
 
 
+def test_convert_chat_completion_messages_to_responses_api_tool_result_with_image():
+    """
+    Test that tool messages with image content are correctly transformed to Responses API format.
+
+    This is a regression test for issue #17762 where images in tool results were not
+    correctly transformed from Chat Completion format (image_url with nested object)
+    to Responses API format (input_image with flat string).
+
+    Chat Completion format:
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
+
+    Responses API format:
+        {"type": "input_image", "image_url": "data:image/png;base64,..."}
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    test_image_base64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+
+    # Chat Completion format with image in tool result
+    messages = [
+        {
+            "role": "user",
+            "content": "Fetch the image from this URL",
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_abc123",
+                    "type": "function",
+                    "function": {
+                        "name": "fetch_image",
+                        "arguments": '{"url": "https://example.com/image.png"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_abc123",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": test_image_base64},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": "What color is the image?",
+        },
+    ]
+
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    # Find the function_call_output item
+    function_call_output = None
+    for item in response:
+        if item.get("type") == "function_call_output":
+            function_call_output = item
+            break
+
+    assert function_call_output is not None, "function_call_output not found in response"
+    assert function_call_output["call_id"] == "call_abc123"
+
+    # Check that the output is correctly transformed
+    output = function_call_output["output"]
+    assert isinstance(output, list), "output should be a list"
+    assert len(output) == 1, "output should have one item"
+
+    image_item = output[0]
+    # Should be transformed to Responses API format
+    assert image_item["type"] == "input_image", f"Expected type 'input_image', got '{image_item.get('type')}'"
+    assert image_item["image_url"] == test_image_base64, "image_url should be a flat string, not a nested object"
+    assert "detail" in image_item, "detail field should be present"
+
+    print("✓ Tool result with image correctly transformed to Responses API format")
+
+
 def test_openai_responses_chunk_parser_reasoning_summary():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,
