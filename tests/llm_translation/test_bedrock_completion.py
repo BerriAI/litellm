@@ -3568,7 +3568,64 @@ def test_bedrock_openai_model_id_extraction():
     # The ARN should be double URL encoded
     assert "arn" in model_id
     assert "imported-model" in model_id
+    # Ensure the openai/ prefix was stripped
+    assert "openai%2F" not in model_id
+    assert "openai/" not in model_id
     print(f"✓ Model ID extracted and encoded: {model_id}")
+
+
+def test_bedrock_qwen3_model_id_extraction():
+    """
+    Test that the model ID (ARN) is correctly extracted and encoded for Qwen3 imported models.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/17763
+    """
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    model = "qwen3/arn:aws:bedrock:eu-central-1:123456789012:imported-model/test-model-123"
+    provider = BaseAWSLLM.get_bedrock_invoke_provider(model)
+
+    assert provider == "qwen3"
+
+    model_id = BaseAWSLLM.get_bedrock_model_id(
+        model=model,
+        provider=provider,
+        optional_params={}
+    )
+
+    # The ARN should be URL encoded
+    assert "arn" in model_id
+    assert "imported-model" in model_id
+    # Ensure the qwen3/ prefix was stripped (this was the bug)
+    assert "qwen3%2F" not in model_id
+    assert "qwen3/" not in model_id
+    print(f"✓ Qwen3 Model ID extracted and encoded: {model_id}")
+
+
+def test_bedrock_qwen2_model_id_extraction():
+    """
+    Test that the model ID (ARN) is correctly extracted and encoded for Qwen2 imported models.
+    """
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    model = "qwen2/arn:aws:bedrock:us-west-2:123456789012:imported-model/test-model-456"
+    provider = BaseAWSLLM.get_bedrock_invoke_provider(model)
+
+    assert provider == "qwen2"
+
+    model_id = BaseAWSLLM.get_bedrock_model_id(
+        model=model,
+        provider=provider,
+        optional_params={}
+    )
+
+    # The ARN should be URL encoded
+    assert "arn" in model_id
+    assert "imported-model" in model_id
+    # Ensure the qwen2/ prefix was stripped
+    assert "qwen2%2F" not in model_id
+    assert "qwen2/" not in model_id
+    print(f"✓ Qwen2 Model ID extracted and encoded: {model_id}")
 
 
 def test_bedrock_openai_convert_messages_to_prompt():
