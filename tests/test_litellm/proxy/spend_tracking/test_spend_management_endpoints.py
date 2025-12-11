@@ -1164,6 +1164,7 @@ class TestSpendLogsPayload:
                     "proxy_server_request": "{}",
                     "status": "success",
                     "mcp_namespaced_tool_name": None,
+                    "agent_id": None,
                 }
             )
 
@@ -1257,6 +1258,7 @@ class TestSpendLogsPayload:
                     "proxy_server_request": "{}",
                     "status": "success",
                     "mcp_namespaced_tool_name": None,
+                    "agent_id": None,
                 }
             )
 
@@ -1348,6 +1350,7 @@ class TestSpendLogsPayload:
                     "proxy_server_request": "{}",
                     "status": "success",
                     "mcp_namespaced_tool_name": None,
+                    "agent_id": None,
                 }
             )
 
