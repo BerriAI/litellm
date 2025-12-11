@@ -98,8 +98,8 @@ class AzureAnthropicConfig(AnthropicConfig):
         headers: dict,
     ) -> dict:
         """
-        Transform request using parent AnthropicConfig, then remove extra_body if present.
-        Azure Anthropic doesn't support extra_body parameter.
+        Transform request using parent AnthropicConfig, then remove unsupported params.
+        Azure Anthropic doesn't support extra_body, max_retries, or stream_options parameters.
         """
         # Call parent transform_request
         data = super().transform_request(
@@ -109,9 +109,11 @@ class AzureAnthropicConfig(AnthropicConfig):
             litellm_params=litellm_params,
             headers=headers,
         )
-        
-        # Remove extra_body if present (Azure Anthropic doesn't support it)
+
+        # Remove unsupported parameters for Azure AI Anthropic
         data.pop("extra_body", None)
-        
+        data.pop("max_retries", None)
+        data.pop("stream_options", None)
+
         return data
 

@@ -957,6 +957,65 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 </TabItem>
 </Tabs>
 
+## Usage - Service Tier
+
+Control the processing tier for your Bedrock requests using `serviceTier`. Valid values are `priority`, `default`, or `flex`.
+
+- `priority`: Higher priority processing with guaranteed capacity
+- `default`: Standard processing tier
+- `flex`: Cost-optimized processing for batch workloads
+
+[Bedrock ServiceTier API Reference](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ServiceTier.html)
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="bedrock/converse/qwen.qwen3-235b-a22b-2507-v1:0",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    serviceTier={"type": "priority"},
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: qwen3-235b-priority
+    litellm_params:
+      model: bedrock/converse/qwen.qwen3-235b-a22b-2507-v1:0
+      aws_region_name: ap-northeast-1
+      serviceTier:
+        type: priority
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it!
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "qwen3-235b-priority",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "serviceTier": {"type": "priority"}
+  }'
+```
+
+</TabItem>
+</Tabs>
 ## Usage - Bedrock Guardrails
 
 Example of using [Bedrock Guardrails with LiteLLM](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-converse-api.html)

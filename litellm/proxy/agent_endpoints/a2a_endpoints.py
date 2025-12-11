@@ -6,7 +6,7 @@ The A2A SDK can point to LiteLLM's URL and invoke agents registered with LiteLLM
 """
 
 import json
-from typing import Any, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -46,7 +46,7 @@ def _get_agent(agent_id: str):
 
 
 async def _handle_stream_message(
-    api_base: str,
+    api_base: Optional[str],
     request_id: str,
     params: dict,
     litellm_params: Optional[dict] = None,
@@ -213,13 +213,17 @@ async def invoke_agent_a2a(
         # Get backend URL and agent name
         agent_url = agent.agent_card_params.get("url")
         agent_name = agent.agent_card_params.get("name", agent_id)
-        if not agent_url:
-            return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
-
-        verbose_proxy_logger.info(f"Proxying A2A request to agent '{agent_id}' at {agent_url}")
-
+        
         # Get litellm_params (may include custom_llm_provider for completion bridge)
         litellm_params = agent.litellm_params or {}
+        custom_llm_provider = litellm_params.get("custom_llm_provider")
+        
+        # URL is required unless using completion bridge with a provider that derives endpoint from model
+        # (e.g., bedrock/agentcore derives endpoint from ARN in model string)
+        if not agent_url and not custom_llm_provider:
+            return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
+
+        verbose_proxy_logger.info(f"Proxying A2A request to agent '{agent_id}' at {agent_url or 'completion-bridge'}")
 
         # Set up data dict for litellm processing
         body.update({

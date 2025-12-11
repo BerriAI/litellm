@@ -165,11 +165,24 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     )
             elif role == "tool":
                 # Convert tool message to function call output format
+                # Transform content to responses format (handles str, list, and other types)
+                # _convert_content_to_responses_format always returns List[Dict[str, Any]]
+                if content is None:
+                    transformed_output: list[dict[str, Any]] = []
+                elif isinstance(content, (str, list)):
+                    transformed_output = self._convert_content_to_responses_format(
+                        content, "tool"
+                    )
+                else:
+                    # Fallback: convert unexpected types to string first
+                    transformed_output = self._convert_content_to_responses_format(
+                        str(content), "tool"
+                    )
                 input_items.append(
                     {
                         "type": "function_call_output",
                         "call_id": tool_call_id,
-                        "output": content,
+                        "output": transformed_output,
                     }
                 )
             elif role == "assistant" and tool_calls and isinstance(tool_calls, list):

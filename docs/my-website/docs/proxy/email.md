@@ -69,6 +69,23 @@ litellm_settings:
 ```
 
   </TabItem>
+  <TabItem value="sendgrid" label="SendGrid API">
+
+Add `sendgrid_email` to your proxy config.yaml under `litellm_settings`
+
+set the following env variables
+
+```shell showLineNumbers
+SENDGRID_API_KEY="SG.1234"
+SENDGRID_SENDER_EMAIL="notifications@your-domain.com"
+```
+
+```yaml showLineNumbers title="proxy_config.yaml"
+litellm_settings:
+  callbacks: ["sendgrid_email"]
+```
+
+  </TabItem>
 </Tabs>
 
 ### 2. Create a new user

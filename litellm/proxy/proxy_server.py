@@ -1022,21 +1022,33 @@ try:
 
     app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 
+    def _restructure_ui_html_files(ui_root: str) -> None:
+        """Ensure each exported HTML route is available as <route>/index.html."""
+
+        for current_root, _, files in os.walk(ui_root):
+            rel_root = os.path.relpath(current_root, ui_root)
+            first_segment = "" if rel_root == "." else rel_root.split(os.sep)[0]
+
+            # Ignore Next.js asset directories
+            if first_segment in {"_next", "litellm-asset-prefix"}:
+                continue
+
+            for filename in files:
+                if not filename.endswith(".html") or filename == "index.html":
+                    continue
+
+                file_path = os.path.join(current_root, filename)
+                target_dir = os.path.splitext(file_path)[0]
+                target_path = os.path.join(target_dir, "index.html")
+
+                os.makedirs(target_dir, exist_ok=True)
+                os.replace(file_path, target_path)
+
     # Handle HTML file restructuring
     # Skip this for non-root Docker since it's done at build time
     # Support both "true" and "True" for case-insensitive comparison
     if os.getenv("LITELLM_NON_ROOT", "").lower() != "true":
-        for filename in os.listdir(ui_path):
-            if filename.endswith(".html") and filename != "index.html":
-                # Create a folder with the same name as the HTML file
-                folder_name = os.path.splitext(filename)[0]
-                folder_path = os.path.join(ui_path, folder_name)
-                os.makedirs(folder_path, exist_ok=True)
-
-                # Move the HTML file into the folder and rename it to 'index.html'
-                src = os.path.join(ui_path, filename)
-                dst = os.path.join(folder_path, "index.html")
-                os.rename(src, dst)
+        _restructure_ui_html_files(ui_path)
     else:
         verbose_proxy_logger.info(
             "Skipping runtime HTML restructuring for non-root Docker (already done at build time)"
@@ -4440,7 +4452,7 @@ class ProxyStartupEvent:
         ### MONITOR SPEND LOGS QUEUE (queue-size-based job) ###
         if general_settings.get("disable_spend_logs", False) is False:
             from litellm.proxy.utils import _monitor_spend_logs_queue
-
+            
             # Start background task to monitor spend logs queue size
             asyncio.create_task(
                 _monitor_spend_logs_queue(
@@ -5132,14 +5144,16 @@ async def completion(  # noqa: PLR0915
 
         if _data.get("stream", None) is not None and _data["stream"] is True:
             _text_response = litellm.ModelResponse()
-            _text_response.choices[0].text = e.message  # type: ignore[attr-defined]
+            # Set text attribute dynamically for text completion format
+            setattr(_text_response.choices[0], "text", e.message)
             _text_response.model = e.model  # type: ignore[assignment]
             _usage = litellm.Usage(
                 prompt_tokens=0,
                 completion_tokens=0,
                 total_tokens=0,
             )
-            _text_response.usage = _usage  # type: ignore[assignment]
+            # Set usage attribute dynamically (ModelResponse accepts usage in __init__ but it's not in type definition)
+            setattr(_text_response, "usage", _usage)
             _iterator = litellm.utils.ModelResponseIterator(
                 model_response=_text_response, convert_to_delta=True
             )

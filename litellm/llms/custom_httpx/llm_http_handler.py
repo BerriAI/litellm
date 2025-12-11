@@ -7311,6 +7311,7 @@ class BaseLLMHTTPHandler:
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
+        system_instruction: Optional[Any] = None,
     ) -> Any:
         """
         Handles Google GenAI generate content requests.
@@ -7336,6 +7337,7 @@ class BaseLLMHTTPHandler:
                 client=client if isinstance(client, AsyncHTTPHandler) else None,
                 stream=stream,
                 litellm_metadata=litellm_metadata,
+                system_instruction=system_instruction,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -7365,6 +7367,7 @@ class BaseLLMHTTPHandler:
             contents=contents,
             tools=tools,
             generate_content_config_dict=generate_content_config_dict,
+            system_instruction=system_instruction,
         )
 
         if extra_body:
@@ -7435,6 +7438,7 @@ class BaseLLMHTTPHandler:
         client: Optional[AsyncHTTPHandler] = None,
         stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
+        system_instruction: Optional[Any] = None,
     ) -> Any:
         """
         Async version of the generate content handler.
@@ -7472,6 +7476,7 @@ class BaseLLMHTTPHandler:
             contents=contents,
             tools=tools,
             generate_content_config_dict=generate_content_config_dict,
+            system_instruction=system_instruction,
         )
 
         if extra_body:

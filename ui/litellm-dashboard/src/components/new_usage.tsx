@@ -49,6 +49,7 @@ import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "./usage/ty
 import { valueFormatterSpend } from "./usage/utils/value_formatters";
 import UserAgentActivity from "./user_agent_activity";
 import ViewUserSpend from "./view_user_spend";
+import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 
 interface NewUsagePageProps {
   accessToken: string | null;
@@ -88,6 +89,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
 
   const [allTags, setAllTags] = useState<EntityList[]>([]);
   const { data: customers = [] } = useCustomers(accessToken, userRole);
+  const { data: agentsResponse } = useAgents(accessToken, userRole);
   const [modelViewType, setModelViewType] = useState<"groups" | "individual">("groups");
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
@@ -435,6 +437,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                 <Tab>Team Usage</Tab>
                 {all_admin_roles.includes(userRole || "") ? <Tab>Customer Usage</Tab> : <></>}
                 {all_admin_roles.includes(userRole || "") ? <Tab>Tag Usage</Tab> : <></>}
+                {all_admin_roles.includes(userRole || "") ? <Tab>Agent Usage</Tab> : <></>}
                 {all_admin_roles.includes(userRole || "") ? <Tab>User Agent Activity</Tab> : <></>}
               </TabList>
               <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
@@ -838,6 +841,19 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                   userID={userID}
                   userRole={userRole}
                   entityList={allTags}
+                  premiumUser={premiumUser}
+                  dateValue={dateValue}
+                />
+              </TabPanel>
+              <TabPanel>
+                <EntityUsage
+                  accessToken={accessToken}
+                  entityType="agent"
+                  userID={userID}
+                  userRole={userRole}
+                  entityList={
+                    agentsResponse?.agents?.map((agent) => ({ label: agent.agent_name, value: agent.agent_id })) || null
+                  }
                   premiumUser={premiumUser}
                   dateValue={dateValue}
                 />
