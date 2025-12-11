@@ -186,8 +186,7 @@ async def asend_message(
     if custom_llm_provider:
         if request is None:
             raise ValueError("request is required for completion bridge")
-        if api_base is None:
-            raise ValueError("api_base is required for completion bridge")
+        # api_base is optional for providers that derive endpoint from model (e.g., bedrock/agentcore)
 
         verbose_logger.info(
             f"A2A using completion bridge: provider={custom_llm_provider}, api_base={api_base}"
@@ -334,8 +333,7 @@ async def asend_message_streaming(
     if custom_llm_provider:
         if request is None:
             raise ValueError("request is required for completion bridge")
-        if api_base is None:
-            raise ValueError("api_base is required for completion bridge")
+        # api_base is optional for providers that derive endpoint from model (e.g., bedrock/agentcore)
 
         verbose_logger.info(
             f"A2A streaming using completion bridge: provider={custom_llm_provider}"
