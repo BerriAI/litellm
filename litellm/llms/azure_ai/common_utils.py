@@ -1,12 +1,9 @@
-from typing import TYPE_CHECKING, List, Literal, Optional
+from typing import List, Literal, Optional
 
 import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-
-if TYPE_CHECKING:
-    from litellm.types.utils import ModelResponse
 
 
 class AzureFoundryModelInfo(BaseLLMModelInfo):

@@ -22,11 +22,9 @@ from typing import (
     AsyncIterator,
     Callable,
     Dict,
-    Iterator,
     List,
     Optional,
     Tuple,
-    Union,
 )
 
 import httpx
