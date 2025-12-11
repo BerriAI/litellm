@@ -308,29 +308,46 @@ class AzureAIAgentsConfig(BaseConfig):
         litellm_params: dict,
         timeout: float,
         acompletion: bool,
+        stream: bool = False,
         headers: Optional[dict] = None,
-    ) -> Union[ModelResponse, Coroutine[Any, Any, ModelResponse]]:
+    ) -> Any:
         """
         Dispatch method for Azure AI Agents completion.
         
         Routes to sync or async completion based on acompletion flag.
+        Supports native streaming via SSE when stream=True and acompletion=True.
         """
         from litellm.llms.azure_ai.agents.handler import azure_ai_agents_handler
 
         if acompletion:
-            return azure_ai_agents_handler.acompletion(
-                model=model,
-                messages=messages,
-                api_base=api_base,
-                api_key=api_key,
-                model_response=model_response,
-                logging_obj=logging_obj,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                timeout=timeout,
-                headers=headers,
-            )
+            if stream:
+                # Native async streaming via SSE - return the async generator directly
+                return azure_ai_agents_handler.acompletion_stream(
+                    model=model,
+                    messages=messages,
+                    api_base=api_base,
+                    api_key=api_key,
+                    logging_obj=logging_obj,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    timeout=timeout,
+                    headers=headers,
+                )
+            else:
+                return azure_ai_agents_handler.acompletion(
+                    model=model,
+                    messages=messages,
+                    api_base=api_base,
+                    api_key=api_key,
+                    model_response=model_response,
+                    logging_obj=logging_obj,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    timeout=timeout,
+                    headers=headers,
+                )
         else:
+            # Sync completion - streaming not supported for sync
             return azure_ai_agents_handler.completion(
                 model=model,
                 messages=messages,

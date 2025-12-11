@@ -8,12 +8,26 @@ This handler executes the multi-step agent flow:
 4. Retrieve the assistant's response messages
 
 Model format: azure_ai/agents/<agent_id>
+
+Supports both polling-based and native streaming (SSE) modes.
 """
 
 import asyncio
 import json
 import time
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
+import uuid
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Union,
+)
 
 import httpx
 
@@ -62,6 +76,10 @@ class AzureAIAgentsHandler:
 
     def _build_list_messages_url(self, api_base: str, thread_id: str, api_version: str) -> str:
         return f"{api_base}/openai/threads/{thread_id}/messages?api-version={api_version}"
+
+    def _build_create_thread_and_run_url(self, api_base: str, api_version: str) -> str:
+        """URL for the create-thread-and-run endpoint (supports streaming)."""
+        return f"{api_base}/openai/threads/runs?api-version={api_version}"
 
     # -------------------------------------------------------------------------
     # Response Helpers
@@ -370,6 +388,154 @@ class AzureAIAgentsHandler:
         
         content = self._extract_content_from_messages(response.json())
         return thread_id, content
+
+    # -------------------------------------------------------------------------
+    # Streaming Completion (Native SSE)
+    # -------------------------------------------------------------------------
+    async def acompletion_stream(
+        self,
+        model: str,
+        messages: List[Dict[str, Any]],
+        api_base: str,
+        api_key: str,
+        logging_obj: LiteLLMLoggingObj,
+        optional_params: dict,
+        litellm_params: dict,
+        timeout: float,
+        headers: Optional[dict] = None,
+    ) -> AsyncIterator:
+        """Execute async streaming completion using Azure Agent Service with native SSE."""
+        import litellm
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+
+        headers, api_version, agent_id, thread_id, api_base = self._prepare_completion_params(
+            model, api_base, api_key, optional_params, headers
+        )
+
+        # Build payload for create-thread-and-run with streaming
+        thread_messages = []
+        for msg in messages:
+            if msg.get("role") in ["user", "system"]:
+                thread_messages.append({
+                    "role": "user",
+                    "content": msg.get("content", "")
+                })
+
+        payload: Dict[str, Any] = {
+            "assistant_id": agent_id,
+            "stream": True,
+        }
+        
+        # Add thread with messages if we don't have an existing thread
+        if not thread_id:
+            payload["thread"] = {"messages": thread_messages}
+        
+        if "instructions" in optional_params:
+            payload["instructions"] = optional_params["instructions"]
+
+        url = self._build_create_thread_and_run_url(api_base, api_version)
+        verbose_logger.debug(f"Azure AI Agents streaming - URL: {url}")
+
+        # Use LiteLLM's async HTTP client for streaming
+        client = get_async_httpx_client(
+            llm_provider=litellm.LlmProviders.AZURE_AI,
+            params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+        )
+
+        response = await client.post(
+            url=url,
+            headers=headers,
+            data=json.dumps(payload),
+            stream=True,
+        )
+
+        if response.status_code not in [200, 201]:
+            error_text = await response.aread()
+            raise AzureAIAgentsError(
+                status_code=response.status_code,
+                message=f"Streaming request failed: {error_text.decode()}"
+            )
+
+        async for chunk in self._process_sse_stream(response, model):
+            yield chunk
+
+    async def _process_sse_stream(
+        self,
+        response: httpx.Response,
+        model: str,
+    ) -> AsyncIterator:
+        """Process SSE stream and yield OpenAI-compatible streaming chunks."""
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+        
+        response_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+        created = int(time.time())
+        thread_id = None
+        
+        current_event = None
+        
+        async for line in response.aiter_lines():
+            line = line.strip()
+            
+            if line.startswith("event:"):
+                current_event = line[6:].strip()
+                continue
+            
+            if line.startswith("data:"):
+                data_str = line[5:].strip()
+                
+                if data_str == "[DONE]":
+                    # Send final chunk with finish_reason
+                    final_chunk = ModelResponseStream(
+                        id=response_id,
+                        created=created,
+                        model=model,
+                        object="chat.completion.chunk",
+                        choices=[
+                            StreamingChoices(
+                                finish_reason="stop",
+                                index=0,
+                                delta=Delta(content=None),
+                            )
+                        ],
+                    )
+                    if thread_id:
+                        final_chunk._hidden_params = {"thread_id": thread_id}
+                    yield final_chunk
+                    return
+                
+                try:
+                    data = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+                
+                # Extract thread_id from thread.created event
+                if current_event == "thread.created" and "id" in data:
+                    thread_id = data["id"]
+                    verbose_logger.debug(f"Stream created thread: {thread_id}")
+                
+                # Process message deltas - this is where the actual content comes
+                if current_event == "thread.message.delta":
+                    delta_content = data.get("delta", {}).get("content", [])
+                    for content_item in delta_content:
+                        if content_item.get("type") == "text":
+                            text_value = content_item.get("text", {}).get("value", "")
+                            if text_value:
+                                chunk = ModelResponseStream(
+                                    id=response_id,
+                                    created=created,
+                                    model=model,
+                                    object="chat.completion.chunk",
+                                    choices=[
+                                        StreamingChoices(
+                                            finish_reason=None,
+                                            index=0,
+                                            delta=Delta(content=text_value, role="assistant"),
+                                        )
+                                    ],
+                                )
+                                if thread_id:
+                                    chunk._hidden_params = {"thread_id": thread_id}
+                                yield chunk
 
 
 # Singleton instance

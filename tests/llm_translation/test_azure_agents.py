@@ -81,6 +81,7 @@ async def test_azure_ai_agents_acompletion_streaming():
     chunks = []
     full_content = ""
     async for chunk in response:
+        print("Streaming chunk: ", chunk)
         chunks.append(chunk)
         if hasattr(chunk, "choices") and chunk.choices:
             delta = chunk.choices[0].delta
