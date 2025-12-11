@@ -1761,6 +1761,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     litellm_params=litellm_params,
                     timeout=timeout,
                     acompletion=acompletion,
+                    stream=stream,
                     headers=headers or litellm.headers,
                 )
 
