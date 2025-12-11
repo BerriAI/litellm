@@ -34,12 +34,22 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
     
     @classmethod
     def is_model_gpt_5_1_model(cls, model: str) -> bool:
-        """Check if the model is a gpt-5.1 variant.
+        """Check if the model is a gpt-5.1 or gpt-5.2 chat variant.
         
-        gpt-5.1 supports temperature when reasoning_effort="none",
-        unlike gpt-5 which only supports temperature=1.
+        gpt-5.1/5.2 support temperature when reasoning_effort="none",
+        unlike base gpt-5 which only supports temperature=1. Excludes
+        pro variants which keep stricter knobs.
         """
-        return "gpt-5.1" in model
+        model_name = model.split("/")[-1]
+        is_gpt_5_1 = model_name.startswith("gpt-5.1")
+        is_gpt_5_2 = model_name.startswith("gpt-5.2") and "pro" not in model_name
+        return is_gpt_5_1 or is_gpt_5_2
+
+    @classmethod
+    def is_model_gpt_5_2_pro_model(cls, model: str) -> bool:
+        """Check if the model is the gpt-5.2-pro snapshot/alias."""
+        model_name = model.split("/")[-1]
+        return model_name.startswith("gpt-5.2-pro")
 
     def get_supported_openai_params(self, model: str) -> list:
         from litellm.utils import supports_tool_choice
@@ -77,7 +87,10 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             or optional_params.get("reasoning_effort")
         )
         if reasoning_effort is not None and reasoning_effort == "xhigh":
-            if not self.is_model_gpt_5_1_codex_max_model(model):
+            if not (
+                self.is_model_gpt_5_1_codex_max_model(model)
+                or self.is_model_gpt_5_2_pro_model(model)
+            ):
                 if litellm.drop_params or drop_params:
                     non_default_params.pop("reasoning_effort", None)
                 else:
