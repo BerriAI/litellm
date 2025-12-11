@@ -1,9 +1,10 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import NewUsagePage from "./new_usage";
 import type { Organization } from "./networking";
 import * as networking from "./networking";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
+import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 
 // Polyfill ResizeObserver for test environment
 beforeAll(() => {
@@ -58,10 +59,15 @@ vi.mock("@/app/(dashboard)/hooks/customers/useCustomers", () => ({
   useCustomers: vi.fn(),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/agents/useAgents", () => ({
+  useAgents: vi.fn(),
+}));
+
 describe("NewUsage", () => {
   const mockUserDailyActivityAggregatedCall = vi.mocked(networking.userDailyActivityAggregatedCall);
   const mockTagListCall = vi.mocked(networking.tagListCall);
   const mockUseCustomers = vi.mocked(useCustomers);
+  const mockUseAgents = vi.mocked(useAgents);
 
   const mockSpendData = {
     results: [
@@ -193,6 +199,13 @@ describe("NewUsage", () => {
     },
   ];
 
+  const mockAgents = [
+    {
+      agent_id: "agent-123",
+      agent_name: "Test Agent",
+    },
+  ];
+
   const defaultProps = {
     accessToken: "test-token",
     userRole: "Admin",
@@ -226,6 +239,11 @@ describe("NewUsage", () => {
     mockTagListCall.mockResolvedValue({});
     mockUseCustomers.mockReturnValue({
       data: [],
+      isLoading: false,
+      error: null,
+    } as any);
+    mockUseAgents.mockReturnValue({
+      data: { agents: [] },
       isLoading: false,
       error: null,
     } as any);
@@ -278,7 +296,9 @@ describe("NewUsage", () => {
 
     // Switch to Team Usage tab
     const teamUsageTab = screen.getByText("Team Usage");
-    fireEvent.click(teamUsageTab);
+    act(() => {
+      fireEvent.click(teamUsageTab);
+    });
 
     // Should render EntityUsage component
     await waitFor(() => {
@@ -288,7 +308,9 @@ describe("NewUsage", () => {
 
     // Switch to Tag Usage tab (admin only)
     const tagUsageTab = screen.getByText("Tag Usage");
-    fireEvent.click(tagUsageTab);
+    act(() => {
+      fireEvent.click(tagUsageTab);
+    });
 
     // Should still render EntityUsage component for tags
     await waitFor(() => {
@@ -298,18 +320,20 @@ describe("NewUsage", () => {
   });
 
   it("should show organization usage banner and tab for admins", async () => {
-    const { getByText, getAllByText } = render(<NewUsagePage {...defaultProps} organizations={mockOrganizations} />);
+    render(<NewUsagePage {...defaultProps} organizations={mockOrganizations} />);
 
     await waitFor(() => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
-    const organizationTab = getByText("Organization Usage");
-    fireEvent.click(organizationTab);
+    const organizationTab = screen.getByText("Organization Usage");
+    act(() => {
+      fireEvent.click(organizationTab);
+    });
 
     await waitFor(() => {
-      expect(getByText("Organization usage is a new feature.")).toBeInTheDocument();
-      const entityUsageElements = getAllByText("Entity Usage");
+      expect(screen.getByText("Organization usage is a new feature.")).toBeInTheDocument();
+      const entityUsageElements = screen.getAllByText("Entity Usage");
       expect(entityUsageElements.length).toBeGreaterThan(0);
     });
   });
@@ -321,17 +345,43 @@ describe("NewUsage", () => {
       error: null,
     } as any);
 
-    const { getByText, getAllByText } = render(<NewUsagePage {...defaultProps} />);
+    render(<NewUsagePage {...defaultProps} />);
 
     await waitFor(() => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
-    const customerTab = getByText("Customer Usage");
-    fireEvent.click(customerTab);
+    const customerTab = screen.getByText("Customer Usage");
+    act(() => {
+      fireEvent.click(customerTab);
+    });
 
     await waitFor(() => {
-      const entityUsageElements = getAllByText("Entity Usage");
+      const entityUsageElements = screen.getAllByText("Entity Usage");
+      expect(entityUsageElements.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("should show agent usage tab for admins", async () => {
+    mockUseAgents.mockReturnValue({
+      data: { agents: mockAgents },
+      isLoading: false,
+      error: null,
+    } as any);
+
+    render(<NewUsagePage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+
+    const agentTab = screen.getByText("Agent Usage");
+    act(() => {
+      fireEvent.click(agentTab);
+    });
+
+    await waitFor(() => {
+      const entityUsageElements = screen.getAllByText("Entity Usage");
       expect(entityUsageElements.length).toBeGreaterThan(0);
     });
   });
