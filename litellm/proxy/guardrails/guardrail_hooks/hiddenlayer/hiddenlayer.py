@@ -95,14 +95,15 @@ class HiddenlayerGuardrail(CustomGuardrail):
         request_data: dict,
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> str:
+    ) -> GenericGuardrailAPIInputs:
         """Validate (and optionally redact) text via HiddenLayer before/after LLM calls."""
 
         # The model in the request and the response can be inconsistent
         # I.e request can specify gpt-4o-mini but the response from the server will be
         # gpt-4o-mini-2025-11-01. We need the model to be consistent so that inferences
         # will be grouped correctly on the Hiddenlayer side
-        hl_request_metadata = {"model": logging_obj.model}
+        model_name = logging_obj.model if logging_obj and logging_obj.model else "unknown"
+        hl_request_metadata = {"model": model_name}
 
         # We need the hiddenlayer project id and requester id on both the input and output
         # Since headers aren't available on the response back from the model, we get them
@@ -110,15 +111,21 @@ class HiddenlayerGuardrail(CustomGuardrail):
         # hiddenlayer params from the raw request and then retrieve those same headers
         # from the logger object on the response from the model.
         headers = request_data.get("proxy_server_request", {}).get("headers", {})
-        if not headers:
+        if not headers and logging_obj and logging_obj.model_call_details:
             headers = logging_obj.model_call_details.get("litellm_params", {}).get("metadata", {}).get("headers", {})
 
         hl_request_metadata["requester_id"] = headers.get("hl-requester-id") or "LiteLLM"
         project_id = headers.get("hl-project-id")
 
         if scan_params := inputs.get("structured_messages"):
+            # Convert AllMessageValues to simple dict format for HiddenLayer API
+            messages = [
+                {"role": msg.get("role", "user"), "content": msg.get("content", "")}
+                for msg in scan_params
+                if isinstance(msg, dict)
+            ]
             result = await self._call_hiddenlayer(
-                project_id, hl_request_metadata, {"messages": scan_params}, input_type
+                project_id, hl_request_metadata, {"messages": messages}, input_type
             )
         elif text := inputs.get("texts"):
             result = await self._call_hiddenlayer(
@@ -151,10 +158,10 @@ class HiddenlayerGuardrail(CustomGuardrail):
         self,
         project_id: str | None,
         metadata: dict[str, str],
-        payload: dict[Literal["messages"], list[dict[str, str]]],
+        payload: dict[str, Any],
         input_type: Literal["request", "response"],
-    ) -> dict:
-        data = {"metadata": metadata}
+    ) -> dict[str, Any]:
+        data: dict[str, Any] = {"metadata": metadata}
 
         if input_type == "request":
             data["input"] = payload
