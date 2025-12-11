@@ -1051,9 +1051,8 @@ def test_deployment_state_management(prometheus_logger):
 
 def test_increment_deployment_cooled_down(prometheus_logger):
     import inspect
-    from litellm.integrations.prometheus import PrometheusLogger
 
-    method_sig = inspect.signature(PrometheusLogger.increment_deployment_cooled_down)
+    method_sig = inspect.signature(prometheus_logger.increment_deployment_cooled_down)
     expected_label_count = len([p for p in method_sig.parameters.keys() if p != 'self'])
 
     mock_chain = MagicMock()
