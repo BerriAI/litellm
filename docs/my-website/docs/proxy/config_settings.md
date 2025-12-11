@@ -819,6 +819,8 @@ router_settings:
 | SMTP_SENDER_LOGO | Logo used in emails sent via SMTP
 | SMTP_TLS | Flag to enable or disable TLS for SMTP connections
 | SMTP_USERNAME | Username for SMTP authentication (do not set if SMTP does not require auth)
+| SENDGRID_API_KEY | API key for SendGrid email service
+| SENDGRID_SENDER_EMAIL | Email address used as the sender in SendGrid email transactions 
 | SPEND_LOGS_URL | URL for retrieving spend logs
 | SPEND_LOG_CLEANUP_BATCH_SIZE | Number of logs deleted per batch during cleanup. Default is 1000
 | SSL_CERTIFICATE | Path to the SSL certificate file
