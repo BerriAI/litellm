@@ -60,6 +60,79 @@ We support ALL Deepseek models, just set `deepseek/` as a prefix when sending co
 |--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | deepseek-reasoner | `completion(model="deepseek/deepseek-reasoner", messages)` | 
 
+## Tool calling with thinking / `reasoning_content`
+
+When you enable DeepSeek thinking mode (`thinking: {"type": "enabled"}`), the API requires you to echo back `reasoning_content` on assistant messages that contain tool calls. If you omit it, DeepSeek returns a 400 error. See the official docs: https://api-docs.deepseek.com/guides/thinking_mode.
+
+```python
+from litellm import completion
+import json
+import os
+
+os.environ["DEEPSEEK_API_KEY"] = ""
+
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get weather for a city",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+            },
+        },
+    }
+]
+
+messages = [{"role": "user", "content": "What's the weather in Tokyo?"}]
+
+# First turn: model decides whether to call tools; include thinking
+resp = completion(
+    model="deepseek/deepseek-reasoner",
+    messages=messages,
+    tools=tools,
+    extra_body={"thinking": {"type": "enabled"}},
+)
+assistant_msg = resp.choices[0].message
+
+# Echo reasoning_content back with the tool call (required by DeepSeek)
+messages.append(
+    {
+        "role": "assistant",
+        "content": assistant_msg.content or "",
+        "tool_calls": assistant_msg.tool_calls,
+        "reasoning_content": assistant_msg.reasoning_content,
+    }
+)
+
+# Execute the tool(s)
+for tool_call in assistant_msg.tool_calls or []:
+    args = json.loads(tool_call.function.arguments or "{}")
+    tool_result = f"Mock weather for {args.get('city', 'unknown')}"
+    messages.append(
+        {
+            "role": "tool",
+            "tool_call_id": tool_call.id,
+            "content": tool_result,
+        }
+    )
+
+# Second turn: send tool results + reasoning_content back to get the final answer
+resp = completion(
+    model="deepseek/deepseek-reasoner",
+    messages=messages,
+    extra_body={"thinking": {"type": "enabled"}},
+)
+print(resp.choices[0].message.content)
+
+# If you start a new user question, drop old reasoning_content to save bandwidth:
+# for m in messages:
+#     if isinstance(m, dict) and m.get("role") == "assistant":
+#         m.pop("reasoning_content", None)
+```
+
 
 
 <Tabs>
