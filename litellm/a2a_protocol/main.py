@@ -287,6 +287,8 @@ async def asend_message_streaming(
     api_base: Optional[str] = None,
     litellm_params: Optional[Dict[str, Any]] = None,
     agent_id: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    proxy_server_request: Optional[Dict[str, Any]] = None,
 ) -> AsyncIterator[Any]:
     """
     Async: Send a streaming message to an A2A agent.
@@ -298,7 +300,9 @@ async def asend_message_streaming(
         request: SendStreamingMessageRequest from a2a.types
         api_base: API base URL (required for completion bridge)
         litellm_params: Optional dict with custom_llm_provider, model, etc. for completion bridge
-        agent_id: Optional agent ID for tracking in SpendLogs (currently unused in streaming)
+        agent_id: Optional agent ID for tracking in SpendLogs
+        metadata: Optional metadata dict (contains user_api_key, user_id, team_id, etc.)
+        proxy_server_request: Optional proxy server request data
 
     Yields:
         SendStreamingMessageResponse chunks from the agent
@@ -391,6 +395,19 @@ async def asend_message_streaming(
     logging_obj.model_call_details["custom_llm_provider"] = "a2a_agent"
     if agent_id:
         logging_obj.model_call_details["agent_id"] = agent_id
+
+    # Propagate litellm_params for spend logging (includes cost_per_query, etc.)
+    _litellm_params = litellm_params.copy() if litellm_params else {}
+    # Merge metadata into litellm_params.metadata (required for proxy cost tracking)
+    if metadata:
+        _litellm_params["metadata"] = metadata
+    if proxy_server_request:
+        _litellm_params["proxy_server_request"] = proxy_server_request
+
+    logging_obj.litellm_params = _litellm_params
+    logging_obj.optional_params = _litellm_params  # used by cost calc
+    logging_obj.model_call_details["litellm_params"] = _litellm_params
+    logging_obj.model_call_details["metadata"] = metadata or {}
 
     iterator = A2AStreamingIterator(
         stream=stream,
