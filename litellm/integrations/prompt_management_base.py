@@ -167,6 +167,8 @@ class PromptManagementBase(ABC):
         prompt_spec: Optional[PromptSpec] = None,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
     ) -> Tuple[str, List[AllMessageValues], dict]:
 
         if prompt_id is None:
@@ -224,6 +226,21 @@ class PromptManagementBase(ABC):
             prompt_label=prompt_label,
             prompt_version=prompt_version,
         )
+        if not ignore_prompt_manager_optional_params:
+            updated_non_default_params = {
+                **non_default_params,
+                **prompt_template_optional_params,
+            }
+        else:
+            updated_non_default_params = non_default_params
+
+        if not ignore_prompt_manager_model:
+            model = self._get_model_from_prompt(
+                prompt_management_client=prompt_template, model=model
+            )
+        else:
+            model = model
+
 
         return self.post_compile_prompt_processing(
             prompt_template=prompt_template,

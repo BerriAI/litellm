@@ -46,22 +46,38 @@ def _get_agent(agent_id: str):
 
 
 async def _handle_stream_message(
-    a2a_client: Any,
+    api_base: str,
     request_id: str,
     params: dict,
+    litellm_params: Optional[dict] = None,
+    agent_id: Optional[str] = None,
+    metadata: Optional[dict] = None,
+    proxy_server_request: Optional[dict] = None,
 ) -> StreamingResponse:
-    """Handle message/stream method."""
+    """Handle message/stream method via SDK functions."""
     from a2a.types import MessageSendParams, SendStreamingMessageRequest
 
-    a2a_request = SendStreamingMessageRequest(
-        id=request_id,
-        params=MessageSendParams(**params),
-    )
+    from litellm.a2a_protocol import asend_message_streaming
 
     async def stream_response():
         try:
-            async for chunk in a2a_client.send_message_streaming(a2a_request):
-                yield json.dumps(chunk.model_dump(mode="json", exclude_none=True)) + "\n"
+            a2a_request = SendStreamingMessageRequest(
+                id=request_id,
+                params=MessageSendParams(**params),
+            )
+            async for chunk in asend_message_streaming(
+                request=a2a_request,
+                api_base=api_base,
+                litellm_params=litellm_params,
+                agent_id=agent_id,
+                metadata=metadata,
+                proxy_server_request=proxy_server_request,
+            ):
+                # Chunk may be dict or object depending on bridge vs standard path
+                if hasattr(chunk, "model_dump"):
+                    yield json.dumps(chunk.model_dump(mode="json", exclude_none=True)) + "\n"
+                else:
+                    yield json.dumps(chunk) + "\n"
         except Exception as e:
             verbose_proxy_logger.exception(f"Error streaming A2A response: {e}")
             yield json.dumps({
@@ -153,7 +169,9 @@ async def invoke_agent_a2a(
     - message/send: Send a message and get a response
     - message/stream: Send a message and stream the response
     """
-    from litellm.a2a_protocol import asend_message, create_a2a_client
+    from a2a.types import MessageSendParams, SendMessageRequest
+
+    from litellm.a2a_protocol import asend_message
     from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
         AgentRequestHandler,
     )
@@ -200,6 +218,9 @@ async def invoke_agent_a2a(
 
         verbose_proxy_logger.info(f"Proxying A2A request to agent '{agent_id}' at {agent_url}")
 
+        # Get litellm_params (may include custom_llm_provider for completion bridge)
+        litellm_params = agent.litellm_params or {}
+
         # Set up data dict for litellm processing
         body.update({
             "model": f"a2a_agent/{agent_name}",
@@ -216,28 +237,32 @@ async def invoke_agent_a2a(
             version=version,
         )
 
-        # Create A2A client
-        a2a_client = await create_a2a_client(base_url=agent_url)
-
+        # Route through SDK functions
         if method == "message/send":
-            from a2a.types import MessageSendParams, SendMessageRequest
-
             a2a_request = SendMessageRequest(
                 id=request_id,
                 params=MessageSendParams(**params),
             )
-
-            # Pass litellm data through kwargs for proper logging
             response = await asend_message(
-                a2a_client=a2a_client,
                 request=a2a_request,
+                api_base=agent_url,
+                litellm_params=litellm_params,
+                agent_id=agent.agent_id,
                 metadata=data.get("metadata", {}),
                 proxy_server_request=data.get("proxy_server_request"),
             )
             return JSONResponse(content=response.model_dump(mode="json", exclude_none=True))
 
         elif method == "message/stream":
-            return await _handle_stream_message(a2a_client, request_id, params)
+            return await _handle_stream_message(
+                api_base=agent_url,
+                request_id=request_id,
+                params=params,
+                litellm_params=litellm_params,
+                agent_id=agent.agent_id,
+                metadata=data.get("metadata", {}),
+                proxy_server_request=data.get("proxy_server_request"),
+            )
         else:
             return _jsonrpc_error(request_id, -32601, f"Method '{method}' not found")
 

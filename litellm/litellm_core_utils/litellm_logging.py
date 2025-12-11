@@ -1663,6 +1663,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 result = self._handle_non_streaming_google_genai_generate_content_response_logging(
                     result=result
                 )
+            elif (
+                self.call_type == CallTypes.asend_message.value
+                or self.call_type == CallTypes.send_message.value
+            ):
+                result = self._handle_a2a_response_logging(result=result)
 
             logging_result = self.normalize_logging_result(result=result)
 
@@ -3254,6 +3259,29 @@ class Logging(LiteLLMLoggingBaseClass):
             ),
         )
         return result
+
+    def _handle_a2a_response_logging(self, result: Any) -> Any:
+        """
+        Handles logging for A2A (Agent-to-Agent) responses.
+
+        Adds usage from model_call_details to the result if available.
+        Uses Pydantic's model_copy to avoid modifying the original response.
+
+        Args:
+            result: The LiteLLMSendMessageResponse from the A2A call
+
+        Returns:
+            The response object with usage added if available
+        """
+        # Get usage from model_call_details (set by asend_message)
+        usage = self.model_call_details.get("usage")
+        if usage is None:
+            return result
+
+        # Deep copy result and add usage
+        result_copy = result.model_copy(deep=True)
+        result_copy.usage = usage.model_dump() if hasattr(usage, "model_dump") else dict(usage)
+        return result_copy
 
 
 def _get_masked_values(

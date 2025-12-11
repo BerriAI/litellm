@@ -98,7 +98,8 @@ const sidebars = {
         "proxy/litellm_prompt_management",
         "proxy/custom_prompt_management",
         "proxy/native_litellm_prompt",
-        "proxy/prompt_management"
+        "proxy/prompt_management",
+        "proxy/arize_phoenix_prompts"
       ]
     },
     {
@@ -172,7 +173,7 @@ const sidebars = {
             {
               type: "link",
               label: "All Supported Endpoints →",
-              href: "/docs/supported_endpoints",
+              href: "https://docs.litellm.ai/docs/supported_endpoints",
             },
           ],
         },
@@ -492,6 +493,7 @@ const sidebars = {
           ]
         },
         "anthropic_unified",
+        "anthropic_count_tokens",
         "moderation",
         "ocr",
         {
@@ -704,6 +706,7 @@ const sidebars = {
         "providers/infinity",
         "providers/jina_ai",
         "providers/lambda_ai",
+        "providers/langgraph",
         "providers/lemonade",
         "providers/llamafile",
         "providers/lm_studio",

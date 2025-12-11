@@ -1,6 +1,5 @@
 import asyncio
 import copy
-import gc
 import hashlib
 import json
 import os
@@ -882,6 +881,11 @@ class ProxyLogging:
             data.update(optional_params)
             data["model"] = model
             data["messages"] = messages
+            # prevent re-processing the prompt template
+            data.pop("prompt_id", None)
+            data.pop("prompt_variables", None)
+            data.pop("prompt_label", None)
+            data.pop("prompt_version", None)
 
     def _process_guardrail_metadata(self, data: dict) -> None:
         """Process guardrails from metadata and add to applied_guardrails."""
@@ -970,6 +974,7 @@ class ProxyLogging:
         prompt_version = data.get("prompt_version", None)
 
         ## PROMPT TEMPLATE CHECK ##
+
         if (
             litellm_logging_obj is not None
             and prompt_id is not None
@@ -3376,7 +3381,6 @@ class ProxyUpdateSpend:
                             headers={"Content-Type": "application/json"},
                         )
                         del json_data
-                        gc.collect()
                         if response.status_code == 200:
                             prisma_client.spend_log_transactions = (
                                 prisma_client.spend_log_transactions[
@@ -3398,9 +3402,6 @@ class ProxyUpdateSpend:
                             )
                             # Explicitly clear batch memory
                             del batch, batch_with_dates
-                            # Only run gc every 5 batches to reduce overhead
-                            if j % (BATCH_SIZE * 5) == 0:
-                                gc.collect()
 
                         prisma_client.spend_log_transactions = (
                             prisma_client.spend_log_transactions[len(logs_to_process) :]
@@ -3426,7 +3427,6 @@ class ProxyUpdateSpend:
         finally:
             # Clean up logs_to_process after all processing is complete
             del logs_to_process
-            gc.collect()
 
     @staticmethod
     def disable_spend_updates() -> bool:
