@@ -65,7 +65,7 @@ from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_a
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.proxy._types import (
     AlertType,
     CallInfo,
@@ -3349,7 +3349,7 @@ class ProxyUpdateSpend:
     async def update_spend_logs(
         n_retry_times: int,
         prisma_client: PrismaClient,
-        db_writer_client: Optional[AsyncHTTPHandler],
+        db_writer_client: Optional[HTTPHandler],
         proxy_logging_obj: ProxyLogging,
     ):
         BATCH_SIZE = 1000  # Preferred size of each batch to write to the database
@@ -3440,7 +3440,7 @@ class ProxyUpdateSpend:
 
 async def update_spend(  # noqa: PLR0915
     prisma_client: PrismaClient,
-    db_writer_client: Optional[AsyncHTTPHandler],
+    db_writer_client: Optional[HTTPHandler],
     proxy_logging_obj: ProxyLogging,
 ):
     """
