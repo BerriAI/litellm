@@ -5,11 +5,14 @@ Provides standalone functions with @client decorator for LiteLLM logging integra
 """
 
 import asyncio
+import datetime
 from typing import TYPE_CHECKING, Any, AsyncIterator, Coroutine, Dict, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.a2a_protocol.streaming_iterator import A2AStreamingIterator
 from litellm.a2a_protocol.utils import A2ARequestUtils
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -63,6 +66,26 @@ def _set_usage_on_logging_obj(
         litellm_logging_obj.model_call_details["usage"] = usage
 
 
+def _set_agent_id_on_logging_obj(
+    kwargs: Dict[str, Any],
+    agent_id: Optional[str],
+) -> None:
+    """
+    Set agent_id on litellm_logging_obj for SpendLogs tracking.
+
+    Args:
+        kwargs: The kwargs dict containing litellm_logging_obj
+        agent_id: The A2A agent ID
+    """
+    if agent_id is None:
+        return
+
+    litellm_logging_obj = kwargs.get("litellm_logging_obj")
+    if litellm_logging_obj is not None:
+        # Set agent_id directly on model_call_details (same pattern as custom_llm_provider)
+        litellm_logging_obj.model_call_details["agent_id"] = agent_id
+
+
 def _get_a2a_model_info(a2a_client: Any, kwargs: Dict[str, Any]) -> str:
     """
     Extract agent info and set model/custom_llm_provider for cost tracking.
@@ -101,6 +124,7 @@ async def asend_message(
     request: Optional["SendMessageRequest"] = None,
     api_base: Optional[str] = None,
     litellm_params: Optional[Dict[str, Any]] = None,
+    agent_id: Optional[str] = None,
     **kwargs: Any,
 ) -> LiteLLMSendMessageResponse:
     """
@@ -114,6 +138,7 @@ async def asend_message(
         request: SendMessageRequest from a2a.types (optional if using completion bridge with api_base)
         api_base: API base URL (required for completion bridge, optional for standard A2A)
         litellm_params: Optional dict with custom_llm_provider, model, etc. for completion bridge
+        agent_id: Optional agent ID for tracking in SpendLogs
         **kwargs: Additional arguments passed to the client decorator
 
     Returns:
@@ -186,10 +211,14 @@ async def asend_message(
         return LiteLLMSendMessageResponse.from_dict(response_dict)
 
     # Standard A2A client flow
-    if a2a_client is None:
-        raise ValueError("a2a_client is required for standard A2A flow")
     if request is None:
         raise ValueError("request is required")
+
+    # Create A2A client if not provided but api_base is available
+    if a2a_client is None:
+        if api_base is None:
+            raise ValueError("Either a2a_client or api_base is required for standard A2A flow")
+        a2a_client = await create_a2a_client(base_url=api_base)
 
     agent_name = _get_a2a_model_info(a2a_client, kwargs)
 
@@ -215,6 +244,9 @@ async def asend_message(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
     )
+
+    # Set agent_id on logging obj for SpendLogs tracking
+    _set_agent_id_on_logging_obj(kwargs=kwargs, agent_id=agent_id)
 
     return response
 
@@ -254,6 +286,9 @@ async def asend_message_streaming(
     request: Optional["SendStreamingMessageRequest"] = None,
     api_base: Optional[str] = None,
     litellm_params: Optional[Dict[str, Any]] = None,
+    agent_id: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    proxy_server_request: Optional[Dict[str, Any]] = None,
 ) -> AsyncIterator[Any]:
     """
     Async: Send a streaming message to an A2A agent.
@@ -265,6 +300,9 @@ async def asend_message_streaming(
         request: SendStreamingMessageRequest from a2a.types
         api_base: API base URL (required for completion bridge)
         litellm_params: Optional dict with custom_llm_provider, model, etc. for completion bridge
+        agent_id: Optional agent ID for tracking in SpendLogs
+        metadata: Optional metadata dict (contains user_api_key, user_id, team_id, etc.)
+        proxy_server_request: Optional proxy server request data
 
     Yields:
         SendStreamingMessageResponse chunks from the agent
@@ -320,23 +358,66 @@ async def asend_message_streaming(
         return
 
     # Standard A2A client flow
-    if a2a_client is None:
-        raise ValueError("a2a_client is required for standard A2A flow")
     if request is None:
         raise ValueError("request is required")
 
+    # Create A2A client if not provided but api_base is available
+    if a2a_client is None:
+        if api_base is None:
+            raise ValueError("Either a2a_client or api_base is required for standard A2A flow")
+        a2a_client = await create_a2a_client(base_url=api_base)
+
     verbose_logger.info(f"A2A send_message_streaming request_id={request.id}")
 
+    # Track for logging
+    import datetime
+
+    start_time = datetime.datetime.now()
     stream = a2a_client.send_message_streaming(request)
 
-    chunk_count = 0
-    async for chunk in stream:
-        chunk_count += 1
-        yield chunk
+    # Build logging object for streaming completion callbacks
+    agent_card = getattr(a2a_client, "_litellm_agent_card", None) or getattr(a2a_client, "agent_card", None)
+    agent_name = getattr(agent_card, "name", "unknown") if agent_card else "unknown"
+    model = f"a2a_agent/{agent_name}"
 
-    verbose_logger.info(
-        f"A2A send_message_streaming completed, request_id={request.id}, chunks={chunk_count}"
+    logging_obj = Logging(
+        model=model,
+        messages=[{"role": "user", "content": "streaming-request"}],
+        stream=False,  # complete response logging after stream ends
+        call_type="asend_message_streaming",
+        start_time=start_time,
+        litellm_call_id=str(request.id),
+        function_id=str(request.id),
     )
+    logging_obj.model = model
+    logging_obj.custom_llm_provider = "a2a_agent"
+    logging_obj.model_call_details["model"] = model
+    logging_obj.model_call_details["custom_llm_provider"] = "a2a_agent"
+    if agent_id:
+        logging_obj.model_call_details["agent_id"] = agent_id
+
+    # Propagate litellm_params for spend logging (includes cost_per_query, etc.)
+    _litellm_params = litellm_params.copy() if litellm_params else {}
+    # Merge metadata into litellm_params.metadata (required for proxy cost tracking)
+    if metadata:
+        _litellm_params["metadata"] = metadata
+    if proxy_server_request:
+        _litellm_params["proxy_server_request"] = proxy_server_request
+
+    logging_obj.litellm_params = _litellm_params
+    logging_obj.optional_params = _litellm_params  # used by cost calc
+    logging_obj.model_call_details["litellm_params"] = _litellm_params
+    logging_obj.model_call_details["metadata"] = metadata or {}
+
+    iterator = A2AStreamingIterator(
+        stream=stream,
+        request=request,
+        logging_obj=logging_obj,
+        agent_name=agent_name,
+    )
+
+    async for chunk in iterator:
+        yield chunk
 
 
 async def create_a2a_client(

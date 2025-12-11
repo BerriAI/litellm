@@ -50,6 +50,9 @@ async def _handle_stream_message(
     request_id: str,
     params: dict,
     litellm_params: Optional[dict] = None,
+    agent_id: Optional[str] = None,
+    metadata: Optional[dict] = None,
+    proxy_server_request: Optional[dict] = None,
 ) -> StreamingResponse:
     """Handle message/stream method via SDK functions."""
     from a2a.types import MessageSendParams, SendStreamingMessageRequest
@@ -66,6 +69,9 @@ async def _handle_stream_message(
                 request=a2a_request,
                 api_base=api_base,
                 litellm_params=litellm_params,
+                agent_id=agent_id,
+                metadata=metadata,
+                proxy_server_request=proxy_server_request,
             ):
                 # Chunk may be dict or object depending on bridge vs standard path
                 if hasattr(chunk, "model_dump"):
@@ -241,6 +247,7 @@ async def invoke_agent_a2a(
                 request=a2a_request,
                 api_base=agent_url,
                 litellm_params=litellm_params,
+                agent_id=agent.agent_id,
                 metadata=data.get("metadata", {}),
                 proxy_server_request=data.get("proxy_server_request"),
             )
@@ -252,6 +259,9 @@ async def invoke_agent_a2a(
                 request_id=request_id,
                 params=params,
                 litellm_params=litellm_params,
+                agent_id=agent.agent_id,
+                metadata=data.get("metadata", {}),
+                proxy_server_request=data.get("proxy_server_request"),
             )
         else:
             return _jsonrpc_error(request_id, -32601, f"Method '{method}' not found")

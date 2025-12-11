@@ -315,6 +315,7 @@ model LiteLLM_SpendLogs {
   session_id          String?
   status              String?
   mcp_namespaced_tool_name String? 
+  agent_id            String?
   proxy_server_request Json?     @default("{}")
   @@index([startTime])
   @@index([end_user])
