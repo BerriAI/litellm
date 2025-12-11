@@ -165,13 +165,19 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     )
             elif role == "tool":
                 # Convert tool message to function call output format
-                # Transform content if it's multimodal (list with images, etc.)
-                if isinstance(content, list):
+                # Transform content to responses format (handles str, list, and other types)
+                # _convert_content_to_responses_format always returns List[Dict[str, Any]]
+                if content is None:
+                    transformed_output: list[dict[str, Any]] = []
+                elif isinstance(content, (str, list)):
                     transformed_output = self._convert_content_to_responses_format(
                         content, "tool"
                     )
                 else:
-                    transformed_output = content
+                    # Fallback: convert unexpected types to string first
+                    transformed_output = self._convert_content_to_responses_format(
+                        str(content), "tool"
+                    )
                 input_items.append(
                     {
                         "type": "function_call_output",
