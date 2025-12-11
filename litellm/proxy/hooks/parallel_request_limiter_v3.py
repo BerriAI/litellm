@@ -29,6 +29,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import get_model_rate_limit_from_metadata
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
+from litellm.types.utils import ModelResponse, Usage
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -1232,6 +1233,28 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         return pipeline_operations
 
+    def _get_total_tokens_from_usage(self, usage: Any | None, rate_limit_type: Literal["output", "input", "total"]) -> int:
+        # Get total tokens from response
+        total_tokens = 0
+        # spot fix for /responses api
+        if usage:
+            if isinstance(usage, Usage):
+                if rate_limit_type == "output":
+                    total_tokens = usage.completion_tokens
+                elif rate_limit_type == "input":
+                    total_tokens = usage.prompt_tokens
+                elif rate_limit_type == "total":
+                    total_tokens = usage.total_tokens
+            elif isinstance(usage, dict):
+                # Responses API usage comes as a dict in ResponsesAPIResponse
+                if rate_limit_type == "output":
+                    total_tokens = usage.get("completion_tokens", 0)
+                elif rate_limit_type == "input":
+                    total_tokens = usage.get("prompt_tokens", 0)
+                elif rate_limit_type == "total":
+                    total_tokens = usage.get("total_tokens", 0)
+        return total_tokens
+
     async def _execute_token_increment_script(
         self,
         pipeline_operations: List["RedisPipelineIncrementOperation"],
@@ -1313,11 +1336,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     def get_rate_limit_type(self) -> Literal["output", "input", "total"]:
         from litellm.proxy.proxy_server import general_settings
-
         specified_rate_limit_type = general_settings.get(
-            "token_rate_limit_type", "output"
+            "token_rate_limit_type", "total"
         )
-        if not specified_rate_limit_type or specified_rate_limit_type not in [
+        if specified_rate_limit_type not in [
             "output",
             "input",
             "total",
@@ -1336,7 +1358,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             get_model_group_from_litellm_kwargs,
         )
         from litellm.types.caching import RedisPipelineIncrementOperation
-        from litellm.types.utils import ModelResponse, Usage
 
         rate_limit_type = self.get_rate_limit_type()
 
@@ -1372,13 +1393,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 response_obj, BaseLiteLLMOpenAIResponseObject
             ):
                 _usage = getattr(response_obj, "usage", None)
-                if _usage and isinstance(_usage, Usage):
-                    if rate_limit_type == "output":
-                        total_tokens = _usage.completion_tokens
-                    elif rate_limit_type == "input":
-                        total_tokens = _usage.prompt_tokens
-                    elif rate_limit_type == "total":
-                        total_tokens = _usage.total_tokens
+                total_tokens = self._get_total_tokens_from_usage(usage=_usage, rate_limit_type=rate_limit_type)
 
             # Create pipeline operations for TPM increments
             pipeline_operations: List[RedisPipelineIncrementOperation] = []

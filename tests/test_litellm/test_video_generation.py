@@ -832,6 +832,37 @@ def test_video_content_handler_uses_get_for_openai():
     assert called_url == "https://api.openai.com/v1/videos/video_abc/content"
 
 
+def test_video_content_respects_api_base_and_api_key_from_kwargs():
+    """Test that video_content respects api_base and api_key from kwargs (simulating database entry)."""
+    from litellm.videos.main import video_content
+    
+    # Mock the handler to capture litellm_params
+    captured_litellm_params = None
+    
+    def capture_litellm_params(*args, **kwargs):
+        nonlocal captured_litellm_params
+        captured_litellm_params = kwargs.get("litellm_params")
+        return b"mp4-bytes"
+    
+    with patch('litellm.videos.main.base_llm_http_handler') as mock_handler:
+        mock_handler.video_content_handler = capture_litellm_params
+        
+        # Call video_content with api_base and api_key in kwargs (simulating database entry)
+        # This simulates how the router passes model config from database via **kwargs
+        result = video_content(
+            video_id="video_test_123",
+            custom_llm_provider="azure",
+            api_base="https://test-resource.openai.azure.com/",  # Passed via kwargs by router
+            api_key="test-api-key-from-db",  # Passed via kwargs by router
+        )
+    
+    # Verify that api_base and api_key from kwargs were included in litellm_params
+    assert captured_litellm_params is not None
+    assert captured_litellm_params.get("api_base") == "https://test-resource.openai.azure.com/"
+    assert captured_litellm_params.get("api_key") == "test-api-key-from-db"
+    assert result == b"mp4-bytes"
+
+
 def test_openai_video_config_has_async_transform():
     """Ensure OpenAIVideoConfig exposes async_transform_video_content_response at runtime."""
     cfg = OpenAIVideoConfig()
