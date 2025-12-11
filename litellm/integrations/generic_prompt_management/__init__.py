@@ -43,11 +43,14 @@ def prompt_initializer(
     if not api_base:
         raise ValueError("api_base is required in generic_prompt_config")
 
+    provider_specific_query_params = litellm_params.provider_specific_query_params
+
     try:
         generic_prompt_manager = GenericPromptManager(
             api_base=api_base,
             api_key=api_key,
             prompt_id=prompt_id,
+            additional_provider_specific_query_params=provider_specific_query_params,
         )
 
         return generic_prompt_manager

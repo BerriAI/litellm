@@ -27,6 +27,8 @@ class PromptLiteLLMParams(BaseModel):
     api_base: Optional[str] = None
     api_key: Optional[str] = None
 
+    provider_specific_query_params: Optional[Dict[str, Any]] = None
+
     dotprompt_content: Optional[str] = None
     """
     allows saving the dotprompt file content

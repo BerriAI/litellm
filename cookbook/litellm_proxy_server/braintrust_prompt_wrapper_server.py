@@ -190,6 +190,9 @@ async def get_prompt(
         "Authorization": f"Bearer {braintrust_token}",
         "Accept": "application/json",
     }
+    print(f"headers: {headers}")
+    print(f"braintrust_url: {braintrust_url}")
+    print(f"braintrust_token: {braintrust_token}")
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
