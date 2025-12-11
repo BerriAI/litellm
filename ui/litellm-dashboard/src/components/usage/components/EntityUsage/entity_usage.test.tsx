@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import EntityUsage from "./entity_usage";
-import * as networking from "./networking";
+import * as networking from "../../../networking";
 
 beforeAll(() => {
   if (typeof window !== "undefined" && !window.ResizeObserver) {
