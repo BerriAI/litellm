@@ -147,3 +147,57 @@ async def test_a2a_completion_bridge_streaming():
 
     print(f"Received {len(chunks)} chunks with proper A2A streaming format")
 
+
+@pytest.mark.asyncio
+async def test_a2a_completion_bridge_bedrock_agentcore():
+    """
+    Test A2A request via the completion bridge with Bedrock AgentCore provider.
+    
+    Uses the AgentCore runtime ARN to call a hosted agent.
+    """
+    from litellm.a2a_protocol import asend_message_streaming
+
+    litellm._turn_on_debug()
+
+    # Bedrock AgentCore ARN (streaming-capable runtime)
+    agentcore_arn = "arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_r9jvp-3ySZuRHjLC"
+
+    send_message_payload = {
+        "message": {
+            "role": "user",
+            "parts": [{"kind": "text", "text": "Explain machine learning in simple terms"}],
+            "messageId": uuid4().hex,
+        }
+    }
+
+    request = SendStreamingMessageRequest(
+        id=str(uuid4()),
+        params=MessageSendParams(**send_message_payload),  # type: ignore
+    )
+
+    chunks = []
+    async for chunk in asend_message_streaming(
+        request=request,
+        api_base=None,  # Not needed for Bedrock AgentCore
+        litellm_params={
+            "custom_llm_provider": "bedrock",
+            "model": f"bedrock/agentcore/{agentcore_arn}",
+        },
+    ):
+        chunks.append(chunk)
+        print(f"Chunk: {chunk}")
+
+    # Validate we received proper A2A streaming events
+    assert len(chunks) >= 4, f"Expected at least 4 chunks, got {len(chunks)}"
+
+    # Validate first chunk is task event
+    assert chunks[0]["result"]["kind"] == "task"
+    assert chunks[0]["result"]["status"]["state"] == "submitted"
+
+    # Validate final chunk is completed status
+    assert chunks[-1]["result"]["kind"] == "status-update"
+    assert chunks[-1]["result"]["status"]["state"] == "completed"
+    assert chunks[-1]["result"]["final"] is True
+
+    print(f"Received {len(chunks)} chunks from Bedrock AgentCore")
+
