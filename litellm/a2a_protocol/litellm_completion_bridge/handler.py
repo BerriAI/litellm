@@ -2,6 +2,12 @@
 Handler for A2A to LiteLLM completion bridge.
 
 Routes A2A requests through litellm.acompletion based on custom_llm_provider.
+
+A2A Streaming Events (in order):
+1. Task event (kind: "task") - Initial task creation with status "submitted"
+2. Status update (kind: "status-update") - Status change to "working"
+3. Artifact update (kind: "artifact-update") - Content/artifact delivery
+4. Status update (kind: "status-update") - Final status "completed" with final=true
 """
 
 from typing import Any, AsyncIterator, Dict, Optional
@@ -10,6 +16,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.litellm_completion_bridge.transformation import (
     A2ACompletionBridgeTransformation,
+    A2AStreamingContext,
 )
 
 
@@ -50,7 +57,8 @@ class A2ACompletionBridgeHandler:
         model = litellm_params.get("model", "agent")
 
         # Build full model string if provider specified
-        if custom_llm_provider:
+        # Skip prepending if model already starts with the provider prefix
+        if custom_llm_provider and not model.startswith(f"{custom_llm_provider}/"):
             full_model = f"{custom_llm_provider}/{model}"
         else:
             full_model = model
@@ -87,6 +95,12 @@ class A2ACompletionBridgeHandler:
         """
         Handle streaming A2A request via litellm.acompletion with stream=True.
 
+        Emits proper A2A streaming events:
+        1. Task event (kind: "task") - Initial task with status "submitted"
+        2. Status update (kind: "status-update") - Status "working"
+        3. Artifact update (kind: "artifact-update") - Content delivery
+        4. Status update (kind: "status-update") - Final "completed" status
+
         Args:
             request_id: A2A JSON-RPC request ID
             params: A2A MessageSendParams containing the message
@@ -94,10 +108,16 @@ class A2ACompletionBridgeHandler:
             api_base: API base URL from agent_card_params
 
         Yields:
-            A2A streaming response chunks
+            A2A streaming response events
         """
         # Extract message from params
         message = params.get("message", {})
+
+        # Create streaming context
+        ctx = A2AStreamingContext(
+            request_id=request_id,
+            input_message=message,
+        )
 
         # Transform A2A message to OpenAI format
         openai_messages = A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(
@@ -109,7 +129,8 @@ class A2ACompletionBridgeHandler:
         model = litellm_params.get("model", "agent")
 
         # Build full model string if provider specified
-        if custom_llm_provider:
+        # Skip prepending if model already starts with the provider prefix
+        if custom_llm_provider and not model.startswith(f"{custom_llm_provider}/"):
             full_model = f"{custom_llm_provider}/{model}"
         else:
             full_model = model
@@ -117,6 +138,19 @@ class A2ACompletionBridgeHandler:
         verbose_logger.info(
             f"A2A completion bridge streaming: model={full_model}, api_base={api_base}"
         )
+
+        # 1. Emit initial task event (kind: "task", status: "submitted")
+        task_event = A2ACompletionBridgeTransformation.create_task_event(ctx)
+        yield task_event
+
+        # 2. Emit status update (kind: "status-update", status: "working")
+        working_event = A2ACompletionBridgeTransformation.create_status_update_event(
+            ctx=ctx,
+            state="working",
+            final=False,
+            message_text="Processing request...",
+        )
+        yield working_event
 
         # Call litellm.acompletion with streaming
         response = await litellm.acompletion(
@@ -126,27 +160,37 @@ class A2ACompletionBridgeHandler:
             stream=True,
         )
 
+        # 3. Accumulate content and emit artifact update
+        accumulated_text = ""
         chunk_count = 0
         async for chunk in response:  # type: ignore[union-attr]
             chunk_count += 1
-            a2a_chunk = A2ACompletionBridgeTransformation.openai_chunk_to_a2a_chunk(
-                chunk=chunk,
-                request_id=request_id,
-                is_final=False,
-            )
-            if a2a_chunk:
-                yield a2a_chunk
 
-        # Send final chunk
-        final_chunk = A2ACompletionBridgeTransformation.openai_chunk_to_a2a_chunk(
-            chunk=None,
-            request_id=request_id,
-            is_final=True,
+            # Extract delta content
+            content = ""
+            if chunk is not None and hasattr(chunk, "choices") and chunk.choices:
+                choice = chunk.choices[0]
+                if hasattr(choice, "delta") and choice.delta:
+                    content = choice.delta.content or ""
+
+            if content:
+                accumulated_text += content
+
+        # Emit artifact update with accumulated content
+        if accumulated_text:
+            artifact_event = A2ACompletionBridgeTransformation.create_artifact_update_event(
+                ctx=ctx,
+                text=accumulated_text,
+            )
+            yield artifact_event
+
+        # 4. Emit final status update (kind: "status-update", status: "completed", final: true)
+        completed_event = A2ACompletionBridgeTransformation.create_status_update_event(
+            ctx=ctx,
+            state="completed",
+            final=True,
         )
-        if final_chunk:
-            # Clear content for final chunk
-            final_chunk["result"]["message"]["parts"][0]["text"] = ""
-            yield final_chunk
+        yield completed_event
 
         verbose_logger.info(
             f"A2A completion bridge streaming completed: request_id={request_id}, chunks={chunk_count}"
