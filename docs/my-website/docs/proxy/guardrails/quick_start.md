@@ -45,6 +45,20 @@ guardrails:
           description: "Score between 0-1 indicating content toxicity level"
         - name: "pii_detection"
           type: "boolean"
+
+# Example Presidio guardrail config with entity actions + confidence score thresholds
+  - guardrail_name: "presidio-pii"
+    litellm_params:
+      guardrail: presidio
+      mode: "pre_call"
+      presidio_language: "en"
+      pii_entities_config:
+        CREDIT_CARD: "MASK"
+        EMAIL_ADDRESS: "MASK"
+        US_SSN: "MASK"
+      presidio_score_thresholds:  # minimum confidence scores for keeping detections
+        CREDIT_CARD: 0.8
+        EMAIL_ADDRESS: 0.6
 ```
 
 
