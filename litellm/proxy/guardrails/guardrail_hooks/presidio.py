@@ -78,6 +78,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             Dict[Union[PiiEntityType, str], PiiAction]
         ] = None,
         presidio_language: Optional[str] = None,
+        presidio_score_thresholds: Optional[
+            Dict[Union[PiiEntityType, str], float]
+        ] = None,
         **kwargs,
     ):
         if logging_only is True:
@@ -92,6 +95,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self.output_parse_pii = output_parse_pii or False
         self.pii_entities_config: Dict[Union[PiiEntityType, str], PiiAction] = (
             pii_entities_config or {}
+        )
+        self.presidio_score_thresholds: Dict[Union[PiiEntityType, str], float] = (
+            presidio_score_thresholds or {}
         )
         self.presidio_language = presidio_language or "en"
         if mock_testing is True:  # for testing purposes only
@@ -239,7 +245,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 async with session.post(analyze_url, json=analyze_payload) as response:
                     analyze_results = await response.json()
                     verbose_proxy_logger.debug("analyze_results: %s", analyze_results)
-                    
+
                     # Handle error responses from Presidio (e.g., {'error': 'No text provided'})
                     # Presidio may return a dict instead of a list when errors occur
                     if isinstance(analyze_results, dict):
@@ -261,7 +267,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                                 e
                             )
                             return []
-                    
+
                     # Normal case: list of results
                     final_results = []
                     for item in analyze_results:
@@ -272,7 +278,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             verbose_proxy_logger.warning(
                                 "Skipping invalid Presidio result item: %s (error: %s)",
                                 item,
-                                te
+                                te,
                             )
                             continue
                     return final_results
@@ -290,6 +296,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Send analysis results to the Presidio anonymizer endpoint to get redacted text
         """
         try:
+            # If there are no detections after filtering, return the original text
+            if isinstance(analyze_results, list) and len(analyze_results) == 0:
+                return text
+
             async with aiohttp.ClientSession() as session:
                 # Make the request to /anonymize
                 anonymize_url = f"{self.presidio_anonymizer_api_base}anonymize"
@@ -332,6 +342,36 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     raise Exception(f"Invalid anonymizer response: {redacted_text}")
         except Exception as e:
             raise e
+
+    def filter_analyze_results_by_score(
+        self, analyze_results: Union[List[PresidioAnalyzeResponseItem], Dict]
+    ) -> Union[List[PresidioAnalyzeResponseItem], Dict]:
+        """
+        Drop detections that fall below configured per-entity score thresholds.
+        """
+        if not self.presidio_score_thresholds:
+            return analyze_results
+
+        if not isinstance(analyze_results, list):
+            return analyze_results
+
+        filtered_results: List[PresidioAnalyzeResponseItem] = []
+        for item in analyze_results:
+            entity_type = item.get("entity_type")
+            score = item.get("score")
+
+            if entity_type is None:
+                filtered_results.append(item)
+                continue
+
+            threshold = self.presidio_score_thresholds.get(entity_type)
+            if threshold is not None:
+                if score is None or score < threshold:
+                    continue
+
+            filtered_results.append(item)
+
+        return filtered_results
 
     def raise_exception_if_blocked_entities_detected(
         self, analyze_results: Union[List[PresidioAnalyzeResponseItem], Dict]
@@ -388,6 +428,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 )
 
                 verbose_proxy_logger.debug("analyze_results: %s", analyze_results)
+
+                # Apply score threshold filtering if configured
+                analyze_results = self.filter_analyze_results_by_score(
+                    analyze_results=analyze_results
+                )
 
                 ####################################################
                 # Blocked Entities check
@@ -455,9 +500,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             if messages is None:
                 return data
             tasks = []
-            task_mappings: List[Tuple[int, Optional[int]]] = (
-                []
-            )  # Track (message_index, content_index) for each task
+            task_mappings: List[
+                Tuple[int, Optional[int]]
+            ] = []  # Track (message_index, content_index) for each task
 
             for msg_idx, m in enumerate(messages):
                 content = m.get("content", None)
@@ -558,9 +603,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         ):  # /chat/completions requests
             messages: Optional[List] = kwargs.get("messages", None)
             tasks = []
-            task_mappings: List[Tuple[int, Optional[int]]] = (
-                []
-            )  # Track (message_index, content_index) for each task
+            task_mappings: List[
+                Tuple[int, Optional[int]]
+            ] = []  # Track (message_index, content_index) for each task
 
             if messages is None:
                 return kwargs, result
@@ -787,3 +832,5 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         super().update_in_memory_litellm_params(litellm_params)
         if litellm_params.pii_entities_config:
             self.pii_entities_config = litellm_params.pii_entities_config
+        if litellm_params.presidio_score_thresholds:
+            self.presidio_score_thresholds = litellm_params.presidio_score_thresholds

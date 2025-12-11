@@ -220,11 +220,13 @@ When connecting Litellm to Langfuse, you can see the guardrail information on th
   style={{width: '60%', display: 'block', margin: '0'}}
 />
 
-## Entity Type Configuration
+## Entity Type and Detection Confidence Score Threshold Configuration
 
 You can configure specific entity types for PII detection and decide how to handle each entity type (mask or block).
 
-### Configure Entity Types in config.yaml
+You can also provide an optional confidence score threshold at which detections will be passed to the anonymizer. Entities without an entry in `presidio_score_thresholds` keep all detections (no minimum score).
+
+### Configure Entity Types and Thresholds in config.yaml
 
 Define your guardrails with specific entity type configuration:
 
@@ -240,6 +242,9 @@ guardrails:
     litellm_params:
       guardrail: presidio
       mode: "pre_mcp_call"  # Use this mode for MCP requests
+      presidio_score_thresholds:
+        CREDIT_CARD: 0.8  # Only keep credit card detections scoring 0.8+
+        EMAIL_ADDRESS: 0.6  # Only keep email detections scoring 0.6+
       pii_entities_config:
         CREDIT_CARD: "MASK"  # Will mask credit card numbers
         EMAIL_ADDRESS: "MASK"  # Will mask email addresses
@@ -248,6 +253,8 @@ guardrails:
     litellm_params:
       guardrail: presidio
       mode: "pre_call"  # Use this mode for regular LLM requests
+      presidio_score_thresholds:
+        CREDIT_CARD: 0.8  # Only keep credit card detections scoring 0.8+
       pii_entities_config:
         CREDIT_CARD: "BLOCK"  # Will block requests containing credit card numbers
 ```
@@ -357,6 +364,9 @@ guardrails:
     litellm_params:
       guardrail: presidio
       mode: "pre_mcp_call"
+      presidio_score_thresholds:
+        CREDIT_CARD: 0.8  # Only keep credit card detections scoring 0.8+
+        EMAIL_ADDRESS: 0.6  # Only keep email detections scoring 0.6+
       pii_entities_config:
         CREDIT_CARD: "MASK"  # Will mask credit card numbers
         EMAIL_ADDRESS: "BLOCK"  # Will block email addresses
@@ -674,5 +684,3 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 ```text title="Logged Response with Masked PII" showLineNumbers
 Hi, my name is <PERSON>!
 ```
-
-

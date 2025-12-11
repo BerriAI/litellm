@@ -18,7 +18,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.presidio import (
     _OPTIONAL_PresidioPIIMasking,
 )
-from litellm.types.guardrails import PiiAction, PiiEntityType
+from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
 
 
 @pytest.fixture
@@ -604,6 +604,7 @@ async def test_request_data_flows_to_apply_guardrail():
     presidio = _OPTIONAL_PresidioPIIMasking(
         guardrail_name="test_presidio",
         output_parse_pii=True,
+        mock_testing=True,
     )
 
     request_data = {
@@ -856,21 +857,102 @@ async def test_tool_calling_complete_scenario(presidio_guardrail, mock_user_api_
     print("✓ Tool calling complete scenario test passed")
 
 
-if __name__ == "__main__":
-    # Run tests
-    asyncio.run(
-        test_multimodal_message_format_completion_call_type(
-            _OPTIONAL_PresidioPIIMasking(
-                mock_testing=True,
-                output_parse_pii=False,
-                pii_entities_config={
-                    PiiEntityType.CREDIT_CARD: PiiAction.MASK,
-                    PiiEntityType.EMAIL_ADDRESS: PiiAction.MASK,
-                    PiiEntityType.PHONE_NUMBER: PiiAction.MASK,
-                },
-            ),
-            UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
-            MagicMock(spec=DualCache),
-        )
+def test_filter_drops_low_score_detection():
+    """
+    Detections below the configured score threshold should be removed.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        presidio_score_thresholds={PiiEntityType.CREDIT_CARD: 0.8},
     )
-    print("\n✅ All Presidio tests passed!")
+    analyze_results = [
+        {"entity_type": PiiEntityType.CREDIT_CARD, "score": 0.7, "start": 0, "end": 4}
+    ]
+
+    filtered = guardrail.filter_analyze_results_by_score(analyze_results)
+    assert filtered == []
+
+
+def test_filter_preserves_high_score_detection():
+    """
+    Detections meeting the score threshold should be preserved.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        presidio_score_thresholds={PiiEntityType.CREDIT_CARD: 0.8},
+    )
+    analyze_results = [
+        {"entity_type": PiiEntityType.CREDIT_CARD, "score": 0.9, "start": 0, "end": 4}
+    ]
+
+    filtered = guardrail.filter_analyze_results_by_score(analyze_results)
+    assert len(filtered) == 1
+    assert filtered[0]["entity_type"] == PiiEntityType.CREDIT_CARD
+
+
+@pytest.mark.asyncio
+async def test_anonymize_skips_when_no_detections_after_filter():
+    """
+    When all detections are filtered out, anonymize_text should return the original text.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        presidio_score_thresholds={PiiEntityType.CREDIT_CARD: 0.8},
+    )
+    masked_entity_count = {}
+    text = "4111"
+
+    filtered = guardrail.filter_analyze_results_by_score(
+        [{"entity_type": PiiEntityType.CREDIT_CARD, "score": 0.7, "start": 0, "end": 4}]
+    )
+
+    result = await guardrail.anonymize_text(
+        text=text,
+        analyze_results=filtered,
+        output_parse_pii=False,
+        masked_entity_count=masked_entity_count,
+    )
+
+    assert result == text
+    assert masked_entity_count == {}
+
+
+def test_blocking_respects_threshold_filter():
+    """
+    Entities filtered out by score should not trigger blocking, but high-score detections should.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        pii_entities_config={PiiEntityType.CREDIT_CARD: PiiAction.BLOCK},
+        presidio_score_thresholds={PiiEntityType.CREDIT_CARD: 0.9},
+    )
+
+    low_score_results = [
+        {"entity_type": PiiEntityType.CREDIT_CARD, "score": 0.7, "start": 0, "end": 4}
+    ]
+    filtered = guardrail.filter_analyze_results_by_score(low_score_results)
+    guardrail.raise_exception_if_blocked_entities_detected(filtered)
+
+    high_score_results = [
+        {"entity_type": PiiEntityType.CREDIT_CARD, "score": 0.95, "start": 0, "end": 4}
+    ]
+    filtered_high = guardrail.filter_analyze_results_by_score(high_score_results)
+    with pytest.raises(Exception):
+        guardrail.raise_exception_if_blocked_entities_detected(filtered_high)
+
+
+def test_update_in_memory_applies_score_thresholds():
+    """
+    update_in_memory_litellm_params should refresh score thresholds.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    assert guardrail.presidio_score_thresholds == {}
+
+    params = LitellmParams(
+        guardrail="presidio",
+        mode="pre_call",
+        presidio_score_thresholds={PiiEntityType.CREDIT_CARD: 0.85},
+    )
+    guardrail.update_in_memory_litellm_params(params)
+
+    assert guardrail.presidio_score_thresholds == {PiiEntityType.CREDIT_CARD: 0.85}
