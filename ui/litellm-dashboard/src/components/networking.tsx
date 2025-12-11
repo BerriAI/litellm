@@ -213,6 +213,7 @@ export interface AgentCreateInfo {
   logo_url?: string | null;
   credential_fields: AgentCredentialFieldMetadata[];
   litellm_params_template?: Record<string, string> | null;
+  inherit_credentials_from_provider?: string | null;
 }
 
 export interface PublicModelHubInfo {
