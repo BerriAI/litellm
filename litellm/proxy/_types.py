@@ -546,6 +546,7 @@ class LiteLLMRoutes(enum.Enum):
     ui_routes = [
         "/sso",
         "/sso/get/ui_settings",
+        "/get/ui_settings",
         "/login",
         "/key/info",
         "/config",
