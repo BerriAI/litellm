@@ -20,6 +20,7 @@ from litellm.caching.caching import DualCache
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
 from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
+from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import (
     AdapterCompletionStreamWrapper,
     CallTypes,
@@ -158,9 +159,12 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: LiteLLMLoggingObj,
+        prompt_spec: Optional[PromptSpec] = None,
         tools: Optional[List[Dict]] = None,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Returns:
@@ -178,6 +182,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_spec: Optional[PromptSpec] = None,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
         ignore_prompt_manager_model: Optional[bool] = False,

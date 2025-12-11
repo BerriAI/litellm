@@ -6,6 +6,7 @@ from litellm.integrations.prompt_management_base import (
     PromptManagementClient,
 )
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import StandardCallbackDynamicParams
 
 
@@ -29,6 +30,7 @@ class CustomPromptManagement(CustomLogger, PromptManagementBase):
         prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_spec: Optional[PromptSpec] = None,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
         ignore_prompt_manager_model: Optional[bool] = False,
@@ -48,14 +50,16 @@ class CustomPromptManagement(CustomLogger, PromptManagementBase):
 
     def should_run_prompt_management(
         self,
-        prompt_id: str,
+        prompt_id: Optional[str],
+        prompt_spec: Optional[PromptSpec],
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> bool:
         return True
 
     def _compile_prompt_helper(
         self,
-        prompt_id: str,
+        prompt_id: Optional[str],
+        prompt_spec: Optional[PromptSpec],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_label: Optional[str] = None,
