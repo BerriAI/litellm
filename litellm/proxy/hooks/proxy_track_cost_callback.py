@@ -166,9 +166,7 @@ class _ProxyDBLogger(CustomLogger):
                             matched_model = model_name
                             break
 
-                # DEBUG LOG
-                print(f"[CACHE_UPDATE_CHECK] User: {user_id}, RequestModel: {_request_model}, LiteLLMModel: {_litellm_model}, IsFreeModel: {is_free_model}, MatchedModel: {matched_model}, Cost: ${response_cost:.6f}")
-
+                
                 verbose_proxy_logger.debug(
                     f"user_api_key {user_api_key}, user_id {user_id}, team_id {team_id}, end_user_id {end_user_id}"
                 )
@@ -195,7 +193,6 @@ class _ProxyDBLogger(CustomLogger):
                     # Update cache - use 0.0 cost for FREE_MODELS to prevent budget blocking
                     if is_free_model:
                         # Free model: set cost to 0.0 for cache (budget checks won't block)
-                        print(f"[CACHE_UPDATE_CALL] FREE MODEL - User: {user_id}, PassingCostToCache: $0.0000 (actual cost: ${response_cost:.6f})")
                         asyncio.create_task(
                             update_cache(
                                 token=user_api_key,
@@ -210,7 +207,6 @@ class _ProxyDBLogger(CustomLogger):
                         # No Slack alerts for free models
                     else:
                         # Paid model: use actual cost for cache
-                        print(f"[CACHE_UPDATE_CALL] PAID MODEL - User: {user_id}, PassingCostToCache: ${response_cost:.6f}")
                         asyncio.create_task(
                             update_cache(
                                 token=user_api_key,

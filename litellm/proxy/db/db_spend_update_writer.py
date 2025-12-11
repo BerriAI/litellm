@@ -155,19 +155,10 @@ class DBSpendUpdateWriter:
                 except Exception:
                     user_email = user_id
 
-            # PRINT DEBUG: Always show what's happening
-            if is_free_model:
-                print(f"[FREE_MODELS] SPEND COUNTER SKIPPED - User: {user_email}, PayloadModel: {_payload_model}, RequestModel: {_request_model}, LiteLLMModel: {_litellm_model}, MatchedModel: {matched_free_model}, Cost: ${response_cost or 0.0:.6f} (analytics still recorded)")
-                verbose_proxy_logger.info(
-                    f"FREE_MODELS: Skipping spend counter updates for user={user_email}, matched_model={matched_free_model}, cost=${response_cost or 0.0:.4f}. Analytics (spend logs + daily tables) will still be recorded."
-                )
-            else:
-                print(f"[PAID_MODEL] SPEND COUNTER UPDATED - User: {user_email}, PayloadModel: {_payload_model}, RequestModel: {_request_model}, LiteLLMModel: {_litellm_model}, Cost: ${response_cost or 0.0:.6f}")
-
+            
             # Only update spend counters (user, key, team, org, tag) if NOT a free model
             # Free models still log to analytics tables (litellm_spendlogs, daily spend tables)
             if not is_free_model:
-                print(f"[DB_QUEUE_ADD] PAID MODEL - Adding to database queue - User: {user_email}, Cost: ${response_cost or 0.0:.6f}")
                 asyncio.create_task(
                     self._update_user_db(
                         response_cost=response_cost,
@@ -207,9 +198,7 @@ class DBSpendUpdateWriter:
                         prisma_client=prisma_client,
                     )
                 )
-            else:
-                print(f"[DB_QUEUE_SKIP] FREE MODEL - NOT adding to database queue - User: {user_email}, Cost: ${response_cost or 0.0:.6f}")
-
+            
             if disable_spend_logs is False:
                 await self._insert_spend_log_to_db(
                     payload=payload,
