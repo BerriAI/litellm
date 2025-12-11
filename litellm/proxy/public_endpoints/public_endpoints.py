@@ -1,6 +1,6 @@
-from typing import List
-import os
 import json
+import os
+from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -12,6 +12,7 @@ from litellm.types.proxy.management_endpoints.model_management_endpoints import 
     ModelGroupInfoProxy,
 )
 from litellm.types.proxy.public_endpoints.public_endpoints import (
+    AgentCreateInfo,
     ProviderCreateInfo,
     PublicModelHubInfo,
 )
@@ -167,3 +168,25 @@ async def get_litellm_model_cost_map():
             status_code=500,
             detail=f"Internal Server Error ({str(e)})",
         )
+
+
+@router.get(
+    "/public/agents/fields",
+    tags=["public", "[beta] Agents"],
+    response_model=List[AgentCreateInfo],
+)
+async def get_agent_fields() -> List[AgentCreateInfo]:
+    """
+    Return agent type metadata required by the dashboard create-agent flow.
+    """
+    agent_create_fields_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        "proxy",
+        "public_endpoints",
+        "agent_create_fields.json"
+    )
+
+    with open(agent_create_fields_path, "r") as f:
+        agent_create_fields = json.load(f)
+
+    return agent_create_fields

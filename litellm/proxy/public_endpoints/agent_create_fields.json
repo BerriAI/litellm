@@ -1,0 +1,32 @@
+[
+  {
+    "agent_type": "langgraph",
+    "agent_type_display_name": "LangGraph",
+    "description": "Connect to LangGraph agents via the LangGraph Platform API",
+    "logo_url": "https://avatars.githubusercontent.com/u/126733545?s=200&v=4",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "LangGraph API Base",
+        "placeholder": "http://localhost:2024",
+        "tooltip": "The base URL for your LangGraph server (e.g., http://localhost:2024 or your deployed LangGraph Cloud URL)",
+        "required": true,
+        "field_type": "text",
+        "default_value": "http://localhost:2024"
+      },
+      {
+        "key": "api_key",
+        "label": "LangGraph API Key",
+        "placeholder": null,
+        "tooltip": "API key for authenticating with your LangGraph server (optional for local development)",
+        "required": false,
+        "field_type": "password",
+        "default_value": null
+      }
+    ],
+    "litellm_params_template": {
+      "custom_llm_provider": "langgraph"
+    }
+  }
+]
+
