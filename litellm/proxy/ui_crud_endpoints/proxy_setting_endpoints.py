@@ -671,7 +671,6 @@ async def update_ui_theme_settings(theme_config: UIThemeConfig):
 @router.get(
     "/get/ui_settings",
     tags=["UI Settings"],
-    dependencies=[Depends(user_api_key_auth)],
     response_model=UISettingsResponse,
 )
 async def get_ui_settings():
