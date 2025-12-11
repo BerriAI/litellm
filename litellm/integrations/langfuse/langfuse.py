@@ -549,6 +549,14 @@ class LangFuseLogger:
             debug = clean_metadata.pop("debug_langfuse", None)
             mask_input = clean_metadata.pop("mask_input", False)
             mask_output = clean_metadata.pop("mask_output", False)
+            # Look for masking function in the dedicated location first (set by scrub_sensitive_keys_in_metadata)
+            # Fall back to metadata for backwards compatibility
+            masking_function = litellm_params.get("_langfuse_masking_function") or clean_metadata.pop("langfuse_masking_function", None)
+
+            # Apply custom masking function if provided
+            if masking_function is not None and callable(masking_function):
+                input = self._apply_masking_function(input, masking_function)
+                output = self._apply_masking_function(output, masking_function)
 
             clean_metadata = redact_user_api_key_info(metadata=clean_metadata)
 
@@ -884,6 +892,45 @@ class LangFuseLogger:
     def _supports_completion_start_time(self):
         """Check if current langfuse version supports completion start time"""
         return Version(self.langfuse_sdk_version) >= Version("2.7.3")
+
+    @staticmethod
+    def _apply_masking_function(data: Any, masking_function: callable) -> Any:
+        """
+        Apply a masking function to data, handling different data types.
+
+        Args:
+            data: The data to mask (can be str, dict, list, or None)
+            masking_function: A callable that takes data and returns masked data
+
+        Returns:
+            The masked data
+        """
+        if data is None:
+            return None
+
+        try:
+            if isinstance(data, str):
+                return masking_function(data)
+            elif isinstance(data, dict):
+                masked_dict = {}
+                for key, value in data.items():
+                    masked_dict[key] = LangFuseLogger._apply_masking_function(
+                        value, masking_function
+                    )
+                return masked_dict
+            elif isinstance(data, list):
+                return [
+                    LangFuseLogger._apply_masking_function(item, masking_function)
+                    for item in data
+                ]
+            else:
+                # For other types, try to apply the function directly
+                return masking_function(data)
+        except Exception as e:
+            verbose_logger.warning(
+                f"Failed to apply masking function: {e}. Returning original data."
+            )
+            return data
 
     @staticmethod
     def _get_langfuse_flush_interval(flush_interval: int) -> int:
