@@ -824,7 +824,7 @@ class ProxyLogging:
 
         return data
 
-    def _process_prompt_template(
+    async def _process_prompt_template(
         self,
         data: dict,
         litellm_logging_obj: Any,
@@ -833,6 +833,7 @@ class ProxyLogging:
         call_type: CallTypesLiteral,
     ) -> None:
         """Process prompt template if applicable."""
+
         from litellm.proxy.prompts.prompt_endpoints import (
             construct_versioned_prompt_id,
             get_latest_version_prompt_id,
@@ -857,21 +858,24 @@ class ProxyLogging:
         litellm_prompt_id: Optional[str] = None
         if prompt_spec is not None:
             litellm_prompt_id = prompt_spec.litellm_params.prompt_id
+            data.pop("prompt_id", None)
 
-        if custom_logger and litellm_prompt_id is not None:
+        if custom_logger and prompt_spec is not None:
+
             (
                 model,
                 messages,
                 optional_params,
-            ) = litellm_logging_obj.get_chat_completion_prompt(
+            ) = await litellm_logging_obj.async_get_chat_completion_prompt(
                 model=data.get("model", ""),
                 messages=data.get("messages", []),
-                non_default_params=get_non_default_completion_params(kwargs=data),
+                non_default_params=get_non_default_completion_params(kwargs=data) or {},
                 prompt_id=litellm_prompt_id,
+                prompt_spec=prompt_spec,
                 prompt_management_logger=custom_logger,
-                prompt_variables=data.get("prompt_variables", None),
-                prompt_label=data.get("prompt_label", None),
-                prompt_version=data.get("prompt_version", None),
+                prompt_variables=data.pop("prompt_variables", None) or {},
+                prompt_label=data.pop("prompt_label", None) or {},
+                prompt_version=data.pop("prompt_version", None) or {},
             )
 
             data.update(optional_params)
@@ -976,8 +980,7 @@ class ProxyLogging:
             and prompt_id is not None
             and (call_type == "completion" or call_type == "acompletion")
         ):
-
-            self._process_prompt_template(
+            await self._process_prompt_template(
                 data=data,
                 litellm_logging_obj=litellm_logging_obj,
                 prompt_id=prompt_id,
