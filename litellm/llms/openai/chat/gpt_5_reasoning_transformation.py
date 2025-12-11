@@ -7,10 +7,10 @@ import litellm
 from .gpt_transformation import OpenAIGPTConfig
 
 
-class OpenAIGPT5Config(OpenAIGPTConfig):
-    """Configuration for gpt-5 models including GPT-5-Codex variants.
+class OpenAIGPT5ReasoningConfig(OpenAIGPTConfig):
+    """Configuration for gpt-5 reasoning models including GPT-5-Codex variants.
 
-    Handles OpenAI API quirks for the gpt-5 series like:
+    Handles OpenAI API quirks for the gpt-5 reasoning series like:
 
     - Mapping ``max_tokens`` -> ``max_completion_tokens``.
     - Dropping unsupported ``temperature`` values when requested.
@@ -18,8 +18,8 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
     """
 
     @classmethod
-    def is_model_gpt_5_model(cls, model: str) -> bool:
-        return "gpt-5" in model
+    def is_model_gpt_5_reasoning_model(cls, model: str) -> bool:
+        return "gpt-5" in model and "gpt-5-chat" not in model
 
     @classmethod
     def is_model_gpt_5_codex_model(cls, model: str) -> bool:
