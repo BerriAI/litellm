@@ -122,13 +122,18 @@ class LiteLLMCompletionResponsesConfig:
                 text_param
             )
 
+        # Default tool_choice to "auto" when tools are present
+        tool_choice_value = responses_api_request.get("tool_choice")
+        if tool_choice_value is None and tools:
+            tool_choice_value = "auto"
+
         litellm_completion_request: dict = {
             "messages": LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input,
                 responses_api_request=responses_api_request,
             ),
             "model": model,
-            "tool_choice": responses_api_request.get("tool_choice"),
+            "tool_choice": tool_choice_value,
             "tools": tools,
             "top_p": responses_api_request.get("top_p"),
             "user": responses_api_request.get("user"),
