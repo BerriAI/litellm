@@ -345,26 +345,13 @@ class BaseAWSLLM:
             model_id = model
 
         model_id = model_id.replace("invoke/", "", 1)
-        if provider == "llama" and "llama/" in model_id:
-            model_id = BaseAWSLLM._get_model_id_from_model_with_spec(
-                model_id, spec="llama"
-            )
-        elif provider == "deepseek_r1" and "deepseek_r1/" in model_id:
-            model_id = BaseAWSLLM._get_model_id_from_model_with_spec(
-                model_id, spec="deepseek_r1"
-            )
-        elif provider == "openai" and "openai/" in model_id:
-            model_id = BaseAWSLLM._get_model_id_from_model_with_spec(
-                model_id, spec="openai"
-            )
-        elif provider == "qwen3" and "qwen3/" in model_id:
-            model_id = BaseAWSLLM._get_model_id_from_model_with_spec(
-                model_id, spec="qwen3"
-            )
-        elif provider == "qwen2" and "qwen2/" in model_id:
-            model_id = BaseAWSLLM._get_model_id_from_model_with_spec(
-                model_id, spec="qwen2"
-            )
+        provider_specs = ["llama", "deepseek_r1", "openai", "qwen3", "qwen2"]
+        for spec in provider_specs:
+            if provider == spec and f"{spec}/" in model_id:
+                model_id = BaseAWSLLM._get_model_id_from_model_with_spec(
+                    model_id, spec=spec
+                )
+                break
         return model_id
 
     @staticmethod
