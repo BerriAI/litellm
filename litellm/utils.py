@@ -6992,7 +6992,7 @@ def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
                         for item in user_content:
                             if isinstance(item, dict):
                                 if item.get("type") not in ValidUserMessageContentTypes:
-                                    raise Exception("invalid content type")
+                                    raise Exception(f"invalid content type={item.get('type')}")
         except Exception as e:
             if isinstance(e, KeyError):
                 raise Exception(
