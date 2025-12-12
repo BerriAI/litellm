@@ -762,15 +762,19 @@ class PillarGuardrail(CustomGuardrail):
                 metadata_store["pillar_session_id"] = pillar_session_id
             metadata_store["pillar_session_id_response"] = pillar_session_id
 
+        # Always set flagged status and scanner/evidence data for monitor mode
+        metadata_store["pillar_flagged"] = flagged
+        if self.include_scanners:
+            metadata_store["pillar_scanners"] = pillar_response.get("scanners", {})
+        if self.include_evidence:
+            metadata_store["pillar_evidence"] = pillar_response.get("evidence", [])
+
         if flagged:
             verbose_proxy_logger.warning("Pillar Guardrail: Threat detected")
             if self.on_flagged_action == "block":
                 self._raise_pillar_detection_exception(pillar_response)
             elif self.on_flagged_action == "monitor":
                 verbose_proxy_logger.info("Pillar Guardrail: Monitoring mode - allowing flagged content to proceed")
-                metadata_store["pillar_flagged"] = True
-                metadata_store["pillar_scanners"] = pillar_response.get("scanners", {})
-                metadata_store["pillar_evidence"] = pillar_response.get("evidence", [])
 
         build_pillar_response_headers(metadata_store)
 

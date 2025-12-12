@@ -176,6 +176,7 @@ def pillar_clean_response():
                 "pii": False,
                 "toxic_language": False,
             },
+            "evidence": [],
         },
         status_code=200,
         request=Request(
@@ -416,6 +417,42 @@ async def test_pre_call_hook_flagged_content_monitor(
     assert metadata.get("pillar_session_id_response") == pillar_flagged_response.json()["session_id"]
     assert metadata.get("pillar_scanners") == pillar_flagged_response.json().get("scanners", {})
     assert metadata.get("pillar_evidence") == pillar_flagged_response.json().get("evidence", [])
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_clean_content_returns_scanners_and_evidence(
+    pillar_monitor_guardrail,
+    sample_request_data,
+    user_api_key_dict,
+    dual_cache,
+    pillar_clean_response,
+):
+    """Test that scanners and evidence are returned even when content is not flagged."""
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=pillar_clean_response,
+    ):
+        result = await pillar_monitor_guardrail.async_pre_call_hook(
+            data=sample_request_data,
+            cache=dual_cache,
+            user_api_key_dict=user_api_key_dict,
+            call_type="completion",
+        )
+
+    assert result == sample_request_data
+    assert "metadata" in sample_request_data
+    metadata = sample_request_data["metadata"]
+    # Even when not flagged, we should get scanners and evidence
+    assert metadata.get("pillar_flagged") is False
+    # pillar_session_id preserves existing value, pillar_session_id_response is always from response
+    assert metadata.get("pillar_session_id_response") == pillar_clean_response.json()["session_id"]
+    assert metadata.get("pillar_scanners") == pillar_clean_response.json().get("scanners", {})
+    assert metadata.get("pillar_evidence") == pillar_clean_response.json().get("evidence", [])
+
+    # Verify headers are also built
+    headers = get_logging_caching_headers(sample_request_data)
+    assert headers["x-pillar-flagged"] == "false"
+    assert json.loads(unquote(headers["x-pillar-scanners"])) == pillar_clean_response.json().get("scanners", {})
 
 
 def test_get_logging_caching_headers_pillar_metadata():
