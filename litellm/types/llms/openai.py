@@ -743,6 +743,68 @@ ValidUserMessageContentTypes = [
     "file",
 ]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
 
+ValidUserMessageContentTypesLiteral = Literal[
+    "text",
+    "image_url",
+    "input_audio",
+    "audio_url",
+    "document",
+    "guarded_text",
+    "video_url",
+    "file",
+]
+
+ValidUserMessageContentTypes = [
+    "text",
+    "image_url",
+    "input_audio",
+    "audio_url",
+    "document",
+    "guarded_text",
+    "video_url",
+    "file",
+]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
+
+# Assistant message content types (text, thinking, redacted_thinking)
+ValidAssistantMessageContentTypesLiteral = Literal[
+    "text",
+    "thinking",
+    "redacted_thinking",
+]
+
+ValidAssistantMessageContentTypes = [
+    "text",
+    "thinking",
+    "redacted_thinking",
+]
+
+# Combined valid content types for chat completion messages
+ValidChatCompletionMessageContentTypesLiteral = Literal[
+    "text",
+    "image_url",
+    "input_audio",
+    "audio_url",
+    "document",
+    "guarded_text",
+    "video_url",
+    "file",
+    "thinking",
+    "redacted_thinking",
+]
+
+ValidChatCompletionMessageContentTypes = [
+    "text",
+    "image_url",
+    "input_audio",
+    "audio_url",
+    "document",
+    "guarded_text",
+    "video_url",
+    "file",
+    "thinking",
+    "redacted_thinking",
+]
+
 AllMessageValues = Union[
     ChatCompletionUserMessage,
     ChatCompletionAssistantMessage,
