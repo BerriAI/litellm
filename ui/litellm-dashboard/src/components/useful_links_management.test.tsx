@@ -71,4 +71,39 @@ describe("UsefulLinksManagement", () => {
     expect(screen.getByText("https://docs.example.com")).toBeInTheDocument();
     expect(mockedNotifications.success).toHaveBeenCalledWith("Link added successfully");
   });
+
+  it("should rearrange links and save the new order", async () => {
+    const user = userEvent.setup();
+    mockedGetPublicModelHubInfo.mockResolvedValue({
+      docs_title: "Docs",
+      custom_docs_description: null,
+      litellm_version: "1.0.0",
+      useful_links: {
+        "First Link": "https://first.example.com",
+        "Second Link": "https://second.example.com",
+        "Third Link": "https://third.example.com",
+      },
+    });
+
+    render(<UsefulLinksManagement accessToken="token" userRole="Admin" />);
+
+    await waitFor(() => expect(screen.getByText("First Link")).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: /rearrange order/i }));
+
+    const secondLinkMoveUpButton = screen.getByTestId("move-up-1-Second Link");
+    await user.click(secondLinkMoveUpButton);
+
+    await user.click(screen.getByRole("button", { name: /save order/i }));
+
+    await waitFor(() =>
+      expect(mockedUpdateUsefulLinksCall).toHaveBeenCalledWith("token", {
+        "Second Link": "https://second.example.com",
+        "First Link": "https://first.example.com",
+        "Third Link": "https://third.example.com",
+      }),
+    );
+
+    expect(mockedNotifications.success).toHaveBeenCalledWith("Link order saved successfully");
+  });
 });
