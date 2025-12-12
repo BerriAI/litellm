@@ -1587,7 +1587,16 @@ def default_image_cost_calculator(
             f"Model not found in cost map. Tried checking {models_to_check}"
         )
 
-    return cost_info["input_cost_per_pixel"] * height * width * n
+    # Priority 1: Use per-image pricing if available (for gpt-image-1 and similar models)
+    if "input_cost_per_image" in cost_info and cost_info["input_cost_per_image"] is not None:
+        return cost_info["input_cost_per_image"] * n
+    # Priority 2: Fall back to per-pixel pricing for backward compatibility
+    elif "input_cost_per_pixel" in cost_info and cost_info["input_cost_per_pixel"] is not None:
+        return cost_info["input_cost_per_pixel"] * height * width * n
+    else:
+        raise Exception(
+            f"No pricing information found for model {model}. Tried checking {models_to_check}"
+        )
 
 
 def default_video_cost_calculator(
