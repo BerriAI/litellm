@@ -1379,65 +1379,15 @@ jobs:
             - search_coverage
   # Split litellm_mapped_tests into 3 parallel jobs for 3x faster execution
   litellm_mapped_tests_proxy:
-    machine:
-      image: ubuntu-2204:2023.10.1
-    resource_class: xlarge
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
+    resource_class: xlarge
     steps:
-      - run:
-          name: Install Docker CLI (In case it's not already installed)
-          command: |
-            curl -fsSL https://get.docker.com | sh
-            sudo usermod -aG docker $USER
-            docker version
       - setup_litellm_test_deps
-      - run:
-          name: Install dockerize
-          command: |
-            wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
-            rm dockerize-linux-amd64-v0.6.1.tar.gz
-      - run:
-          name: Start PostgreSQL Database
-          command: |
-            docker run -d \
-              --name postgres-db \
-              -e POSTGRES_USER=postgres \
-              -e POSTGRES_PASSWORD=postgres \
-              -e POSTGRES_DB=circle_test \
-              -p 5432:5432 \
-              postgres:14
-      - run:
-          name: Wait for PostgreSQL to be ready
-          command: dockerize -wait tcp://localhost:5432 -timeout 1m
-      - run:
-          name: Start Redis
-          command: |
-            docker run -d \
-              --name redis-db \
-              -p 6379:6379 \
-              redis:7-alpine
-      - run:
-          name: Wait for Redis to be ready
-          command: dockerize -wait tcp://localhost:6379 -timeout 1m
-      - run:
-          name: Set DATABASE_URL and Redis environment variables
-          command: |
-            echo 'export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/circle_test"' >> $BASH_ENV
-            echo 'export REDIS_HOST="localhost"' >> $BASH_ENV
-            echo 'export REDIS_PORT="6379"' >> $BASH_ENV
-            source $BASH_ENV
-      - run:
-          name: Install prisma for database setup
-          command: |
-            pip install prisma==0.11.0
-      - run:
-          name: Run prisma ./docker/entrypoint.sh
-          command: |
-            set +e
-            chmod +x docker/entrypoint.sh
-            ./docker/entrypoint.sh
-            set -e
       - run:
           name: Run proxy tests
           command: |
