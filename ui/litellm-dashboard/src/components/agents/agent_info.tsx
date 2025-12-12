@@ -67,7 +67,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
         if (typeInfo) {
           form.setFieldsValue(parseDynamicAgentForForm(data, typeInfo));
         } else {
-          form.setFieldsValue(parseAgentForForm(data));
+      form.setFieldsValue(parseAgentForForm(data));
         }
       }
     } catch (error) {
@@ -254,7 +254,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
                     ) : selectedAgentTypeInfo ? (
                       <DynamicAgentFormFields agentTypeInfo={selectedAgentTypeInfo} />
                     ) : (
-                      <AgentFormFields showAgentName={true} />
+                    <AgentFormFields showAgentName={true} />
                     )}
 
                     <div className="flex justify-end gap-2 mt-6">
