@@ -23,7 +23,7 @@ import { Typography } from "antd";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import NotificationsManager from "./molecules/notifications_manager";
 import { modelAvailableCall, userDeleteCall } from "./networking";
-import SSOSettings from "./SSOSettings";
+import DefaultUserSettings from "./DefaultUserSettings";
 import { columns } from "./view_users/columns";
 import { UserDataTable } from "./view_users/table";
 import { UserInfo } from "./view_users/types";
@@ -366,7 +366,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
                 <Skeleton active paragraph={{ rows: 4 }} />
               </div>
             ) : (
-              <SSOSettings
+              <DefaultUserSettings
                 accessToken={accessToken}
                 possibleUIRoles={possibleUIRoles}
                 userID={userID}
