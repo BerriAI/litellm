@@ -9,26 +9,16 @@ import { Button } from "@tremor/react";
 import { formatNumberWithCommas } from "../../../../utils/dataUtils";
 import { TagUsage } from "../../types";
 import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/outline";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 interface TopKeyViewProps {
   topKeys: any[];
-  accessToken: string | null;
-  userID: string | null;
-  userRole: string | null;
   teams: any[] | null;
-  premiumUser: boolean;
   showTags?: boolean;
 }
 
-const TopKeyView: React.FC<TopKeyViewProps> = ({
-  topKeys,
-  accessToken,
-  userID,
-  userRole,
-  teams,
-  premiumUser,
-  showTags = false,
-}) => {
+const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = false }) => {
+  const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [keyData, setKeyData] = useState<any | undefined>(undefined);
