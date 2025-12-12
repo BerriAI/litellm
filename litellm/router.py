@@ -1266,6 +1266,7 @@ class Router:
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             request_priority = kwargs.get("priority") or self.default_priority
             start_time = time.perf_counter()
+            start_time_real = time.time()
             _is_prompt_management_model = self._is_prompt_management_model(model)
 
             if _is_prompt_management_model:
@@ -1278,6 +1279,7 @@ class Router:
                 response = await self.schedule_acompletion(**kwargs)
             else:
                 response = await self.async_function_with_fallbacks(**kwargs)
+            end_time_real = time.time()
             end_time = time.perf_counter()
             _duration = end_time - start_time
             asyncio.create_task(
@@ -1285,8 +1287,8 @@ class Router:
                     service=ServiceTypes.ROUTER,
                     duration=_duration,
                     call_type="acompletion",
-                    start_time=start_time,
-                    end_time=end_time,
+                    start_time=start_time_real,
+                    end_time=end_time_real,
                     parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
@@ -1435,7 +1437,7 @@ class Router:
 
         return FallbackStreamWrapper(stream_with_fallbacks())
 
-    async def _acompletion(
+    async def _acompletion(  # noqa: PLR0915
         self, model: str, messages: List[Dict[str, str]], **kwargs
     ) -> Union[
         ModelResponse,
@@ -1457,6 +1459,7 @@ class Router:
 
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             start_time = time.perf_counter()
+            start_time_real = time.time()
             deployment = await self.async_get_available_deployment(
                 model=model,
                 messages=messages,
@@ -1465,6 +1468,7 @@ class Router:
             )
 
             _timeout_debug_deployment_dict = deployment
+            end_time_real = time.time()
             end_time = time.perf_counter()
             _duration = end_time - start_time
             asyncio.create_task(
@@ -1472,8 +1476,8 @@ class Router:
                     service=ServiceTypes.ROUTER,
                     duration=_duration,
                     call_type="async_get_available_deployment",
-                    start_time=start_time,
-                    end_time=end_time,
+                    start_time=start_time_real,
+                    end_time=end_time_real,
                     parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                 )
             )
@@ -7681,6 +7685,7 @@ class Router:
                 return healthy_deployments
 
             start_time = time.perf_counter()
+            start_time_real = time.time()
             if (
                 self.routing_strategy == "usage-based-routing-v2"
                 and self.lowesttpm_logger_v2 is not None
@@ -7747,6 +7752,7 @@ class Router:
                 f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
             )
 
+            end_time_real = time.time()
             end_time = time.perf_counter()
             _duration = end_time - start_time
             asyncio.create_task(
@@ -7755,8 +7761,8 @@ class Router:
                     duration=_duration,
                     call_type="<routing_strategy>.async_get_available_deployments",
                     parent_otel_span=parent_otel_span,
-                    start_time=start_time,
-                    end_time=end_time,
+                    start_time=start_time_real,
+                    end_time=end_time_real,
                 )
             )
 
