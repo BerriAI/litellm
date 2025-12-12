@@ -36,7 +36,7 @@ import { Button } from "@tremor/react";
 import { all_admin_roles } from "../../../utils/roles";
 import { ActivityMetrics, processActivityData } from "../../activity_metrics";
 import CloudZeroExportModal from "../../cloudzero_export_modal";
-import EntityUsage, { EntityList } from "./EntityUsage/entity_usage";
+import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import EntityUsageExportModal from "../../EntityUsageExport";
 import { Team } from "../../key_team_helpers/key_list";
 import { Organization, tagListCall, userDailyActivityAggregatedCall, userDailyActivityCall } from "../../networking";
@@ -44,14 +44,14 @@ import { getProviderLogoAndName } from "../../provider_info_helpers";
 import AdvancedDatePicker from "../../shared/advanced_date_picker";
 import { ChartLoader } from "../../shared/chart_loader";
 import { Tag } from "../../tag_management/types";
-import TopKeyView from "./EntityUsage/top_key_view";
+import TopKeyView from "./EntityUsage/TopKeyView";
 import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "../types";
 import { valueFormatterSpend } from "../utils/value_formatters";
 import UserAgentActivity from "../../user_agent_activity";
 import ViewUserSpend from "../../view_user_spend";
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 
-interface NewUsagePageProps {
+interface UsagePageProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
@@ -60,14 +60,7 @@ interface NewUsagePageProps {
   premiumUser: boolean;
 }
 
-const NewUsagePage: React.FC<NewUsagePageProps> = ({
-  accessToken,
-  userRole,
-  userID,
-  teams,
-  organizations,
-  premiumUser,
-}) => {
+const UsagePage: React.FC<UsagePageProps> = ({ accessToken, userRole, userID, teams, organizations, premiumUser }) => {
   const [userSpendData, setUserSpendData] = useState<{
     results: DailyData[];
     metadata: any;
@@ -928,4 +921,4 @@ const getModelActivityData = (userSpendData: { results: DailyData[]; metadata: a
   return modelData;
 };
 
-export default NewUsagePage;
+export default UsagePage;

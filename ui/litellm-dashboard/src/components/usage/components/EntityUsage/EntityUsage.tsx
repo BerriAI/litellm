@@ -30,13 +30,13 @@ import {
   customerDailyActivityCall,
   agentDailyActivityCall,
 } from "../../../networking";
-import TopKeyView from "./top_key_view";
+import TopKeyView from "./TopKeyView";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { valueFormatterSpend } from "../../utils/value_formatters";
 import { getProviderLogoAndName } from "../../../provider_info_helpers";
 import { UsageExportHeader } from "../../../EntityUsageExport";
 import type { EntityType } from "../../../EntityUsageExport/types";
-import TopModelView from "./top_model_view";
+import TopModelView from "./TopModelView";
 
 interface EntityMetrics {
   metrics: {

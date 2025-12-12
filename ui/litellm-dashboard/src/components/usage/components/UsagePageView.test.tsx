@@ -1,6 +1,6 @@
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
-import NewUsagePage from "./new_usage";
+import NewUsagePage from "./UsagePageView";
 import type { Organization } from "../../networking";
 import * as networking from "../../networking";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
@@ -18,40 +18,40 @@ beforeAll(() => {
 });
 
 // Mock the networking module
-vi.mock("./networking", () => ({
+vi.mock("../../networking", () => ({
   userDailyActivityCall: vi.fn(),
   userDailyActivityAggregatedCall: vi.fn(),
   tagListCall: vi.fn(),
 }));
 
 // Mock child components to simplify testing
-vi.mock("./activity_metrics", () => ({
+vi.mock("../../activity_metrics", () => ({
   ActivityMetrics: () => <div>Activity Metrics</div>,
   processActivityData: () => ({ data: [], metadata: {} }),
 }));
 
-vi.mock("./view_user_spend", () => ({
+vi.mock("../../view_user_spend", () => ({
   default: () => <div>View User Spend</div>,
 }));
 
-vi.mock("./top_key_view", () => ({
+vi.mock("./EntityUsage/TopKeyView", () => ({
   default: () => <div>Top Keys</div>,
 }));
 
-vi.mock("./entity_usage", () => ({
+vi.mock("./EntityUsage/EntityUsage", () => ({
   default: () => <div>Entity Usage</div>,
   EntityList: [],
 }));
 
-vi.mock("./user_agent_activity", () => ({
+vi.mock("../../user_agent_activity", () => ({
   default: () => <div>User Agent Activity</div>,
 }));
 
-vi.mock("./cloudzero_export_modal", () => ({
+vi.mock("../../cloudzero_export_modal", () => ({
   default: () => <div>CloudZero Export Modal</div>,
 }));
 
-vi.mock("./EntityUsageExport", () => ({
+vi.mock("../../EntityUsageExport", () => ({
   default: () => <div>Entity Usage Export Modal</div>,
 }));
 
