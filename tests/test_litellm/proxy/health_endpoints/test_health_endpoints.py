@@ -205,13 +205,14 @@ def test_health_liveness_endpoint(proxy_client):
     print(f"\n/health/liveness response time: {duration_ms:.2f}ms")
 
 
-def test_health_readiness_with_database(proxy_client):
+def test_health_readiness(proxy_client):
     """
-    Test /health/readiness endpoint when database is available.
-    This test requires DATABASE_URL to be set in the environment.
+    Test /health/readiness endpoint.
+    Database and Redis are optional - the endpoint should work whether they're available or not.
     
-    Example:
-        DATABASE_URL=postgresql://user:pass@localhost:5432/litellm pytest tests/test_litellm/proxy/health_endpoints/test_health_endpoints.py::test_health_readiness_with_database -v
+    If DATABASE_URL is set, the endpoint will check database connectivity.
+    If REDIS_HOST is set, the endpoint will report cache status.
+    If neither is set, the endpoint should still return a valid health status.
     """
     # Measure the time taken for the health check call
     start_time = time.perf_counter()
@@ -225,9 +226,9 @@ def test_health_readiness_with_database(proxy_client):
     # Assert response status
     assert response.status_code == 200, f"Expected 200 OK, got {response.status_code}: {response.text}"
     
-    # Verify response is fast (readiness includes DB check, so < 500ms is reasonable)
+    # Verify response is fast (readiness may include DB check if available, so < 500ms is reasonable)
     # This is critical for orchestration systems (Kubernetes) that poll frequently
-    assert duration_ms < 500, f"Health check took {duration_ms:.2f}ms, expected < 500ms for readiness endpoint (includes DB check)"
+    assert duration_ms < 500, f"Health check took {duration_ms:.2f}ms, expected < 500ms for readiness endpoint"
     
     # Assert response contains expected fields
     response_data = response.json()
@@ -246,23 +247,13 @@ def test_health_readiness_with_database(proxy_client):
     print(f"Use AioHTTP Transport: {response_data.get('use_aiohttp_transport', 'unknown')}")
     print(f"Response time: {duration_ms:.2f}ms")
     
-    # If database is connected, verify it's reported
+    # If database status is reported, verify it's a valid status
+    # Database may be "connected", "disconnected", "unknown", or "Not connected" (when prisma_client is None)
     if "db" in response_data:
         db_status = response_data["db"]
-        print(f"\n✓ Database status from endpoint: {db_status}")
-        
-        # Database status should be "connected" or similar when DB is available
-        assert db_status in ["connected", "disconnected", "unknown"], \
+        # Database status can be any of these valid states
+        assert db_status in ["connected", "disconnected", "unknown", "Not connected"], \
             f"Unexpected db status: {db_status}"
-        
-        if db_status == "connected":
-            print("  ✓ Database connection confirmed by proxy server")
-        elif db_status == "disconnected":
-            print("  ⚠ Database reported as disconnected by proxy server")
-        else:
-            print(f"  ? Database status: {db_status}")
-    else:
-        print("\n⚠ Database status not reported in health endpoint response")
     
     print("="*60 + "\n")
 
