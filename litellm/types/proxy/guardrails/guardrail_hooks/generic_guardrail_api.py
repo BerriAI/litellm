@@ -3,8 +3,8 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.llms.openai import (
+    AllMessageValues,
     ChatCompletionToolCallChunk,
     ChatCompletionToolParam,
 )
@@ -71,6 +71,12 @@ class GenericGuardrailAPIResponse:
     tools: Optional[List[ChatCompletionToolParam]]
     action: str
     blocked_reason: Optional[str]
+    additional_response_headers: Optional[Dict] = (
+        None  # additional response headers to return in LiteLLM request
+    )
+    logging_metadata: Optional[Dict] = (
+        None  # metadata to add to litellm logging payload, for future user debugging
+    )
 
     def __init__(
         self,
@@ -79,12 +85,16 @@ class GenericGuardrailAPIResponse:
         blocked_reason: Optional[str] = None,
         images: Optional[List[str]] = None,
         tools: Optional[List[ChatCompletionToolParam]] = None,
+        additional_response_headers: Optional[Dict] = None,
+        logging_metadata: Optional[Dict] = None,
     ):
         self.action = action
         self.blocked_reason = blocked_reason
         self.texts = texts
         self.images = images
         self.tools = tools
+        self.additional_response_headers = additional_response_headers
+        self.logging_metadata = logging_metadata
 
     @classmethod
     def from_dict(cls, data: dict) -> "GenericGuardrailAPIResponse":
@@ -94,4 +104,6 @@ class GenericGuardrailAPIResponse:
             texts=data.get("texts"),
             images=data.get("images"),
             tools=data.get("tools"),
+            additional_response_headers=data.get("additional_response_headers"),
+            logging_metadata=data.get("logging_metadata"),
         )

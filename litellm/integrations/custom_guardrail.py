@@ -15,6 +15,7 @@ from litellm._logging import verbose_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.guardrails import (
+    ApplyGuardrailResponse,
     DynamicGuardrailParams,
     GenericGuardrailAPIInputs,
     GuardrailEventHooks,
@@ -488,6 +489,7 @@ class CustomGuardrail(CustomLogger):
         """
         Builds `StandardLoggingGuardrailInformation` and adds it to the request metadata so it can be used for logging to DataDog, Langfuse, etc.
         """
+
         if isinstance(guardrail_json_response, Exception):
             guardrail_json_response = str(guardrail_json_response)
         from litellm.types.utils import GuardrailMode
@@ -536,7 +538,7 @@ class CustomGuardrail(CustomLogger):
         request_data: dict,
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> GenericGuardrailAPIInputs:
+    ) -> ApplyGuardrailResponse:
         """
         Apply your guardrail logic to the given inputs
 
@@ -558,7 +560,12 @@ class CustomGuardrail(CustomLogger):
                 - If the guardrail raises an exception
 
         """
-        return inputs
+        return ApplyGuardrailResponse(
+            texts=inputs.get("texts"),
+            images=inputs.get("images"),
+            additional_response_headers=None,
+            logging_metadata=None,
+        )
 
     def _process_response(
         self,

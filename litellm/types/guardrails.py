@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Required, TypedDict
 
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionToolCallChunk,
@@ -737,7 +736,7 @@ class ApplyGuardrailRequest(BaseModel):
     entities: Optional[List[PiiEntityType]] = None
 
 
-class ApplyGuardrailResponse(BaseModel):
+class ApplyGuardrailAPIResponse(BaseModel):
     response_text: str
 
 
@@ -755,3 +754,16 @@ class GenericGuardrailAPIInputs(TypedDict, total=False):
     structured_messages: List[
         AllMessageValues
     ]  # structured messages sent to the LLM - indicates if text is from system or user
+
+
+class ApplyGuardrailResponse(TypedDict, total=False):
+    texts: Optional[List[str]]
+    images: Optional[List[str]]
+    tools: List[ChatCompletionToolParam]  # tools sent to the LLM
+    tool_calls: List[ChatCompletionToolCallChunk]  # tool calls sent from the LLM
+    additional_response_headers: Optional[
+        Dict
+    ]  # additional response headers to return in LiteLLM request
+    logging_metadata: Optional[
+        Dict
+    ]  # metadata to add to litellm logging payload, for future user debugging

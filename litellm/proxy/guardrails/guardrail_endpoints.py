@@ -16,8 +16,8 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.types.guardrails import (
     PII_ENTITY_CATEGORIES_MAP,
+    ApplyGuardrailAPIResponse,
     ApplyGuardrailRequest,
-    ApplyGuardrailResponse,
     BedrockGuardrailConfigModel,
     Guardrail,
     GuardrailEventHooks,
@@ -1189,8 +1189,8 @@ async def get_provider_specific_params():
     return provider_params
 
 
-@router.post("/guardrails/apply_guardrail", response_model=ApplyGuardrailResponse)
-@router.post("/apply_guardrail", response_model=ApplyGuardrailResponse)
+@router.post("/guardrails/apply_guardrail", response_model=ApplyGuardrailAPIResponse)
+@router.post("/apply_guardrail", response_model=ApplyGuardrailAPIResponse)
 async def apply_guardrail(
     request: ApplyGuardrailRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -1221,7 +1221,7 @@ async def apply_guardrail(
         )
         response_text = guardrailed_inputs.get("texts", [])
 
-        return ApplyGuardrailResponse(
+        return ApplyGuardrailAPIResponse(
             response_text=response_text[0] if response_text else request.text
         )
     except Exception as e:

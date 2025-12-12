@@ -9,12 +9,19 @@ import os
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
 
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.types.guardrails import GenericGuardrailAPIInputs, GuardrailEventHooks
+from litellm.types.guardrails import (
+    ApplyGuardrailResponse,
+    GenericGuardrailAPIInputs,
+    GuardrailEventHooks,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPIMetadata,
     GenericGuardrailAPIRequest,
@@ -142,13 +149,14 @@ class GenericGuardrailAPI(CustomGuardrail):
 
         return result_metadata
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> GenericGuardrailAPIInputs:
+    ) -> ApplyGuardrailResponse:
         """
         Apply the Generic Guardrail API to the given inputs.
 
@@ -243,7 +251,7 @@ class GenericGuardrailAPI(CustomGuardrail):
                 raise Exception(f"Content blocked by guardrail: {error_message}")
 
             # Action is NONE or no modifications needed
-            return_inputs = GenericGuardrailAPIInputs(texts=texts)
+            return_inputs = ApplyGuardrailResponse(texts=texts)
             if guardrail_response.texts:
                 return_inputs["texts"] = guardrail_response.texts
             if guardrail_response.images:
@@ -254,6 +262,15 @@ class GenericGuardrailAPI(CustomGuardrail):
                 return_inputs["tools"] = guardrail_response.tools
             elif tools:
                 return_inputs["tools"] = tools
+
+            if guardrail_response.logging_metadata is not None:
+                return_inputs["logging_metadata"] = guardrail_response.logging_metadata
+
+            if guardrail_response.additional_response_headers is not None:
+                return_inputs["additional_response_headers"] = (
+                    guardrail_response.additional_response_headers
+                )
+
             return return_inputs
 
         except Exception as e:

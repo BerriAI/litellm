@@ -229,6 +229,14 @@ class ProxyBaseLLMRequestProcessing:
             litellm_logging_obj=litellm_logging_obj
         )
 
+        additional_logging_response_headers = {}
+        if litellm_logging_obj:
+            additional_logging_response_headers = (
+                litellm_logging_obj.model_call_details.get(
+                    "additional_logging_response_headers"
+                )
+            )
+
         headers = {
             "x-litellm-call-id": call_id,
             "x-litellm-model-id": model_id,
@@ -263,6 +271,12 @@ class ProxyBaseLLMRequestProcessing:
             "x-litellm-timeout": str(timeout) if timeout is not None else None,
             **{k: str(v) for k, v in kwargs.items()},
         }
+        if additional_logging_response_headers and isinstance(
+            additional_logging_response_headers, dict
+        ):
+            headers.update(
+                **{k: str(v) for k, v in additional_logging_response_headers.items()}
+            )
         if request_data:
             remaining_tokens_header = (
                 get_remaining_tokens_and_requests_from_request_data(request_data)

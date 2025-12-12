@@ -408,6 +408,12 @@ class LitellmBasicGuardrailResponse(BaseModel):
     blocked_reason: Optional[str] = None  # only if action is BLOCKED, otherwise None
     texts: Optional[List[str]] = None
     images: Optional[List[str]] = None
+    additional_response_headers: Optional[Dict] = (
+        None  # additional response headers to return in LiteLLM request
+    )
+    logging_metadata: Optional[Dict] = (
+        None  # metadata to add to litellm logging payload, for future user debugging
+    )
 
 
 @app.post(
@@ -429,10 +435,12 @@ async def beta_litellm_basic_guardrail_api(
     Returns:
         LitellmBasicGuardrailResponse with analysis results
     """
-    print(f"request: {request}")
     if any("ishaan" in text.lower() for text in request.texts):
         return LitellmBasicGuardrailResponse(
-            action="BLOCKED", blocked_reason="Ishaan is not allowed"
+            action="BLOCKED",
+            blocked_reason="Ishaan is not allowed",
+            additional_response_headers={"x-mock-guardrail-header": "value_3"},
+            logging_metadata={"x-mock-guardrail-logging-key": "value_3"},
         )
     elif any("pii_value" in text for text in request.texts):
         return LitellmBasicGuardrailResponse(
@@ -441,8 +449,14 @@ async def beta_litellm_basic_guardrail_api(
                 text.replace("pii_value", "pii_value_redacted")
                 for text in request.texts
             ],
+            additional_response_headers={"x-mock-guardrail-header": "value"},
+            logging_metadata={"x-mock-guardrail-logging-key": "value"},
         )
-    return LitellmBasicGuardrailResponse(action="NONE")
+    return LitellmBasicGuardrailResponse(
+        action="NONE",
+        additional_response_headers={"x-mock-guardrail-header": "value_2"},
+        logging_metadata={"x-mock-guardrail-logging-key": "value_2"},
+    )
 
 
 @app.post("/config/update")
