@@ -36,6 +36,8 @@ from litellm.types.llms.openai import (
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
     ResponsesAPIStatus,
+    ValidChatCompletionMessageContentTypes,
+    ValidChatCompletionMessageContentTypesLiteral,
 )
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
@@ -98,6 +100,58 @@ class LiteLLMCompletionResponsesConfig:
         ]
 
     @staticmethod
+    def _transform_tool_choice(
+        tool_choice: Any,
+    ) -> Optional[Union[str, Dict[str, Any]]]:
+        """
+        Transform tool_choice from various formats to OpenAI Chat Completion format.
+
+        Handles:
+        - String values: "auto", "none", "required" -> pass through as-is
+        - Dict with type only (Cursor IDE format):
+            - {"type": "auto"} -> "auto"
+            - {"type": "none"} -> "none"
+            - {"type": "required"} -> "required"
+            - {"type": "tool"} -> "required" (force tool use without specific tool)
+        - Dict with function (OpenAI format):
+            - {"type": "function", "function": {"name": "..."}} -> pass through as-is
+
+        This normalization is needed because some clients (like Cursor IDE) send
+        tool_choice in a dict format like {"type": "tool"} which is not valid for
+        providers like Anthropic that require a tool name when forcing tool use.
+        """
+        if tool_choice is None:
+            return None
+
+        if isinstance(tool_choice, str):
+            return tool_choice
+
+        if isinstance(tool_choice, dict):
+            tool_choice_type = tool_choice.get("type")
+
+            # If it has a function with name, it's standard OpenAI format - pass through
+            if tool_choice.get("function") and tool_choice.get("function", {}).get(
+                "name"
+            ):
+                return tool_choice
+
+            # Handle Cursor IDE dict formats without function name
+            if tool_choice_type == "auto":
+                return "auto"
+            elif tool_choice_type == "none":
+                return "none"
+            elif tool_choice_type in ["required", "tool", "any"]:
+                # "tool" without a specific function name means "use any tool"
+                # which is equivalent to "required" in OpenAI format
+                return "required"
+            elif tool_choice_type == "function":
+                # function type without name - fall back to required
+                return "required"
+
+        # Return as-is for unknown formats
+        return tool_choice
+
+    @staticmethod
     def transform_responses_api_request_to_chat_completion_request(
         model: str,
         input: Union[str, ResponseInputParam],
@@ -130,7 +184,9 @@ class LiteLLMCompletionResponsesConfig:
                 responses_api_request=responses_api_request,
             ),
             "model": model,
-            "tool_choice": responses_api_request.get("tool_choice"),
+            "tool_choice": LiteLLMCompletionResponsesConfig._transform_tool_choice(
+                responses_api_request.get("tool_choice")
+            ),
             "tools": tools,
             "top_p": responses_api_request.get("top_p"),
             "user": responses_api_request.get("user"),
@@ -555,15 +611,37 @@ class LiteLLMCompletionResponsesConfig:
             raise ValueError(f"Invalid content type: {type(content)}")
 
     @staticmethod
-    def _get_chat_completion_request_content_type(content_type: str) -> str:
+    def _get_chat_completion_request_content_type(
+        content_type: str,
+    ) -> ValidChatCompletionMessageContentTypesLiteral:
         """
-        Get the Chat Completion request content type
+        Transform Responses API content type to valid Chat Completion content type.
+        
+        Returns one of ValidChatCompletionMessageContentTypes:
+        - User: "text", "image_url", "input_audio", "audio_url", "document", 
+                "guarded_text", "video_url", "file"
+        - Assistant: "text", "thinking", "redacted_thinking"
         """
         # Responses API content has `input_` prefix, if it exists, remove it
         if content_type.startswith("input_"):
-            return content_type[len("input_") :]
-        else:
-            return content_type
+            stripped = content_type[len("input_") :]
+            # Validate stripped type is valid, otherwise default to "text"
+            if stripped in ValidChatCompletionMessageContentTypes:
+                return stripped  # type: ignore
+            # Handle input_audio -> input_audio (it's already valid)
+            if stripped == "audio":
+                return "input_audio"
+            return "text"
+        
+        # Map Responses API specific types to valid Chat Completion types
+        if content_type in ["tool_result", "output_text"]:
+            return "text"
+        
+        # Return as-is if it's a valid type, otherwise default to "text"
+        if content_type in ValidChatCompletionMessageContentTypes:
+            return content_type  # type: ignore
+        
+        return "text"
 
     @staticmethod
     def transform_instructions_to_system_message(
