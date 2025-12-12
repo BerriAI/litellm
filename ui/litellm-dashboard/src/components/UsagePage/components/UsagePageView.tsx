@@ -33,41 +33,32 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { Button } from "@tremor/react";
-import { all_admin_roles } from "../utils/roles";
-import { ActivityMetrics, processActivityData } from "./activity_metrics";
-import CloudZeroExportModal from "./cloudzero_export_modal";
-import EntityUsage, { EntityList } from "./entity_usage";
-import EntityUsageExportModal from "./EntityUsageExport";
-import { Team } from "./key_team_helpers/key_list";
-import { Organization, tagListCall, userDailyActivityAggregatedCall, userDailyActivityCall } from "./networking";
-import { getProviderLogoAndName } from "./provider_info_helpers";
-import AdvancedDatePicker from "./shared/advanced_date_picker";
-import { ChartLoader } from "./shared/chart_loader";
-import { Tag } from "./tag_management/types";
-import TopKeyView from "./top_key_view";
-import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "./usage/types";
-import { valueFormatterSpend } from "./usage/utils/value_formatters";
-import UserAgentActivity from "./user_agent_activity";
-import ViewUserSpend from "./view_user_spend";
+import { all_admin_roles } from "../../../utils/roles";
+import { ActivityMetrics, processActivityData } from "../../activity_metrics";
+import CloudZeroExportModal from "../../cloudzero_export_modal";
+import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
+import EntityUsageExportModal from "../../EntityUsageExport";
+import { Team } from "../../key_team_helpers/key_list";
+import { Organization, tagListCall, userDailyActivityAggregatedCall, userDailyActivityCall } from "../../networking";
+import { getProviderLogoAndName } from "../../provider_info_helpers";
+import AdvancedDatePicker from "../../shared/advanced_date_picker";
+import { ChartLoader } from "../../shared/chart_loader";
+import { Tag } from "../../tag_management/types";
+import TopKeyView from "./EntityUsage/TopKeyView";
+import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "../types";
+import { valueFormatterSpend } from "../utils/value_formatters";
+import UserAgentActivity from "../../user_agent_activity";
+import ViewUserSpend from "../../view_user_spend";
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
-interface NewUsagePageProps {
-  accessToken: string | null;
-  userRole: string | null;
-  userID: string | null;
+interface UsagePageProps {
   teams: Team[];
   organizations: Organization[];
-  premiumUser: boolean;
 }
 
-const NewUsagePage: React.FC<NewUsagePageProps> = ({
-  accessToken,
-  userRole,
-  userID,
-  teams,
-  organizations,
-  premiumUser,
-}) => {
+const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
+  const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
   const [userSpendData, setUserSpendData] = useState<{
     results: DailyData[];
     metadata: any;
@@ -495,14 +486,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                             )}
                           </Text>
 
-                          <ViewUserSpend
-                            userID={userID}
-                            userRole={userRole}
-                            accessToken={accessToken}
-                            userSpend={totalSpend}
-                            selectedTeam={null}
-                            userMaxBudget={null}
-                          />
+                          <ViewUserSpend userSpend={totalSpend} selectedTeam={null} userMaxBudget={null} />
                         </Col>
 
                         <Col numColSpan={2}>
@@ -588,14 +572,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                         <Col numColSpan={1}>
                           <Card className="h-full">
                             <Title>Top Virtual Keys</Title>
-                            <TopKeyView
-                              topKeys={getTopKeys()}
-                              accessToken={accessToken}
-                              userID={userID}
-                              userRole={userRole}
-                              teams={null}
-                              premiumUser={premiumUser}
-                            />
+                            <TopKeyView topKeys={getTopKeys()} teams={null} />
                           </Card>
                         </Col>
 
@@ -928,4 +905,4 @@ const getModelActivityData = (userSpendData: { results: DailyData[]; metadata: a
   return modelData;
 };
 
-export default NewUsagePage;
+export default UsagePage;

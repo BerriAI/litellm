@@ -1,7 +1,7 @@
 import { BarChart } from "@tremor/react";
-import { formatNumberWithCommas } from "../utils/dataUtils";
+import { formatNumberWithCommas } from "../../../../utils/dataUtils";
 import { useState } from "react";
-import { DataTable } from "./view_logs/table";
+import { DataTable } from "../../../view_logs/table";
 
 interface TopModel {
   key: string;
