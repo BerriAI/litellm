@@ -69,6 +69,60 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: vi.fn(),
 }));
 
+vi.mock("antd", async () => {
+  const React = await import("react");
+
+  function Select(props: any) {
+    const { value, onChange, options, ...rest } = props;
+    return React.createElement(
+      "select",
+      {
+        ...rest,
+        value,
+        onChange: (e: any) => onChange?.(e.target.value),
+        role: "combobox",
+      },
+      options?.map((opt: any) => React.createElement("option", { key: opt.value, value: opt.value }, opt.label)),
+    );
+  }
+  (Select as any).displayName = "AntdSelect";
+
+  function Alert(props: any) {
+    const { message, description, type, closable, onClose, ...rest } = props;
+    return React.createElement(
+      "div",
+      { ...rest, "data-testid": "antd-alert", "data-type": type },
+      message && React.createElement("div", null, message),
+      description && React.createElement("div", null, description),
+      closable && React.createElement("button", { onClick: onClose, "aria-label": "Close" }, "×"),
+    );
+  }
+  (Alert as any).displayName = "AntdAlert";
+
+  return { Select, Alert };
+});
+
+vi.mock("@ant-design/icons", async () => {
+  const React = await import("react");
+
+  function Icon() {
+    return React.createElement("span");
+  }
+
+  return {
+    GlobalOutlined: Icon,
+    BankOutlined: Icon,
+    TeamOutlined: Icon,
+    ShoppingCartOutlined: Icon,
+    TagsOutlined: Icon,
+    RobotOutlined: Icon,
+    LineChartOutlined: Icon,
+    BarChartOutlined: Icon,
+    ClockCircleOutlined: Icon,
+    CalendarOutlined: Icon,
+  };
+});
+
 describe("NewUsage", () => {
   const mockUserDailyActivityAggregatedCall = vi.mocked(networking.userDailyActivityAggregatedCall);
   const mockTagListCall = vi.mocked(networking.tagListCall);
@@ -301,20 +355,20 @@ describe("NewUsage", () => {
     expect(screen.getByText("Top Virtual Keys")).toBeInTheDocument();
   });
 
-  it("should switch between tabs correctly", async () => {
+  it("should switch between usage views correctly", async () => {
     render(<NewUsagePage {...defaultProps} />);
 
     await waitFor(() => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
-    // Default tab should show Global Usage (for admin)
+    // Default view should show Global Usage (for admin)
     expect(screen.getByText("Daily Spend")).toBeInTheDocument();
 
-    // Switch to Team Usage tab
-    const teamUsageTab = screen.getByText("Team Usage");
+    // Switch to Team Usage view
+    const usageSelect = screen.getByRole("combobox");
     act(() => {
-      fireEvent.click(teamUsageTab);
+      fireEvent.change(usageSelect, { target: { value: "team" } });
     });
 
     // Should render EntityUsage component
@@ -323,10 +377,9 @@ describe("NewUsage", () => {
       expect(entityUsageElements.length).toBeGreaterThan(0);
     });
 
-    // Switch to Tag Usage tab (admin only)
-    const tagUsageTab = screen.getByText("Tag Usage");
+    // Switch to Tag Usage view (admin only)
     act(() => {
-      fireEvent.click(tagUsageTab);
+      fireEvent.change(usageSelect, { target: { value: "tag" } });
     });
 
     // Should still render EntityUsage component for tags
@@ -336,16 +389,16 @@ describe("NewUsage", () => {
     });
   });
 
-  it("should show organization usage banner and tab for admins", async () => {
+  it("should show organization usage banner and view for admins", async () => {
     render(<NewUsagePage {...defaultProps} organizations={mockOrganizations} />);
 
     await waitFor(() => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
-    const organizationTab = screen.getByText("Organization Usage");
+    const usageSelect = screen.getByRole("combobox");
     act(() => {
-      fireEvent.click(organizationTab);
+      fireEvent.change(usageSelect, { target: { value: "organization" } });
     });
 
     await waitFor(() => {
@@ -355,7 +408,7 @@ describe("NewUsage", () => {
     });
   });
 
-  it("should show customer usage tab for admins", async () => {
+  it("should show customer usage view for admins", async () => {
     mockUseCustomers.mockReturnValue({
       data: mockCustomers,
       isLoading: false,
@@ -368,9 +421,9 @@ describe("NewUsage", () => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
-    const customerTab = screen.getByText("Customer Usage");
+    const usageSelect = screen.getByRole("combobox");
     act(() => {
-      fireEvent.click(customerTab);
+      fireEvent.change(usageSelect, { target: { value: "customer" } });
     });
 
     await waitFor(() => {
@@ -379,7 +432,7 @@ describe("NewUsage", () => {
     });
   });
 
-  it("should show agent usage tab for admins", async () => {
+  it("should show agent usage view for admins", async () => {
     mockUseAgents.mockReturnValue({
       data: { agents: mockAgents },
       isLoading: false,
@@ -392,9 +445,9 @@ describe("NewUsage", () => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
-    const agentTab = screen.getByText("Agent Usage");
+    const usageSelect = screen.getByRole("combobox");
     act(() => {
-      fireEvent.click(agentTab);
+      fireEvent.change(usageSelect, { target: { value: "agent" } });
     });
 
     await waitFor(() => {
