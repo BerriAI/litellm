@@ -64,7 +64,9 @@ describe("UsefulLinksManagement", () => {
     await user.click(screen.getByRole("button", { name: /add link/i }));
 
     await waitFor(() =>
-      expect(mockedUpdateUsefulLinksCall).toHaveBeenCalledWith("token", { Docs: "https://docs.example.com" }),
+      expect(mockedUpdateUsefulLinksCall).toHaveBeenCalledWith("token", {
+        Docs: { url: "https://docs.example.com", index: 0 },
+      }),
     );
 
     expect(await screen.findByText("Docs")).toBeInTheDocument();
@@ -98,9 +100,9 @@ describe("UsefulLinksManagement", () => {
 
     await waitFor(() =>
       expect(mockedUpdateUsefulLinksCall).toHaveBeenCalledWith("token", {
-        "Second Link": "https://second.example.com",
-        "First Link": "https://first.example.com",
-        "Third Link": "https://third.example.com",
+        "Second Link": { url: "https://second.example.com", index: 0 },
+        "First Link": { url: "https://first.example.com", index: 1 },
+        "Third Link": { url: "https://third.example.com", index: 2 },
       }),
     );
 
