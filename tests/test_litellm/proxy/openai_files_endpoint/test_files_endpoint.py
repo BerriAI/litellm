@@ -477,3 +477,290 @@ def test_create_file_for_each_model(
             openai_call_found = True
             break
     assert openai_call_found, "OpenAI call not found with expected parameters"
+
+
+def test_create_file_with_expires_after(mocker: MockerFixture, monkeypatch, llm_router: Router):
+    """
+    Test that expires_after is properly parsed and passed through when creating a file
+    """
+    from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+    from litellm.types.llms.openai import OpenAIFileObject
+
+    proxy_logging_obj = ProxyLogging(
+        user_api_key_cache=DualCache(default_in_memory_ttl=1)
+    )
+    proxy_logging_obj._add_proxy_hooks(llm_router)
+
+    class DummyManagedFiles(BaseFileEndpoints):
+        async def acreate_file(self, llm_router, create_file_request, target_model_names_list, litellm_parent_otel_span, user_api_key_dict):
+            # Verify expires_after is in the request
+            if isinstance(create_file_request, dict):
+                expires_after = create_file_request.get("expires_after")
+            else:
+                expires_after = getattr(create_file_request, "expires_after", None)
+            
+            # Verify expires_after was passed correctly
+            assert expires_after is not None, "expires_after should be in the request"
+            assert expires_after["anchor"] == "created_at"
+            assert expires_after["seconds"] == 2592000
+            
+            # Return a dummy response
+            return OpenAIFileObject(
+                id="file-abc123",
+                object="file",
+                bytes=100,
+                created_at=1234567890,
+                filename="mydata.jsonl",
+                purpose="fine-tune",
+                status="uploaded",
+            )
+        
+        async def afile_retrieve(self, file_id, litellm_parent_otel_span):
+            raise NotImplementedError("Not implemented for test")
+        
+        async def afile_list(self, purpose, litellm_parent_otel_span):
+            raise NotImplementedError("Not implemented for test")
+        
+        async def afile_delete(self, file_id, litellm_parent_otel_span):
+            raise NotImplementedError("Not implemented for test")
+        
+        async def afile_content(self, file_id, litellm_parent_otel_span):
+            raise NotImplementedError("Not implemented for test")
+
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = DummyManagedFiles()
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
+    )
+
+    # Create test file content
+    test_file_content = b'{"prompt": "Hello", "completion": "Hi"}'
+    test_file = ("mydata.jsonl", test_file_content, "application/json")
+
+    # Test with expires_after
+    response = client.post(
+        "/v1/files",
+        files={"file": test_file},
+        data={
+            "purpose": "fine-tune",
+            "target_model_names": "gpt-3.5-turbo",
+            "expires_after[anchor]": "created_at",
+            "expires_after[seconds]": "2592000",  # 30 days
+        },
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["id"] == "file-abc123"
+    assert result["purpose"] == "fine-tune"
+
+
+def test_create_file_with_expires_after_missing_anchor(mocker: MockerFixture, monkeypatch, llm_router: Router):
+    """
+    Test that an error is returned when expires_after[anchor] is missing
+    """
+    proxy_logging_obj = ProxyLogging(
+        user_api_key_cache=DualCache(default_in_memory_ttl=1)
+    )
+    proxy_logging_obj._add_proxy_hooks(llm_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
+    )
+
+    test_file_content = b'{"prompt": "Hello", "completion": "Hi"}'
+    test_file = ("mydata.jsonl", test_file_content, "application/json")
+
+    # Test with only expires_after[seconds], missing anchor
+    response = client.post(
+        "/v1/files",
+        files={"file": test_file},
+        data={
+            "purpose": "fine-tune",
+            "expires_after[seconds]": "2592000",
+        },
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 400
+    error_detail = response.json()
+    assert "expires_after" in error_detail["error"]["message"].lower() or "both" in error_detail["error"]["message"].lower()
+
+
+def test_create_file_with_expires_after_missing_seconds(mocker: MockerFixture, monkeypatch, llm_router: Router):
+    """
+    Test that an error is returned when expires_after[seconds] is missing
+    """
+    proxy_logging_obj = ProxyLogging(
+        user_api_key_cache=DualCache(default_in_memory_ttl=1)
+    )
+    proxy_logging_obj._add_proxy_hooks(llm_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
+    )
+
+    test_file_content = b'{"prompt": "Hello", "completion": "Hi"}'
+    test_file = ("mydata.jsonl", test_file_content, "application/json")
+
+    # Test with only expires_after[anchor], missing seconds
+    response = client.post(
+        "/v1/files",
+        files={"file": test_file},
+        data={
+            "purpose": "fine-tune",
+            "expires_after[anchor]": "created_at",
+        },
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 400
+    error_detail = response.json()
+    assert "expires_after" in error_detail["error"]["message"].lower() or "both" in error_detail["error"]["message"].lower()
+
+
+def test_create_file_with_expires_after_valid_values(mocker: MockerFixture, monkeypatch, llm_router: Router):
+    """
+    Test that expires_after works with valid anchor and seconds values
+    """
+    from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+    from litellm.types.llms.openai import OpenAIFileObject
+
+    proxy_logging_obj = ProxyLogging(
+        user_api_key_cache=DualCache(default_in_memory_ttl=1)
+    )
+    proxy_logging_obj._add_proxy_hooks(llm_router)
+
+    class DummyManagedFiles(BaseFileEndpoints):
+        async def acreate_file(self, llm_router, create_file_request, target_model_names_list, litellm_parent_otel_span, user_api_key_dict):
+            # Verify expires_after is in the request
+            if isinstance(create_file_request, dict):
+                expires_after = create_file_request.get("expires_after")
+            else:
+                expires_after = getattr(create_file_request, "expires_after", None)
+            
+            # Verify expires_after was passed correctly
+            assert expires_after is not None, "expires_after should be in the request"
+            assert expires_after["anchor"] == "created_at"
+            assert expires_after["seconds"] == 3600
+            
+            return OpenAIFileObject(
+                id="file-abc123",
+                object="file",
+                bytes=100,
+                created_at=1234567890,
+                filename="mydata.jsonl",
+                purpose="fine-tune",
+                status="uploaded",
+            )
+        
+        async def afile_retrieve(self, file_id, litellm_parent_otel_span):
+            raise NotImplementedError("Not implemented for test")
+        
+        async def afile_list(self, purpose, litellm_parent_otel_span):
+            raise NotImplementedError("Not implemented for test")
+        
+        async def afile_delete(self, file_id, litellm_parent_otel_span):
+            raise NotImplementedError("Not implemented for test")
+        
+        async def afile_content(self, file_id, litellm_parent_otel_span):
+            raise NotImplementedError("Not implemented for test")
+
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = DummyManagedFiles()
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
+    )
+
+    test_file_content = b'{"prompt": "Hello", "completion": "Hi"}'
+    test_file = ("mydata.jsonl", test_file_content, "application/json")
+
+    # Test with valid expires_after values
+    response = client.post(
+        "/v1/files",
+        files={"file": test_file},
+        data={
+            "purpose": "fine-tune",
+            "target_model_names": "gpt-3.5-turbo",
+            "expires_after[anchor]": "created_at",
+            "expires_after[seconds]": "3600",  # Minimum valid value (1 hour)
+        },
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["id"] == "file-abc123"
+    assert result["purpose"] == "fine-tune"
+
+
+def test_create_file_without_expires_after(mocker: MockerFixture, monkeypatch, llm_router: Router):
+    """
+    Test that file creation works normally without expires_after
+    """
+    from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+    from litellm.types.llms.openai import OpenAIFileObject
+
+    proxy_logging_obj = ProxyLogging(
+        user_api_key_cache=DualCache(default_in_memory_ttl=1)
+    )
+    proxy_logging_obj._add_proxy_hooks(llm_router)
+
+    class DummyManagedFiles(BaseFileEndpoints):
+        async def acreate_file(self, llm_router, create_file_request, target_model_names_list, litellm_parent_otel_span, user_api_key_dict):
+            # Verify expires_after is None when not provided
+            if isinstance(create_file_request, dict):
+                expires_after = create_file_request.get("expires_after")
+            else:
+                expires_after = getattr(create_file_request, "expires_after", None)
+            
+            # expires_after should be None when not provided
+            assert expires_after is None, "expires_after should be None when not provided"
+            
+            return OpenAIFileObject(
+                id="file-abc123",
+                object="file",
+                bytes=100,
+                created_at=1234567890,
+                filename="mydata.jsonl",
+                purpose="fine-tune",
+                status="uploaded",
+            )
+        
+        async def afile_retrieve(self, file_id, litellm_parent_otel_span):
+            raise NotImplementedError("Not implemented for test")
+        
+        async def afile_list(self, purpose, litellm_parent_otel_span):
+            raise NotImplementedError("Not implemented for test")
+        
+        async def afile_delete(self, file_id, litellm_parent_otel_span):
+            raise NotImplementedError("Not implemented for test")
+        
+        async def afile_content(self, file_id, litellm_parent_otel_span):
+            raise NotImplementedError("Not implemented for test")
+
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = DummyManagedFiles()
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
+    )
+
+    test_file_content = b'{"prompt": "Hello", "completion": "Hi"}'
+    test_file = ("mydata.jsonl", test_file_content, "application/json")
+
+    # Test without expires_after
+    response = client.post(
+        "/v1/files",
+        files={"file": test_file},
+        data={
+            "purpose": "fine-tune",
+            "target_model_names": "gpt-3.5-turbo",
+        },
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["id"] == "file-abc123"
+    assert result["purpose"] == "fine-tune"
