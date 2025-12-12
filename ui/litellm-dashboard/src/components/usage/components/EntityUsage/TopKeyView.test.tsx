@@ -1,6 +1,6 @@
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import TopKeyView from "./top_key_view";
+import TopKeyView from "./TopKeyView";
 
 describe("TopKeyView", () => {
   it("should render", () => {

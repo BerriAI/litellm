@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import EntityUsage from "./entity_usage";
+import EntityUsage from "./EntityUsage";
 import * as networking from "../../../networking";
 
 beforeAll(() => {
@@ -14,7 +14,7 @@ beforeAll(() => {
 });
 
 // Mock the networking module
-vi.mock("./networking", () => ({
+vi.mock("../../../networking", () => ({
   tagDailyActivityCall: vi.fn(),
   teamDailyActivityCall: vi.fn(),
   organizationDailyActivityCall: vi.fn(),
@@ -23,16 +23,16 @@ vi.mock("./networking", () => ({
 }));
 
 // Mock the child components to simplify testing
-vi.mock("./activity_metrics", () => ({
+vi.mock("../../../activity_metrics", () => ({
   ActivityMetrics: () => <div>Activity Metrics</div>,
   processActivityData: () => ({ data: [], metadata: {} }),
 }));
 
-vi.mock("./top_key_view", () => ({
+vi.mock("./TopKeyView", () => ({
   default: () => <div>Top Keys</div>,
 }));
 
-vi.mock("./top_model_view", () => ({
+vi.mock("./TopModelView", () => ({
   default: () => <div>Top Models</div>,
 }));
 
