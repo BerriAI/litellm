@@ -782,6 +782,50 @@ class CostCalculatorUtils:
                 model=model,
                 image_response=completion_response,
             )
+        elif custom_llm_provider == litellm.LlmProviders.OPENAI.value:
+            # Check if this is a gpt-image model (token-based pricing)
+            model_lower = model.lower()
+            if "gpt-image-1" in model_lower:
+                from litellm.llms.openai.image_generation.cost_calculator import (
+                    cost_calculator as openai_gpt_image_cost_calculator,
+                )
+
+                return openai_gpt_image_cost_calculator(
+                    model=model,
+                    image_response=completion_response,
+                    custom_llm_provider=custom_llm_provider,
+                )
+            # Fall through to default for DALL-E models
+            return default_image_cost_calculator(
+                model=model,
+                quality=quality,
+                custom_llm_provider=custom_llm_provider,
+                n=n,
+                size=size,
+                optional_params=optional_params,
+            )
+        elif custom_llm_provider == litellm.LlmProviders.AZURE.value:
+            # Check if this is a gpt-image model (token-based pricing)
+            model_lower = model.lower()
+            if "gpt-image-1" in model_lower:
+                from litellm.llms.openai.image_generation.cost_calculator import (
+                    cost_calculator as openai_gpt_image_cost_calculator,
+                )
+
+                return openai_gpt_image_cost_calculator(
+                    model=model,
+                    image_response=completion_response,
+                    custom_llm_provider=custom_llm_provider,
+                )
+            # Fall through to default for DALL-E models
+            return default_image_cost_calculator(
+                model=model,
+                quality=quality,
+                custom_llm_provider=custom_llm_provider,
+                n=n,
+                size=size,
+                optional_params=optional_params,
+            )
         else:
             return default_image_cost_calculator(
                 model=model,
