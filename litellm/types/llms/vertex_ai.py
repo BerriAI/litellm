@@ -213,6 +213,7 @@ class GenerationConfig(TypedDict, total=False):
     responseModalities: List[GeminiResponseModalities]
     imageConfig: GeminiImageConfig
     thinkingConfig: GeminiThinkingConfig
+    speechConfig: SpeechConfig
 
 
 class VertexToolName(str, Enum):
@@ -301,7 +302,6 @@ class RequestBody(TypedDict, total=False):
     generationConfig: GenerationConfig
     cachedContent: str
     labels: Dict[str, str]
-    speechConfig: SpeechConfig
 
 
 class CachedContentRequestBody(TypedDict, total=False):
