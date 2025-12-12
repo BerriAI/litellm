@@ -1208,6 +1208,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     placeholder="Select a Model"
                     onChange={onModelChange}
                     options={[
+                      { value: "custom", label: "Enter custom model", key: "custom" },
                       ...Array.from(
                         new Set(
                           modelInfo
@@ -1237,7 +1238,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         label: model_group,
                         key: index,
                       })),
-                      { value: "custom", label: "Enter custom model", key: "custom" },
                     ]}
                     style={{ width: "100%" }}
                     showSearch={true}
