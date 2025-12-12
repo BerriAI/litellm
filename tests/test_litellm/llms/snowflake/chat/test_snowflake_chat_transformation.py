@@ -579,6 +579,91 @@ class TestSnowflakeMessageTransformation:
         assert "content" in result["messages"][1]  # Must have content field
         assert "content_list" in result["messages"][1]
 
+    def test_transform_messages_with_none_content(self):
+        """
+        Test that messages with content=None are normalized to have content=""
+        This is critical for previous_response_id scenarios where loaded messages
+        may have None content.
+        """
+        config = SnowflakeConfig()
+
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": None},  # content=None (no tool_calls)
+            {"role": "assistant"},  # Missing content field entirely
+        ]
+
+        transformed = config._transform_messages(messages)
+
+        # All messages should have content field, even if it was None or missing
+        assert len(transformed) == 3
+        assert transformed[0]["content"] == "Hello"
+        assert "content" in transformed[1]
+        assert transformed[1]["content"] == ""  # None should become empty string
+        assert "content" in transformed[2]
+        assert transformed[2]["content"] == ""  # Missing should become empty string
+
+    def test_transform_messages_preserves_existing_content(self):
+        """
+        Test that messages with valid content are not modified
+        """
+        config = SnowflakeConfig()
+
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "What's the weather?"},
+            {"role": "assistant", "content": "I can help with that."},
+        ]
+
+        transformed = config._transform_messages(messages)
+
+        assert len(transformed) == 3
+        assert transformed[0]["content"] == "You are a helpful assistant."
+        assert transformed[1]["content"] == "What's the weather?"
+        assert transformed[2]["content"] == "I can help with that."
+
+    def test_transform_messages_previous_response_id_scenario(self):
+        """
+        Test the exact scenario that causes the error:
+        - First request returns assistant message with tool_calls (content may be None)
+        - Message is loaded from spend logs without tool_calls field
+        - Should be normalized to have content field
+        """
+        config = SnowflakeConfig()
+
+        # Simulate messages loaded from previous_response_id
+        # The assistant message from the first response no longer has tool_calls
+        messages = [
+            {"role": "user", "content": "What's the weather in Paris?"},
+            {
+                "role": "assistant",
+                "content": None,  # Was returned from Snowflake with no text, only tool_calls
+                # Note: tool_calls field is NOT present because it was consumed
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_abc123",
+                "content": "Temperature: 18°C",
+            },
+        ]
+
+        transformed = config._transform_messages(messages)
+
+        # All messages should be properly formatted
+        assert len(transformed) == 3
+        assert transformed[0]["role"] == "user"
+        assert transformed[0]["content"] == "What's the weather in Paris?"
+
+        # The problematic assistant message should now have content field
+        assert transformed[1]["role"] == "assistant"
+        assert "content" in transformed[1]
+        assert transformed[1]["content"] == ""  # Normalized from None
+
+        # Tool result should be transformed properly
+        assert transformed[2]["role"] == "user"
+        assert "content" in transformed[2]
+        assert transformed[2]["content"] == ""
+
 
 class TestSnowflakeStreamingHandler:
     """Test suite for Snowflake streaming response handling"""

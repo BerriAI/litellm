@@ -40,6 +40,15 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
         Returns:
             ModelResponseStream with all required fields
         """
+        from litellm._logging import verbose_logger
+        import json
+
+        # TRACE 4: Log each chunk from Snowflake
+        verbose_logger.debug("=" * 80)
+        verbose_logger.debug("TRACE 4: SNOWFLAKE API RESPONSE CHUNK")
+        verbose_logger.debug(f"Chunk: {json.dumps(chunk, indent=2, default=str)}")
+        verbose_logger.debug("=" * 80)
+
         try:
             # Snowflake may not include 'created' timestamp, use current time as default
             created = chunk.get("created", int(time.time()))
@@ -588,12 +597,24 @@ class SnowflakeConfig(OpenAIGPTConfig):
                 transformed_messages.append(transformed_message)
 
             else:
-                # Pass through other messages - convert to dict to ensure proper format
+                # Pass through other messages, but ensure they have at least a content field
+                # Snowflake requires either 'content' or 'content_list' to be present
                 if isinstance(message, dict):
-                    transformed_messages.append(message)
+                    msg_to_append = message.copy()
                 else:
                     # Convert Pydantic models or other objects to dict
-                    transformed_messages.append(dict(message))
+                    msg_to_append = dict(message) if hasattr(message, '__dict__') else dict(message)
+
+                # Ensure content field exists and is non-empty OR content_list exists
+                # Snowflake rejects messages with empty content and no content_list
+                content_value = msg_to_append.get("content")
+                has_content_list = "content_list" in msg_to_append and msg_to_append.get("content_list")
+
+                # If content is None, empty string, or missing AND there's no content_list, set a placeholder
+                if (not content_value or content_value == "") and not has_content_list:
+                    msg_to_append["content"] = " "  # Space as placeholder to satisfy Snowflake
+
+                transformed_messages.append(msg_to_append)
 
         return transformed_messages
 
@@ -613,6 +634,14 @@ class SnowflakeConfig(OpenAIGPTConfig):
         ## MESSAGE TRANSFORMATION
         # Transform messages to handle tool results and assistant tool_calls
         transformed_messages = self._transform_messages(messages)
+
+        # TRACE 2.5: Log transformed messages to diagnose content/contentList issue
+        verbose_logger.debug("=" * 80)
+        verbose_logger.debug("TRACE 2.5: SNOWFLAKE MESSAGE TRANSFORMATION")
+        verbose_logger.debug(f"Snowflake: Transformed {len(transformed_messages)} messages")
+        for i, msg in enumerate(transformed_messages):
+            verbose_logger.debug(f"Message {i}: role={msg.get('role')}, has_content={'content' in msg}, content_value={repr(msg.get('content'))}, has_content_list={'content_list' in msg}")
+        verbose_logger.debug("=" * 80)
 
         ## TOOL CALLING
         # Transform tools from OpenAI format to Snowflake's tool_spec format
@@ -647,7 +676,13 @@ class SnowflakeConfig(OpenAIGPTConfig):
             **extra_body,
         }
 
-        verbose_logger.debug(f"Snowflake request: {len(transformed_messages)} messages, tools={'tools' in request_data}")
+        # TRACE 3: Log final request to Snowflake API
+        import json
+        verbose_logger.debug("=" * 80)
+        verbose_logger.debug("TRACE 3: FINAL REQUEST TO SNOWFLAKE API")
+        verbose_logger.debug(f"Messages: {len(transformed_messages)}, tools={'tools' in request_data}")
+        verbose_logger.debug(f"Full request body:\n{json.dumps(request_data, indent=2, default=str)}")
+        verbose_logger.debug("=" * 80)
 
         return request_data
 
