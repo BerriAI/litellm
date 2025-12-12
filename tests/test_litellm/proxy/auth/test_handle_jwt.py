@@ -1072,3 +1072,30 @@ async def test_auth_builder_with_oidc_userinfo_disabled():
         # Verify the result
         assert result["user_id"] == "test_user_1"
         assert result["user_object"] == user_object
+
+
+def test_get_team_id_from_header():
+    """Test get_team_id_from_header returns team when valid, None when missing, raises on invalid."""
+    from fastapi import HTTPException
+
+    # Valid team in allowed list
+    result = JWTAuthManager.get_team_id_from_header(
+        request_headers={"x-litellm-team-id": "team-1"},
+        allowed_team_ids={"team-1", "team-2"},
+    )
+    assert result == "team-1"
+
+    # No header returns None
+    result = JWTAuthManager.get_team_id_from_header(
+        request_headers={"authorization": "Bearer token"},
+        allowed_team_ids={"team-1"},
+    )
+    assert result is None
+
+    # Invalid team raises 403
+    with pytest.raises(HTTPException) as exc_info:
+        JWTAuthManager.get_team_id_from_header(
+            request_headers={"x-litellm-team-id": "invalid-team"},
+            allowed_team_ids={"team-1", "team-2"},
+        )
+    assert exc_info.value.status_code == 403
