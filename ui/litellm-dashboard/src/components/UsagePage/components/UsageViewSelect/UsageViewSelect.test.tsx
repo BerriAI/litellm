@@ -1,6 +1,6 @@
-import { render, screen, fireEvent, act } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { UsageViewSelect, UsageOption } from "./UsageViewSelect";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { UsageViewSelect } from "./UsageViewSelect";
 
 vi.mock("antd", async () => {
   const React = await import("react");

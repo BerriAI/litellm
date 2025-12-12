@@ -1,15 +1,15 @@
-import React from "react";
-import { Select } from "antd";
 import {
-  GlobalOutlined,
   BankOutlined,
-  TeamOutlined,
+  BarChartOutlined,
+  GlobalOutlined,
+  LineChartOutlined,
+  RobotOutlined,
   ShoppingCartOutlined,
   TagsOutlined,
-  RobotOutlined,
-  LineChartOutlined,
-  BarChartOutlined,
+  TeamOutlined,
 } from "@ant-design/icons";
+import { Select } from "antd";
+import React from "react";
 export type UsageOption = "global" | "organization" | "team" | "customer" | "tag" | "agent" | "user-agent-activity";
 export interface UsageViewSelectProps {
   value: UsageOption;
