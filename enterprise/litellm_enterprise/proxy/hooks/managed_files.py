@@ -22,7 +22,6 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
-    convert_b64_uid_to_unified_uid,
     get_batch_id_from_unified_batch_id,
     get_model_id_from_unified_batch_id,
 )
@@ -41,6 +40,10 @@ from litellm.types.utils import (
     LiteLLMFineTuningJob,
     LLMResponseTypes,
     SpecialEnums,
+)
+from litellm.proxy.openai_files_endpoints.common_utils import (
+    get_content_type_from_file_object,
+    normalize_mime_type_for_provider,
 )
 
 if TYPE_CHECKING:
@@ -108,6 +111,17 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         if file_object is not None:
             db_data["file_object"] = file_object.model_dump_json()
+            # Extract storage metadata from hidden params if present
+            hidden_params = getattr(file_object, "_hidden_params", {}) or {}
+            if "storage_backend" in hidden_params:
+                db_data["storage_backend"] = hidden_params["storage_backend"]
+            if "storage_url" in hidden_params:
+                db_data["storage_url"] = hidden_params["storage_url"]
+            
+            verbose_logger.debug(
+                f"Storage metadata: storage_backend={db_data.get('storage_backend')}, "
+                f"storage_url={db_data.get('storage_url')}"
+            )
 
         result = await self.prisma_client.db.litellm_managedfiletable.create(
             data=db_data
@@ -268,7 +282,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 )
         return False
 
-    async def async_pre_call_hook(
+    async def async_pre_call_hook(  # noqa: PLR0915
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
@@ -287,15 +301,31 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             await self.check_managed_file_id_access(data, user_api_key_dict)
 
         ### HANDLE TRANSFORMATIONS ###
-        if call_type == CallTypes.completion.value:
+        # Check both completion and acompletion call types
+        is_completion_call = (
+            call_type == CallTypes.completion.value 
+            or call_type == CallTypes.acompletion.value
+        )
+        
+        if is_completion_call:
             messages = data.get("messages")
+            model = data.get("model", "")
             if messages:
                 file_ids = self.get_file_ids_from_messages(messages)
                 if file_ids:
+                    # Check if any files are stored in storage backends and need base64 conversion
+                    # This is needed for Vertex AI/Gemini which requires base64 content
+                    is_vertex_ai = model and ("vertex_ai" in model or "gemini" in model.lower())
+                    if is_vertex_ai:
+                        await self._convert_storage_files_to_base64(
+                            messages=messages,
+                            file_ids=file_ids,
+                            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                        )
+                    
                     model_file_id_mapping = await self.get_model_file_id_mapping(
                         file_ids, user_api_key_dict.parent_otel_span
                     )
-
                     data["model_file_id_mapping"] = model_file_id_mapping
         elif call_type == CallTypes.aresponses.value or call_type == CallTypes.responses.value:
             # Handle managed files in responses API input
@@ -865,3 +895,124 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             )
         else:
             raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
+
+    async def _convert_storage_files_to_base64(
+        self,
+        messages: List[AllMessageValues],
+        file_ids: List[str],
+        litellm_parent_otel_span: Optional[Span],
+    ) -> None:
+        """
+        Convert files stored in storage backends to base64 format for Vertex AI/Gemini.
+        
+        This method checks if any managed files are stored in storage backends,
+        downloads them, and converts them to base64 format in the messages.
+        """
+        # Check each file_id to see if it's stored in a storage backend
+        for file_id in file_ids:
+            # Check if this is a base64 encoded unified file ID
+            decoded_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
+            
+            if not decoded_unified_file_id:
+                continue
+            
+            # Check database for storage backend info
+            # IMPORTANT: The database stores the base64 encoded unified_file_id (not the decoded version)
+            # So we query with the original file_id (which is base64 encoded)
+            db_file = await self.prisma_client.db.litellm_managedfiletable.find_first(
+                where={"unified_file_id": file_id}
+            )
+            
+            if not db_file or not db_file.storage_backend or not db_file.storage_url:
+                continue
+            
+            # File is stored in a storage backend, download and convert to base64
+            try:
+                from litellm.llms.base_llm.files.storage_backend_factory import get_storage_backend
+                
+                storage_backend_name = db_file.storage_backend
+                storage_url = db_file.storage_url
+                
+                # Get storage backend (uses same env vars as callback)
+                try:
+                    storage_backend = get_storage_backend(storage_backend_name)
+                except ValueError as e:
+                    verbose_logger.warning(
+                        f"Storage backend '{storage_backend_name}' error for file {file_id}: {str(e)}"
+                    )
+                    continue
+                
+                file_content = await storage_backend.download_file(storage_url)
+                
+                # Determine content type from file object
+                content_type = self._get_content_type_from_file_object(db_file.file_object)
+                
+                # Convert to base64
+                base64_data = base64.b64encode(file_content).decode("utf-8")
+                base64_data_uri = f"data:{content_type};base64,{base64_data}"
+                
+                # Update messages to use base64 instead of file_id
+                self._update_messages_with_base64_data(messages, file_id, base64_data_uri, content_type)
+            except Exception as e:
+                verbose_logger.exception(
+                    f"Error converting file {file_id} from storage backend to base64: {str(e)}"
+                )
+                # Continue with other files even if one fails
+                continue
+
+    def _get_content_type_from_file_object(self, file_object: Optional[Any]) -> str:
+        """
+        Determine content type from file object.
+        
+        Uses the MIME type utility for consistent detection and normalization.
+        
+        Args:
+            file_object: The file object from the database (can be dict, JSON string, or None)
+        
+        Returns:
+            str: MIME type (defaults to "application/octet-stream" if cannot be determined)
+        """
+        # Use utility function for detection
+        content_type = get_content_type_from_file_object(file_object)
+        
+        # Normalize for Gemini/Vertex AI (requires image/jpeg, not image/jpg)
+        content_type = normalize_mime_type_for_provider(content_type, provider="gemini")
+        
+        return content_type
+
+    def _update_messages_with_base64_data(
+        self,
+        messages: List[AllMessageValues],
+        file_id: str,
+        base64_data_uri: str,
+        content_type: str,
+    ) -> None:
+        """
+        Update messages to replace file_id with base64 data URI.
+        
+        Args:
+            messages: List of messages to update
+            file_id: The file ID to replace
+            base64_data_uri: The base64 data URI to use as replacement
+            content_type: The MIME type of the file (e.g., "image/jpeg", "application/pdf")
+        """
+        for message in messages:
+            if message.get("role") == "user":
+                content = message.get("content")
+                if content and isinstance(content, list):
+                    for element in content:
+                        if element.get("type") == "file":
+                            file_element = cast(ChatCompletionFileObject, element)
+                            file_element_file = file_element.get("file", {})
+                            
+                            if file_element_file.get("file_id") == file_id:
+                                # Replace file_id with base64 data
+                                file_element_file["file_data"] = base64_data_uri
+                                # Set format to help Gemini determine mime type
+                                file_element_file["format"] = content_type
+                                # Remove file_id to ensure only file_data is used
+                                file_element_file.pop("file_id", None)
+                                
+                                verbose_logger.debug(
+                                    f"Converted file {file_id} from storage backend to base64 with format {content_type}"
+                                )
