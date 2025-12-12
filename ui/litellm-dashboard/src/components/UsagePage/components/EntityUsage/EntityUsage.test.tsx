@@ -269,4 +269,79 @@ describe("EntityUsage", () => {
     expect(screen.getByText("Total Spend")).toBeInTheDocument();
     expect(screen.getAllByText("0")[0]).toBeInTheDocument();
   });
+
+  it("should use entityList label when entityList is provided and entity exists", async () => {
+    const customEntityList = [
+      { label: "Custom Tag Label", value: "tag-1" },
+      { label: "Tag 2", value: "tag-2" },
+    ];
+
+    render(<EntityUsage {...defaultProps} entityList={customEntityList} />);
+
+    await waitFor(() => {
+      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Custom Tag Label")).toBeInTheDocument();
+    });
+  });
+
+  it("should fallback to team_alias when entityList is provided but entity does not exist", async () => {
+    const customEntityList = [{ label: "Tag 2", value: "tag-2" }];
+
+    render(<EntityUsage {...defaultProps} entityList={customEntityList} />);
+
+    await waitFor(() => {
+      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Tag 1")).toBeInTheDocument();
+    });
+  });
+
+  it("should fallback to team_alias when entityList is null", async () => {
+    render(<EntityUsage {...defaultProps} entityList={null} />);
+
+    await waitFor(() => {
+      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Tag 1")).toBeInTheDocument();
+    });
+  });
+
+  it("should fallback to entity value when no entityList and no team_alias", async () => {
+    const spendDataWithoutAlias = {
+      ...mockSpendData,
+      results: [
+        {
+          ...mockSpendData.results[0],
+          breakdown: {
+            ...mockSpendData.results[0].breakdown,
+            entities: {
+              "tag-1": {
+                ...mockSpendData.results[0].breakdown.entities["tag-1"],
+                metadata: {},
+              },
+            },
+          },
+        },
+      ],
+    };
+
+    mockTagDailyActivityCall.mockResolvedValue(spendDataWithoutAlias);
+
+    render(<EntityUsage {...defaultProps} entityList={null} />);
+
+    await waitFor(() => {
+      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("tag-1")).toBeInTheDocument();
+    });
+  });
 });
