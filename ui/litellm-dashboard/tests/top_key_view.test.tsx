@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderWithProviders, screen, fireEvent } from "./test-utils";
-import TopKeyView from "../src/components/Usage/components/EntityUsage/TopKeyView";
-import { TagUsage } from "../src/components/Usage/types";
+import TopKeyView from "../src/components/UsagePage/components/EntityUsage/TopKeyView";
+import { TagUsage } from "../src/components/UsagePage/types";
 import useAuthorized from "../src/app/(dashboard)/hooks/useAuthorized";
 
 // Mock the networking module
