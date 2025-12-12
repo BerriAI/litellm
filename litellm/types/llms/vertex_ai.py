@@ -1,16 +1,9 @@
-import json
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from typing_extensions import (
-    Protocol,
     Required,
-    Self,
     TypedDict,
-    TypeGuard,
-    get_origin,
-    override,
-    runtime_checkable,
 )
 
 
@@ -230,6 +223,7 @@ class VertexToolName(str, Enum):
     URL_CONTEXT = "url_context"
     CODE_EXECUTION = "code_execution"
     GOOGLE_MAPS = "googleMaps"
+    COMPUTER_USE = "computerUse"
 
 
 class Tools(TypedDict, total=False):
@@ -240,6 +234,7 @@ class Tools(TypedDict, total=False):
     url_context: dict
     code_execution: dict
     googleMaps: dict
+    computerUse: dict
     retrieval: Retrieval
 
 

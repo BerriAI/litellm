@@ -20,7 +20,7 @@ from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import LLMResponseTypes
+from litellm.types.utils import Choices, LLMResponseTypes, ModelResponse
 
 
 class GraySwanGuardrailMissingSecrets(Exception):
@@ -147,7 +147,7 @@ class GraySwanGuardrail(CustomGuardrail):
             )
             return data
 
-        await self.run_grayswan_guardrail(payload, data)
+        await self.run_grayswan_guardrail(payload, data, GuardrailEventHooks.pre_call)
         add_guardrail_to_applied_guardrails_header(
             request_data=data, guardrail_name=self.guardrail_name
         )
@@ -193,7 +193,9 @@ class GraySwanGuardrail(CustomGuardrail):
             )
             return data
 
-        await self.run_grayswan_guardrail(payload, data)
+        await self.run_grayswan_guardrail(
+            payload, data, GuardrailEventHooks.during_call
+        )
         add_guardrail_to_applied_guardrails_header(
             request_data=data, guardrail_name=self.guardrail_name
         )
@@ -240,23 +242,60 @@ class GraySwanGuardrail(CustomGuardrail):
             )
             return response
 
-        await self.run_grayswan_guardrail(payload, data)
+        await self.run_grayswan_guardrail(payload, data, GuardrailEventHooks.post_call)
 
-        # If passthrough mode and detection info exists, add it to response
+        # If passthrough mode and detection info exists, replace response content with violation message
         if self.on_flagged_action == "passthrough" and "metadata" in data:
             guardrail_detections = data.get("metadata", {}).get(
                 "guardrail_detections", []
             )
             if guardrail_detections:
-                # Add guardrail detections to response hidden params for client visibility
-                hidden_params = getattr(response, "_hidden_params", None)
-                if hidden_params is not None:
-                    if not hidden_params:
-                        hidden_params = {}
-                        setattr(response, "_hidden_params", hidden_params)
+                # Replace the model response content with guardrail violation message
+                violation_message = self._format_violation_message(
+                    guardrail_detections, is_output=True
+                )
 
-                    hidden_params["guardrail_detections"] = guardrail_detections
-                    setattr(response, "_hidden_params", hidden_params)
+                # Handle ModelResponse (OpenAI-style chat/text completions)
+                # Use isinstance to narrow the type for mypy
+                if isinstance(response, ModelResponse) and response.choices:
+                    verbose_proxy_logger.debug(
+                        "Gray Swan Guardrail: Replacing response content in ModelResponse format"
+                    )
+                    for choice in response.choices:
+                        # Handle chat completion format (message.content)
+                        # Choices has message attribute, StreamingChoices has delta
+                        if isinstance(choice, Choices) and hasattr(choice, "message") and hasattr(
+                            choice.message, "content"
+                        ):
+                            choice.message.content = violation_message
+                        # Handle text completion format (text)
+                        # Text attribute might be set dynamically, use setattr
+                        elif hasattr(choice, "text"):
+                            setattr(choice, "text", violation_message)
+
+                        # Update finish_reason to indicate content filtering
+                        if hasattr(choice, "finish_reason"):
+                            choice.finish_reason = "content_filter"
+
+                # Handle AnthropicMessagesResponse format
+                elif hasattr(response, "content") and isinstance(response.content, list):  # type: ignore
+                    verbose_proxy_logger.debug(
+                        "Gray Swan Guardrail: Replacing response content in Anthropic Messages format"
+                    )
+                    # Replace content blocks with text block containing violation message
+                    response.content = [  # type: ignore
+                        {"type": "text", "text": violation_message}
+                    ]
+                    # Update stop_reason if present
+                    if hasattr(response, "stop_reason"):
+                        response.stop_reason = "end_turn"  # type: ignore
+
+                else:
+                    verbose_proxy_logger.warning(
+                        "Gray Swan Guardrail: Passthrough mode enabled but response format not recognized. "
+                        "Cannot replace content. Response type: %s",
+                        type(response).__name__,
+                    )
 
         add_guardrail_to_applied_guardrails_header(
             request_data=data, guardrail_name=self.guardrail_name
@@ -267,7 +306,12 @@ class GraySwanGuardrail(CustomGuardrail):
     # Core GraySwan interaction
     # ------------------------------------------------------------------
 
-    async def run_grayswan_guardrail(self, payload: dict, data: Optional[dict] = None):
+    async def run_grayswan_guardrail(
+        self,
+        payload: dict,
+        data: Optional[dict] = None,
+        hook_type: Optional[GuardrailEventHooks] = None,
+    ):
         headers = self._prepare_headers()
 
         try:
@@ -290,7 +334,7 @@ class GraySwanGuardrail(CustomGuardrail):
             )
             raise GraySwanGuardrailAPIError(str(exc)) from exc
 
-        self._process_grayswan_response(result, data)
+        self._process_grayswan_response(result, data, hook_type)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -324,7 +368,10 @@ class GraySwanGuardrail(CustomGuardrail):
         return payload
 
     def _process_grayswan_response(
-        self, response_json: Dict[str, Any], data: Optional[dict] = None
+        self,
+        response_json: Dict[str, Any],
+        data: Optional[dict] = None,
+        hook_type: Optional[GuardrailEventHooks] = None,
     ) -> None:
         violation_score = float(response_json.get("violation", 0.0) or 0.0)
         violated_rules = response_json.get("violated_rules", [])
@@ -347,10 +394,17 @@ class GraySwanGuardrail(CustomGuardrail):
         )
 
         if self.on_flagged_action == "block":
+            # Determine if violation was in input or output
+            violation_location = (
+                "output"
+                if hook_type == GuardrailEventHooks.post_call
+                else "input"
+            )
             raise HTTPException(
                 status_code=400,
                 detail={
                     "error": "Blocked by Gray Swan Guardrail",
+                    "violation_location": violation_location,
                     "violation": violation_score,
                     "violated_rules": violated_rules,
                     "mutation": mutation_detected,
@@ -362,25 +416,89 @@ class GraySwanGuardrail(CustomGuardrail):
                 "Gray Swan Guardrail: Monitoring mode - allowing flagged content to proceed"
             )
         elif self.on_flagged_action == "passthrough":
+            # Store detection info
+            detection_info = {
+                "guardrail": "grayswan",
+                "flagged": True,
+                "violation_score": violation_score,
+                "violated_rules": violated_rules,
+                "mutation": mutation_detected,
+                "ipi": ipi_detected,
+            }
+
+            # For pre_call and during_call, raise exception to short-circuit LLM call
+            if hook_type in (
+                GuardrailEventHooks.pre_call,
+                GuardrailEventHooks.during_call,
+            ):
+                verbose_proxy_logger.info(
+                    "Gray Swan Guardrail: Passthrough mode - raising exception to short-circuit LLM call"
+                )
+                violation_message = self._format_violation_message(
+                    [detection_info], is_output=False
+                )
+                self.raise_passthrough_exception(
+                    violation_message=violation_message,
+                    request_data=data or {},
+                    detection_info=detection_info,
+                )
+
+            # For post_call, store in metadata to replace response later
             verbose_proxy_logger.info(
                 "Gray Swan Guardrail: Passthrough mode - storing detection info in metadata"
             )
             if data is not None:
-                # Store guardrail detection info in metadata to be included in response
                 if "metadata" not in data:
                     data["metadata"] = {}
                 if "guardrail_detections" not in data["metadata"]:
                     data["metadata"]["guardrail_detections"] = []
-
-                detection_info = {
-                    "guardrail": "grayswan",
-                    "flagged": True,
-                    "violation_score": violation_score,
-                    "violated_rules": violated_rules,
-                    "mutation": mutation_detected,
-                    "ipi": ipi_detected,
-                }
                 data["metadata"]["guardrail_detections"].append(detection_info)
+
+    def _format_violation_message(
+        self, guardrail_detections: list, is_output: bool = False
+    ) -> str:
+        """
+        Format guardrail detections into a user-friendly violation message.
+
+        Args:
+            guardrail_detections: List of detection info dictionaries
+            is_output: True if violation is in model output (post_call), False if in input (pre_call/during_call)
+
+        Returns:
+            Formatted violation message string
+        """
+        if not guardrail_detections:
+            return "Content was flagged by guardrail"
+
+        # Get the most recent detection (should be from this guardrail)
+        detection = guardrail_detections[-1]
+
+        violation_score = detection.get("violation_score", 0.0)
+        violated_rules = detection.get("violated_rules", [])
+        mutation = detection.get("mutation", False)
+        ipi = detection.get("ipi", False)
+
+        # Indicate whether violation was in input or output
+        violation_location = "the model response" if is_output else "input query"
+
+        message_parts = [
+            f"Sorry I can't help with that. According to the Gray Swan Cygnal Guardrail, the {violation_location} has a violation score of {violation_score:.2f}.",
+        ]
+
+        if violated_rules:
+            message_parts.append(
+                f"It was violating the rule(s): {', '.join(map(str, violated_rules))}."
+            )
+
+        if mutation:
+            message_parts.append(
+                "Mutation effort to make the harmful intention disguised was DETECTED."
+            )
+
+        if ipi:
+            message_parts.append("Indirect Prompt Injection was DETECTED.")
+
+        return "\n".join(message_parts)
 
     def _resolve_threshold(self, threshold: Optional[float]) -> float:
         if threshold is not None:

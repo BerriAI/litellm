@@ -738,6 +738,11 @@ async def test_gemini_image_generation_async():
 
     CONTENT = response.choices[0].message.content
 
+    # Check if images list exists and has items before accessing
+    assert hasattr(response.choices[0].message, "images"), "Response message should have images attribute"
+    assert response.choices[0].message.images is not None, "Images should not be None"
+    assert len(response.choices[0].message.images) > 0, "Images list should not be empty"
+    
     IMAGE_URL = response.choices[0].message.images[0]["image_url"]
     print("IMAGE_URL: ", IMAGE_URL)
 

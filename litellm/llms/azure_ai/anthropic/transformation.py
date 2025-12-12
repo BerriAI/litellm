@@ -98,8 +98,8 @@ class AzureAnthropicConfig(AnthropicConfig):
         headers: dict,
     ) -> dict:
         """
-        Transform request using parent AnthropicConfig, then remove extra_body if present.
-        Azure Anthropic doesn't support extra_body parameter.
+        Transform request using parent AnthropicConfig, then remove unsupported params.
+        Azure Anthropic doesn't support extra_body, max_retries, or stream_options parameters.
         """
         # Remove max_retries - Azure Anthropic API doesn't accept this parameter
         optional_params.pop("max_retries", None)
@@ -113,8 +113,12 @@ class AzureAnthropicConfig(AnthropicConfig):
             headers=headers,
         )
 
-        # Remove extra_body if present (Azure Anthropic doesn't support it)
+        # Remove unsupported parameters for Azure AI Anthropic
         data.pop("extra_body", None)
+        data.pop("max_retries", None)
+        data.pop("stream_options", None)
+
+        return data
 
         # Azure AI Anthropic requires explicit "type": "custom" for user-defined tools
         # Regular Anthropic API allows tools without a type field

@@ -272,6 +272,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         contents: GenerateContentContentListUnionDict,
         tools: Optional[ToolConfigDict],
         generate_content_config_dict: Dict,
+        system_instruction: Optional[Any] = None,
     ) -> dict:
         from litellm.types.google_genai.main import (
             GenerateContentConfigDict,

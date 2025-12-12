@@ -619,6 +619,10 @@ router_settings:
 | HELICONE_API_BASE | Base URL for Helicone service, defaults to `https://api.helicone.ai`
 | HOSTNAME | Hostname for the server, this will be [emitted to `datadog` logs](https://docs.litellm.ai/docs/proxy/logging#datadog)
 | HOURS_IN_A_DAY | Hours in a day for calculation purposes. Default is 24
+| HIDDENLAYER_API_BASE | Base URL for HiddenLayer API. Defaults to `https://api.hiddenlayer.ai`
+| HIDDENLAYER_AUTH_URL | Authentication URL for HiddenLayer. Defaults to `https://auth.hiddenlayer.ai`
+| HIDDENLAYER_CLIENT_ID | Client ID for HiddenLayer SaaS authentication
+| HIDDENLAYER_CLIENT_SECRET | Client secret for HiddenLayer SaaS authentication
 | HUGGINGFACE_API_BASE | Base URL for Hugging Face API
 | HUGGINGFACE_API_KEY | API key for Hugging Face API
 | HUMANLOOP_PROMPT_CACHE_TTL_SECONDS | Time-to-live in seconds for cached prompts in Humanloop. Default is 60
@@ -641,6 +645,7 @@ router_settings:
 | LANGFUSE_PUBLIC_KEY | Public key for Langfuse authentication
 | LANGFUSE_RELEASE | Release version of Langfuse integration
 | LANGFUSE_SECRET_KEY | Secret key for Langfuse authentication
+| LANGFUSE_PROPAGATE_TRACE_ID | Flag to enable propagating trace ID to Langfuse. Default is False
 | LANGSMITH_API_KEY | API key for Langsmith platform
 | LANGSMITH_BASE_URL | Base URL for Langsmith service
 | LANGSMITH_BATCH_SIZE | Batch size for operations in Langsmith
@@ -796,6 +801,7 @@ router_settings:
 | REPLICATE_MODEL_NAME_WITH_ID_LENGTH | Length of Replicate model names with ID. Default is 64
 | REPLICATE_POLLING_DELAY_SECONDS | Delay in seconds for Replicate polling operations. Default is 0.5
 | REQUEST_TIMEOUT | Timeout in seconds for requests. Default is 6000
+| ROOT_REDIRECT_URL | URL to redirect root path (/) to when DOCS_URL is set to something other than "/" (DOCS_URL is "/" by default)
 | ROUTER_MAX_FALLBACKS | Maximum number of fallbacks for router. Default is 5
 | RUNWAYML_DEFAULT_API_VERSION | Default API version for RunwayML service. Default is "2024-11-06"
 | RUNWAYML_POLLING_TIMEOUT | Timeout in seconds for RunwayML image generation polling. Default is 600 (10 minutes)
@@ -817,6 +823,8 @@ router_settings:
 | SMTP_SENDER_LOGO | Logo used in emails sent via SMTP
 | SMTP_TLS | Flag to enable or disable TLS for SMTP connections
 | SMTP_USERNAME | Username for SMTP authentication (do not set if SMTP does not require auth)
+| SENDGRID_API_KEY | API key for SendGrid email service
+| SENDGRID_SENDER_EMAIL | Email address used as the sender in SendGrid email transactions 
 | SPEND_LOGS_URL | URL for retrieving spend logs
 | SPEND_LOG_CLEANUP_BATCH_SIZE | Number of logs deleted per batch during cleanup. Default is 1000
 | SSL_CERTIFICATE | Path to the SSL certificate file
@@ -854,6 +862,8 @@ router_settings:
 | WEBHOOK_URL | URL for receiving webhooks from external services
 | SPEND_LOG_RUN_LOOPS | Constant for setting how many runs of 1000 batch deletes should spend_log_cleanup task run
 | SPEND_LOG_CLEANUP_BATCH_SIZE | Number of logs deleted per batch during cleanup. Default is 1000
+| SPEND_LOG_QUEUE_POLL_INTERVAL | Polling interval in seconds for spend log queue. Default is 2.0
+| SPEND_LOG_QUEUE_SIZE_THRESHOLD | Threshold for spend log queue size before processing. Default is 100
 | COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY | Maximum size for CoroutineChecker in-memory cache. Default is 1000
 | DEFAULT_SHARED_HEALTH_CHECK_TTL | Time-to-live in seconds for cached health check results in shared health check mode. Default is 300 (5 minutes)
 | DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL | Time-to-live in seconds for health check lock in shared health check mode. Default is 60 (1 minute)

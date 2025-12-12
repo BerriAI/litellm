@@ -16,6 +16,7 @@ const sidebars = {
   // // By default, Docusaurus generates a sidebar from the docs folder structure
   integrationsSidebar: [
     { type: "doc", id: "integrations/index" },
+    { type: "doc", id: "integrations/community" },
     {
       type: "category",
       label: "Observability",
@@ -60,6 +61,7 @@ const sidebars = {
           "proxy/guardrails/enkryptai",
           "proxy/guardrails/ibm_guardrails",
           "proxy/guardrails/grayswan",
+          "proxy/guardrails/hiddenlayer",
           "proxy/guardrails/lasso_security",
           "proxy/guardrails/litellm_content_filter",
           "proxy/guardrails/guardrails_ai",
@@ -97,7 +99,8 @@ const sidebars = {
         "proxy/litellm_prompt_management",
         "proxy/custom_prompt_management",
         "proxy/native_litellm_prompt",
-        "proxy/prompt_management"
+        "proxy/prompt_management",
+        "proxy/arize_phoenix_prompts"
       ]
     },
     {
@@ -171,7 +174,7 @@ const sidebars = {
             {
               type: "link",
               label: "All Supported Endpoints →",
-              href: "/docs/supported_endpoints",
+              href: "https://docs.litellm.ai/docs/supported_endpoints",
             },
           ],
         },
@@ -429,6 +432,7 @@ const sidebars = {
           ]
         },
         "containers",
+        "container_files",
         {
           type: "category",
           label: "/chat/completions",
@@ -490,6 +494,7 @@ const sidebars = {
           ]
         },
         "anthropic_unified",
+        "anthropic_count_tokens",
         "moderation",
         "ocr",
         {
@@ -604,6 +609,7 @@ const sidebars = {
           label: "Azure AI",
           items: [
             "providers/azure_ai",
+            "providers/azure_ai_agents",
             "providers/azure_ocr",
             "providers/azure_document_intelligence",
             "providers/azure_ai_speech",
@@ -702,6 +708,7 @@ const sidebars = {
         "providers/infinity",
         "providers/jina_ai",
         "providers/lambda_ai",
+        "providers/langgraph",
         "providers/lemonade",
         "providers/llamafile",
         "providers/lm_studio",
@@ -781,6 +788,7 @@ const sidebars = {
         "completion/image_generation_chat",
         "completion/json_mode",
         "completion/knowledgebase",
+        "guides/code_interpreter",
         "completion/message_trimming",
         "completion/model_alias",
         "completion/mock_requests",

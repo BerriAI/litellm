@@ -250,6 +250,7 @@ async def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
                 "generated_text": "Hello! How can I help you?",
                 "generated_token_count": 10,
                 "input_token_count": 5,
+                "stop_reason": "stop",  # Required field for response transformation
             }
         ],
         "model_id": "openai/gpt-oss-120b",
@@ -282,6 +283,11 @@ async def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
         # Return failure to use tokenizer_config instead
         return {"status": "failure"}
 
+    # Clear any cached tokenizer config for this model to ensure fresh fetch
+    hf_model = "openai/gpt-oss-120b"
+    if hf_model in litellm.known_tokenizer_config:
+        del litellm.known_tokenizer_config[hf_model]
+    
     with patch.object(client, "post") as mock_post, patch.object(
         litellm.module_level_client, "post", return_value=mock_token_response
     ), patch(

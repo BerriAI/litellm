@@ -18,7 +18,16 @@
         "ocr": "Supports /ocr endpoint",
         "search": "Supports /search endpoint",
         "skills": "Supports /skills endpoint",
-        "a2a_(Agent Gateway)": "Supports /a2a/{agent}/message/send endpoint (A2A Protocol)"
+        "a2a_(Agent Gateway)": "Supports /a2a/{agent}/message/send endpoint (A2A Protocol)",
+        "create_container": "Supports POST /containers endpoint",
+        "list_containers": "Supports GET /containers endpoint",
+        "retrieve_container": "Supports GET /containers/{id} endpoint",
+        "delete_container": "Supports DELETE /containers/{id} endpoint",
+        "create_container_file": "Supports POST /containers/{id}/files endpoint",
+        "list_container_files": "Supports GET /containers/{id}/files endpoint",
+        "retrieve_container_file": "Supports GET /containers/{id}/files/{file_id} endpoint",
+        "retrieve_container_file_content": "Supports GET /containers/{id}/files/{file_id}/content endpoint",
+        "delete_container_file": "Supports DELETE /containers/{id}/files/{file_id} endpoint"
       }
     }
   },
@@ -228,6 +237,23 @@
         "batches": false,
         "rerank": false,
         "ocr": true
+      }
+    },
+    "azure_ai/agents": {
+      "display_name": "Azure AI Foundry Agents (`azure_ai/agents`)",
+      "url": "https://docs.litellm.ai/docs/providers/azure_ai_agents",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true
       }
     },
     "azure_text": {
@@ -1314,6 +1340,15 @@
         "moderations": true,
         "batches": true,
         "rerank": false,
+        "create_container": true,
+        "list_containers": true,
+        "retrieve_container": true,
+        "delete_container": true,
+        "create_container_file": false,
+        "list_container_files": true,
+        "retrieve_container_file": true,
+        "retrieve_container_file_content": true,
+        "delete_container_file": true,
         "a2a": true
       }
     },
@@ -1879,6 +1914,23 @@
     "cursor": {
       "display_name": "Cursor BYOK (`cursor`)",
       "url": "https://docs.litellm.ai/docs/providers/cursor",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true
+      }
+    },
+    "langgraph": {
+      "display_name": "LangGraph (`langgraph`)",
+      "url": "https://docs.litellm.ai/docs/providers/langgraph",
       "endpoints": {
         "chat_completions": true,
         "messages": true,

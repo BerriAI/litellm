@@ -176,7 +176,6 @@ from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.deprecated_providers import aleph_alpha, palm
 from .llms.gemini.common_utils import get_api_key_from_env
 from .llms.groq.chat.handler import GroqChatCompletion
-from .llms.sap.chat.handler import GenAIHubOrchestration
 from .llms.heroku.chat.transformation import HerokuChatConfig
 from .llms.huggingface.embedding.handler import HuggingFaceEmbedding
 from .llms.lemonade.chat.transformation import LemonadeChatConfig
@@ -196,6 +195,7 @@ from .llms.predibase.chat.handler import PredibaseChatCompletion
 from .llms.replicate.chat.handler import completion as replicate_chat_completion
 from .llms.sagemaker.chat.handler import SagemakerChatHandler
 from .llms.sagemaker.completion.handler import SagemakerLLM
+from .llms.sap.chat.handler import GenAIHubOrchestration
 from .llms.vertex_ai import vertex_ai_non_gemini
 from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from .llms.vertex_ai.gemini_embeddings.batch_embed_content_handler import (
@@ -1736,9 +1736,37 @@ def completion(  # type: ignore # noqa: PLR0915
         elif custom_llm_provider == "azure_ai":
             from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
 
+            azure_ai_route = AzureFoundryModelInfo.get_azure_ai_route(model)
+
+            # Check if this is an agents route - model format: azure_ai/agents/<agent_id>
+            if azure_ai_route == "agents":
+                from litellm.llms.azure_ai.agents import AzureAIAgentsConfig
+
+                api_base = AzureFoundryModelInfo.get_api_base(api_base)
+                if api_base is None:
+                    raise ValueError(
+                        "Azure AI Agents requests require an api_base. "
+                        "Set `api_base` or the AZURE_AI_API_BASE env var."
+                    )
+                api_key = AzureFoundryModelInfo.get_api_key(api_key)
+
+                response = AzureAIAgentsConfig.completion(
+                    model=model,
+                    messages=messages,
+                    api_base=api_base,
+                    api_key=api_key,
+                    model_response=model_response,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    timeout=timeout,
+                    acompletion=acompletion,
+                    stream=stream,
+                    headers=headers or litellm.headers,
+                )
+
             # Check if this is a Claude model - route to Azure Anthropic handler
-            model_lower = model.lower()
-            if "claude" in model_lower:
+            elif "claude" in model.lower():
                 # Use Azure Anthropic handler for Claude models
                 api_base = AzureFoundryModelInfo.get_api_base(api_base)
                 if api_base is None:
@@ -3962,6 +3990,39 @@ def completion(  # type: ignore # noqa: PLR0915
                     custom_llm_provider=custom_llm_provider,
                     logging_obj=logging,
                 )
+
+        elif custom_llm_provider == "langgraph":
+            # LangGraph - Agent Runtime Provider
+            from litellm.llms.langgraph.chat.transformation import LangGraphConfig
+
+            (
+                api_base,
+                api_key,
+            ) = LangGraphConfig()._get_openai_compatible_provider_info(
+                api_base=api_base or litellm.api_base,
+                api_key=api_key or litellm.api_key,
+            )
+
+            headers = headers or litellm.headers
+
+            response = base_llm_http_handler.completion(
+                model=model,
+                stream=stream,
+                messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                shared_session=shared_session,
+                custom_llm_provider=custom_llm_provider,
+                timeout=timeout,
+                headers=headers,
+                encoding=encoding,
+                api_key=api_key,
+                logging_obj=logging,
+                client=client,
+            )
 
         else:
             raise LiteLLMUnknownProvider(
@@ -6716,6 +6777,36 @@ def stream_chunk_builder(  # noqa: PLR0915
         if len(audio_chunks) > 0:
             _choice = cast(Choices, response.choices[0])
             _choice.message.audio = processor.get_combined_audio_content(audio_chunks)
+
+        # Combine provider_specific_fields from streaming chunks (e.g., web_search_results, citations)
+        # See: https://github.com/BerriAI/litellm/issues/17737
+        provider_specific_chunks = [
+            chunk
+            for chunk in chunks
+            if len(chunk["choices"]) > 0
+            and "provider_specific_fields" in chunk["choices"][0]["delta"]
+            and chunk["choices"][0]["delta"]["provider_specific_fields"] is not None
+        ]
+
+        if len(provider_specific_chunks) > 0:
+            combined_provider_fields: Dict[str, Any] = {}
+            for chunk in provider_specific_chunks:
+                fields = chunk["choices"][0]["delta"]["provider_specific_fields"]
+                if isinstance(fields, dict):
+                    for key, value in fields.items():
+                        if key not in combined_provider_fields:
+                            combined_provider_fields[key] = value
+                        elif isinstance(value, list) and isinstance(
+                            combined_provider_fields[key], list
+                        ):
+                            # For lists like web_search_results, take the last (most complete) one
+                            combined_provider_fields[key] = value
+                        else:
+                            combined_provider_fields[key] = value
+
+            if combined_provider_fields:
+                _choice = cast(Choices, response.choices[0])
+                _choice.message.provider_specific_fields = combined_provider_fields
 
         completion_output = get_content_from_model_response(response)
 
