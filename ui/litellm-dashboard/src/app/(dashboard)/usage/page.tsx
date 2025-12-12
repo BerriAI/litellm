@@ -8,16 +8,7 @@ const UsagePage = () => {
   const { accessToken, userRole, userId, premiumUser } = useAuthorized();
   const { teams } = useTeams();
 
-  return (
-    <UsagePageView
-      accessToken={accessToken}
-      userRole={userRole}
-      userID={userId}
-      teams={teams ?? []}
-      premiumUser={premiumUser}
-      organizations={[]}
-    />
-  );
+  return <UsagePageView teams={teams ?? []} organizations={[]} />;
 };
 
 export default UsagePage;

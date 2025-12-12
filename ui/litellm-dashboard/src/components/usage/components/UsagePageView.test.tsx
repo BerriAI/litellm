@@ -5,6 +5,7 @@ import type { Organization } from "../../networking";
 import * as networking from "../../networking";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 // Polyfill ResizeObserver for test environment
 beforeAll(() => {
@@ -63,11 +64,17 @@ vi.mock("@/app/(dashboard)/hooks/agents/useAgents", () => ({
   useAgents: vi.fn(),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  __esModule: true,
+  default: vi.fn(),
+}));
+
 describe("NewUsage", () => {
   const mockUserDailyActivityAggregatedCall = vi.mocked(networking.userDailyActivityAggregatedCall);
   const mockTagListCall = vi.mocked(networking.tagListCall);
   const mockUseCustomers = vi.mocked(useCustomers);
   const mockUseAgents = vi.mocked(useAgents);
+  const mockUseAuthorized = vi.mocked(useAuthorized);
 
   const mockSpendData = {
     results: [
@@ -233,6 +240,16 @@ describe("NewUsage", () => {
   };
 
   beforeEach(() => {
+    mockUseAuthorized.mockReturnValue({
+      token: "mock-token",
+      accessToken: defaultProps.accessToken,
+      userId: defaultProps.userID,
+      userEmail: "test@example.com",
+      userRole: defaultProps.userRole,
+      premiumUser: defaultProps.premiumUser,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    });
     mockUserDailyActivityAggregatedCall.mockClear();
     mockTagListCall.mockClear();
     mockUserDailyActivityAggregatedCall.mockResolvedValue(mockSpendData);

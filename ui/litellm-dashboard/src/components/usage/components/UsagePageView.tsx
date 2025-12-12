@@ -50,17 +50,15 @@ import { valueFormatterSpend } from "../utils/value_formatters";
 import UserAgentActivity from "../../user_agent_activity";
 import ViewUserSpend from "../../view_user_spend";
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 interface UsagePageProps {
-  accessToken: string | null;
-  userRole: string | null;
-  userID: string | null;
   teams: Team[];
   organizations: Organization[];
-  premiumUser: boolean;
 }
 
-const UsagePage: React.FC<UsagePageProps> = ({ accessToken, userRole, userID, teams, organizations, premiumUser }) => {
+const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
+  const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
   const [userSpendData, setUserSpendData] = useState<{
     results: DailyData[];
     metadata: any;
@@ -488,14 +486,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, userRole, userID, te
                             )}
                           </Text>
 
-                          <ViewUserSpend
-                            userID={userID}
-                            userRole={userRole}
-                            accessToken={accessToken}
-                            userSpend={totalSpend}
-                            selectedTeam={null}
-                            userMaxBudget={null}
-                          />
+                          <ViewUserSpend userSpend={totalSpend} selectedTeam={null} userMaxBudget={null} />
                         </Col>
 
                         <Col numColSpan={2}>
@@ -581,14 +572,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, userRole, userID, te
                         <Col numColSpan={1}>
                           <Card className="h-full">
                             <Title>Top Virtual Keys</Title>
-                            <TopKeyView
-                              topKeys={getTopKeys()}
-                              accessToken={accessToken}
-                              userID={userID}
-                              userRole={userRole}
-                              teams={null}
-                              premiumUser={premiumUser}
-                            />
+                            <TopKeyView topKeys={getTopKeys()} teams={null} />
                           </Card>
                         </Col>
 

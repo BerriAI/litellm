@@ -1,87 +1,64 @@
-import { render } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import TopKeyView from "./TopKeyView";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  __esModule: true,
+  default: vi.fn(),
+}));
 
 describe("TopKeyView", () => {
+  const mockUseAuthorized = vi.mocked(useAuthorized);
+  const mockAuth = {
+    token: "mock-token",
+    accessToken: "test-token",
+    userId: "user-1",
+    userEmail: "user@example.com",
+    userRole: "admin",
+    premiumUser: true,
+    disabledPersonalKeyCreation: false,
+    showSSOBanner: false,
+  };
+  const baseProps = {
+    topKeys: [],
+    teams: null,
+    showTags: false,
+  };
+
+  beforeEach(() => {
+    mockUseAuthorized.mockReturnValue(mockAuth);
+  });
+
   it("should render", () => {
-    const { container } = render(
-      <TopKeyView
-        topKeys={[]}
-        accessToken={null}
-        userID={null}
-        userRole={null}
-        teams={null}
-        premiumUser={false}
-        showTags={false}
-      />,
-    );
-    expect(container).toBeTruthy();
+    render(<TopKeyView {...baseProps} />);
+    expect(screen.getByText("Table View")).toBeInTheDocument();
   });
 
   it("should have a table view button", () => {
-    const { getByText } = render(
-      <TopKeyView
-        topKeys={[]}
-        accessToken={null}
-        userID={null}
-        userRole={null}
-        teams={null}
-        premiumUser={false}
-        showTags={false}
-      />,
-    );
-    expect(getByText("Table View")).toBeInTheDocument();
+    render(<TopKeyView {...baseProps} />);
+    expect(screen.getByText("Table View")).toBeInTheDocument();
   });
 
   it("should have a chart view", () => {
-    const { getByText } = render(
-      <TopKeyView
-        topKeys={[]}
-        accessToken={null}
-        userID={null}
-        userRole={null}
-        teams={null}
-        premiumUser={false}
-        showTags={false}
-      />,
-    );
-    expect(getByText("Chart View")).toBeInTheDocument();
+    render(<TopKeyView {...baseProps} />);
+    expect(screen.getByText("Chart View")).toBeInTheDocument();
   });
 
   ["Key ID", "Key Alias", "Spend (USD)"].forEach((header) => {
     it(`should have a ${header} column`, () => {
-      const { getByText } = render(
-        <TopKeyView
-          topKeys={[]}
-          accessToken={null}
-          userID={null}
-          userRole={null}
-          teams={null}
-          premiumUser={false}
-          showTags={false}
-        />,
-      );
-      expect(getByText(header)).toBeInTheDocument();
+      render(<TopKeyView {...baseProps} />);
+      expect(screen.getByText(header)).toBeInTheDocument();
     });
   });
 
   it("should have a Tags column when showTags is true", () => {
-    const { getByText } = render(
-      <TopKeyView
-        topKeys={[]}
-        accessToken={null}
-        userID={null}
-        userRole={null}
-        teams={null}
-        premiumUser={false}
-        showTags={true}
-      />,
-    );
-    expect(getByText("Tags")).toBeInTheDocument();
+    render(<TopKeyView {...baseProps} showTags={true} />);
+    expect(screen.getByText("Tags")).toBeInTheDocument();
   });
 
   it("should show the key's information on the table", () => {
-    const { getByText } = render(
+    render(
       <TopKeyView
         topKeys={[
           {
@@ -94,17 +71,13 @@ describe("TopKeyView", () => {
             ],
           },
         ]}
-        accessToken="test-token"
-        userID={null}
-        userRole={null}
         teams={null}
-        premiumUser={false}
         showTags={true}
       />,
     );
-    expect(getByText("Test Key")).toBeInTheDocument();
-    expect(getByText(/tag-1/)).toBeInTheDocument();
-    expect(getByText(/tag-2/)).toBeInTheDocument();
-    expect(getByText("$100.00")).toBeInTheDocument();
+    expect(screen.getByText("Test Key")).toBeInTheDocument();
+    expect(screen.getByText(/tag-1/)).toBeInTheDocument();
+    expect(screen.getByText(/tag-2/)).toBeInTheDocument();
+    expect(screen.getByText("$100.00")).toBeInTheDocument();
   });
 });

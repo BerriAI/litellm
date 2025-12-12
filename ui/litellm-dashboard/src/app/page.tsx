@@ -446,12 +446,8 @@ export default function CreateKeyPage() {
                   <VectorStoreManagement accessToken={accessToken} userRole={userRole} userID={userID} />
                 ) : page == "new_usage" ? (
                   <NewUsagePage
-                    userID={userID}
-                    userRole={userRole}
-                    accessToken={accessToken}
                     teams={(teams as Team[]) ?? []}
                     organizations={(organizations as Organization[]) ?? []}
-                    premiumUser={premiumUser}
                   />
                 ) : (
                   <Usage
