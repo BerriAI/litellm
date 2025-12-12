@@ -1,11 +1,11 @@
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
-import NewUsagePage from "./UsagePageView";
+import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
+import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Organization } from "../../networking";
 import * as networking from "../../networking";
-import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
-import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
-import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import NewUsagePage from "./UsagePageView";
 
 // Polyfill ResizeObserver for test environment
 beforeAll(() => {

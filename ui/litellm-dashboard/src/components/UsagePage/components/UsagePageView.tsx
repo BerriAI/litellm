@@ -30,13 +30,14 @@ import {
 import { Alert } from "antd";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
+import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { Button } from "@tremor/react";
 import { all_admin_roles } from "../../../utils/roles";
 import { ActivityMetrics, processActivityData } from "../../activity_metrics";
 import CloudZeroExportModal from "../../cloudzero_export_modal";
-import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import EntityUsageExportModal from "../../EntityUsageExport";
 import { Team } from "../../key_team_helpers/key_list";
 import { Organization, tagListCall, userDailyActivityAggregatedCall, userDailyActivityCall } from "../../networking";
@@ -44,14 +45,13 @@ import { getProviderLogoAndName } from "../../provider_info_helpers";
 import AdvancedDatePicker from "../../shared/advanced_date_picker";
 import { ChartLoader } from "../../shared/chart_loader";
 import { Tag } from "../../tag_management/types";
-import TopKeyView from "./EntityUsage/TopKeyView";
-import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "../types";
-import { valueFormatterSpend } from "../utils/value_formatters";
 import UserAgentActivity from "../../user_agent_activity";
 import ViewUserSpend from "../../view_user_spend";
-import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
-import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { UsageViewSelect, UsageOption } from "./UsageViewSelect/UsageViewSelect";
+import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "../types";
+import { valueFormatterSpend } from "../utils/value_formatters";
+import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
+import TopKeyView from "./EntityUsage/TopKeyView";
+import { UsageOption, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
 
 interface UsagePageProps {
   teams: Team[];
