@@ -163,14 +163,21 @@ const Navbar: React.FC<NavbarProps> = ({
               </button>
             )}
 
-            <Link href="/" className="flex items-center">
-              <img src={imageUrl} alt="LiteLLM Brand" className="h-10 w-auto" />
+            <div className="flex items-center">
+              <Link href="/" className="flex items-center">
+                <img src={imageUrl} alt="LiteLLM Brand" className="h-10 w-auto" />
+              </Link>
               {version && (
-                <span className="text-xs text-gray-500 border border-gray-200 rounded-lg px-2 py-0.5 bg-gray-50 font-medium -ml-2">
+                <a
+                  href="https://docs.litellm.ai/release_notes"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-gray-500 border border-gray-200 rounded-lg px-2 py-0.5 bg-gray-50 font-medium -ml-2 hover:bg-gray-100 transition-colors cursor-pointer z-10"
+                >
                   v{version}
-                </span>
+                </a>
               )}
-            </Link>
+            </div>
           </div>
           {/* Right side nav items */}
           <div className="flex items-center space-x-5 ml-auto">
