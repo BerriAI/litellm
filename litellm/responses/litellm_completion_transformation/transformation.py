@@ -598,12 +598,16 @@ class LiteLLMCompletionResponsesConfig:
                             )
                         )
                     else:
+                        # Skip text blocks with None text to avoid downstream errors
+                        text_value = item.get("text")
+                        if text_value is None:
+                            continue
                         content_list.append(
                             {
                                 "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
                                     item.get("type") or "text"
                                 ),
-                                "text": item.get("text"),
+                                "text": text_value,
                             }
                         )
             return content_list
