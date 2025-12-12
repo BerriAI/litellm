@@ -21,7 +21,7 @@ import {
   ToolOutlined,
   UserOutlined,
 } from "@ant-design/icons";
-import { ConfigProvider, Layout, Menu } from "antd";
+import { Badge, ConfigProvider, Layout, Menu } from "antd";
 import { all_admin_roles, internalUserRoles, isAdminRole, rolesWithWriteAccess } from "../utils/roles";
 import UsageIndicator from "./usage_indicator";
 const { Sider } = Layout;
@@ -39,7 +39,7 @@ interface SidebarProps {
 interface MenuItem {
   key: string;
   page: string;
-  label: string;
+  label: string | React.ReactNode;
   roles?: string[];
   children?: MenuItem[]; // Add children property for submenus
   icon?: React.ReactNode;
@@ -71,7 +71,11 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
     {
       key: "new_usage",
       page: "new_usage",
-      label: "Usage",
+      label: (
+        <span className="flex items-center gap-4">
+          Usage <Badge color="blue" count="New" />
+        </span>
+      ),
       icon: <BarChartOutlined style={{ fontSize: "18px" }} />,
       roles: [...all_admin_roles, ...internalUserRoles],
     },
