@@ -21,21 +21,22 @@ import {
   TabPanels,
   Subtitle,
 } from "@tremor/react";
-import { ActivityMetrics, processActivityData } from "./activity_metrics";
-import { DailyData, BreakdownMetrics, KeyMetricWithMetadata, EntityMetricWithMetadata, TagUsage } from "./usage/types";
+import { ActivityMetrics, processActivityData } from "../../../activity_metrics";
+import { DailyData, BreakdownMetrics, KeyMetricWithMetadata, EntityMetricWithMetadata, TagUsage } from "../../types";
 import {
   organizationDailyActivityCall,
   tagDailyActivityCall,
   teamDailyActivityCall,
   customerDailyActivityCall,
-} from "./networking";
-import TopKeyView from "./top_key_view";
+  agentDailyActivityCall,
+} from "../../../networking";
+import TopKeyView from "./TopKeyView";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { valueFormatterSpend } from "./usage/utils/value_formatters";
-import { getProviderLogoAndName } from "./provider_info_helpers";
-import { UsageExportHeader } from "./EntityUsageExport";
-import type { EntityType } from "./EntityUsageExport/types";
-import TopModelView from "./top_model_view";
+import { valueFormatterSpend } from "../../utils/value_formatters";
+import { getProviderLogoAndName } from "../../../provider_info_helpers";
+import { UsageExportHeader } from "../../../EntityUsageExport";
+import type { EntityType } from "../../../EntityUsageExport/types";
+import TopModelView from "./TopModelView";
 
 interface EntityMetrics {
   metrics: {
@@ -143,6 +144,15 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       setSpendData(data);
     } else if (entityType === "customer") {
       const data = await customerDailyActivityCall(
+        accessToken,
+        startTime,
+        endTime,
+        1,
+        selectedTags.length > 0 ? selectedTags : null,
+      );
+      setSpendData(data);
+    } else if (entityType === "agent") {
+      const data = await agentDailyActivityCall(
         accessToken,
         startTime,
         endTime,
@@ -566,15 +576,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
               <Col numColSpan={1}>
                 <Card>
                   <Title>Top Virtual Keys</Title>
-                  <TopKeyView
-                    topKeys={getTopAPIKeys()}
-                    accessToken={accessToken}
-                    userID={userID}
-                    userRole={userRole}
-                    teams={null}
-                    premiumUser={premiumUser}
-                    showTags={entityType === "tag"}
-                  />
+                  <TopKeyView topKeys={getTopAPIKeys()} teams={null} showTags={entityType === "tag"} />
                 </Card>
               </Col>
 

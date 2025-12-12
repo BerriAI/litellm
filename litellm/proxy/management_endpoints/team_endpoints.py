@@ -1052,7 +1052,7 @@ async def fetch_and_validate_organization(
 
     organization_row = await prisma_client.db.litellm_organizationtable.find_unique(
         where={"organization_id": organization_id},
-        include={"litellm_budget_table": True, "members": True},
+        include={"litellm_budget_table": True, "members": True, "teams": True},
     )
 
     if organization_row is None:

@@ -1,7 +1,7 @@
 # LITELLM PROXY DEPENDENCIES #
 anyio==4.8.0 # openai + http req.
 httpx==0.28.1
-openai==2.8.0  # openai req.
+openai==2.9.0  # openai req.
 fastapi==0.120.1 # server dep
 starlette==0.49.1 # starlette fastapi dep
 backoff==2.2.1 # server dep
@@ -39,12 +39,14 @@ azure-storage-file-datalake==12.20.0 # for azure buck storage logging
 opentelemetry-api==1.25.0
 opentelemetry-sdk==1.25.0
 opentelemetry-exporter-otlp==1.25.0
-grpcio>=1.62.3,<1.68.0  # Constraint for opentelemetry-exporter-otlp-proto-grpc to avoid resource exhausted bug (https://github.com/grpc/grpc/issues/38290)
+# grpcio: 1.68.0-1.68.1 has reconnect bug (#38290), 1.75+ has Python 3.14 wheels + fix
+grpcio>=1.62.3,<1.68.0; python_version < "3.14"
+grpcio>=1.75.0; python_version >= "3.14"
 sentry_sdk==2.21.0 # for sentry error handling
 detect-secrets==1.5.0 # Enterprise - secret detection / masking in LLM requests
 cryptography==44.0.1
 tzdata==2025.1 # IANA time zone database
-litellm-proxy-extras==0.4.12 # for proxy extras - e.g. prisma migrations
+litellm-proxy-extras==0.4.13 # for proxy extras - e.g. prisma migrations
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv==1.0.1 # for env
 tiktoken==0.8.0 # for calculating usage
@@ -64,4 +66,4 @@ soundfile==0.12.1 # for audio file processing
 ########################
 # LITELLM ENTERPRISE DEPENDENCIES
 ########################
-litellm-enterprise==0.1.23
+litellm-enterprise==0.1.25

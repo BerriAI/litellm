@@ -1,9 +1,11 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
-import NewUsagePage from "./new_usage";
-import type { Organization } from "./networking";
-import * as networking from "./networking";
+import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Organization } from "../../networking";
+import * as networking from "../../networking";
+import NewUsagePage from "./UsagePageView";
 
 // Polyfill ResizeObserver for test environment
 beforeAll(() => {
@@ -17,40 +19,40 @@ beforeAll(() => {
 });
 
 // Mock the networking module
-vi.mock("./networking", () => ({
+vi.mock("../../networking", () => ({
   userDailyActivityCall: vi.fn(),
   userDailyActivityAggregatedCall: vi.fn(),
   tagListCall: vi.fn(),
 }));
 
 // Mock child components to simplify testing
-vi.mock("./activity_metrics", () => ({
+vi.mock("../../activity_metrics", () => ({
   ActivityMetrics: () => <div>Activity Metrics</div>,
   processActivityData: () => ({ data: [], metadata: {} }),
 }));
 
-vi.mock("./view_user_spend", () => ({
+vi.mock("../../view_user_spend", () => ({
   default: () => <div>View User Spend</div>,
 }));
 
-vi.mock("./top_key_view", () => ({
+vi.mock("./EntityUsage/TopKeyView", () => ({
   default: () => <div>Top Keys</div>,
 }));
 
-vi.mock("./entity_usage", () => ({
+vi.mock("./EntityUsage/EntityUsage", () => ({
   default: () => <div>Entity Usage</div>,
   EntityList: [],
 }));
 
-vi.mock("./user_agent_activity", () => ({
+vi.mock("../../user_agent_activity", () => ({
   default: () => <div>User Agent Activity</div>,
 }));
 
-vi.mock("./cloudzero_export_modal", () => ({
+vi.mock("../../cloudzero_export_modal", () => ({
   default: () => <div>CloudZero Export Modal</div>,
 }));
 
-vi.mock("./EntityUsageExport", () => ({
+vi.mock("../../EntityUsageExport", () => ({
   default: () => <div>Entity Usage Export Modal</div>,
 }));
 
@@ -58,10 +60,75 @@ vi.mock("@/app/(dashboard)/hooks/customers/useCustomers", () => ({
   useCustomers: vi.fn(),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/agents/useAgents", () => ({
+  useAgents: vi.fn(),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  __esModule: true,
+  default: vi.fn(),
+}));
+
+vi.mock("antd", async () => {
+  const React = await import("react");
+
+  function Select(props: any) {
+    const { value, onChange, options, ...rest } = props;
+    return React.createElement(
+      "select",
+      {
+        ...rest,
+        value,
+        onChange: (e: any) => onChange?.(e.target.value),
+        role: "combobox",
+      },
+      options?.map((opt: any) => React.createElement("option", { key: opt.value, value: opt.value }, opt.label)),
+    );
+  }
+  (Select as any).displayName = "AntdSelect";
+
+  function Alert(props: any) {
+    const { message, description, type, closable, onClose, ...rest } = props;
+    return React.createElement(
+      "div",
+      { ...rest, "data-testid": "antd-alert", "data-type": type },
+      message && React.createElement("div", null, message),
+      description && React.createElement("div", null, description),
+      closable && React.createElement("button", { onClick: onClose, "aria-label": "Close" }, "×"),
+    );
+  }
+  (Alert as any).displayName = "AntdAlert";
+
+  return { Select, Alert };
+});
+
+vi.mock("@ant-design/icons", async () => {
+  const React = await import("react");
+
+  function Icon() {
+    return React.createElement("span");
+  }
+
+  return {
+    GlobalOutlined: Icon,
+    BankOutlined: Icon,
+    TeamOutlined: Icon,
+    ShoppingCartOutlined: Icon,
+    TagsOutlined: Icon,
+    RobotOutlined: Icon,
+    LineChartOutlined: Icon,
+    BarChartOutlined: Icon,
+    ClockCircleOutlined: Icon,
+    CalendarOutlined: Icon,
+  };
+});
+
 describe("NewUsage", () => {
   const mockUserDailyActivityAggregatedCall = vi.mocked(networking.userDailyActivityAggregatedCall);
   const mockTagListCall = vi.mocked(networking.tagListCall);
   const mockUseCustomers = vi.mocked(useCustomers);
+  const mockUseAgents = vi.mocked(useAgents);
+  const mockUseAuthorized = vi.mocked(useAuthorized);
 
   const mockSpendData = {
     results: [
@@ -193,6 +260,13 @@ describe("NewUsage", () => {
     },
   ];
 
+  const mockAgents = [
+    {
+      agent_id: "agent-123",
+      agent_name: "Test Agent",
+    },
+  ];
+
   const defaultProps = {
     accessToken: "test-token",
     userRole: "Admin",
@@ -220,12 +294,27 @@ describe("NewUsage", () => {
   };
 
   beforeEach(() => {
+    mockUseAuthorized.mockReturnValue({
+      token: "mock-token",
+      accessToken: defaultProps.accessToken,
+      userId: defaultProps.userID,
+      userEmail: "test@example.com",
+      userRole: defaultProps.userRole,
+      premiumUser: defaultProps.premiumUser,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    });
     mockUserDailyActivityAggregatedCall.mockClear();
     mockTagListCall.mockClear();
     mockUserDailyActivityAggregatedCall.mockResolvedValue(mockSpendData);
     mockTagListCall.mockResolvedValue({});
     mockUseCustomers.mockReturnValue({
       data: [],
+      isLoading: false,
+      error: null,
+    } as any);
+    mockUseAgents.mockReturnValue({
+      data: { agents: [] },
       isLoading: false,
       error: null,
     } as any);
@@ -266,19 +355,21 @@ describe("NewUsage", () => {
     expect(screen.getByText("Top Virtual Keys")).toBeInTheDocument();
   });
 
-  it("should switch between tabs correctly", async () => {
+  it("should switch between usage views correctly", async () => {
     render(<NewUsagePage {...defaultProps} />);
 
     await waitFor(() => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
-    // Default tab should show Global Usage (for admin)
+    // Default view should show Global Usage (for admin)
     expect(screen.getByText("Daily Spend")).toBeInTheDocument();
 
-    // Switch to Team Usage tab
-    const teamUsageTab = screen.getByText("Team Usage");
-    fireEvent.click(teamUsageTab);
+    // Switch to Team Usage view
+    const usageSelect = screen.getByRole("combobox");
+    act(() => {
+      fireEvent.change(usageSelect, { target: { value: "team" } });
+    });
 
     // Should render EntityUsage component
     await waitFor(() => {
@@ -286,9 +377,10 @@ describe("NewUsage", () => {
       expect(entityUsageElements.length).toBeGreaterThan(0);
     });
 
-    // Switch to Tag Usage tab (admin only)
-    const tagUsageTab = screen.getByText("Tag Usage");
-    fireEvent.click(tagUsageTab);
+    // Switch to Tag Usage view (admin only)
+    act(() => {
+      fireEvent.change(usageSelect, { target: { value: "tag" } });
+    });
 
     // Should still render EntityUsage component for tags
     await waitFor(() => {
@@ -297,41 +389,69 @@ describe("NewUsage", () => {
     });
   });
 
-  it("should show organization usage banner and tab for admins", async () => {
-    const { getByText, getAllByText } = render(<NewUsagePage {...defaultProps} organizations={mockOrganizations} />);
+  it("should show organization usage banner and view for admins", async () => {
+    render(<NewUsagePage {...defaultProps} organizations={mockOrganizations} />);
 
     await waitFor(() => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
-    const organizationTab = getByText("Organization Usage");
-    fireEvent.click(organizationTab);
+    const usageSelect = screen.getByRole("combobox");
+    act(() => {
+      fireEvent.change(usageSelect, { target: { value: "organization" } });
+    });
 
     await waitFor(() => {
-      expect(getByText("Organization usage is a new feature.")).toBeInTheDocument();
-      const entityUsageElements = getAllByText("Entity Usage");
+      expect(screen.getByText("Organization usage is a new feature.")).toBeInTheDocument();
+      const entityUsageElements = screen.getAllByText("Entity Usage");
       expect(entityUsageElements.length).toBeGreaterThan(0);
     });
   });
 
-  it("should show customer usage tab for admins", async () => {
+  it("should show customer usage view for admins", async () => {
     mockUseCustomers.mockReturnValue({
       data: mockCustomers,
       isLoading: false,
       error: null,
     } as any);
 
-    const { getByText, getAllByText } = render(<NewUsagePage {...defaultProps} />);
+    render(<NewUsagePage {...defaultProps} />);
 
     await waitFor(() => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
-    const customerTab = getByText("Customer Usage");
-    fireEvent.click(customerTab);
+    const usageSelect = screen.getByRole("combobox");
+    act(() => {
+      fireEvent.change(usageSelect, { target: { value: "customer" } });
+    });
 
     await waitFor(() => {
-      const entityUsageElements = getAllByText("Entity Usage");
+      const entityUsageElements = screen.getAllByText("Entity Usage");
+      expect(entityUsageElements.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("should show agent usage view for admins", async () => {
+    mockUseAgents.mockReturnValue({
+      data: { agents: mockAgents },
+      isLoading: false,
+      error: null,
+    } as any);
+
+    render(<NewUsagePage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+
+    const usageSelect = screen.getByRole("combobox");
+    act(() => {
+      fireEvent.change(usageSelect, { target: { value: "agent" } });
+    });
+
+    await waitFor(() => {
+      const entityUsageElements = screen.getAllByText("Entity Usage");
       expect(entityUsageElements.length).toBeGreaterThan(0);
     });
   });

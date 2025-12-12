@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import EntityUsage from "./entity_usage";
-import * as networking from "./networking";
+import EntityUsage from "./EntityUsage";
+import * as networking from "../../../networking";
 
 beforeAll(() => {
   if (typeof window !== "undefined" && !window.ResizeObserver) {
@@ -14,24 +14,25 @@ beforeAll(() => {
 });
 
 // Mock the networking module
-vi.mock("./networking", () => ({
+vi.mock("../../../networking", () => ({
   tagDailyActivityCall: vi.fn(),
   teamDailyActivityCall: vi.fn(),
   organizationDailyActivityCall: vi.fn(),
   customerDailyActivityCall: vi.fn(),
+  agentDailyActivityCall: vi.fn(),
 }));
 
 // Mock the child components to simplify testing
-vi.mock("./activity_metrics", () => ({
+vi.mock("../../../activity_metrics", () => ({
   ActivityMetrics: () => <div>Activity Metrics</div>,
   processActivityData: () => ({ data: [], metadata: {} }),
 }));
 
-vi.mock("./top_key_view", () => ({
+vi.mock("./TopKeyView", () => ({
   default: () => <div>Top Keys</div>,
 }));
 
-vi.mock("./top_model_view", () => ({
+vi.mock("./TopModelView", () => ({
   default: () => <div>Top Models</div>,
 }));
 
@@ -44,6 +45,7 @@ describe("EntityUsage", () => {
   const mockTeamDailyActivityCall = vi.mocked(networking.teamDailyActivityCall);
   const mockOrganizationDailyActivityCall = vi.mocked(networking.organizationDailyActivityCall);
   const mockCustomerDailyActivityCall = vi.mocked(networking.customerDailyActivityCall);
+  const mockAgentDailyActivityCall = vi.mocked(networking.agentDailyActivityCall);
 
   const mockSpendData = {
     results: [
@@ -131,10 +133,12 @@ describe("EntityUsage", () => {
     mockTeamDailyActivityCall.mockClear();
     mockOrganizationDailyActivityCall.mockClear();
     mockCustomerDailyActivityCall.mockClear();
+    mockAgentDailyActivityCall.mockClear();
     mockTagDailyActivityCall.mockResolvedValue(mockSpendData);
     mockTeamDailyActivityCall.mockResolvedValue(mockSpendData);
     mockOrganizationDailyActivityCall.mockResolvedValue(mockSpendData);
     mockCustomerDailyActivityCall.mockResolvedValue(mockSpendData);
+    mockAgentDailyActivityCall.mockResolvedValue(mockSpendData);
   });
 
   it("should render with tag entity type and display spend metrics", async () => {
@@ -194,6 +198,21 @@ describe("EntityUsage", () => {
     });
 
     expect(screen.getByText("Customer Spend Overview")).toBeInTheDocument();
+
+    await waitFor(() => {
+      const spendElements = screen.getAllByText("$100.50");
+      expect(spendElements.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("should render with agent entity type and call agent API", async () => {
+    render(<EntityUsage {...defaultProps} entityType="agent" />);
+
+    await waitFor(() => {
+      expect(mockAgentDailyActivityCall).toHaveBeenCalled();
+    });
+
+    expect(screen.getByText("Agent Spend Overview")).toBeInTheDocument();
 
     await waitFor(() => {
       const spendElements = screen.getAllByText("$100.50");
