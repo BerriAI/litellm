@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import EntityUsage from "./EntityUsage";
 import * as networking from "../../../networking";
+import EntityUsage from "./EntityUsage";
 
 beforeAll(() => {
   if (typeof window !== "undefined" && !window.ResizeObserver) {
@@ -268,6 +268,47 @@ describe("EntityUsage", () => {
     expect(await screen.findByText("$0.00")).toBeInTheDocument();
     expect(screen.getByText("Total Spend")).toBeInTheDocument();
     expect(screen.getAllByText("0")[0]).toBeInTheDocument();
+  });
+
+  it("should display Model Activity tab for non-agent entity types", async () => {
+    render(<EntityUsage {...defaultProps} entityType="tag" />);
+
+    await waitFor(() => {
+      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+    });
+
+    expect(screen.getByText("Model Activity")).toBeInTheDocument();
+  });
+
+  it("should display Request / Token Consumption tab for agent entity type", async () => {
+    render(<EntityUsage {...defaultProps} entityType="agent" />);
+
+    await waitFor(() => {
+      expect(mockAgentDailyActivityCall).toHaveBeenCalled();
+    });
+
+    expect(screen.getByText("Request / Token Consumption")).toBeInTheDocument();
+  });
+
+  it("should display Top Models title for non-agent entity types", async () => {
+    render(<EntityUsage {...defaultProps} entityType="tag" />);
+
+    await waitFor(() => {
+      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+    });
+
+    const topModelsElements = screen.getAllByText("Top Models");
+    expect(topModelsElements.length).toBeGreaterThan(0);
+  });
+
+  it("should display Top Agents title for agent entity type", async () => {
+    render(<EntityUsage {...defaultProps} entityType="agent" />);
+
+    await waitFor(() => {
+      expect(mockAgentDailyActivityCall).toHaveBeenCalled();
+    });
+
+    expect(screen.getByText("Top Agents")).toBeInTheDocument();
   });
 
   it("should use entityList label when entityList is provided and entity exists", async () => {
