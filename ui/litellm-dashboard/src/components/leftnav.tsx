@@ -90,7 +90,11 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
         {
           key: "agents",
           page: "agents",
-          label: "Agents",
+          label: (
+            <span className="flex items-center gap-4">
+              Agents <Badge color="blue" count="New" />
+            </span>
+          ),
           icon: <RobotOutlined />,
           roles: rolesWithWriteAccess,
         },
