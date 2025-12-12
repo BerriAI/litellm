@@ -1585,3 +1585,139 @@ def test_translate_system_message_preserves_cache_control():
     assert len(result) == 1
     assert result[0]["text"] == "Cached content"
     assert result[0]["cache_control"] == {"type": "ephemeral"}
+
+
+# ============ Dynamic max_tokens Tests ============
+
+
+def test_get_max_tokens_for_model_claude_3():
+    """
+    Test that get_max_tokens_for_model returns correct value for Claude 3 models.
+    Claude 3 models have max_output_tokens of 4096.
+    """
+    config = AnthropicConfig()
+
+    # Claude 3 Sonnet should return 4096
+    max_tokens = config.get_max_tokens_for_model("claude-3-sonnet-20240229")
+    assert max_tokens == 4096
+
+
+def test_get_max_tokens_for_model_claude_35():
+    """
+    Test that get_max_tokens_for_model returns correct value for Claude 3.5 models.
+    Claude 3.5 models have max_output_tokens of 8192.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/8835
+    """
+    config = AnthropicConfig()
+
+    # Claude 3.5 Sonnet should return 8192
+    max_tokens = config.get_max_tokens_for_model("claude-3-5-sonnet-20241022")
+    assert max_tokens == 8192
+
+
+def test_get_max_tokens_for_model_claude_37():
+    """
+    Test that get_max_tokens_for_model returns correct value for Claude 3.7 models.
+    Claude 3.7 Sonnet has max_output_tokens of 128000 (128K with extended thinking).
+
+    Fixes: https://github.com/BerriAI/litellm/issues/8835
+    """
+    config = AnthropicConfig()
+
+    # Claude 3.7 Sonnet should return 128000 (128K)
+    max_tokens = config.get_max_tokens_for_model("claude-3-7-sonnet-20250219")
+    assert max_tokens == 128000
+
+
+def test_get_max_tokens_for_model_unknown():
+    """
+    Test that get_max_tokens_for_model returns 4096 fallback for unknown models.
+    """
+    config = AnthropicConfig()
+
+    # Unknown model should return 4096 as fallback
+    max_tokens = config.get_max_tokens_for_model("unknown-model-xyz")
+    assert max_tokens == 4096
+
+
+def test_get_max_tokens_for_model_none():
+    """
+    Test that get_max_tokens_for_model returns 4096 fallback when model is None.
+    """
+    config = AnthropicConfig()
+
+    # None model should return 4096 as fallback
+    max_tokens = config.get_max_tokens_for_model(None)
+    assert max_tokens == 4096
+
+
+def test_get_config_with_model_uses_dynamic_max_tokens():
+    """
+    Test that get_config returns dynamic max_tokens based on model.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/8835
+    """
+    # Claude 3 model should get 4096
+    config_claude3 = AnthropicConfig.get_config(model="claude-3-sonnet-20240229")
+    assert config_claude3["max_tokens"] == 4096
+
+    # Claude 3.5 model should get 8192
+    config_claude35 = AnthropicConfig.get_config(model="claude-3-5-sonnet-20241022")
+    assert config_claude35["max_tokens"] == 8192
+
+    # Claude 3.7 model should get 128000 (128K with extended thinking)
+    config_claude37 = AnthropicConfig.get_config(model="claude-3-7-sonnet-20250219")
+    assert config_claude37["max_tokens"] == 128000
+
+
+def test_get_config_without_model_uses_fallback():
+    """
+    Test that get_config without model parameter uses 4096 fallback.
+    """
+    config = AnthropicConfig.get_config()
+    assert config["max_tokens"] == 4096
+
+
+def test_transform_request_uses_dynamic_max_tokens():
+    """
+    Test that transform_request uses dynamic max_tokens based on model
+    when max_tokens is not explicitly provided.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/8835
+    """
+    config = AnthropicConfig()
+
+    messages = [{"role": "user", "content": "Hello"}]
+
+    # Claude 3.5 model should get 8192 as default max_tokens
+    result = config.transform_request(
+        model="claude-3-5-sonnet-20241022",
+        messages=messages,
+        optional_params={},  # No max_tokens provided
+        litellm_params={},
+        headers={}
+    )
+
+    assert result["max_tokens"] == 8192
+
+
+def test_transform_request_respects_user_max_tokens():
+    """
+    Test that transform_request respects user-provided max_tokens
+    and doesn't override it with dynamic value.
+    """
+    config = AnthropicConfig()
+
+    messages = [{"role": "user", "content": "Hello"}]
+
+    # User provides explicit max_tokens=1000, should not be overridden
+    result = config.transform_request(
+        model="claude-3-5-sonnet-20241022",
+        messages=messages,
+        optional_params={"max_tokens": 1000},
+        litellm_params={},
+        headers={}
+    )
+
+    assert result["max_tokens"] == 1000

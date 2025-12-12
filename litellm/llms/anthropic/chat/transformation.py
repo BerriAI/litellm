@@ -8,7 +8,6 @@ import httpx
 import litellm
 from litellm.constants import (
     ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES,
-    DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
@@ -59,6 +58,7 @@ from litellm.utils import (
     ModelResponse,
     Usage,
     add_dummy_tool,
+    get_max_tokens,
     has_tool_call_blocks,
     supports_reasoning,
     token_counter,
@@ -81,9 +81,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     to pass metadata to anthropic, it's {"user_id": "any-relevant-information"}
     """
 
-    max_tokens: Optional[int] = (
-        DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS  # anthropic requires a default value (Opus, Sonnet, and Haiku have the same default)
-    )
+    max_tokens: Optional[int] = None
     stop_sequences: Optional[list] = None
     temperature: Optional[int] = None
     top_p: Optional[int] = None
@@ -93,9 +91,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     def __init__(
         self,
-        max_tokens: Optional[
-            int
-        ] = DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS,  # You can pass in a value yourself or use the default value 4096
+        max_tokens: Optional[int] = None,
         stop_sequences: Optional[list] = None,
         temperature: Optional[int] = None,
         top_p: Optional[int] = None,
@@ -113,8 +109,31 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return "anthropic"
 
     @classmethod
-    def get_config(cls):
-        return super().get_config()
+    def get_config(cls, *, model: Optional[str] = None):
+        config = super().get_config()
+
+        # anthropic requires a default value for max_tokens
+        if config.get("max_tokens") is None:
+            config["max_tokens"] = cls.get_max_tokens_for_model(model)
+
+        return config
+
+    @staticmethod
+    def get_max_tokens_for_model(model: Optional[str] = None) -> int:
+        """
+        Get the max output tokens for a given model.
+        Falls back to 4096 if model is not found.
+        """
+        DEFAULT_MAX_TOKENS = 4096
+        if model is None:
+            return DEFAULT_MAX_TOKENS
+        try:
+            max_tokens = get_max_tokens(model)
+            if max_tokens is None:
+                return DEFAULT_MAX_TOKENS
+            return max_tokens
+        except Exception:
+            return DEFAULT_MAX_TOKENS
 
     @staticmethod
     def convert_tool_use_to_openai_format(
@@ -1015,7 +1034,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             optional_params["tools"] = tools
 
         ## Load Config
-        config = litellm.AnthropicConfig.get_config()
+        config = litellm.AnthropicConfig.get_config(model=model)
         for k, v in config.items():
             if (
                 k not in optional_params
