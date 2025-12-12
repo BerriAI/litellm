@@ -68,6 +68,12 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
       groupLabel: "AI GATEWAY",
       items: [
         {
+          key: "api-keys",
+          page: "api-keys",
+          label: "Virtual Keys",
+          icon: <KeyOutlined />,
+        },
+        {
           key: "llm-playground",
           page: "llm-playground",
           label: "Playground",
@@ -75,17 +81,31 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
           roles: rolesWithWriteAccess,
         },
         {
-          key: "api-keys",
-          page: "api-keys",
-          label: "Virtual Keys",
-          icon: <KeyOutlined />,
-        },
-        {
           key: "models",
           page: "models",
           label: "Models + Endpoints",
           icon: <BlockOutlined />,
           roles: rolesWithWriteAccess,
+        },
+        {
+          key: "agents",
+          page: "agents",
+          label: "Agents",
+          icon: <RobotOutlined />,
+          roles: rolesWithWriteAccess,
+        },
+        {
+          key: "mcp-servers",
+          page: "mcp-servers",
+          label: "MCP Servers",
+          icon: <ToolOutlined />,
+        },
+        {
+          key: "guardrails",
+          page: "guardrails",
+          label: "Guardrails",
+          icon: <SafetyOutlined />,
+          roles: all_admin_roles,
         },
         {
           key: "tools",
@@ -107,26 +127,6 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
               roles: all_admin_roles,
             },
           ],
-        },
-        {
-          key: "agents",
-          page: "agents",
-          label: "Agents",
-          icon: <RobotOutlined />,
-          roles: rolesWithWriteAccess,
-        },
-        {
-          key: "mcp-servers",
-          page: "mcp-servers",
-          label: "MCP Servers",
-          icon: <ToolOutlined />,
-        },
-        {
-          key: "guardrails",
-          page: "guardrails",
-          label: "Guardrails",
-          icon: <SafetyOutlined />,
-          roles: all_admin_roles,
         },
       ],
     },
