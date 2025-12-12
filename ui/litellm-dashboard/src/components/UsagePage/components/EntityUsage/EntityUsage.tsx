@@ -1,41 +1,41 @@
-import React, { useState, useEffect } from "react";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 import {
   BarChart,
   Card,
-  Title,
-  Text,
-  Grid,
   Col,
   DateRangePickerValue,
+  DonutChart,
+  Grid,
+  Subtitle,
+  Tab,
+  TabGroup,
   Table,
-  TableHead,
-  TableRow,
-  TableHeaderCell,
   TableBody,
   TableCell,
-  DonutChart,
-  TabPanel,
-  TabGroup,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
   TabList,
-  Tab,
+  TabPanel,
   TabPanels,
-  Subtitle,
+  Text,
+  Title,
 } from "@tremor/react";
+import React, { useEffect, useState } from "react";
 import { ActivityMetrics, processActivityData } from "../../../activity_metrics";
-import { DailyData, BreakdownMetrics, KeyMetricWithMetadata, EntityMetricWithMetadata, TagUsage } from "../../types";
+import { UsageExportHeader } from "../../../EntityUsageExport";
+import type { EntityType } from "../../../EntityUsageExport/types";
 import {
+  agentDailyActivityCall,
+  customerDailyActivityCall,
   organizationDailyActivityCall,
   tagDailyActivityCall,
   teamDailyActivityCall,
-  customerDailyActivityCall,
-  agentDailyActivityCall,
 } from "../../../networking";
-import TopKeyView from "./TopKeyView";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { valueFormatterSpend } from "../../utils/value_formatters";
 import { getProviderLogoAndName } from "../../../provider_info_helpers";
-import { UsageExportHeader } from "../../../EntityUsageExport";
-import type { EntityType } from "../../../EntityUsageExport/types";
+import { BreakdownMetrics, DailyData, EntityMetricWithMetadata, KeyMetricWithMetadata, TagUsage } from "../../types";
+import { valueFormatterSpend } from "../../utils/value_formatters";
+import TopKeyView from "./TopKeyView";
 import TopModelView from "./TopModelView";
 
 interface EntityMetrics {
@@ -399,7 +399,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       <TabGroup>
         <TabList variant="solid" className="mt-1">
           <Tab>Cost</Tab>
-          <Tab>Model Activity</Tab>
+          <Tab>{entityType === "agent" ? "Request / Token Consumption" : "Model Activity"}</Tab>
           <Tab>Key Activity</Tab>
         </TabList>
         <TabPanels>
@@ -597,7 +597,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
               {/* Top Models */}
               <Col numColSpan={1}>
                 <Card>
-                  <Title>Top Models</Title>
+                  <Title>{entityType === "agent" ? "Top Agents" : "Top Models"}</Title>
                   <TopModelView topModels={getTopModels()} />
                 </Card>
               </Col>
@@ -675,10 +675,10 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
             </Grid>
           </TabPanel>
           <TabPanel>
-            <ActivityMetrics modelMetrics={modelMetrics} />
+            <ActivityMetrics modelMetrics={modelMetrics} hidePromptCachingMetrics={entityType === "agent"} />
           </TabPanel>
           <TabPanel>
-            <ActivityMetrics modelMetrics={keyMetrics} />
+            <ActivityMetrics modelMetrics={keyMetrics} hidePromptCachingMetrics={entityType === "agent"} />
           </TabPanel>
         </TabPanels>
       </TabGroup>
