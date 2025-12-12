@@ -1,0 +1,194 @@
+# Example Agent Configuration for LiteLLM Proxy
+# This file shows how to configure agents via the proxy config.yaml
+# You can also create agents via the UI or API
+
+# Add this to your proxy config.yaml file
+agents:
+  # Example 1: Simple Hello World Agent
+  - agent_name: hello-world-agent
+    agent_card_params:
+      protocolVersion: "1.0"
+      name: "Hello World Agent"
+      description: "A simple agent that greets users"
+      url: "http://localhost:9999/"
+      version: "1.0.0"
+      defaultInputModes:
+        - text
+      defaultOutputModes:
+        - text
+      capabilities:
+        streaming: false
+      skills:
+        - id: hello_world
+          name: "Hello World Skill"
+          description: "Returns a greeting message"
+          tags:
+            - greeting
+            - hello
+          examples:
+            - "hi"
+            - "hello"
+            - "greet me"
+
+  # Example 2: Customer Support Agent (More Advanced)
+  - agent_name: customer-support-agent
+    agent_card_params:
+      protocolVersion: "1.0"
+      name: "Customer Support Agent"
+      description: "Handles customer inquiries and support tickets"
+      url: "https://support-agent.example.com/"
+      version: "2.0.0"
+      defaultInputModes:
+        - text
+      defaultOutputModes:
+        - text
+      capabilities:
+        streaming: true
+        pushNotifications: true
+        stateTransitionHistory: true
+      skills:
+        - id: create_ticket
+          name: "Create Support Ticket"
+          description: "Creates a new support ticket with customer information"
+          tags:
+            - support
+            - ticket
+            - create
+          examples:
+            - "create a ticket"
+            - "open new ticket"
+            - "file a complaint"
+        - id: search_kb
+          name: "Search Knowledge Base"
+          description: "Searches the knowledge base for solutions"
+          tags:
+            - search
+            - knowledge
+            - documentation
+          examples:
+            - "how to reset password"
+            - "search docs"
+            - "find solution"
+        - id: escalate
+          name: "Escalate to Human"
+          description: "Escalates complex issues to human agents"
+          tags:
+            - escalate
+            - human
+            - transfer
+          examples:
+            - "talk to a person"
+            - "escalate this"
+            - "speak to an agent"
+      iconUrl: "https://example.com/support-icon.png"
+      documentationUrl: "https://docs.example.com/support-agent"
+    litellm_params:
+      model: gpt-4  # Optional: specify which LLM model to use
+      make_public: false  # Set to true to share in Agent Hub
+
+  # Example 3: Data Analysis Agent
+  - agent_name: data-analysis-agent
+    agent_card_params:
+      protocolVersion: "1.0"
+      name: "Data Analysis Agent"
+      description: "Analyzes data, generates reports, and creates visualizations"
+      url: "http://data-agent.internal:8080/"
+      version: "1.5.0"
+      defaultInputModes:
+        - text
+      defaultOutputModes:
+        - text
+      capabilities:
+        streaming: true
+      skills:
+        - id: query_database
+          name: "Query Database"
+          description: "Executes SQL queries on the data warehouse"
+          tags:
+            - database
+            - query
+            - sql
+          examples:
+            - "show me sales data"
+            - "query customer table"
+        - id: generate_report
+          name: "Generate Report"
+          description: "Creates analytical reports from data"
+          tags:
+            - report
+            - analysis
+            - analytics
+          examples:
+            - "generate sales report"
+            - "create monthly summary"
+        - id: create_visualization
+          name: "Create Visualization"
+          description: "Generates charts and graphs from data"
+          tags:
+            - visualization
+            - chart
+            - graph
+          examples:
+            - "create a bar chart"
+            - "visualize trends"
+    litellm_params:
+      model: claude-3-opus
+      make_public: false
+
+  # Example 4: Code Review Agent (Public)
+  - agent_name: code-review-agent
+    agent_card_params:
+      protocolVersion: "1.0"
+      name: "Code Review Agent"
+      description: "Reviews code, suggests improvements, and checks best practices"
+      url: "https://code-agent.example.com/"
+      version: "3.0.1"
+      defaultInputModes:
+        - text
+      defaultOutputModes:
+        - text
+      capabilities:
+        streaming: true
+      skills:
+        - id: review_code
+          name: "Review Code"
+          description: "Analyzes code for bugs, security issues, and improvements"
+          tags:
+            - code-review
+            - analysis
+            - security
+          examples:
+            - "review this code"
+            - "check for bugs"
+        - id: suggest_improvements
+          name: "Suggest Improvements"
+          description: "Provides recommendations for code optimization"
+          tags:
+            - optimization
+            - refactoring
+            - best-practices
+          examples:
+            - "how can I improve this"
+            - "suggest refactoring"
+        - id: generate_docs
+          name: "Generate Documentation"
+          description: "Creates documentation for code"
+          tags:
+            - documentation
+            - comments
+            - docstrings
+          examples:
+            - "document this function"
+            - "generate docstring"
+      iconUrl: "https://example.com/code-icon.png"
+      documentationUrl: "https://docs.example.com/code-agent"
+    litellm_params:
+      model: gpt-4
+      make_public: true  # This agent is shared publicly
+
+# Note: After adding agents to config.yaml, restart the proxy:
+# litellm --config proxy_config.yaml
+
+# To verify agents loaded correctly, check:
+# GET http://localhost:4000/v1/agents
+# Or view them in the Agents tab of the UI
