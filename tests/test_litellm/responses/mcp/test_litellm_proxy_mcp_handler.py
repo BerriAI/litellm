@@ -1,9 +1,33 @@
+import sys
+import types
+from unittest.mock import AsyncMock
+
 import pytest
 
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
 from litellm.types.utils import ModelResponse
+
+
+class _DummyMCPResult:
+    def __init__(self):
+        self.content = []
+
+
+def _setup_mcp_call_environment(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    """Patch MCP globals so _execute_tool_calls can run in tests."""
+    proxy_module = types.SimpleNamespace(proxy_logging_obj=object())
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_module)
+
+    fake_manager = types.SimpleNamespace(
+        call_tool=AsyncMock(return_value=_DummyMCPResult())
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        fake_manager,
+    )
+    return fake_manager.call_tool
 
 
 def test_deduplicate_mcp_tools_single_allowed_server():
@@ -142,3 +166,63 @@ def test_transform_mcp_tools_to_openai_uses_chat_format(monkeypatch):
     assert resp_tools == [{"responses": True}]
     assert captured["chat"] == ["tool"]
     assert captured["responses"] == ["tool"]
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_strips_server_prefix(monkeypatch):
+    call_tool_mock = _setup_mcp_call_environment(monkeypatch)
+    tool_name = "deepwiki-read_wiki_structure"
+    tool_calls = [
+        {
+            "id": "call-1",
+            "function": {"name": tool_name, "arguments": "{}"},
+        }
+    ]
+
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=tool_calls,
+        user_api_key_auth=None,
+    )
+
+    assert call_tool_mock.await_args.kwargs["name"] == "read_wiki_structure"
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_keeps_tool_name_without_prefix(monkeypatch):
+    call_tool_mock = _setup_mcp_call_environment(monkeypatch)
+    tool_name = "read_wiki_structure"
+    tool_calls = [
+        {
+            "id": "call-2",
+            "function": {"name": tool_name, "arguments": "{}"},
+        }
+    ]
+
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=tool_calls,
+        user_api_key_auth=None,
+    )
+
+    assert call_tool_mock.await_args.kwargs["name"] == tool_name
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_keeps_tool_name_when_equal_to_server(monkeypatch):
+    call_tool_mock = _setup_mcp_call_environment(monkeypatch)
+    tool_name = "echo"
+    tool_calls = [
+        {
+            "id": "call-3",
+            "function": {"name": tool_name, "arguments": "{}"},
+        }
+    ]
+
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "echo"},
+        tool_calls=tool_calls,
+        user_api_key_auth=None,
+    )
+
+    assert call_tool_mock.await_args.kwargs["name"] == tool_name

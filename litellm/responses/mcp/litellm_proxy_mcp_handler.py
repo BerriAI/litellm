@@ -494,9 +494,21 @@ class LiteLLM_Proxy_MCP_Handler:
 
                 server_name = tool_server_map[tool_name]
 
+                # Remove the server name prefix if the tool name includes it.
+                sanitized_tool_name = tool_name
+                unprefixed_name, prefixed_server_name = split_server_prefix_from_name(
+                    tool_name
+                )
+                if (
+                    prefixed_server_name
+                    and prefixed_server_name == server_name
+                    and unprefixed_name
+                ):
+                    sanitized_tool_name = unprefixed_name
+
                 result = await global_mcp_server_manager.call_tool(
                     server_name=server_name,
-                    name=tool_name,
+                    name=sanitized_tool_name,
                     arguments=parsed_arguments,
                     user_api_key_auth=user_api_key_auth,
                     mcp_auth_header=mcp_auth_header,
