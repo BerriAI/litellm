@@ -8,6 +8,7 @@ import httpx
 import litellm
 from litellm.constants import (
     ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES,
+    DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
@@ -122,18 +123,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def get_max_tokens_for_model(model: Optional[str] = None) -> int:
         """
         Get the max output tokens for a given model.
-        Falls back to 4096 if model is not found.
+        Falls back to DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS (configurable via env var) if model is not found.
         """
-        DEFAULT_MAX_TOKENS = 4096
         if model is None:
-            return DEFAULT_MAX_TOKENS
+            return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
         try:
             max_tokens = get_max_tokens(model)
             if max_tokens is None:
-                return DEFAULT_MAX_TOKENS
+                return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
             return max_tokens
         except Exception:
-            return DEFAULT_MAX_TOKENS
+            return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
 
     @staticmethod
     def convert_tool_use_to_openai_format(
