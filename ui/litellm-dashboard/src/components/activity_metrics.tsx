@@ -1,12 +1,10 @@
-import React from "react";
-import { Card, Grid, Text, Title } from "@tremor/react";
-import { AreaChart, BarChart } from "@tremor/react";
-import { DailyData, ModelActivityData, KeyMetricWithMetadata, TopApiKeyData } from "./UsagePage/types";
-import { Collapse } from "antd";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { AreaChart, BarChart, Card, Grid, Text, Title } from "@tremor/react";
+import { Collapse } from "antd";
+import React from "react";
+import { CustomLegend, CustomTooltip } from "./common_components/chartUtils";
+import { DailyData, KeyMetricWithMetadata, ModelActivityData, TopApiKeyData } from "./UsagePage/types";
 import { valueFormatter } from "./UsagePage/utils/value_formatters";
-import { CustomTooltip, CustomLegend } from "./common_components/chartUtils";
-import { EntityType } from "./EntityUsageExport/types";
 
 interface ActivityMetricsProps {
   modelMetrics: Record<string, ModelActivityData>;
