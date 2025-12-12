@@ -1379,14 +1379,17 @@ jobs:
             - search_coverage
   # Split litellm_mapped_tests into 3 parallel jobs for 3x faster execution
   litellm_mapped_tests_proxy:
-    docker:
-      - image: cimg/python:3.11
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
-    working_directory: ~/project
+    machine:
+      image: ubuntu-2204:2023.10.1
     resource_class: xlarge
+    working_directory: ~/project
     steps:
+      - run:
+          name: Install Docker CLI (In case it's not already installed)
+          command: |
+            curl -fsSL https://get.docker.com | sh
+            sudo usermod -aG docker $USER
+            docker version
       - setup_litellm_test_deps
       - run:
           name: Install dockerize
