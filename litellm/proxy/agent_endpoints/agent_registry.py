@@ -170,7 +170,6 @@ class AgentRegistry:
             The patched agent
         """
         try:
-
             existing_agent = await prisma_client.db.litellm_agentstable.find_unique(
                 where={"agent_id": agent_id}
             )

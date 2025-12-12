@@ -68,7 +68,7 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         )
 
         data.pop("model", None)  # vertex anthropic doesn't accept 'model' parameter
-        
+
         tools = optional_params.get("tools")
         tool_search_used = self.is_tool_search_used(tools)
         auto_betas = self.get_anthropic_beta_list(
@@ -82,11 +82,13 @@ class VertexAIAnthropicConfig(AnthropicConfig):
 
         beta_set = set(auto_betas)
         if tool_search_used:
-            beta_set.add("tool-search-tool-2025-10-19")  # Vertex requires this header for tool search
+            beta_set.add(
+                "tool-search-tool-2025-10-19"
+            )  # Vertex requires this header for tool search
 
         if beta_set:
             data["anthropic_beta"] = list(beta_set)
-        
+
         return data
 
     def transform_response(

@@ -911,13 +911,13 @@ def convert_to_anthropic_image_obj(
 
 
 def create_anthropic_image_param(
-    image_url_input: Union[str, dict], 
+    image_url_input: Union[str, dict],
     format: Optional[str] = None,
-    is_bedrock_invoke: bool = False
+    is_bedrock_invoke: bool = False,
 ) -> AnthropicMessagesImageParam:
     """
     Create an AnthropicMessagesImageParam from an image URL input.
-    
+
     Supports both URL references (for HTTP/HTTPS URLs) and base64 encoding.
     """
     # Extract URL and format from input
@@ -927,7 +927,7 @@ def create_anthropic_image_param(
         image_url = image_url_input.get("url", "")
         if format is None:
             format = image_url_input.get("format")
-    
+
     # Check if the image URL is an HTTP/HTTPS URL
     if image_url.startswith("http://") or image_url.startswith("https://"):
         # For Bedrock invoke, always convert URLs to base64 (Bedrock invoke doesn't support URLs)
@@ -1070,8 +1070,14 @@ def anthropic_messages_pt_xml(messages: list):
             if isinstance(messages[msg_i]["content"], list):
                 for m in messages[msg_i]["content"]:
                     if m.get("type", "") == "image_url":
-                        format = m["image_url"].get("format") if isinstance(m["image_url"], dict) else None
-                        image_param = create_anthropic_image_param(m["image_url"], format=format)
+                        format = (
+                            m["image_url"].get("format")
+                            if isinstance(m["image_url"], dict)
+                            else None
+                        )
+                        image_param = create_anthropic_image_param(
+                            m["image_url"], format=format
+                        )
                         # Convert to dict format for XML version
                         source = image_param["source"]
                         if isinstance(source, dict) and source.get("type") == "url":
@@ -1483,10 +1489,10 @@ def convert_to_gemini_tool_call_result(
     }
     """
     from litellm.types.llms.vertex_ai import BlobType
-    
+
     content_str: str = ""
     inline_data: Optional[BlobType] = None
-    
+
     if "content" in message:
         if isinstance(message["content"], str):
             content_str = message["content"]
@@ -1499,14 +1505,16 @@ def convert_to_gemini_tool_call_result(
                 elif content_type == "input_image":
                     # Extract image for inline_data (for Computer Use screenshots)
                     image_url = content.get("image_url", "")
-                    
+
                     if image_url:
                         # Convert image to base64 blob format for Gemini
                         try:
-                            image_obj = convert_to_anthropic_image_obj(image_url, format=None)
+                            image_obj = convert_to_anthropic_image_obj(
+                                image_url, format=None
+                            )
                             inline_data = BlobType(
                                 data=image_obj["data"],
-                                mime_type=image_obj["media_type"]
+                                mime_type=image_obj["media_type"],
                             )
                         except Exception as e:
                             verbose_logger.warning(
@@ -1539,6 +1547,7 @@ def convert_to_gemini_tool_call_result(
     response_data: dict
     try:
         import json
+
         if content_str.strip().startswith("{") or content_str.strip().startswith("["):
             # Try to parse as JSON (for Computer Use structured responses)
             parsed = json.loads(content_str)
@@ -1551,7 +1560,7 @@ def convert_to_gemini_tool_call_result(
     except (json.JSONDecodeError, ValueError):
         # Not valid JSON, wrap in content field
         response_data = {"content": content_str}
-    
+
     # We can't determine from openai message format whether it's a successful or
     # error call result so default to the successful result template
     _function_response = VertexFunctionResponse(
@@ -1560,7 +1569,7 @@ def convert_to_gemini_tool_call_result(
 
     # Create part with function_response, and optionally inline_data for images (Computer Use)
     _part: VertexPartType = {"function_response": _function_response}
-    
+
     # For Computer Use, if we have an image, we need separate parts:
     # - One part with function_response
     # - One part with inline_data
@@ -1568,7 +1577,7 @@ def convert_to_gemini_tool_call_result(
     if inline_data:
         image_part: VertexPartType = {"inline_data": inline_data}
         return [_part, image_part]
-    
+
     return _part
 
 
@@ -1627,7 +1636,11 @@ def convert_to_anthropic_tool_result(
                     )
                 )
             elif content["type"] == "image_url":
-                format = content["image_url"].get("format") if isinstance(content["image_url"], dict) else None
+                format = (
+                    content["image_url"].get("format")
+                    if isinstance(content["image_url"], dict)
+                    else None
+                )
                 anthropic_content_list.append(
                     create_anthropic_image_param(content["image_url"], format=format)
                 )
@@ -1725,7 +1738,9 @@ def convert_to_anthropic_tool_invoke(
 
     Fixes: https://github.com/BerriAI/litellm/issues/17737
     """
-    anthropic_tool_invoke: List[Union[AnthropicMessagesToolUseParam, Dict[str, Any]]] = []
+    anthropic_tool_invoke: List[
+        Union[AnthropicMessagesToolUseParam, Dict[str, Any]]
+    ] = []
 
     for tool in tool_calls:
         if not get_attribute_or_key(tool, "type") == "function":
@@ -1737,9 +1752,7 @@ def convert_to_anthropic_tool_invoke(
             get_attribute_or_key(get_attribute_or_key(tool, "function"), "name"),
         )
         tool_input = json.loads(
-            get_attribute_or_key(
-                get_attribute_or_key(tool, "function"), "arguments"
-            )
+            get_attribute_or_key(get_attribute_or_key(tool, "function"), "arguments")
         )
 
         # Check if this is a server-side tool (web_search, tool_search, etc.)
@@ -1991,11 +2004,17 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     for m in user_message_types_block["content"]:
                         if m.get("type", "") == "image_url":
                             m = cast(ChatCompletionImageObject, m)
-                            format = m["image_url"].get("format") if isinstance(m["image_url"], dict) else None
+                            format = (
+                                m["image_url"].get("format")
+                                if isinstance(m["image_url"], dict)
+                                else None
+                            )
                             # Convert ChatCompletionImageUrlObject to dict if needed
                             image_url_value = m["image_url"]
                             if isinstance(image_url_value, str):
-                                image_url_input: Union[str, dict[str, Any]] = image_url_value
+                                image_url_input: Union[
+                                    str, dict[str, Any]
+                                ] = image_url_value
                             else:
                                 # ChatCompletionImageUrlObject or dict case - convert to dict
                                 image_url_input = {
@@ -2005,8 +2024,10 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             # Bedrock invoke models have format: invoke/...
                             is_bedrock_invoke = model.lower().startswith("invoke/")
                             _anthropic_content_element = create_anthropic_image_param(
-                                image_url_input, format=format, is_bedrock_invoke=is_bedrock_invoke
-                            ) 
+                                image_url_input,
+                                format=format,
+                                is_bedrock_invoke=is_bedrock_invoke,
+                            )
                             _content_element = add_cache_control_to_content(
                                 anthropic_content_element=_anthropic_content_element,
                                 original_content_element=dict(m),
@@ -2143,18 +2164,27 @@ def anthropic_messages_pt(  # noqa: PLR0915
             ):  # support assistant tool invoke conversion
                 # Get web_search_results from provider_specific_fields for server_tool_use reconstruction
                 # Fixes: https://github.com/BerriAI/litellm/issues/17737
-                _provider_specific_fields_raw = assistant_content_block.get("provider_specific_fields")
+                _provider_specific_fields_raw = assistant_content_block.get(
+                    "provider_specific_fields"
+                )
                 _provider_specific_fields: Dict[str, Any] = {}
                 if isinstance(_provider_specific_fields_raw, dict):
-                    _provider_specific_fields = cast(Dict[str, Any], _provider_specific_fields_raw)
-                _web_search_results = _provider_specific_fields.get("web_search_results")
+                    _provider_specific_fields = cast(
+                        Dict[str, Any], _provider_specific_fields_raw
+                    )
+                _web_search_results = _provider_specific_fields.get(
+                    "web_search_results"
+                )
                 tool_invoke_results = convert_to_anthropic_tool_invoke(
                     assistant_tool_calls,
                     web_search_results=_web_search_results,
                 )
                 # AnthropicMessagesAssistantMessageValues includes AnthropicMessagesToolUseParam
                 assistant_content.extend(
-                    cast(List[AnthropicMessagesAssistantMessageValues], tool_invoke_results)
+                    cast(
+                        List[AnthropicMessagesAssistantMessageValues],
+                        tool_invoke_results,
+                    )
                 )
 
             assistant_function_call = assistant_content_block.get("function_call")
@@ -3212,14 +3242,18 @@ def _convert_to_bedrock_tool_call_result(
     """
     - 
     """
-    tool_result_content_blocks:List[BedrockToolResultContentBlock] = []
+    tool_result_content_blocks: List[BedrockToolResultContentBlock] = []
     if isinstance(message["content"], str):
-        tool_result_content_blocks.append(BedrockToolResultContentBlock(text=message["content"]))
+        tool_result_content_blocks.append(
+            BedrockToolResultContentBlock(text=message["content"])
+        )
     elif isinstance(message["content"], List):
         content_list = message["content"]
         for content in content_list:
             if content["type"] == "text":
-                tool_result_content_blocks.append(BedrockToolResultContentBlock(text=content["text"]))
+                tool_result_content_blocks.append(
+                    BedrockToolResultContentBlock(text=content["text"])
+                )
             elif content["type"] == "image_url":
                 format: Optional[str] = None
                 if isinstance(content["image_url"], dict):
@@ -3227,12 +3261,14 @@ def _convert_to_bedrock_tool_call_result(
                     format = content["image_url"].get("format")
                 else:
                     image_url = content["image_url"]
-                _block:BedrockContentBlock = BedrockImageProcessor.process_image_sync(
+                _block: BedrockContentBlock = BedrockImageProcessor.process_image_sync(
                     image_url=image_url,
                     format=format,
                 )
                 if "image" in _block:
-                    tool_result_content_blocks.append(BedrockToolResultContentBlock(image=_block["image"]))
+                    tool_result_content_blocks.append(
+                        BedrockToolResultContentBlock(image=_block["image"])
+                    )
 
     message.get("name", "")
     id = str(message.get("tool_call_id", str(uuid.uuid4())))

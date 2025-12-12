@@ -116,9 +116,7 @@ class AimGuardrail(CustomGuardrail):
         elif action_type == "block_action":
             self._handle_block_action(res["analysis_result"], required_action)
         elif action_type == "anonymize_action":
-            return self._anonymize_request(
-                res, data
-            )
+            return self._anonymize_request(res, data)
         else:
             verbose_proxy_logger.error(f"Aim: {action_type} action")
         return data
@@ -132,9 +130,7 @@ class AimGuardrail(CustomGuardrail):
         )
         raise HTTPException(status_code=400, detail=detection_message)
 
-    def _anonymize_request(
-        self, res: Any, data: dict
-    ) -> dict:
+    def _anonymize_request(self, res: Any, data: dict) -> dict:
         verbose_proxy_logger.info("Aim: anonymize action")
         redacted_chat = res.get("redacted_chat")
         if not redacted_chat:
@@ -179,7 +175,9 @@ class AimGuardrail(CustomGuardrail):
         redacted_chat = res.get("redacted_chat", None)
 
         if action_type and action_type == "anonymize_action" and redacted_chat:
-            return {"redacted_output": redacted_chat["all_redacted_messages"][-1]["content"]}
+            return {
+                "redacted_output": redacted_chat["all_redacted_messages"][-1]["content"]
+            }
         return {"redacted_output": output}
 
     def _handle_block_action_on_output(

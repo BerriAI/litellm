@@ -25,6 +25,7 @@ _PATTERNS_DATA = _load_patterns_from_json()
 
 class PrebuiltPatternName(str, Enum):
     """Enum for prebuilt pattern names - dynamically generated from JSON"""
+
     pass
 
 
@@ -43,13 +44,13 @@ PREBUILT_PATTERNS: Dict[str, str] = {
 def get_compiled_pattern(pattern_name: str) -> Pattern:
     """
     Get a compiled regex pattern by name.
-    
+
     Args:
         pattern_name: Name of the prebuilt pattern
-        
+
     Returns:
         Compiled regex pattern
-        
+
     Raises:
         ValueError: If pattern_name is not found in PREBUILT_PATTERNS
     """
@@ -59,14 +60,14 @@ def get_compiled_pattern(pattern_name: str) -> Pattern:
             f"Unknown pattern name: '{pattern_name}'. "
             f"Available patterns: {available_patterns}"
         )
-    
+
     return re.compile(PREBUILT_PATTERNS[pattern_name], re.IGNORECASE)
 
 
 def get_all_pattern_names() -> List[str]:
     """
     Get a list of all available prebuilt pattern names.
-    
+
     Returns:
         List of pattern names
     """
@@ -99,7 +100,7 @@ PATTERN_DESCRIPTIONS: Dict[str, str] = {
 def get_pattern_metadata() -> List[Dict[str, str]]:
     """
     Return pattern metadata for UI display.
-    
+
     Returns:
         List of dictionaries containing pattern name, display_name, category, and description
     """
@@ -112,4 +113,3 @@ def get_pattern_metadata() -> List[Dict[str, str]]:
         }
         for pattern_data in _PATTERNS_DATA["patterns"]
     ]
-

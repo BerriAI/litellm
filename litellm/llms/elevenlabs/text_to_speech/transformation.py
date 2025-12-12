@@ -192,17 +192,17 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
                 "xi-api-key": api_key,
                 "Content-Type": "application/json",
             }
-        )        
-        
+        )
+
         return headers
-    
+
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, Headers]
     ) -> BaseLLMException:
         return ElevenLabsException(
             message=error_message, status_code=status_code, headers=headers
         )
-    
+
     def transform_text_to_speech_request(
         self,
         model: str,
@@ -311,9 +311,7 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
         Construct the ElevenLabs endpoint URL, including path voice_id and query params.
         """
         base_url = (
-            api_base
-            or get_secret_str("ELEVENLABS_API_BASE")
-            or self.TTS_BASE_URL
+            api_base or get_secret_str("ELEVENLABS_API_BASE") or self.TTS_BASE_URL
         )
         base_url = base_url.rstrip("/")
 

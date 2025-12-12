@@ -5,7 +5,11 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Required, TypedDict
 
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk, ChatCompletionToolParam
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionToolCallChunk,
+    ChatCompletionToolParam,
+)
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionToolCallChunk,
@@ -305,9 +309,7 @@ class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
             "'output' runs on model → user traffic, and 'both' applies to both."
         ),
     )
-    presidio_score_thresholds: Optional[
-        Dict[Union[PiiEntityType, str], float]
-    ] = Field(
+    presidio_score_thresholds: Optional[Dict[Union[PiiEntityType, str], float]] = Field(
         default=None,
         description=(
             "Optional per-entity minimum confidence scores for Presidio detections. "

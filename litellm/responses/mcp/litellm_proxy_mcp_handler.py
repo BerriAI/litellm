@@ -399,8 +399,8 @@ class LiteLLM_Proxy_MCP_Handler:
 
     @staticmethod
     async def _execute_tool_calls(
-        tool_server_map: dict[str, str], 
-        tool_calls: List[Any], 
+        tool_server_map: dict[str, str],
+        tool_calls: List[Any],
         user_api_key_auth: Any,
         mcp_auth_header: Optional[str] = None,
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,

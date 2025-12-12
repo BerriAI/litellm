@@ -30,4 +30,3 @@ class ZAIChatConfig(OpenAIGPTConfig):
             "tools",
             "tool_choice",
         ]
-

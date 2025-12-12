@@ -460,7 +460,7 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
         request = httpx.Request(method="POST", url="https://api.openai.com/v1")
         self.response = httpx.Response(status_code=400, request=request)
         self.provider_specific_fields = provider_specific_fields
-        
+
         super().__init__(
             message=self.message,
             model=self.model,  # type: ignore
@@ -468,7 +468,6 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
             response=self.response,
             litellm_debug_info=self.litellm_debug_info,
         )  # Call the base class constructor with the parameters it needs
-    
 
     def __str__(self):
         return self._transform_error_to_string()

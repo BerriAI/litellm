@@ -265,9 +265,7 @@ def generic_response_convertor(
         "GENERIC_USER_PROVIDER_ATTRIBUTE", "provider"
     )
 
-    generic_user_role_attribute_name = os.getenv(
-        "GENERIC_USER_ROLE_ATTRIBUTE", "role"
-    )
+    generic_user_role_attribute_name = os.getenv("GENERIC_USER_ROLE_ATTRIBUTE", "role")
 
     verbose_proxy_logger.debug(
         f" generic_user_id_attribute_name: {generic_user_id_attribute_name}\n generic_user_email_attribute_name: {generic_user_email_attribute_name}"

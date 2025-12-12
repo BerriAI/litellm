@@ -42,11 +42,11 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         aws_profile_name: Optional[str] = None,
         aws_web_identity_token: Optional[str] = None,
         aws_sts_endpoint: Optional[str] = None,
-        **kwargs
+        **kwargs,
     ):
         BaseSecretManager.__init__(self, **kwargs)
         BaseAWSLLM.__init__(self, **kwargs)
-        
+
         # Store AWS authentication settings
         self.aws_region_name = aws_region_name
         self.aws_role_name = aws_role_name
@@ -61,7 +61,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         # AWS_REGION_NAME is only strictly required if not using a profile or role
         # When using IAM roles, the region can come from multiple sources
         if (
-            "AWS_REGION_NAME" not in os.environ 
+            "AWS_REGION_NAME" not in os.environ
             and "AWS_REGION" not in os.environ
             and "AWS_DEFAULT_REGION" not in os.environ
         ):
@@ -83,22 +83,36 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             return
         try:
             cls.validate_environment()
-            
+
             # Extract AWS settings from key_management_settings if provided
             aws_kwargs = {}
             if key_management_settings is not None:
                 aws_kwargs = {
-                    "aws_region_name": getattr(key_management_settings, "aws_region_name", None),
-                    "aws_role_name": getattr(key_management_settings, "aws_role_name", None),
-                    "aws_session_name": getattr(key_management_settings, "aws_session_name", None),
-                    "aws_external_id": getattr(key_management_settings, "aws_external_id", None),
-                    "aws_profile_name": getattr(key_management_settings, "aws_profile_name", None),
-                    "aws_web_identity_token": getattr(key_management_settings, "aws_web_identity_token", None),
-                    "aws_sts_endpoint": getattr(key_management_settings, "aws_sts_endpoint", None),
+                    "aws_region_name": getattr(
+                        key_management_settings, "aws_region_name", None
+                    ),
+                    "aws_role_name": getattr(
+                        key_management_settings, "aws_role_name", None
+                    ),
+                    "aws_session_name": getattr(
+                        key_management_settings, "aws_session_name", None
+                    ),
+                    "aws_external_id": getattr(
+                        key_management_settings, "aws_external_id", None
+                    ),
+                    "aws_profile_name": getattr(
+                        key_management_settings, "aws_profile_name", None
+                    ),
+                    "aws_web_identity_token": getattr(
+                        key_management_settings, "aws_web_identity_token", None
+                    ),
+                    "aws_sts_endpoint": getattr(
+                        key_management_settings, "aws_sts_endpoint", None
+                    ),
                 }
                 # Remove None values
                 aws_kwargs = {k: v for k, v in aws_kwargs.items() if v is not None}
-            
+
             litellm.secret_manager_client = cls(**aws_kwargs)
             litellm._key_management_system = KeyManagementSystem.AWS_SECRET_MANAGER
 
@@ -246,13 +260,13 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         return primary_secret_kv_pairs.get(secret_name)
 
     async def async_write_secret(
-            self,
-            secret_name: str,
-            secret_value: str,
-            description: Optional[str] = None,
-            optional_params: Optional[dict] = None,
-            timeout: Optional[Union[float, httpx.Timeout]] = None,
-            tags: Optional[Union[dict, list]] = None
+        self,
+        secret_name: str,
+        secret_value: str,
+        description: Optional[str] = None,
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        tags: Optional[Union[dict, list]] = None,
     ) -> dict:
         """
         Async function to write a secret to AWS Secrets Manager
@@ -375,7 +389,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         optional_params = optional_params or {}
-        
+
         # Build optional_params from instance settings if not provided
         # This allows the IAM role settings to be used for Secret Manager calls
         if not optional_params.get("aws_role_name") and self.aws_role_name:
@@ -388,11 +402,14 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             optional_params["aws_external_id"] = self.aws_external_id
         if not optional_params.get("aws_profile_name") and self.aws_profile_name:
             optional_params["aws_profile_name"] = self.aws_profile_name
-        if not optional_params.get("aws_web_identity_token") and self.aws_web_identity_token:
+        if (
+            not optional_params.get("aws_web_identity_token")
+            and self.aws_web_identity_token
+        ):
             optional_params["aws_web_identity_token"] = self.aws_web_identity_token
         if not optional_params.get("aws_sts_endpoint") and self.aws_sts_endpoint:
             optional_params["aws_sts_endpoint"] = self.aws_sts_endpoint
-        
+
         boto3_credentials_info = self._get_boto_credentials_from_optional_params(
             optional_params
         )

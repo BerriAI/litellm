@@ -309,9 +309,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         return Tools(googleSearch={})
 
-    def _transform_computer_use_config(
-        self, computer_use_config: dict
-    ) -> dict:
+    def _transform_computer_use_config(self, computer_use_config: dict) -> dict:
         """
         Transform Computer Use configuration to Gemini API format.
 
@@ -322,7 +320,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             Transformed computer use configuration for Gemini API
         """
         transformed_config = {}
-        
+
         # Transform environment values if needed
         if "environment" in computer_use_config:
             env_value = computer_use_config["environment"]
@@ -338,13 +336,17 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     f"Invalid environment value for computer_use: {env_value}. "
                     f"Supported: 'browser', 'unspecified', 'ENVIRONMENT_BROWSER', 'ENVIRONMENT_UNSPECIFIED'"
                 )
-        
+
         # Transform excluded_predefined_functions to camelCase
         if "excluded_predefined_functions" in computer_use_config:
-            transformed_config["excludedPredefinedFunctions"] = computer_use_config["excluded_predefined_functions"]
+            transformed_config["excludedPredefinedFunctions"] = computer_use_config[
+                "excluded_predefined_functions"
+            ]
         elif "excludedPredefinedFunctions" in computer_use_config:
-            transformed_config["excludedPredefinedFunctions"] = computer_use_config["excludedPredefinedFunctions"]
-        
+            transformed_config["excludedPredefinedFunctions"] = computer_use_config[
+                "excludedPredefinedFunctions"
+            ]
+
         return transformed_config
 
     def _extract_google_maps_retrieval_config(
@@ -1159,7 +1161,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 block: ChatCompletionThinkingBlock = {
                     "type": "thinking",
                     "thinking": thinking_text,
-                }                
+                }
                 signature = part.get("thoughtSignature")
                 if signature is not None:
                     block["signature"] = signature
@@ -1472,7 +1474,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 candidates_token_count = usage_metadata.get("candidatesTokenCount", 0)
                 image_tokens = response_tokens_details.image_tokens or 0
                 audio_tokens_candidate = response_tokens_details.audio_tokens or 0
-                calculated_text_tokens = candidates_token_count - image_tokens - audio_tokens_candidate
+                calculated_text_tokens = (
+                    candidates_token_count - image_tokens - audio_tokens_candidate
+                )
                 response_tokens_details.text_tokens = calculated_text_tokens
         #########################################################
 

@@ -81,9 +81,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if tool_calls_to_check:
                 inputs["tool_calls"] = tool_calls_to_check  # type: ignore
             if messages:
-                inputs["structured_messages"] = (
-                    messages  # pass the openai /chat/completions messages to the guardrail, as-is
-                )
+                inputs[
+                    "structured_messages"
+                ] = messages  # pass the openai /chat/completions messages to the guardrail, as-is
 
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
@@ -390,7 +390,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     for content_idx, content_item in enumerate(content):
                         text_str = content_item.get("text")
                         if text_str:
-                            list_key: Tuple[int, Optional[int]] = (choice_idx, content_idx)
+                            list_key: Tuple[int, Optional[int]] = (
+                                choice_idx,
+                                content_idx,
+                            )
                             if list_key not in combined_texts:
                                 combined_texts[list_key] = ""
                             combined_texts[list_key] += text_str
@@ -706,7 +709,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     # List content - handle each content item
                     for content_idx, content_item in enumerate(content):
                         if "text" in content_item:
-                            list_key: Tuple[int, Optional[int]] = (choice_idx_in_response, content_idx)
+                            list_key: Tuple[int, Optional[int]] = (
+                                choice_idx_in_response,
+                                content_idx,
+                            )
                             if list_key in guardrail_map:
                                 if list_key not in already_set:
                                     # First chunk - set the complete guardrailed text

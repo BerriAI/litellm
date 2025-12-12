@@ -1065,7 +1065,9 @@ async def fetch_and_validate_organization(
 
     validate_team_org_change(
         team=LiteLLM_TeamTable(**existing_team_row.model_dump()),
-        organization=LiteLLM_OrganizationTableWithMembers(**organization_row.model_dump()),
+        organization=LiteLLM_OrganizationTableWithMembers(
+            **organization_row.model_dump()
+        ),
         llm_router=llm_router,
     )
 
@@ -1073,7 +1075,9 @@ async def fetch_and_validate_organization(
 
 
 def validate_team_org_change(
-    team: LiteLLM_TeamTable, organization: LiteLLM_OrganizationTableWithMembers, llm_router: Router
+    team: LiteLLM_TeamTable,
+    organization: LiteLLM_OrganizationTableWithMembers,
+    llm_router: Router,
 ) -> bool:
     """
     Validate that a team can be moved to an organization.
@@ -1124,7 +1128,9 @@ def validate_team_org_change(
 
     # Check if the team's user_id is a member of the org
     team_members = [m.user_id for m in team.members_with_roles]
-    org_members = [m.user_id for m in organization.members] if organization.members else []
+    org_members = (
+        [m.user_id for m in organization.members] if organization.members else []
+    )
     not_in_org = [
         m
         for m in team_members
@@ -1252,7 +1258,9 @@ async def update_team(
             )
 
         if data.team_id is None:
-            raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
+            raise HTTPException(
+                status_code=400, detail={"error": "No team id passed in"}
+            )
         verbose_proxy_logger.debug("/team/update - %s", data)
 
         existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
@@ -1361,12 +1369,12 @@ async def update_team(
                 updated_kv["model_id"] = _model_id
 
         updated_kv = prisma_client.jsonify_team_object(db_data=updated_kv)
-        team_row: Optional[LiteLLM_TeamTable] = (
-            await prisma_client.db.litellm_teamtable.update(
-                where={"team_id": data.team_id},
-                data=updated_kv,
-                include={"litellm_model_table": True},  # type: ignore
-            )
+        team_row: Optional[
+            LiteLLM_TeamTable
+        ] = await prisma_client.db.litellm_teamtable.update(
+            where={"team_id": data.team_id},
+            data=updated_kv,
+            include={"litellm_model_table": True},  # type: ignore
         )
 
         if team_row is None or team_row.team_id is None:
@@ -1375,7 +1383,9 @@ async def update_team(
                 detail={"error": "Team doesn't exist. Got={}".format(team_row)},
             )
 
-        verbose_proxy_logger.info("Successfully updated team - %s, info", team_row.team_id)
+        verbose_proxy_logger.info(
+            "Successfully updated team - %s, info", team_row.team_id
+        )
         await _cache_team_object(
             team_id=team_row.team_id,
             team_table=LiteLLM_TeamTableCachedObj(**team_row.model_dump()),
@@ -1792,14 +1802,16 @@ async def team_member_add(
         complete_team_data=complete_team_data,
     )
 
-    updated_team, updated_users, updated_team_memberships = (
-        await _add_team_members_to_team(
-            data=data,
-            complete_team_data=complete_team_data,
-            prisma_client=prisma_client,
-            user_api_key_dict=user_api_key_dict,
-            litellm_proxy_admin_name=litellm_proxy_admin_name,
-        )
+    (
+        updated_team,
+        updated_users,
+        updated_team_memberships,
+    ) = await _add_team_members_to_team(
+        data=data,
+        complete_team_data=complete_team_data,
+        prisma_client=prisma_client,
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name=litellm_proxy_admin_name,
     )
 
     # Check if updated_team is None
@@ -2343,10 +2355,10 @@ async def delete_team(
     team_rows: List[LiteLLM_TeamTable] = []
     for team_id in data.team_ids:
         try:
-            team_row_base: Optional[BaseModel] = (
-                await prisma_client.db.litellm_teamtable.find_unique(
-                    where={"team_id": team_id}
-                )
+            team_row_base: Optional[
+                BaseModel
+            ] = await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": team_id}
             )
             if team_row_base is None:
                 raise Exception
@@ -2523,11 +2535,11 @@ async def team_info(
             )
 
         try:
-            team_info: Optional[BaseModel] = (
-                await prisma_client.db.litellm_teamtable.find_unique(
-                    where={"team_id": team_id},
-                    include={"object_permission": True},
-                )
+            team_info: Optional[
+                BaseModel
+            ] = await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": team_id},
+                include={"object_permission": True},
             )
             if team_info is None:
                 raise Exception

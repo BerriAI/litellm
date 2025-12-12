@@ -503,11 +503,21 @@ class BaseAzureLLM(BaseOpenAILLM):
 
         # litellm_params sometimes contains the key, but the value is None
         # We should respect environment variables in this case
-        tenant_id = self._resolve_env_var(litellm_params, "tenant_id", "AZURE_TENANT_ID")
-        client_id = self._resolve_env_var(litellm_params, "client_id", "AZURE_CLIENT_ID")
-        client_secret = self._resolve_env_var(litellm_params, "client_secret", "AZURE_CLIENT_SECRET")
-        azure_username = self._resolve_env_var(litellm_params, "azure_username", "AZURE_USERNAME")
-        azure_password = self._resolve_env_var(litellm_params, "azure_password", "AZURE_PASSWORD")
+        tenant_id = self._resolve_env_var(
+            litellm_params, "tenant_id", "AZURE_TENANT_ID"
+        )
+        client_id = self._resolve_env_var(
+            litellm_params, "client_id", "AZURE_CLIENT_ID"
+        )
+        client_secret = self._resolve_env_var(
+            litellm_params, "client_secret", "AZURE_CLIENT_SECRET"
+        )
+        azure_username = self._resolve_env_var(
+            litellm_params, "azure_username", "AZURE_USERNAME"
+        )
+        azure_password = self._resolve_env_var(
+            litellm_params, "azure_password", "AZURE_PASSWORD"
+        )
         scope = self._resolve_env_var(litellm_params, "azure_scope", "AZURE_SCOPE")
         if scope is None:
             scope = "https://cognitiveservices.azure.com/.default"
@@ -756,9 +766,11 @@ class BaseAzureLLM(BaseOpenAILLM):
             return False
         return api_version in {"preview", "latest", "v1"}
 
-    def _resolve_env_var(self, litellm_params: Dict[str, Any], param_key: str, env_var_key: str) -> Optional[str]:
+    def _resolve_env_var(
+        self, litellm_params: Dict[str, Any], param_key: str, env_var_key: str
+    ) -> Optional[str]:
         """Resolve the environment variable for a given parameter key.
-        
+
         The logic here is different from `params.get(key, os.getenv(env_var))` because
         litellm_params may contain the key with a None value, in which case we want
         to fallback to the environment variable.
@@ -767,4 +779,3 @@ class BaseAzureLLM(BaseOpenAILLM):
         if param_value is not None:
             return param_value
         return os.getenv(env_var_key)
-

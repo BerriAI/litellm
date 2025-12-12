@@ -123,7 +123,7 @@ class DBSpendUpdateWriter:
                 payload["startTime"] = payload["startTime"].isoformat()
             if isinstance(payload["endTime"], datetime):
                 payload["endTime"] = payload["endTime"].isoformat()
-            
+
             if org_id is not None and org_id != "":
                 payload["organization_id"] = org_id
 
@@ -1216,13 +1216,13 @@ class DBSpendUpdateWriter:
 
                             # Add cache-related fields if they exist
                             if "cache_read_input_tokens" in transaction:
-                                common_data["cache_read_input_tokens"] = (
-                                    transaction.get("cache_read_input_tokens", 0)
-                                )
+                                common_data[
+                                    "cache_read_input_tokens"
+                                ] = transaction.get("cache_read_input_tokens", 0)
                             if "cache_creation_input_tokens" in transaction:
-                                common_data["cache_creation_input_tokens"] = (
-                                    transaction.get("cache_creation_input_tokens", 0)
-                                )
+                                common_data[
+                                    "cache_creation_input_tokens"
+                                ] = transaction.get("cache_creation_input_tokens", 0)
 
                             if entity_type == "tag" and "request_id" in transaction:
                                 common_data["request_id"] = transaction.get(
@@ -1264,7 +1264,9 @@ class DBSpendUpdateWriter:
                                 }
 
                             if entity_type == "tag" and "request_id" in transaction:
-                                update_data["request_id"] = transaction.get("request_id")
+                                update_data["request_id"] = transaction.get(
+                                    "request_id"
+                                )
 
                             table.upsert(
                                 where=where_clause,
@@ -1438,7 +1440,9 @@ class DBSpendUpdateWriter:
         self,
         payload: Union[dict, SpendLogsPayload],
         prisma_client: PrismaClient,
-        type: Literal["user", "team", "org", "request_tags", "end_user", "agent"] = "user",
+        type: Literal[
+            "user", "team", "org", "request_tags", "end_user", "agent"
+        ] = "user",
     ) -> Optional[BaseDailySpendTransaction]:
         common_expected_keys = ["startTime", "api_key"]
         if type == "user":
@@ -1704,7 +1708,7 @@ class DBSpendUpdateWriter:
             return
         daily_transaction_key = f"{payload['agent_id']}_{base_daily_transaction['date']}_{payload_with_agent_id['api_key']}_{payload_with_agent_id['model']}_{payload_with_agent_id['custom_llm_provider']}"
         daily_transaction = DailyAgentSpendTransaction(
-            agent_id=payload['agent_id'], **base_daily_transaction
+            agent_id=payload["agent_id"], **base_daily_transaction
         )
         await self.daily_agent_spend_update_queue.add_update(
             update={daily_transaction_key: daily_transaction}

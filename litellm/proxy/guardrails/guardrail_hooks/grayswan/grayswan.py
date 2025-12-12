@@ -264,8 +264,10 @@ class GraySwanGuardrail(CustomGuardrail):
                     for choice in response.choices:
                         # Handle chat completion format (message.content)
                         # Choices has message attribute, StreamingChoices has delta
-                        if isinstance(choice, Choices) and hasattr(choice, "message") and hasattr(
-                            choice.message, "content"
+                        if (
+                            isinstance(choice, Choices)
+                            and hasattr(choice, "message")
+                            and hasattr(choice.message, "content")
                         ):
                             choice.message.content = violation_message
                         # Handle text completion format (text)
@@ -396,9 +398,7 @@ class GraySwanGuardrail(CustomGuardrail):
         if self.on_flagged_action == "block":
             # Determine if violation was in input or output
             violation_location = (
-                "output"
-                if hook_type == GuardrailEventHooks.post_call
-                else "input"
+                "output" if hook_type == GuardrailEventHooks.post_call else "input"
             )
             raise HTTPException(
                 status_code=400,

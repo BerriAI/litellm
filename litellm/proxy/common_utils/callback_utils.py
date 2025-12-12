@@ -343,17 +343,17 @@ def get_remaining_tokens_and_requests_from_request_data(data: Dict) -> Dict[str,
     remaining_requests_variable_name = f"litellm-key-remaining-requests-{model_group}"
     remaining_requests = _metadata.get(remaining_requests_variable_name, None)
     if remaining_requests:
-        headers[f"x-litellm-key-remaining-requests-{h11_model_group_name}"] = (
-            remaining_requests
-        )
+        headers[
+            f"x-litellm-key-remaining-requests-{h11_model_group_name}"
+        ] = remaining_requests
 
     # Remaining Tokens
     remaining_tokens_variable_name = f"litellm-key-remaining-tokens-{model_group}"
     remaining_tokens = _metadata.get(remaining_tokens_variable_name, None)
     if remaining_tokens:
-        headers[f"x-litellm-key-remaining-tokens-{h11_model_group_name}"] = (
-            remaining_tokens
-        )
+        headers[
+            f"x-litellm-key-remaining-tokens-{h11_model_group_name}"
+        ] = remaining_tokens
 
     return headers
 
@@ -402,9 +402,9 @@ def add_guardrail_response_to_standard_logging_object(
 ):
     if litellm_logging_obj is None:
         return
-    standard_logging_object: Optional[StandardLoggingPayload] = (
-        litellm_logging_obj.model_call_details.get("standard_logging_object")
-    )
+    standard_logging_object: Optional[
+        StandardLoggingPayload
+    ] = litellm_logging_obj.model_call_details.get("standard_logging_object")
     if standard_logging_object is None:
         return
     guardrail_information = standard_logging_object.get("guardrail_information", [])
@@ -433,7 +433,9 @@ def get_metadata_variable_name_from_kwargs(
     return "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
 
 
-def process_callback(_callback: str, callback_type: str, environment_variables: dict) -> dict:
+def process_callback(
+    _callback: str, callback_type: str, environment_variables: dict
+) -> dict:
     """Process a single callback and return its data with environment variables"""
     env_vars = CustomLogger.get_callback_env_vars(_callback)
 
@@ -445,11 +447,9 @@ def process_callback(_callback: str, callback_type: str, environment_variables: 
         else:
             env_vars_dict[_var] = env_variable
 
-    return {
-        "name": _callback,
-        "variables": env_vars_dict,
-        "type": callback_type
-    }
+    return {"name": _callback, "variables": env_vars_dict, "type": callback_type}
+
+
 def normalize_callback_names(callbacks: Iterable[Any]) -> List[Any]:
     if callbacks is None:
         return []

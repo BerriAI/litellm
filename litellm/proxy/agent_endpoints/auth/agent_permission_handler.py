@@ -21,7 +21,7 @@ class AgentRequestHandler:
     1. Key-level agent permissions
     2. Team-level agent permissions
     3. Agent access group resolution
-    
+
     Follows the same inheritance logic as MCP:
     - If team has restrictions and key has restrictions: use intersection
     - If team has restrictions and key has none: inherit from team
@@ -35,7 +35,7 @@ class AgentRequestHandler:
     ) -> List[str]:
         """
         Get list of allowed agent IDs for the given user/key based on permissions.
-        
+
         Returns:
             List[str]: List of allowed agent IDs. Empty list means no restrictions (allow all).
         """
@@ -45,7 +45,9 @@ class AgentRequestHandler:
                 await AgentRequestHandler._get_allowed_agents_for_key(user_api_key_auth)
             )
             allowed_agents_for_team = (
-                await AgentRequestHandler._get_allowed_agents_for_team(user_api_key_auth)
+                await AgentRequestHandler._get_allowed_agents_for_team(
+                    user_api_key_auth
+                )
             )
 
             # If team has agent restrictions, handle inheritance and intersection logic
@@ -73,20 +75,20 @@ class AgentRequestHandler:
     ) -> bool:
         """
         Check if a specific agent is allowed for the given user/key.
-        
+
         Args:
             agent_id: The agent ID to check
             user_api_key_auth: User authentication info
-            
+
         Returns:
             bool: True if agent is allowed, False otherwise
         """
         allowed_agents = await AgentRequestHandler.get_allowed_agents(user_api_key_auth)
-        
+
         # Empty list means no restrictions - allow all
         if len(allowed_agents) == 0:
             return True
-        
+
         return agent_id in allowed_agents
 
     @staticmethod
@@ -205,8 +207,10 @@ class AgentRequestHandler:
             direct_agents = key_object_permission.agents or []
 
             # Get agents from access groups
-            access_group_agents = await AgentRequestHandler._get_agents_from_access_groups(
-                key_object_permission.agent_access_groups or []
+            access_group_agents = (
+                await AgentRequestHandler._get_agents_from_access_groups(
+                    key_object_permission.agent_access_groups or []
+                )
             )
 
             # Combine both lists
@@ -242,8 +246,10 @@ class AgentRequestHandler:
             direct_agents = object_permissions.agents or []
 
             # Get agents from access groups
-            access_group_agents = await AgentRequestHandler._get_agents_from_access_groups(
-                object_permissions.agent_access_groups or []
+            access_group_agents = (
+                await AgentRequestHandler._get_agents_from_access_groups(
+                    object_permissions.agent_access_groups or []
+                )
             )
 
             # Combine both lists
@@ -284,9 +290,7 @@ class AgentRequestHandler:
                 for agent in agents:
                     agent_ids.add(agent.agent_id)
             except Exception as e:
-                verbose_logger.debug(
-                    f"Error getting agents from access groups: {e}"
-                )
+                verbose_logger.debug(f"Error getting agents from access groups: {e}")
         return agent_ids
 
     @staticmethod
@@ -306,16 +310,16 @@ class AgentRequestHandler:
             )
 
             # Use the helper for DB agents
-            db_agent_ids = await AgentRequestHandler._get_db_agent_ids_for_access_groups(
-                prisma_client, access_groups
+            db_agent_ids = (
+                await AgentRequestHandler._get_db_agent_ids_for_access_groups(
+                    prisma_client, access_groups
+                )
             )
             agent_ids.update(db_agent_ids)
 
             return list(agent_ids)
         except Exception as e:
-            verbose_logger.warning(
-                f"Failed to get agents from access groups: {str(e)}"
-            )
+            verbose_logger.warning(f"Failed to get agents from access groups: {str(e)}")
             return []
 
     @staticmethod
@@ -326,11 +330,15 @@ class AgentRequestHandler:
         Get list of agent access groups for the given user/key based on permissions.
         """
         access_groups: List[str] = []
-        access_groups_for_key = await AgentRequestHandler._get_agent_access_groups_for_key(
-            user_api_key_auth
+        access_groups_for_key = (
+            await AgentRequestHandler._get_agent_access_groups_for_key(
+                user_api_key_auth
+            )
         )
-        access_groups_for_team = await AgentRequestHandler._get_agent_access_groups_for_team(
-            user_api_key_auth
+        access_groups_for_team = (
+            await AgentRequestHandler._get_agent_access_groups_for_team(
+                user_api_key_auth
+            )
         )
 
         # If team has access groups, then key must have a subset of the team's access groups
@@ -378,7 +386,9 @@ class AgentRequestHandler:
 
             return key_object_permission.agent_access_groups or []
         except Exception as e:
-            verbose_logger.warning(f"Failed to get agent access groups for key: {str(e)}")
+            verbose_logger.warning(
+                f"Failed to get agent access groups for key: {str(e)}"
+            )
             return []
 
     @staticmethod
@@ -425,4 +435,3 @@ class AgentRequestHandler:
                 f"Failed to get agent access groups for team: {str(e)}"
             )
             return []
-

@@ -540,7 +540,9 @@ class ModelResponseIterator:
             usage_object=cast(dict, anthropic_usage_chunk), reasoning_content=None
         )
 
-    def _content_block_delta_helper(self, chunk: dict) -> Tuple[
+    def _content_block_delta_helper(
+        self, chunk: dict
+    ) -> Tuple[
         str,
         Optional[ChatCompletionToolCallChunk],
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]],
@@ -687,7 +689,9 @@ class ModelResponseIterator:
                 content_block_start = self.get_content_block_start(chunk=chunk)
                 self.content_blocks = []  # reset content blocks when new block starts
                 # Track current content block type for filtering deltas
-                self.current_content_block_type = content_block_start["content_block"]["type"]
+                self.current_content_block_type = content_block_start["content_block"][
+                    "type"
+                ]
                 if content_block_start["content_block"]["type"] == "text":
                     text = content_block_start["content_block"]["text"]
                 elif content_block_start["content_block"]["type"] == "tool_use":
@@ -735,12 +739,10 @@ class ModelResponseIterator:
                     # Capture web_search_tool_result for multi-turn reconstruction
                     # The full content comes in content_block_start, not in deltas
                     # See: https://github.com/BerriAI/litellm/issues/17737
-                    self.web_search_results.append(
-                        content_block_start["content_block"]
-                    )
-                    provider_specific_fields["web_search_results"] = (
-                        self.web_search_results
-                    )
+                    self.web_search_results.append(content_block_start["content_block"])
+                    provider_specific_fields[
+                        "web_search_results"
+                    ] = self.web_search_results
             elif type_chunk == "content_block_stop":
                 ContentBlockStop(**chunk)  # type: ignore
                 # check if tool call content block - only for tool_use and server_tool_use blocks
@@ -1000,7 +1002,9 @@ class ModelResponseIterator:
             except StopIteration:
                 raise StopIteration
             except ValueError as e:
-                raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+                raise RuntimeError(
+                    f"Error parsing chunk: {e},\nReceived chunk: {chunk}"
+                )
 
     # Async iterator
     def __aiter__(self):
@@ -1049,7 +1053,9 @@ class ModelResponseIterator:
             except StopAsyncIteration:
                 raise StopAsyncIteration
             except ValueError as e:
-                raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+                raise RuntimeError(
+                    f"Error parsing chunk: {e},\nReceived chunk: {chunk}"
+                )
 
     def convert_str_chunk_to_generic_chunk(self, chunk: str) -> ModelResponseStream:
         """

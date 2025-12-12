@@ -356,7 +356,9 @@ class ContentFilterGuardrail(CustomGuardrail):
                         pattern_name=pattern_name.upper()
                     )
                     text = compiled_pattern.sub(redaction_tag, text)
-                    verbose_proxy_logger.info(f"Masked all {pattern_name} matches in content")
+                    verbose_proxy_logger.info(
+                        f"Masked all {pattern_name} matches in content"
+                    )
 
             # Check blocked words - iterate through ALL blocked words
             # to ensure all matching keywords are processed, not just the first one

@@ -43,11 +43,11 @@ def create_config_class(provider: SimpleProviderConfig):
             self, messages: List[AllMessageValues], model: str, is_async: bool = False
         ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
             """Transform messages based on special_handling config"""
-            
+
             # Handle content list to string conversion if configured
             if provider.special_handling.get("convert_content_list_to_string"):
                 messages = handle_messages_with_content_list_to_str_conversion(messages)
-            
+
             if is_async:
                 return super()._transform_messages(
                     messages=messages, model=model, is_async=True
@@ -109,7 +109,7 @@ def create_config_class(provider: SimpleProviderConfig):
             """Apply parameter mappings and constraints"""
 
             supported_params = self.get_supported_openai_params(model)
-            
+
             # Apply supported params
             for param, value in non_default_params.items():
                 # Check parameter mappings first

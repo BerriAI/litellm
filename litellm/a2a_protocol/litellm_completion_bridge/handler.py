@@ -48,8 +48,8 @@ class A2ACompletionBridgeHandler:
         message = params.get("message", {})
 
         # Transform A2A message to OpenAI format
-        openai_messages = A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(
-            message
+        openai_messages = (
+            A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(message)
         )
 
         # Get completion params
@@ -76,9 +76,11 @@ class A2ACompletionBridgeHandler:
         )
 
         # Transform response to A2A format
-        a2a_response = A2ACompletionBridgeTransformation.openai_response_to_a2a_response(
-            response=response,
-            request_id=request_id,
+        a2a_response = (
+            A2ACompletionBridgeTransformation.openai_response_to_a2a_response(
+                response=response,
+                request_id=request_id,
+            )
         )
 
         verbose_logger.info(f"A2A completion bridge completed: request_id={request_id}")
@@ -120,8 +122,8 @@ class A2ACompletionBridgeHandler:
         )
 
         # Transform A2A message to OpenAI format
-        openai_messages = A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(
-            message
+        openai_messages = (
+            A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(message)
         )
 
         # Get completion params
@@ -178,9 +180,11 @@ class A2ACompletionBridgeHandler:
 
         # Emit artifact update with accumulated content
         if accumulated_text:
-            artifact_event = A2ACompletionBridgeTransformation.create_artifact_update_event(
-                ctx=ctx,
-                text=accumulated_text,
+            artifact_event = (
+                A2ACompletionBridgeTransformation.create_artifact_update_event(
+                    ctx=ctx,
+                    text=accumulated_text,
+                )
             )
             yield artifact_event
 

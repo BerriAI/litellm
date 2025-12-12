@@ -112,7 +112,9 @@ def _get_a2a_model_info(a2a_client: Any, kwargs: Dict[str, Any]) -> str:
         litellm_logging_obj.model = model
         litellm_logging_obj.custom_llm_provider = custom_llm_provider
         litellm_logging_obj.model_call_details["model"] = model
-        litellm_logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
+        litellm_logging_obj.model_call_details[
+            "custom_llm_provider"
+        ] = custom_llm_provider
 
     return agent_name
 
@@ -196,7 +198,11 @@ async def asend_message(
         )
 
         # Extract params from request
-        params = request.params.model_dump(mode="json") if hasattr(request.params, "model_dump") else dict(request.params)
+        params = (
+            request.params.model_dump(mode="json")
+            if hasattr(request.params, "model_dump")
+            else dict(request.params)
+        )
 
         response_dict = await A2ACompletionBridgeHandler.handle_non_streaming(
             request_id=str(request.id),
@@ -215,7 +221,9 @@ async def asend_message(
     # Create A2A client if not provided but api_base is available
     if a2a_client is None:
         if api_base is None:
-            raise ValueError("Either a2a_client or api_base is required for standard A2A flow")
+            raise ValueError(
+                "Either a2a_client or api_base is required for standard A2A flow"
+            )
         a2a_client = await create_a2a_client(base_url=api_base)
 
     # Type assertion: a2a_client is guaranteed to be non-None here
@@ -234,7 +242,11 @@ async def asend_message(
 
     # Calculate token usage from request and response
     response_dict = a2a_response.model_dump(mode="json", exclude_none=True)
-    prompt_tokens, completion_tokens, _ = A2ARequestUtils.calculate_usage_from_request_response(
+    (
+        prompt_tokens,
+        completion_tokens,
+        _,
+    ) = A2ARequestUtils.calculate_usage_from_request_response(
         request=request,
         response_dict=response_dict,
     )
@@ -279,7 +291,9 @@ def send_message(
     if loop is not None:
         return asend_message(a2a_client=a2a_client, request=request, **kwargs)
     else:
-        return asyncio.run(asend_message(a2a_client=a2a_client, request=request, **kwargs))
+        return asyncio.run(
+            asend_message(a2a_client=a2a_client, request=request, **kwargs)
+        )
 
 
 async def asend_message_streaming(
@@ -346,7 +360,11 @@ async def asend_message_streaming(
         )
 
         # Extract params from request
-        params = request.params.model_dump(mode="json") if hasattr(request.params, "model_dump") else dict(request.params)
+        params = (
+            request.params.model_dump(mode="json")
+            if hasattr(request.params, "model_dump")
+            else dict(request.params)
+        )
 
         async for chunk in A2ACompletionBridgeHandler.handle_streaming(
             request_id=str(request.id),
@@ -364,7 +382,9 @@ async def asend_message_streaming(
     # Create A2A client if not provided but api_base is available
     if a2a_client is None:
         if api_base is None:
-            raise ValueError("Either a2a_client or api_base is required for standard A2A flow")
+            raise ValueError(
+                "Either a2a_client or api_base is required for standard A2A flow"
+            )
         a2a_client = await create_a2a_client(base_url=api_base)
 
     # Type assertion: a2a_client is guaranteed to be non-None here
@@ -377,7 +397,9 @@ async def asend_message_streaming(
     stream = a2a_client.send_message_streaming(request)
 
     # Build logging object for streaming completion callbacks
-    agent_card = getattr(a2a_client, "_litellm_agent_card", None) or getattr(a2a_client, "agent_card", None)
+    agent_card = getattr(a2a_client, "_litellm_agent_card", None) or getattr(
+        a2a_client, "agent_card", None
+    )
     agent_name = getattr(agent_card, "name", "unknown") if agent_card else "unknown"
     model = f"a2a_agent/{agent_name}"
 
@@ -533,5 +555,3 @@ async def aget_agent_card(
         f"Fetched agent card: {agent_card.name if hasattr(agent_card, 'name') else 'unknown'}"
     )
     return agent_card
-
-

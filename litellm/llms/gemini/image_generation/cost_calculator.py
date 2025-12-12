@@ -27,4 +27,6 @@ def cost_calculator(
             num_images = len(image_response.data)
         return output_cost_per_image * num_images
     else:
-        raise ValueError(f"image_response must be of type ImageResponse got type={type(image_response)}")
+        raise ValueError(
+            f"image_response must be of type ImageResponse got type={type(image_response)}"
+        )

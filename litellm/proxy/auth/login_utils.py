@@ -340,4 +340,3 @@ def create_ui_token_object(
         disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
         server_root_path=get_server_root_path(),
     )
-

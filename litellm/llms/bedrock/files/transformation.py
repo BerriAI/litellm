@@ -33,7 +33,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
     """
     Config for Bedrock Files - handles S3 uploads for Bedrock batch processing
     """
-    
+
     def __init__(self):
         self.jsonl_transformation = BedrockJsonlFilesTransformation()
         super().__init__()
@@ -61,8 +61,6 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
     ) -> dict:
         # No additional headers needed for S3 uploads - AWS credentials handled by BaseAWSLLM
         return headers
-
-
 
     def _get_content_from_openai_file(self, openai_file_content: FileTypes) -> str:
         """
@@ -114,10 +112,10 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         # Remove bedrock/ prefix if present
         if _model.startswith("bedrock/"):
             _model = _model[8:]
-        
+
         # Replace colons with hyphens for Bedrock S3 URI compliance
         _model = _model.replace(":", "-")
-        
+
         object_name = f"litellm-bedrock-files-{_model}-{uuid.uuid4()}.jsonl"
         return object_name
 
@@ -164,12 +162,16 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         """
         Get the complete S3 URL for the file upload request
         """
-        bucket_name = litellm_params.get("s3_bucket_name") or os.getenv("AWS_S3_BUCKET_NAME")
+        bucket_name = litellm_params.get("s3_bucket_name") or os.getenv(
+            "AWS_S3_BUCKET_NAME"
+        )
         if not bucket_name:
-            raise ValueError("S3 bucket_name is required. Set 's3_bucket_name' in litellm_params or AWS_S3_BUCKET_NAME env var")
-        
+            raise ValueError(
+                "S3 bucket_name is required. Set 's3_bucket_name' in litellm_params or AWS_S3_BUCKET_NAME env var"
+            )
+
         aws_region_name = self._get_aws_region_name(optional_params, model)
-        
+
         file_data = data.get("file")
         purpose = data.get("purpose")
         if file_data is None:
@@ -178,10 +180,13 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             raise ValueError("purpose is required")
         extracted_file_data = extract_file_data(file_data)
         object_name = self.get_object_name(extracted_file_data, purpose)
-        
+
         # S3 endpoint URL format
-        s3_endpoint_url = optional_params.get("s3_endpoint_url") or f"https://s3.{aws_region_name}.amazonaws.com"
-        
+        s3_endpoint_url = (
+            optional_params.get("s3_endpoint_url")
+            or f"https://s3.{aws_region_name}.amazonaws.com"
+        )
+
         return f"{s3_endpoint_url}/{bucket_name}/{object_name}"
 
     def get_supported_openai_params(
@@ -198,7 +203,6 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
     ) -> dict:
         return optional_params
 
-
     def _map_openai_to_bedrock_params(
         self,
         openai_request_body: Dict[str, Any],
@@ -208,33 +212,38 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         Transform OpenAI request body to Bedrock-compatible modelInput parameters using existing transformation logic
         """
         from litellm.types.utils import LlmProviders
+
         _model = openai_request_body.get("model", "")
         messages = openai_request_body.get("messages", [])
-        
+
         # Use existing Anthropic transformation logic for Anthropic models
         if provider == LlmProviders.ANTHROPIC:
             from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
                 AmazonAnthropicClaudeConfig,
             )
-            
+
             anthropic_config = AmazonAnthropicClaudeConfig()
-            
+
             # Extract optional params (everything except model and messages)
-            optional_params = {k: v for k, v in openai_request_body.items() if k not in ["model", "messages"]}
+            optional_params = {
+                k: v
+                for k, v in openai_request_body.items()
+                if k not in ["model", "messages"]
+            }
             mapped_params = anthropic_config.map_openai_params(
                 non_default_params={},
                 optional_params=optional_params,
                 model=_model,
-                drop_params=False
+                drop_params=False,
             )
-            
+
             # Transform using existing Anthropic logic
             bedrock_params = anthropic_config.transform_request(
                 model=_model,
                 messages=messages,
                 optional_params=mapped_params,
                 litellm_params={},
-                headers={}
+                headers={},
             )
 
             return bedrock_params
@@ -242,7 +251,11 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             # For other providers, use basic mapping
             bedrock_params = {
                 "messages": messages,
-                **{k: v for k, v in openai_request_body.items() if k not in ["model", "messages"]}
+                **{
+                    k: v
+                    for k, v in openai_request_body.items()
+                    if k not in ["model", "messages"]
+                },
             }
             return bedrock_params
 
@@ -251,24 +264,24 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
     ) -> List[Dict[str, Any]]:
         """
         Transforms OpenAI JSONL content to Bedrock batch format
-        
+
         Bedrock batch format: { "recordId": "alphanumeric string", "modelInput": {JSON body} }
         Example:
         {
-            "recordId": "CALL0000001", 
+            "recordId": "CALL0000001",
             "modelInput": {
-                "anthropic_version": "bedrock-2023-05-31", 
+                "anthropic_version": "bedrock-2023-05-31",
                 "max_tokens": 1024,
-                "messages": [ 
-                    { 
-                        "role": "user", 
+                "messages": [
+                    {
+                        "role": "user",
                         "content": [{"type": "text", "text": "Hello"}]
                     }
                 ]
             }
         }
         """
-        
+
         bedrock_jsonl_content = []
         for idx, _openai_jsonl_content in enumerate(openai_jsonl_content):
             # Extract the request body from OpenAI format
@@ -277,28 +290,28 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
             try:
                 model, _, _, _ = get_llm_provider(
-                            model=model, 
-                            custom_llm_provider=None, 
-                    )
+                    model=model,
+                    custom_llm_provider=None,
+                )
             except Exception as e:
-                verbose_logger.exception(f"litellm.llms.bedrock.files.transformation.py::_transform_openai_jsonl_content_to_bedrock_jsonl_content() - Error inferring custom_llm_provider - {str(e)}")
-            
+                verbose_logger.exception(
+                    f"litellm.llms.bedrock.files.transformation.py::_transform_openai_jsonl_content_to_bedrock_jsonl_content() - Error inferring custom_llm_provider - {str(e)}"
+                )
+
             # Determine provider from model name
             provider = self.get_bedrock_invoke_provider(model)
-            
+
             # Transform to Bedrock modelInput format
             model_input = self._map_openai_to_bedrock_params(
-                openai_request_body=openai_body,
-                provider=provider
+                openai_request_body=openai_body, provider=provider
             )
-            
+
             # Create Bedrock batch record
-            record_id = _openai_jsonl_content.get("custom_id", f"CALL{str(idx).zfill(7)}")
-            bedrock_record = {
-                "recordId": record_id,
-                "modelInput": model_input
-            }
-                    
+            record_id = _openai_jsonl_content.get(
+                "custom_id", f"CALL{str(idx).zfill(7)}"
+            )
+            bedrock_record = {"recordId": record_id, "modelInput": model_input}
+
             bedrock_jsonl_content.append(bedrock_record)
         return bedrock_jsonl_content
 
@@ -318,10 +331,10 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             raise ValueError("file is required")
         extracted_file_data = extract_file_data(file_data)
         extracted_file_data_content = extracted_file_data.get("content")
-        
+
         if extracted_file_data_content is None:
             raise ValueError("file content is required")
-            
+
         # Get and transform the file content
         if FilesAPIUtils.is_batch_jsonl_file(
             create_file_data=create_file_data,
@@ -332,7 +345,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 extracted_file_data_content
             )
             openai_jsonl_content = [
-                json.loads(line) for line in original_file_content.splitlines() if line.strip()
+                json.loads(line)
+                for line in original_file_content.splitlines()
+                if line.strip()
             ]
             bedrock_jsonl_content = (
                 self._transform_openai_jsonl_content_to_bedrock_jsonl_content(
@@ -341,12 +356,12 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             )
             file_content = "\n".join(json.dumps(item) for item in bedrock_jsonl_content)
         elif isinstance(extracted_file_data_content, bytes):
-            file_content = extracted_file_data_content.decode('utf-8')
+            file_content = extracted_file_data_content.decode("utf-8")
         elif isinstance(extracted_file_data_content, str):
             file_content = extracted_file_data_content
         else:
             raise ValueError("Unsupported file content type")
-        
+
         # Get the S3 URL for upload
         api_base = self.get_complete_file_url(
             api_base=None,
@@ -356,7 +371,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             litellm_params=litellm_params,
             data=create_file_data,
         )
-        
+
         # Sign the request and return a pre-signed request object
         signed_headers, signed_body = self._sign_s3_request(
             content=file_content,
@@ -365,7 +380,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         )
 
         litellm_params["upload_url"] = api_base
-        
+
         # Return a dict that tells the HTTP handler exactly what to do
         return {
             "method": "PUT",
@@ -408,7 +423,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             aws_web_identity_token=optional_params.get("aws_web_identity_token"),
             aws_sts_endpoint=optional_params.get("aws_sts_endpoint"),
         )
-        
+
         # Calculate SHA256 hash of the content (REQUIRED for S3)
         content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
 
@@ -431,33 +446,33 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             data=prepped.body,
             headers=prepped.headers,
         )
-        
+
         # Get region name for non-LLM API calls (same as s3_v2.py)
         signing_region = self.get_aws_region_name_for_non_llm_api_calls(
             aws_region_name=aws_region_name
         )
-        
+
         SigV4Auth(credentials, "s3", signing_region).add_auth(aws_request)
 
         # Return signed headers and body
         signed_body = aws_request.body
         if isinstance(signed_body, bytes):
-            signed_body = signed_body.decode('utf-8')
+            signed_body = signed_body.decode("utf-8")
         elif signed_body is None:
             signed_body = content  # Fallback to original content
-        
+
         return dict(aws_request.headers), signed_body
 
     def _convert_https_url_to_s3_uri(self, https_url: str) -> tuple[str, str]:
         """
         Convert HTTPS S3 URL to s3:// URI format.
-        
+
         Args:
             https_url: HTTPS S3 URL (e.g., "https://s3.us-west-2.amazonaws.com/bucket/key")
-        
+
         Returns:
             Tuple of (s3_uri, filename)
-        
+
         Example:
             Input: "https://s3.us-west-2.amazonaws.com/litellm-proxy/file.jsonl"
             Output: ("s3://litellm-proxy/file.jsonl", "file.jsonl")
@@ -467,13 +482,13 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         # Match HTTPS S3 URL patterns
         # Pattern 1: https://s3.region.amazonaws.com/bucket/key
         # Pattern 2: https://bucket.s3.region.amazonaws.com/key
-        
+
         pattern1 = r"https://s3\.([^.]+)\.amazonaws\.com/([^/]+)/(.+)"
         pattern2 = r"https://([^.]+)\.s3\.([^.]+)\.amazonaws\.com/(.+)"
-        
+
         match1 = re.match(pattern1, https_url)
         match2 = re.match(pattern2, https_url)
-        
+
         if match1:
             # Pattern: https://s3.region.amazonaws.com/bucket/key
             region, bucket, key = match1.groups()
@@ -485,17 +500,18 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         else:
             # Fallback: try to extract bucket and key from URL path
             from urllib.parse import urlparse
+
             parsed = urlparse(https_url)
-            path_parts = parsed.path.lstrip('/').split('/', 1)
+            path_parts = parsed.path.lstrip("/").split("/", 1)
             if len(path_parts) >= 2:
                 bucket, key = path_parts[0], path_parts[1]
                 s3_uri = f"s3://{bucket}/{key}"
             else:
                 raise ValueError(f"Unable to parse S3 URL: {https_url}")
-        
+
         # Extract filename from key
         filename = key.split("/")[-1] if "/" in key else key
-        
+
         return s3_uri, filename
 
     def transform_create_file_response(
@@ -513,7 +529,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         # Extract S3 object information from the response
         # S3 PUT object returns ETag and other metadata in headers
         content_length = response_headers.get("Content-Length", "0")
-        
+
         # Use the actual upload URL that was used for the S3 upload
         upload_url = litellm_params.get("upload_url")
         file_id: str = ""
@@ -581,7 +597,9 @@ class BedrockJsonlFilesTransformation:
         Delegate to the main BedrockFilesConfig transformation method
         """
         config = BedrockFilesConfig()
-        return config._transform_openai_jsonl_content_to_bedrock_jsonl_content(openai_jsonl_content)
+        return config._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            openai_jsonl_content
+        )
 
     def _get_s3_object_name(
         self,
@@ -598,8 +616,6 @@ class BedrockJsonlFilesTransformation:
             _model = _model[8:]
         object_name = f"litellm-bedrock-files-{_model}-{uuid.uuid4()}.jsonl"
         return object_name
-
-
 
     def _get_content_from_openai_file(self, openai_file_content: FileTypes) -> str:
         """
@@ -647,10 +663,10 @@ class BedrockJsonlFilesTransformation:
         # S3 response typically contains ETag, key, etc.
         object_key = s3_upload_response.get("Key", "")
         bucket_name = s3_upload_response.get("Bucket", "")
-        
+
         # Extract filename from object key
         filename = object_key.split("/")[-1] if "/" in object_key else object_key
-        
+
         return OpenAIFileObject(
             purpose=create_file_data.get("purpose", "batch"),
             id=f"s3://{bucket_name}/{object_key}",

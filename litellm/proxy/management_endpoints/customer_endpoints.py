@@ -362,7 +362,7 @@ async def end_user_info(
                 param="end_user_id",
             )
         return user_info.model_dump(exclude_none=True)
-    
+
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.management_endpoints.customer_endpoints.end_user_info(): Exception occured - {}".format(
@@ -370,6 +370,7 @@ async def end_user_info(
             )
         )
         raise handle_exception_on_proxy(e)
+
 
 @router.post(
     "/customer/update",
@@ -614,6 +615,7 @@ async def delete_end_user(
         )
         raise handle_exception_on_proxy(e)
 
+
 @router.get(
     "/customer/list",
     tags=["Customer Management"],
@@ -670,7 +672,7 @@ async def list_end_user(
         for item in response:
             returned_response.append(LiteLLM_EndUserTable(**item.model_dump()))
         return returned_response
-    
+
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.management_endpoints.customer_endpoints.list_end_user(): Exception occured - {}".format(
@@ -678,6 +680,7 @@ async def list_end_user(
             )
         )
         raise handle_exception_on_proxy(e)
+
 
 @router.get(
     "/customer/daily/activity",
@@ -702,7 +705,6 @@ async def get_customer_daily_activity(
     exclude_end_user_ids: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-
     """
     Get daily activity for specific organizations or all accessible organizations.
     """
@@ -724,7 +726,6 @@ async def get_customer_daily_activity(
             exclude_end_user_ids.split(",") if exclude_end_user_ids else None
         )
 
-    
     # Fetch organization aliases for metadata
     where_condition = {}
     if end_user_ids_list:
@@ -732,10 +733,7 @@ async def get_customer_daily_activity(
     end_user_aliases = await prisma_client.db.litellm_endusertable.find_many(
         where=where_condition
     )
-    end_user_alias_metadata = {
-        e.user_id: {"alias": e.alias}
-        for e in end_user_aliases
-    }
+    end_user_alias_metadata = {e.user_id: {"alias": e.alias} for e in end_user_aliases}
 
     # Query daily activity for organizations
     return await get_daily_activity(

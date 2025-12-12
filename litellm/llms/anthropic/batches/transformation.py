@@ -84,7 +84,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
     ) -> Union[bytes, str, Dict[str, Any]]:
         """
         Transform the batch creation request to Anthropic format.
-        
+
         Not currently implemented - placeholder to satisfy abstract base class.
         """
         raise NotImplementedError("Batch creation not yet implemented for Anthropic")
@@ -98,7 +98,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
     ) -> LiteLLMBatch:
         """
         Transform Anthropic MessageBatch creation response to LiteLLM format.
-        
+
         Not currently implemented - placeholder to satisfy abstract base class.
         """
         raise NotImplementedError("Batch creation not yet implemented for Anthropic")
@@ -112,13 +112,13 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
     ) -> str:
         """
         Get the complete URL for batch retrieval request.
-        
+
         Args:
             api_base: Base API URL (optional, will use default if not provided)
             batch_id: Batch ID to retrieve
             optional_params: Optional parameters
             litellm_params: LiteLLM parameters
-            
+
         Returns:
             Complete URL for Anthropic batch retrieval: {api_base}/v1/messages/batches/{batch_id}
         """
@@ -133,7 +133,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
     ) -> Union[bytes, str, Dict[str, Any]]:
         """
         Transform batch retrieval request for Anthropic.
-        
+
         For Anthropic, the URL is constructed by get_retrieve_batch_url(),
         so this method returns an empty dict (no additional request params needed).
         """
@@ -156,9 +156,21 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         # Map Anthropic MessageBatch to OpenAI Batch format
         batch_id = response_data.get("id", "")
         processing_status = response_data.get("processing_status", "in_progress")
-        
+
         # Map Anthropic processing_status to OpenAI status
-        status_mapping: Dict[str, Literal["validating", "failed", "in_progress", "finalizing", "completed", "expired", "cancelling", "cancelled"]] = {
+        status_mapping: Dict[
+            str,
+            Literal[
+                "validating",
+                "failed",
+                "in_progress",
+                "finalizing",
+                "completed",
+                "expired",
+                "cancelling",
+                "cancelled",
+            ],
+        ] = {
             "in_progress": "in_progress",
             "canceling": "cancelling",
             "ended": "completed",
@@ -171,7 +183,8 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
                 return None
             try:
                 from datetime import datetime
-                dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+
+                dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
                 return int(dt.timestamp())
             except Exception:
                 return None
@@ -185,14 +198,17 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         # Extract request counts
         request_counts_data = response_data.get("request_counts", {})
         from openai.types.batch import BatchRequestCounts
+
         request_counts = BatchRequestCounts(
-            total=sum([
-                request_counts_data.get("processing", 0),
-                request_counts_data.get("succeeded", 0),
-                request_counts_data.get("errored", 0),
-                request_counts_data.get("canceled", 0),
-                request_counts_data.get("expired", 0),
-            ]),
+            total=sum(
+                [
+                    request_counts_data.get("processing", 0),
+                    request_counts_data.get("succeeded", 0),
+                    request_counts_data.get("errored", 0),
+                    request_counts_data.get("canceled", 0),
+                    request_counts_data.get("expired", 0),
+                ]
+            ),
             completed=request_counts_data.get("succeeded", 0),
             failed=request_counts_data.get("errored", 0),
         )
@@ -214,8 +230,12 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
             completed_at=ended_at if processing_status == "ended" else None,
             failed_at=None,
             expired_at=archived_at if archived_at else None,
-            cancelling_at=cancel_initiated_at if processing_status == "canceling" else None,
-            cancelled_at=ended_at if processing_status == "canceling" and ended_at else None,
+            cancelling_at=cancel_initiated_at
+            if processing_status == "canceling"
+            else None,
+            cancelled_at=ended_at
+            if processing_status == "canceling" and ended_at
+            else None,
             request_counts=request_counts,
             metadata={},
         )
@@ -232,7 +252,9 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         else:
             headers_obj = headers if isinstance(headers, Headers) else None
 
-        return AnthropicError(status_code=status_code, message=error_message, headers=headers_obj)
+        return AnthropicError(
+            status_code=status_code, message=error_message, headers=headers_obj
+        )
 
     def transform_response(
         self,
