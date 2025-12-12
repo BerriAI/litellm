@@ -99,6 +99,13 @@ const sidebars = {
       type: "category",
       label: "[Beta] Prompt Management",
       items: [
+        {
+          type: "category",
+          label: "Contributing to Prompt Management",
+          items: [
+            "adding_provider/generic_prompt_management_api",
+          ]
+        },
         "proxy/litellm_prompt_management",
         "proxy/custom_prompt_management",
         "proxy/native_litellm_prompt",
