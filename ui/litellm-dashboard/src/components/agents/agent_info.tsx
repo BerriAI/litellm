@@ -137,6 +137,15 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
               {agent.litellm_params?.make_public !== undefined && (
                 <Descriptions.Item label="Make Public">{agent.litellm_params.make_public ? "Yes" : "No"}</Descriptions.Item>
               )}
+              {agent.litellm_params?.cost_per_query !== undefined && (
+                <Descriptions.Item label="Cost Per Query">${agent.litellm_params.cost_per_query}</Descriptions.Item>
+              )}
+              {agent.litellm_params?.input_cost_per_token !== undefined && (
+                <Descriptions.Item label="Input Cost Per Token">${agent.litellm_params.input_cost_per_token}</Descriptions.Item>
+              )}
+              {agent.litellm_params?.output_cost_per_token !== undefined && (
+                <Descriptions.Item label="Output Cost Per Token">${agent.litellm_params.output_cost_per_token}</Descriptions.Item>
+              )}
               {agent.agent_card_params?.iconUrl && (
                 <Descriptions.Item label="Icon URL">{agent.agent_card_params.iconUrl}</Descriptions.Item>
               )}
