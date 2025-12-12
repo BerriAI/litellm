@@ -250,7 +250,7 @@ async def route_create_file(
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
 )
-async def create_file(
+async def create_file(  # noqa: PLR0915
     request: Request,
     fastapi_response: Response,
     purpose: str = Form(...),
