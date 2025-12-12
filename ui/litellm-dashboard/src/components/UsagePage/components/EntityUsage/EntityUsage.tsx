@@ -305,6 +305,20 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     }
   };
 
+  const getEntityLabel = (entity: string, metadata?: Record<string, any>): string => {
+    if (entityList) {
+      const entityItem = entityList.find((item) => item.value === entity);
+      if (entityItem) {
+        return entityItem.label;
+      }
+    }
+    // Fallback to team_alias for backward compatibility
+    if (metadata?.team_alias) {
+      return metadata.team_alias;
+    }
+    return entity;
+  };
+
   const filterDataByTags = (data: EntityMetricWithMetadata[]) => {
     if (selectedTags.length === 0) return data;
     return data.filter((item) => selectedTags.includes(item.metadata.id));
@@ -328,7 +342,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
               cache_creation_input_tokens: 0,
             },
             metadata: {
-              alias: (data.metadata as any).team_alias || entity,
+              alias: getEntityLabel(entity, data.metadata as any),
               id: entity,
             },
           };
@@ -472,7 +486,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                                 const metrics = entityData as EntityMetrics;
                                 return (
                                   <p key={entity} className="text-sm text-gray-600">
-                                    {metrics.metadata.team_alias || entity}: $
+                                    {getEntityLabel(entity, metrics.metadata)}: $
                                     {formatNumberWithCommas(metrics.metrics.spend, 2)}
                                   </p>
                                 );
