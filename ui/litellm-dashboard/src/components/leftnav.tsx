@@ -152,17 +152,17 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
       groupLabel: "ACCESS CONTROL",
       items: [
         {
-          key: "teams",
-          page: "teams",
-          label: "Teams",
-          icon: <TeamOutlined />,
-        },
-        {
           key: "users",
           page: "users",
           label: "Internal Users",
           icon: <UserOutlined />,
           roles: all_admin_roles,
+        },
+        {
+          key: "teams",
+          page: "teams",
+          label: "Teams",
+          icon: <TeamOutlined />,
         },
         {
           key: "organizations",
