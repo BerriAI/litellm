@@ -43,10 +43,27 @@ const Navbar: React.FC<NavbarProps> = ({
 }) => {
   const baseUrl = getProxyBaseUrl();
   const [logoutUrl, setLogoutUrl] = useState("");
+  const [version, setVersion] = useState("");
   const { logoUrl } = useTheme();
 
   // Simple logo URL: use custom logo if available, otherwise default
   const imageUrl = logoUrl || `${baseUrl}/get_image`;
+
+  useEffect(() => {
+    const fetchVersion = async () => {
+      try {
+        const response = await fetch(`${baseUrl}/health/readiness`);
+        const data = await response.json();
+        if (data.litellm_version) {
+          setVersion(data.litellm_version);
+        }
+      } catch (error) {
+        console.error("Failed to fetch version:", error);
+      }
+    };
+
+    fetchVersion();
+  }, [baseUrl]);
 
   useEffect(() => {
     const initializeProxySettings = async () => {
@@ -148,6 +165,11 @@ const Navbar: React.FC<NavbarProps> = ({
 
             <Link href="/" className="flex items-center">
               <img src={imageUrl} alt="LiteLLM Brand" className="h-10 w-auto" />
+              {version && (
+                <span className="text-xs text-gray-500 border border-gray-200 rounded-lg px-2 py-0.5 bg-gray-50 font-medium -ml-2">
+                  v{version}
+                </span>
+              )}
             </Link>
           </div>
           {/* Right side nav items */}
