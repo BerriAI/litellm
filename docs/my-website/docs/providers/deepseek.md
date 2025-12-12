@@ -123,7 +123,7 @@ for tool_call in assistant_msg.tool_calls or []:
 resp = completion(
     model="deepseek/deepseek-reasoner",
     messages=messages,
-    extra_body={"thinking": {"type": "enabled"}},
+  thinking={"type": "enabled"}
 )
 print(resp.choices[0].message.content)
 
