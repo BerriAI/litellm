@@ -185,6 +185,8 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_redis_daily_spend_update_queue_size",
     "litellm_in_memory_spend_update_queue_size",
     "litellm_redis_spend_update_queue_size",
+    "litellm_deployment_active_requests",
+    "litellm_deployment_queued_requests",
 ]
 
 
@@ -434,6 +436,16 @@ class PrometheusMetricLabels:
     litellm_in_memory_spend_update_queue_size: List[str] = []
 
     litellm_redis_spend_update_queue_size: List[str] = []
+
+    litellm_deployment_active_requests = [
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
+    ]
+
+    litellm_deployment_queued_requests = [
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
+    ]
 
     @staticmethod
     def get_labels(label_name: DEFINED_PROMETHEUS_METRICS) -> List[str]:
