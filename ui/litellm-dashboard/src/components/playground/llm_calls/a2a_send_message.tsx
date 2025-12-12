@@ -381,10 +381,16 @@ export const makeA2AStreamMessageRequest = async (
             }
           }
 
+          // Handle JSON-RPC error response
           if (chunk.error) {
-            throw new Error(chunk.error.message);
+            const errorMessage = chunk.error.message || "Unknown A2A error";
+            throw new Error(errorMessage);
           }
         } catch (parseError) {
+          // Re-throw if it's an actual error we threw (not a parse error)
+          if (parseError instanceof Error && parseError.message && !parseError.message.includes("JSON")) {
+            throw parseError;
+          }
           // Only warn if it's not a JSON parse error on an empty/partial line
           if (line.trim().length > 0) {
             console.warn("Failed to parse A2A streaming chunk:", line, parseError);
