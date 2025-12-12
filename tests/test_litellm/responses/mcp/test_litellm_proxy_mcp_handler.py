@@ -8,6 +8,7 @@ from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
 from litellm.types.utils import ModelResponse
+from litellm.types.responses.main import OutputFunctionToolCall
 
 
 class _DummyMCPResult:
@@ -166,6 +167,36 @@ def test_transform_mcp_tools_to_openai_uses_chat_format(monkeypatch):
     assert resp_tools == [{"responses": True}]
     assert captured["chat"] == ["tool"]
     assert captured["responses"] == ["tool"]
+
+
+def test_create_follow_up_input_handles_response_function_tool_call():
+    response = types.SimpleNamespace(
+        output=[
+            OutputFunctionToolCall(
+                id="id",
+                type="function_call",
+                call_id="call-1",
+                name="foo",
+                arguments="{}",
+                status="completed",
+            )
+        ]
+    )
+
+    follow_up = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
+        response=response,
+        tool_results=[],
+        original_input=None,
+    )
+
+    assert follow_up == [
+        {
+            "type": "function_call",
+            "call_id": "call-1",
+            "name": "foo",
+            "arguments": "{}",
+        }
+    ]
 
 
 @pytest.mark.asyncio
