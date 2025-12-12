@@ -1265,7 +1265,7 @@ class Router:
 
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             request_priority = kwargs.get("priority") or self.default_priority
-            start_time = time.perf_counter()
+            start_time = time.time()
             _is_prompt_management_model = self._is_prompt_management_model(model)
 
             if _is_prompt_management_model:
@@ -1278,7 +1278,7 @@ class Router:
                 response = await self.schedule_acompletion(**kwargs)
             else:
                 response = await self.async_function_with_fallbacks(**kwargs)
-            end_time = time.perf_counter()
+            end_time = time.time()
             _duration = end_time - start_time
             asyncio.create_task(
                 self.service_logger_obj.async_service_success_hook(
@@ -1456,7 +1456,7 @@ class Router:
             input_kwargs_for_streaming_fallback["model"] = model
 
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
-            start_time = time.perf_counter()
+            start_time = time.time()
             deployment = await self.async_get_available_deployment(
                 model=model,
                 messages=messages,
@@ -1465,7 +1465,7 @@ class Router:
             )
 
             _timeout_debug_deployment_dict = deployment
-            end_time = time.perf_counter()
+            end_time = time.time()
             _duration = end_time - start_time
             asyncio.create_task(
                 self.service_logger_obj.async_service_success_hook(
@@ -7680,7 +7680,7 @@ class Router:
             if isinstance(healthy_deployments, dict):
                 return healthy_deployments
 
-            start_time = time.perf_counter()
+            start_time = time.time()
             if (
                 self.routing_strategy == "usage-based-routing-v2"
                 and self.lowesttpm_logger_v2 is not None
@@ -7747,7 +7747,7 @@ class Router:
                 f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
             )
 
-            end_time = time.perf_counter()
+            end_time = time.time()
             _duration = end_time - start_time
             asyncio.create_task(
                 self.service_logger_obj.async_service_success_hook(
