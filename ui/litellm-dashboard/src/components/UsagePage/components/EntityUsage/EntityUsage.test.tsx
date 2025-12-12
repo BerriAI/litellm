@@ -265,7 +265,7 @@ describe("EntityUsage", () => {
     });
 
     expect(await screen.findByText("Tag Spend Overview")).toBeInTheDocument();
-    expect(await screen.findByText("$-")).toBeInTheDocument();
+    expect(await screen.findByText("$0.00")).toBeInTheDocument();
     expect(screen.getByText("Total Spend")).toBeInTheDocument();
     expect(screen.getAllByText("0")[0]).toBeInTheDocument();
   });
