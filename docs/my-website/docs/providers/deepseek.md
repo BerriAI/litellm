@@ -93,7 +93,7 @@ resp = completion(
     model="deepseek/deepseek-reasoner",
     messages=messages,
     tools=tools,
-    extra_body={"thinking": {"type": "enabled"}},
+    thinking={"type": "enabled"}
 )
 assistant_msg = resp.choices[0].message
 
