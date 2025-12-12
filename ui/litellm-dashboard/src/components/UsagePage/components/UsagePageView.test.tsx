@@ -1,10 +1,11 @@
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
-import NewUsagePage from "./new_usage";
-import type { Organization } from "./networking";
-import * as networking from "./networking";
+import NewUsagePage from "./UsagePageView";
+import type { Organization } from "../../networking";
+import * as networking from "../../networking";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 // Polyfill ResizeObserver for test environment
 beforeAll(() => {
@@ -18,40 +19,40 @@ beforeAll(() => {
 });
 
 // Mock the networking module
-vi.mock("./networking", () => ({
+vi.mock("../../networking", () => ({
   userDailyActivityCall: vi.fn(),
   userDailyActivityAggregatedCall: vi.fn(),
   tagListCall: vi.fn(),
 }));
 
 // Mock child components to simplify testing
-vi.mock("./activity_metrics", () => ({
+vi.mock("../../activity_metrics", () => ({
   ActivityMetrics: () => <div>Activity Metrics</div>,
   processActivityData: () => ({ data: [], metadata: {} }),
 }));
 
-vi.mock("./view_user_spend", () => ({
+vi.mock("../../view_user_spend", () => ({
   default: () => <div>View User Spend</div>,
 }));
 
-vi.mock("./top_key_view", () => ({
+vi.mock("./EntityUsage/TopKeyView", () => ({
   default: () => <div>Top Keys</div>,
 }));
 
-vi.mock("./entity_usage", () => ({
+vi.mock("./EntityUsage/EntityUsage", () => ({
   default: () => <div>Entity Usage</div>,
   EntityList: [],
 }));
 
-vi.mock("./user_agent_activity", () => ({
+vi.mock("../../user_agent_activity", () => ({
   default: () => <div>User Agent Activity</div>,
 }));
 
-vi.mock("./cloudzero_export_modal", () => ({
+vi.mock("../../cloudzero_export_modal", () => ({
   default: () => <div>CloudZero Export Modal</div>,
 }));
 
-vi.mock("./EntityUsageExport", () => ({
+vi.mock("../../EntityUsageExport", () => ({
   default: () => <div>Entity Usage Export Modal</div>,
 }));
 
@@ -63,11 +64,17 @@ vi.mock("@/app/(dashboard)/hooks/agents/useAgents", () => ({
   useAgents: vi.fn(),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  __esModule: true,
+  default: vi.fn(),
+}));
+
 describe("NewUsage", () => {
   const mockUserDailyActivityAggregatedCall = vi.mocked(networking.userDailyActivityAggregatedCall);
   const mockTagListCall = vi.mocked(networking.tagListCall);
   const mockUseCustomers = vi.mocked(useCustomers);
   const mockUseAgents = vi.mocked(useAgents);
+  const mockUseAuthorized = vi.mocked(useAuthorized);
 
   const mockSpendData = {
     results: [
@@ -233,6 +240,16 @@ describe("NewUsage", () => {
   };
 
   beforeEach(() => {
+    mockUseAuthorized.mockReturnValue({
+      token: "mock-token",
+      accessToken: defaultProps.accessToken,
+      userId: defaultProps.userID,
+      userEmail: "test@example.com",
+      userRole: defaultProps.userRole,
+      premiumUser: defaultProps.premiumUser,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    });
     mockUserDailyActivityAggregatedCall.mockClear();
     mockTagListCall.mockClear();
     mockUserDailyActivityAggregatedCall.mockResolvedValue(mockSpendData);

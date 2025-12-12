@@ -1,34 +1,24 @@
 import React, { useState } from "react";
 import { BarChart } from "@tremor/react";
-import KeyInfoView from "./templates/key_info_view";
-import { keyInfoV1Call } from "./networking";
-import { transformKeyInfo } from "../components/key_team_helpers/transform_key_info";
-import { DataTable } from "./view_logs/table";
+import KeyInfoView from "../../../templates/key_info_view";
+import { keyInfoV1Call } from "../../../networking";
+import { transformKeyInfo } from "../../../key_team_helpers/transform_key_info";
+import { DataTable } from "../../../view_logs/table";
 import { Tooltip } from "antd";
 import { Button } from "@tremor/react";
-import { formatNumberWithCommas } from "../utils/dataUtils";
-import { TagUsage } from "./usage/types";
+import { formatNumberWithCommas } from "../../../../utils/dataUtils";
+import { TagUsage } from "../../types";
 import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/outline";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 interface TopKeyViewProps {
   topKeys: any[];
-  accessToken: string | null;
-  userID: string | null;
-  userRole: string | null;
   teams: any[] | null;
-  premiumUser: boolean;
   showTags?: boolean;
 }
 
-const TopKeyView: React.FC<TopKeyViewProps> = ({
-  topKeys,
-  accessToken,
-  userID,
-  userRole,
-  teams,
-  premiumUser,
-  showTags = false,
-}) => {
+const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = false }) => {
+  const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [keyData, setKeyData] = useState<any | undefined>(undefined);
