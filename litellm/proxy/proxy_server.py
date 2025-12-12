@@ -2413,7 +2413,27 @@ class ProxyConfig:
                         raise Exception(
                             f"Invalid value set for upperbound_key_generate_params - value={value}"
                         )
-
+                elif key == "public_model_groups_links":
+                    # Handle both list format (new, preserves order) and dict format (old, backward compatibility)
+                    if isinstance(value, list):
+                        # Convert list format [{"display_name": str, "url": str}, ...] to dict
+                        converted_dict = {item["display_name"]: item["url"] for item in value}
+                        verbose_proxy_logger.debug(
+                            f"{blue_color_code} setting litellm.{key}={converted_dict}{reset_color_code}"
+                        )
+                        setattr(litellm, key, converted_dict)
+                    elif isinstance(value, dict):
+                        # Old format - use as-is
+                        verbose_proxy_logger.debug(
+                            f"{blue_color_code} setting litellm.{key}={value}{reset_color_code}"
+                        )
+                        setattr(litellm, key, value)
+                    else:
+                        # Default to empty dict
+                        verbose_proxy_logger.debug(
+                            f"{blue_color_code} setting litellm.{key}={{}} (default){reset_color_code}"
+                        )
+                        setattr(litellm, key, {})
                 else:
                     verbose_proxy_logger.debug(
                         f"{blue_color_code} setting litellm.{key}={value}{reset_color_code}"

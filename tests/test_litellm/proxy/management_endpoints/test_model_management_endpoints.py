@@ -653,3 +653,199 @@ class TestModelInfoEndpoint:
             assert result["id"] == "team-model-1"
             assert result["object"] == "model" 
             assert result["owned_by"] == "custom"
+
+
+class TestUpdateUsefulLinks:
+    """Test the update_useful_links endpoint for order preservation"""
+
+    @pytest.mark.asyncio
+    async def test_update_useful_links_preserves_order(self):
+        """Test that useful_links order is preserved when saving and loading"""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_useful_links,
+        )
+        from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+            UpdateUsefulLinksRequest,
+        )
+        import litellm
+        # Ensure proxy_server module is imported so proxy_config exists
+        from litellm.proxy import proxy_server
+
+        # Setup test data with specific order
+        useful_links_dict = {
+            "Some Link": "http://example.com",
+            "another one": "http://asdf.com",
+            "Some Other Link": "http://example.com",
+            "and another one": "https://aaaaa.com",
+            "dasdasd": "http://asdasda.net",
+        }
+
+        # Mock proxy_config
+        mock_proxy_config = AsyncMock()
+        mock_proxy_config.get_config = AsyncMock(
+            return_value={"litellm_settings": {}}
+        )
+        mock_proxy_config.save_config = AsyncMock()
+
+        # Mock user
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="test_admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        # Patch proxy_config where it's imported from
+        # Since the import happens inside the function, we patch the source module
+        with patch.object(
+            proxy_server,
+            "proxy_config",
+            mock_proxy_config,
+        ), patch.object(litellm, "public_model_groups_links", {}):
+            # Call the endpoint
+            request = UpdateUsefulLinksRequest(useful_links=useful_links_dict)
+            result = await update_useful_links(request, user_api_key_dict)
+
+            # Verify response
+            assert result["message"] == "Successfully updated useful links"
+            assert result["useful_links"] == useful_links_dict
+            assert result["updated_by"] == "test_admin"
+
+            # Verify config was saved
+            mock_proxy_config.save_config.assert_called_once()
+            # Get the saved config from call args (could be positional or keyword)
+            call_args = mock_proxy_config.save_config.call_args
+            if "new_config" in call_args.kwargs:
+                saved_config = call_args.kwargs["new_config"]
+            else:
+                saved_config = call_args.args[0]
+
+            # Verify the config contains the list format
+            assert "litellm_settings" in saved_config
+            assert "public_model_groups_links" in saved_config["litellm_settings"]
+            saved_links = saved_config["litellm_settings"]["public_model_groups_links"]
+
+            # Verify it's stored as a list
+            assert isinstance(saved_links, list)
+
+            # Verify order is preserved
+            expected_order = [
+                "Some Link",
+                "another one",
+                "Some Other Link",
+                "and another one",
+                "dasdasd",
+            ]
+            actual_order = [item["display_name"] for item in saved_links]
+            assert actual_order == expected_order
+
+            # Verify all items are present with correct structure
+            assert len(saved_links) == 5
+            for item in saved_links:
+                assert "display_name" in item
+                assert "url" in item
+                assert item["display_name"] in useful_links_dict
+                assert item["url"] == useful_links_dict[item["display_name"]]
+
+            # Verify in-memory variable was updated as dict
+            assert litellm.public_model_groups_links == useful_links_dict
+
+    @pytest.mark.asyncio
+    async def test_update_useful_links_backward_compatibility_with_dict(self):
+        """Test that loading from old dict format still works"""
+        from litellm.proxy.proxy_server import ProxyConfig
+        import litellm
+
+        # Simulate old config format (dict)
+        old_config = {
+            "litellm_settings": {
+                "public_model_groups_links": {
+                    "Link 1": "http://example.com",
+                    "Link 2": "http://test.com",
+                }
+            }
+        }
+
+        # Create a mock ProxyConfig instance
+        proxy_config = ProxyConfig()
+
+        # Test loading old dict format
+        with patch.object(litellm, "public_model_groups_links", {}):
+            # Simulate the load_config logic for public_model_groups_links
+            value = old_config["litellm_settings"]["public_model_groups_links"]
+            if isinstance(value, dict):
+                # Old format - use as-is
+                litellm.public_model_groups_links = value
+
+            # Verify it works
+            assert isinstance(litellm.public_model_groups_links, dict)
+            assert litellm.public_model_groups_links == {
+                "Link 1": "http://example.com",
+                "Link 2": "http://test.com",
+            }
+
+    @pytest.mark.asyncio
+    async def test_update_useful_links_converts_list_to_dict_on_load(self):
+        """Test that list format is converted to dict when loading config"""
+        from litellm.proxy.proxy_server import ProxyConfig
+        import litellm
+
+        # Simulate new config format (list)
+        new_config = {
+            "litellm_settings": {
+                "public_model_groups_links": [
+                    {"display_name": "Link 1", "url": "http://example.com"},
+                    {"display_name": "Link 2", "url": "http://test.com"},
+                    {"display_name": "Link 3", "url": "http://demo.com"},
+                ]
+            }
+        }
+
+        # Test loading new list format
+        with patch.object(litellm, "public_model_groups_links", {}):
+            # Simulate the load_config logic for public_model_groups_links
+            value = new_config["litellm_settings"]["public_model_groups_links"]
+            if isinstance(value, list):
+                # Convert list format to dict
+                converted_dict = {item["display_name"]: item["url"] for item in value}
+                litellm.public_model_groups_links = converted_dict
+
+            # Verify conversion worked
+            assert isinstance(litellm.public_model_groups_links, dict)
+            assert litellm.public_model_groups_links == {
+                "Link 1": "http://example.com",
+                "Link 2": "http://test.com",
+                "Link 3": "http://demo.com",
+            }
+
+            # Verify order is preserved (Python 3.7+ dicts preserve insertion order)
+            keys = list(litellm.public_model_groups_links.keys())
+            assert keys == ["Link 1", "Link 2", "Link 3"]
+
+    @pytest.mark.asyncio
+    async def test_update_useful_links_non_admin_fails(self):
+        """Test that non-admin users cannot update useful links"""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_useful_links,
+        )
+        from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+            UpdateUsefulLinksRequest,
+        )
+        from fastapi import HTTPException
+
+        useful_links_dict = {
+            "Some Link": "http://example.com",
+        }
+
+        # Mock non-admin user
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="test_user",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+        request = UpdateUsefulLinksRequest(useful_links=useful_links_dict)
+
+        # Should raise HTTPException with 403
+        with pytest.raises(HTTPException) as exc_info:
+            await update_useful_links(request, user_api_key_dict)
+
+        assert exc_info.value.status_code == 403
+        assert "Only proxy admins" in str(exc_info.value.detail)

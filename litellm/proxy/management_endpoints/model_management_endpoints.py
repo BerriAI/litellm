@@ -1253,6 +1253,14 @@ async def update_useful_links(
                 },
             )
 
+        # Convert dict to list format to preserve order
+        # Store as list of dicts: [{"display_name": str, "url": str}, ...]
+        useful_links_list = [
+            {"display_name": display_name, "url": url}
+            for display_name, url in request.useful_links.items()
+        ]
+
+        # Update in-memory variable (convert list back to dict for backward compatibility)
         litellm.public_model_groups_links = request.useful_links
 
         # Load existing config
@@ -1262,7 +1270,8 @@ async def update_useful_links(
         if "litellm_settings" not in config:
             config["litellm_settings"] = {}
 
-        config["litellm_settings"]["public_model_groups_links"] = request.useful_links
+        # Store as list to preserve order
+        config["litellm_settings"]["public_model_groups_links"] = useful_links_list
 
         # Save the updated config
         await proxy_config.save_config(new_config=config)

@@ -105,11 +105,19 @@ async def public_model_hub_info():
     except Exception:
         custom_docs_description = None
 
+    # Ensure useful_links is in dict format (handle both list and dict formats)
+    useful_links = litellm.public_model_groups_links
+    if isinstance(useful_links, list):
+        # Convert list format [{"display_name": str, "url": str}, ...] to dict
+        useful_links = {item["display_name"]: item["url"] for item in useful_links}
+    elif not isinstance(useful_links, dict):
+        useful_links = {}
+
     return PublicModelHubInfo(
         docs_title=_title,
         custom_docs_description=custom_docs_description,
         litellm_version=version,
-        useful_links=litellm.public_model_groups_links,
+        useful_links=useful_links,
     )
 
 
