@@ -16,6 +16,7 @@ interface Link {
   id: string;
   displayName: string;
   url: string;
+  index?: number;
 }
 
 const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessToken, userRole }) => {
@@ -38,11 +39,32 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
         const usefulLinks = response.useful_links || {};
 
         // Convert object to array of links with ids
-        const linksArray = Object.entries(usefulLinks).map(([displayName, url], index) => ({
-          id: `${index}-${displayName}`,
-          displayName,
-          url: url as string,
-        }));
+        // Handle both old format (Dict[str, str]) and new format (Dict[str, {url, index}])
+        const linksArray = Object.entries(usefulLinks)
+          .map(([displayName, value]) => {
+            // Check if it's the new format with {url, index}
+            if (typeof value === "object" && value !== null && "url" in value) {
+              return {
+                id: `${(value as any).index ?? 0}-${displayName}`,
+                displayName,
+                url: (value as any).url as string,
+                index: (value as any).index ?? 0,
+              };
+            } else {
+              // Old format: just a string URL
+              return {
+                id: `0-${displayName}`,
+                displayName,
+                url: value as string,
+                index: 0,
+              };
+            }
+          })
+          .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
+          .map((link, index) => ({
+            ...link,
+            id: `${index}-${link.displayName}`,
+          }));
 
         setLinks(linksArray);
       } else {
@@ -69,10 +91,14 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
     if (!accessToken) return false;
 
     try {
-      // Convert array back to object format
-      const linksObject: Record<string, string> = {};
-      updatedLinks.forEach((link) => {
-        linksObject[link.displayName] = link.url;
+      // Convert array back to object format with index for ordering
+      // New format: { "displayName": { "url": "...", "index": 0 } }
+      const linksObject: Record<string, { url: string; index: number }> = {};
+      updatedLinks.forEach((link, index) => {
+        linksObject[link.displayName] = {
+          url: link.url,
+          index: index,
+        };
       });
 
       await updateUsefulLinksCall(accessToken, linksObject);
