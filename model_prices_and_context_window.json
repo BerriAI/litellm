@@ -30477,6 +30477,90 @@
         "output_cost_per_token": 2e-07,
         "litellm_provider": "fireworks_ai",
         "mode": "chat"
-    }
+    },
+    "azure_ai/Claude-Opus-4-5": {
+    "input_cost_per_token": 1.5e-05,
+    "litellm_provider": "azure_ai",
+    "max_input_tokens": 200000,
+    "max_output_tokens": 32000,
+    "max_tokens": 32000,
+    "mode": "chat",
+    "output_cost_per_token": 7.5e-05,
+    "supports_function_calling": true,
+    "supports_vision": true,
+    "supports_reasoning": true,
+    "supports_prompt_caching": true
+},
+"azure_ai/Claude-Opus-4-1": {
+    "input_cost_per_token": 1.5e-05,
+    "litellm_provider": "azure_ai",
+    "max_input_tokens": 200000,
+    "max_output_tokens": 32000,
+    "max_tokens": 32000,
+    "mode": "chat",
+    "output_cost_per_token": 7.5e-05,
+    "supports_function_calling": true,
+    "supports_vision": true,
+    "supports_reasoning": true,
+    "supports_prompt_caching": true
+},
+"azure_ai/Claude-Sonnet-4-5": {
+    "input_cost_per_token": 3e-06,
+    "litellm_provider": "azure_ai",
+    "max_input_tokens": 200000,
+    "max_output_tokens": 64000,
+    "max_tokens": 64000,
+    "mode": "chat",
+    "output_cost_per_token": 1.5e-05,
+    "supports_function_calling": true,
+    "supports_vision": true,
+    "supports_reasoning": true,
+    "supports_prompt_caching": true
+},
+"azure_ai/Claude-Haiku-4-5": {
+    "input_cost_per_token": 1e-06,
+    "litellm_provider": "azure_ai",
+    "max_input_tokens": 200000,
+    "max_output_tokens": 8192,
+    "max_tokens": 8192,
+    "mode": "chat",
+    "output_cost_per_token": 5e-06,
+    "supports_function_calling": true,
+    "supports_vision": true,
+    "supports_prompt_caching": true
+},
+"azure_ai/DeepSeek-V3-0324": {
+    "input_cost_per_token": 2.7e-07,
+    "litellm_provider": "azure_ai",
+    "max_input_tokens": 65536,
+    "max_output_tokens": 8192,
+    "max_tokens": 8192,
+    "mode": "chat",
+    "output_cost_per_token": 1.1e-06,
+    "supports_function_calling": true,
+    "supports_vision": true
+},
+"azure_ai/DeepSeek-V3.1": {
+    "input_cost_per_token": 2.7e-07,
+    "litellm_provider": "azure_ai",
+    "max_input_tokens": 65536,
+    "max_output_tokens": 8192,
+    "max_tokens": 8192,
+    "mode": "chat",
+    "output_cost_per_token": 1.1e-06,
+    "supports_function_calling": true,
+    "supports_vision": true
+},
+"azure_ai/DeepSeek-R1-0528": {
+    "input_cost_per_token": 5.5e-07,
+    "litellm_provider": "azure_ai",
+    "max_input_tokens": 65536,
+    "max_output_tokens": 8192,
+    "max_tokens": 8192,
+    "mode": "chat",
+    "output_cost_per_token": 2.19e-06,
+    "supports_function_calling": true,
+    "supports_reasoning": true
+}
 
 }
