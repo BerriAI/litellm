@@ -1389,6 +1389,53 @@ jobs:
     steps:
       - setup_litellm_test_deps
       - run:
+          name: Install dockerize
+          command: |
+            wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Start PostgreSQL Database
+          command: |
+            docker run -d \
+              --name postgres-db \
+              -e POSTGRES_USER=postgres \
+              -e POSTGRES_PASSWORD=postgres \
+              -e POSTGRES_DB=circle_test \
+              -p 5432:5432 \
+              postgres:14
+      - run:
+          name: Wait for PostgreSQL to be ready
+          command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - run:
+          name: Start Redis
+          command: |
+            docker run -d \
+              --name redis-db \
+              -p 6379:6379 \
+              redis:7-alpine
+      - run:
+          name: Wait for Redis to be ready
+          command: dockerize -wait tcp://localhost:6379 -timeout 1m
+      - run:
+          name: Set DATABASE_URL and Redis environment variables
+          command: |
+            echo 'export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/circle_test"' >> $BASH_ENV
+            echo 'export REDIS_HOST="localhost"' >> $BASH_ENV
+            echo 'export REDIS_PORT="6379"' >> $BASH_ENV
+            source $BASH_ENV
+      - run:
+          name: Install prisma for database setup
+          command: |
+            pip install prisma==0.11.0
+      - run:
+          name: Run prisma ./docker/entrypoint.sh
+          command: |
+            set +e
+            chmod +x docker/entrypoint.sh
+            ./docker/entrypoint.sh
+            set -e
+      - run:
           name: Run proxy tests
           command: |
             python -m pytest tests/test_litellm/proxy --cov=litellm --cov-report=xml --junitxml=test-results/junit-proxy.xml --durations=10 -n 16 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
