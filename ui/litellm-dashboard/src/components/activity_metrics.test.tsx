@@ -25,12 +25,14 @@ vi.mock("@tremor/react", () => ({
 
 vi.mock("antd", () => {
   const CollapseComponent = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
-  CollapseComponent.Panel = ({ children, header }: { children: React.ReactNode; header: React.ReactNode }) => (
+  const PanelComponent = ({ children, header }: { children: React.ReactNode; header: React.ReactNode }) => (
     <div>
       <div>{header}</div>
       <div>{children}</div>
     </div>
   );
+  PanelComponent.displayName = "Collapse.Panel";
+  CollapseComponent.Panel = PanelComponent;
   return {
     Collapse: CollapseComponent,
   };
