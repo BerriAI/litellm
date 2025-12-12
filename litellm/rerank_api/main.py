@@ -358,6 +358,7 @@ def rerank(  # noqa: PLR0915
                 _is_async=_is_async,
                 optional_params=optional_params.model_dump(exclude_unset=True),
                 api_base=api_base,
+                extra_headers=headers or litellm.headers or {},
                 logging_obj=litellm_logging_obj,
                 client=client,
             )
