@@ -638,9 +638,7 @@ class LiteLLM_Proxy_MCP_Handler:
         function_calls: List[Dict[str, Any]] = []
 
         for output_item in response.output:
-            if not isinstance(output_item, dict) and hasattr(
-                output_item, "model_dump"
-            ):
+            if not isinstance(output_item, dict) and hasattr(output_item, "model_dump"):
                 output_item = output_item.model_dump()
 
             if isinstance(output_item, dict):
