@@ -16,8 +16,9 @@ export const formatNumberWithCommas = (
   value: number | null | undefined,
   decimals: number = 0,
   abbreviate: boolean = false,
+  showZero: boolean = true,
 ): string => {
-  if (value === null || value === undefined || !Number.isFinite(value) || value === 0) {
+  if (value === null || value === undefined || !Number.isFinite(value) || (value === 0 && !showZero)) {
     return "-";
   }
 
@@ -51,7 +52,7 @@ export const getSpendString = (value: number | null | undefined, decimals: numbe
     return "-";
   }
 
-  const formatted = formatNumberWithCommas(value, decimals);
+  const formatted = formatNumberWithCommas(value, decimals, false, false);
   const numericFormatted = Number(formatted.replace(/,/g, ""));
 
   if (numericFormatted === 0) {
