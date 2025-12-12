@@ -52,6 +52,7 @@ commands:
             pip install "pytest-timeout==2.2.0"
             pip install "semantic_router==0.1.10"
             pip install "fastapi-offline==1.7.3"
+            pip install "a2a"
       - setup_litellm_enterprise_pip
       - save_cache:
           paths:
