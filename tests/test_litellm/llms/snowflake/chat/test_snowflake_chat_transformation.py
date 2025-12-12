@@ -97,22 +97,43 @@ class TestSnowflakeToolTransformation:
 
     def test_transform_request_with_string_tool_choice(self):
         """
-        Test that string tool_choice values pass through unchanged.
+        Test that string tool_choice values are transformed to Snowflake object format.
         """
         config = SnowflakeConfig()
 
-        for value in ["auto", "required", "none"]:
-            optional_params = {"tool_choice": value}
+        # Test "auto" - should become {"type": "auto"}
+        optional_params = {"tool_choice": "auto"}
+        transformed_request = config.transform_request(
+            model="claude-3-5-sonnet",
+            messages=[{"role": "user", "content": "Test"}],
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        assert transformed_request["tool_choice"] == {"type": "auto"}
 
-            transformed_request = config.transform_request(
-                model="claude-3-5-sonnet",
-                messages=[{"role": "user", "content": "Test"}],
-                optional_params=optional_params,
-                litellm_params={},
-                headers={},
-            )
+        # Test "none" - should become {"type": "none"}
+        optional_params = {"tool_choice": "none"}
+        transformed_request = config.transform_request(
+            model="claude-3-5-sonnet",
+            messages=[{"role": "user", "content": "Test"}],
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        assert transformed_request["tool_choice"] == {"type": "none"}
 
-            assert transformed_request["tool_choice"] == value
+        # Test "required" - should become {"type": "required", "name": [...]} if tools present
+        optional_params = {"tool_choice": "required"}
+        transformed_request = config.transform_request(
+            model="claude-3-5-sonnet",
+            messages=[{"role": "user", "content": "Test"}],
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        # Without tools, "required" becomes just {"type": "required"}
+        assert transformed_request["tool_choice"]["type"] == "required"
 
     def test_transform_response_with_tool_calls(self):
         """

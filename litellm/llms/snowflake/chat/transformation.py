@@ -605,14 +605,14 @@ class SnowflakeConfig(OpenAIGPTConfig):
                     # Convert Pydantic models or other objects to dict
                     msg_to_append = dict(message) if hasattr(message, '__dict__') else dict(message)
 
-                # Ensure content field exists and is non-empty OR content_list exists
-                # Snowflake rejects messages with empty content and no content_list
+                # Ensure content field exists (Snowflake requires content OR content_list)
+                # Snowflake rejects messages with None content and no content_list
                 content_value = msg_to_append.get("content")
                 has_content_list = "content_list" in msg_to_append and msg_to_append.get("content_list")
 
-                # If content is None, empty string, or missing AND there's no content_list, set a placeholder
-                if (not content_value or content_value == "") and not has_content_list:
-                    msg_to_append["content"] = " "  # Space as placeholder to satisfy Snowflake
+                # If content is None or missing AND there's no content_list, set empty string
+                if content_value is None and not has_content_list:
+                    msg_to_append["content"] = ""  # Empty string satisfies Snowflake's requirement
 
                 transformed_messages.append(msg_to_append)
 
