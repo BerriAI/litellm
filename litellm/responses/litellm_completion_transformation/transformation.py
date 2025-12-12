@@ -408,6 +408,7 @@ class LiteLLMCompletionResponsesConfig:
             "function_call_output",
             "web_search_call",
             "computer_call_output",
+            "tool_result",  # Anthropic/MCP format
         ]
 
     @staticmethod
@@ -692,13 +693,17 @@ class LiteLLMCompletionResponsesConfig:
                 )
             else:
                 typed_tool = cast(FunctionToolParam, tool)
+                # Ensure parameters has "type": "object" as required by providers like Anthropic
+                parameters = dict(typed_tool.get("parameters", {}) or {})
+                if not parameters or "type" not in parameters:
+                    parameters["type"] = "object"
                 chat_completion_tools.append(
                     ChatCompletionToolParam(
                         type="function",
                         function=ChatCompletionToolParamFunctionChunk(
                             name=typed_tool.get("name") or "",
                             description=typed_tool.get("description") or "",
-                            parameters=dict(typed_tool.get("parameters", {}) or {}),
+                            parameters=parameters,
                             strict=typed_tool.get("strict", False) or False,
                         ),
                     )
