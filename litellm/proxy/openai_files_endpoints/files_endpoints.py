@@ -39,6 +39,7 @@ from litellm.proxy.utils import ProxyLogging, is_known_model
 from litellm.router import Router
 from litellm.types.llms.openai import (
     CREATE_FILE_REQUESTS_PURPOSE,
+    FileExpiresAfter,
     OpenAIFileObject,
     OpenAIFilesPurpose,
 )
@@ -249,7 +250,7 @@ async def route_create_file(
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
 )
-async def create_file(
+async def create_file(  # noqa: PLR0915
     request: Request,
     fastapi_response: Response,
     purpose: str = Form(...),
@@ -272,7 +273,8 @@ async def create_file(
         -H "Authorization: Bearer sk-1234" \
         -F purpose="batch" \
         -F file="@mydata.jsonl"
-
+        -F expires_after[anchor]="created_at" \
+        -F expires_after[seconds]=2592000
     ```
     """
     from litellm.proxy.proxy_server import (
@@ -329,6 +331,25 @@ async def create_file(
         if litellm_metadata is not None:
             data["litellm_metadata"] = litellm_metadata
 
+        # Parse expires_after if provided
+        expires_after = None
+        form_data = await request.form()
+        expires_after_anchor = form_data.get("expires_after[anchor]")
+        expires_after_seconds_str = form_data.get("expires_after[seconds]")
+        
+        if expires_after_anchor is not None or expires_after_seconds_str is not None:
+            if expires_after_anchor is None or expires_after_seconds_str is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Both expires_after[anchor] and expires_after[seconds] must be provided if expires_after is specified",
+                    },
+                )
+            expires_after = FileExpiresAfter(
+                anchor=expires_after_anchor,
+                seconds=int(expires_after_seconds_str),
+            )
+
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
             data=data,
@@ -354,7 +375,10 @@ async def create_file(
                 )
 
         _create_file_request = CreateFileRequest(
-            file=file_data, purpose=cast(CREATE_FILE_REQUESTS_PURPOSE, purpose), **data
+            file=file_data, 
+            purpose=cast(CREATE_FILE_REQUESTS_PURPOSE, purpose),
+            expires_after=expires_after,
+            **data
         )
 
         response = await route_create_file(
