@@ -4,7 +4,7 @@ Support for Snowflake REST API
 
 import json
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Iterator, List, Optional, Tuple, Union
 
 import httpx
 
@@ -650,3 +650,22 @@ class SnowflakeConfig(OpenAIGPTConfig):
         verbose_logger.debug(f"Snowflake request: {len(transformed_messages)} messages, tools={'tools' in request_data}")
 
         return request_data
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ) -> Any:
+        """
+        Return custom streaming handler for Snowflake that handles missing 'created' field
+        and transforms Claude-format tool_use to OpenAI-format tool_calls.
+
+        Some Snowflake models (like claude-sonnet-4-5) may not include the 'created' field
+        in their streaming responses, and return tool calls in Claude's format.
+        """
+        return SnowflakeStreamingHandler(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )

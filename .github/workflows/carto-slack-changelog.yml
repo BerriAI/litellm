@@ -1,0 +1,595 @@
+name: CARTO - Slack Changelog
+
+################################################################################
+# AI-Augmented Slack Changelog
+################################################################################
+#
+# Posts GROUNDED, INSIGHT-DRIVEN changelog updates to Slack when changes are
+# pushed or PRs are merged to carto/main.
+#
+# Features:
+# - Two-part messages: Main post + detailed thread reply
+# - Claude analyzes diffs, commits, and historical context
+# - Dynamic investigation: Claude can run git/gh commands for deeper analysis
+# - Tracks both PR merges and direct pushes
+#
+# Security:
+# - Claude has read access + limited bash for git/gh commands
+# - Rate limited: max-turns 25, 10-min timeout
+# - Uses SLACK_KEY and ANTHROPIC_API_KEY secrets
+
+on:
+  push:
+    branches: [carto/main]
+  pull_request:
+    types: [closed]
+    branches: [carto/main]
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  post-changelog:
+    runs-on: ubuntu-latest
+    # Run on: PR merged, direct push, or new release created
+    if: github.event.pull_request.merged == true || github.event_name == 'push' || github.event_name == 'release'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gather comprehensive context
+        id: context
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+
+          # Get current versions
+          UPSTREAM_VERSION=$(grep -E "^version\s*=" pyproject.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          LATEST_TAG=$(git tag -l "v*-carto.*" | sort -V | tail -n 1 || echo "none")
+          echo "upstream_version=${UPSTREAM_VERSION}" >> $GITHUB_OUTPUT
+          echo "latest_tag=${LATEST_TAG}" >> $GITHUB_OUTPUT
+
+          # Determine mode
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "::group::PR Merge Mode - Gathering data for PR #${PR_NUMBER}"
+            echo "mode=pr_merge" >> $GITHUB_OUTPUT
+            echo "pr_number=${PR_NUMBER}" >> $GITHUB_OUTPUT
+            echo "pr_author=${PR_AUTHOR}" >> $GITHUB_OUTPUT
+            echo "pr_url=${PR_URL}" >> $GITHUB_OUTPUT
+
+            # === A. PRIMARY DATA ===
+            echo "::group::Primary Data"
+
+            # 1. Full PR body (author's intent)
+            gh pr view "$PR_NUMBER" --json body --jq '.body // ""' > /tmp/pr_body.txt 2>/dev/null || echo "" > /tmp/pr_body.txt
+            echo "PR body: $(wc -c < /tmp/pr_body.txt) chars"
+
+            # 2. Actual diff (1000 lines for context)
+            gh pr diff "$PR_NUMBER" --patch 2>/dev/null | head -1000 > /tmp/pr_diff.txt || echo "" > /tmp/pr_diff.txt
+            echo "Diff: $(wc -l < /tmp/pr_diff.txt) lines"
+
+            # 3. Commit messages with FULL bodies
+            gh pr view "$PR_NUMBER" --json commits \
+              --jq '.commits[] | "### \(.messageHeadline)\n\(.messageBody // "")\n"' > /tmp/pr_commits_full.txt 2>/dev/null || echo "" > /tmp/pr_commits_full.txt
+            echo "Commits: $(grep -c "^###" /tmp/pr_commits_full.txt || echo 0)"
+
+            # 4. File-level stats
+            gh pr view "$PR_NUMBER" --json files \
+              --jq '.files[] | "\(.path): +\(.additions) -\(.deletions)"' > /tmp/pr_stats.txt 2>/dev/null || echo "" > /tmp/pr_stats.txt
+            echo "Files changed: $(wc -l < /tmp/pr_stats.txt | tr -d ' ')"
+
+            # 5. PR metadata
+            gh pr view "$PR_NUMBER" --json number,title,author,mergeCommit,additions,deletions,labels \
+              > /tmp/pr_meta.json 2>/dev/null || echo '{}' > /tmp/pr_meta.json
+
+            echo "::endgroup::"
+
+            # === B. HISTORICAL CONTEXT ===
+            echo "::group::Historical Context"
+
+            # 6. Recent commits on same files
+            > /tmp/file_history.txt
+            for file in $(gh pr view "$PR_NUMBER" --json files --jq '.files[].path' 2>/dev/null | head -5); do
+              echo "=== History: $file ===" >> /tmp/file_history.txt
+              git log --oneline -10 -- "$file" >> /tmp/file_history.txt 2>/dev/null || true
+              echo "" >> /tmp/file_history.txt
+            done
+            echo "File history gathered for $(grep -c "^===" /tmp/file_history.txt || echo 0) files"
+
+            # 7. Recent PRs by same author
+            gh pr list --author "$PR_AUTHOR" --state merged --limit 5 \
+              --json number,title,mergedAt \
+              --jq '.[] | "#\(.number): \(.title) (\(.mergedAt | split("T")[0]))"' > /tmp/author_recent_prs.txt 2>/dev/null || echo "" > /tmp/author_recent_prs.txt
+            echo "Author's recent PRs: $(wc -l < /tmp/author_recent_prs.txt | tr -d ' ')"
+
+            # 8. Recent PRs touching same files
+            > /tmp/related_prs.txt
+            for file in $(gh pr view "$PR_NUMBER" --json files --jq '.files[].path' 2>/dev/null | head -3); do
+              gh pr list --state merged --limit 3 --search "$file" \
+                --json number,title --jq '.[] | "#\(.number): \(.title)"' >> /tmp/related_prs.txt 2>/dev/null || true
+            done
+            echo "Related PRs: $(wc -l < /tmp/related_prs.txt | tr -d ' ')"
+
+            # 9. Recent carto/main commits
+            git log carto/main --oneline -20 > /tmp/recent_carto_commits.txt 2>/dev/null || echo "" > /tmp/recent_carto_commits.txt
+
+            echo "::endgroup::"
+
+            # === C. FORK CONTEXT ===
+            echo "::group::Fork Context"
+
+            # 10. CARTO documentation
+            cp CARTO_CLAUDE.md /tmp/carto_context.md 2>/dev/null || echo "No CARTO_CLAUDE.md found" > /tmp/carto_context.md
+
+            # 11. Current version
+            echo "$UPSTREAM_VERSION" > /tmp/current_version.txt
+            echo "$LATEST_TAG" > /tmp/latest_carto_tag.txt
+
+            # 12. Upstream remote setup (for dynamic queries)
+            git remote add upstream https://github.com/BerriAI/litellm.git 2>/dev/null || true
+            git fetch upstream --quiet 2>/dev/null || true
+
+            echo "::endgroup::"
+
+            # === D. CLASSIFICATION ===
+            echo "::group::Classification"
+
+            # 13. PR labels
+            gh pr view "$PR_NUMBER" --json labels --jq '.labels[].name' > /tmp/pr_labels.txt 2>/dev/null || echo "" > /tmp/pr_labels.txt
+
+            # 14. Change scope
+            echo "mode=pr_merge" > /tmp/mode.txt
+            > /tmp/change_scope.txt
+            grep -q "litellm/llms/" /tmp/pr_stats.txt 2>/dev/null && echo "scope_providers=true" >> /tmp/change_scope.txt
+            grep -q "litellm/proxy/" /tmp/pr_stats.txt 2>/dev/null && echo "scope_proxy=true" >> /tmp/change_scope.txt
+            grep -q ".github/" /tmp/pr_stats.txt 2>/dev/null && echo "scope_ci=true" >> /tmp/change_scope.txt
+            grep -q "Dockerfile" /tmp/pr_stats.txt 2>/dev/null && echo "scope_docker=true" >> /tmp/change_scope.txt
+            cat /tmp/change_scope.txt
+
+            echo "::endgroup::"
+            echo "::endgroup::"
+
+          elif [[ "${{ github.event_name }}" == "release" ]]; then
+            # === RELEASE MODE ===
+            echo "::group::Release Mode - Gathering data for release"
+            echo "mode=release" >> $GITHUB_OUTPUT
+
+            RELEASE_TAG="${{ github.event.release.tag_name }}"
+            RELEASE_NAME="${{ github.event.release.name }}"
+            RELEASE_URL="${{ github.event.release.html_url }}"
+            RELEASE_AUTHOR="${{ github.event.release.author.login }}"
+            RELEASE_BODY="${{ github.event.release.body }}"
+
+            echo "release_tag=${RELEASE_TAG}" >> $GITHUB_OUTPUT
+            echo "release_name=${RELEASE_NAME}" >> $GITHUB_OUTPUT
+            echo "release_url=${RELEASE_URL}" >> $GITHUB_OUTPUT
+            echo "pr_author=${RELEASE_AUTHOR}" >> $GITHUB_OUTPUT
+
+            echo "[Release] Tag: ${RELEASE_TAG}"
+            echo "[Release] Name: ${RELEASE_NAME}"
+            echo "[Release] Author: ${RELEASE_AUTHOR}"
+
+            # === A. PRIMARY DATA ===
+            echo "::group::Primary Data"
+
+            # 1. Release body (release notes)
+            echo "$RELEASE_BODY" > /tmp/pr_body.txt
+            echo "Release body: $(wc -c < /tmp/pr_body.txt) chars"
+
+            # 2. Get commits since previous release tag
+            PREV_TAG=$(git tag -l "v*-carto.*" | sort -V | grep -v "^${RELEASE_TAG}$" | tail -n 1 || echo "")
+            echo "Previous tag: ${PREV_TAG:-none}"
+            echo "previous_tag=${PREV_TAG}" >> $GITHUB_OUTPUT
+
+            if [ -n "$PREV_TAG" ]; then
+              git diff "${PREV_TAG}..${RELEASE_TAG}" --patch 2>/dev/null | head -1000 > /tmp/pr_diff.txt || echo "" > /tmp/pr_diff.txt
+              git log "${PREV_TAG}..${RELEASE_TAG}" --oneline > /tmp/pr_commits_full.txt 2>/dev/null || echo "" > /tmp/pr_commits_full.txt
+              git diff "${PREV_TAG}..${RELEASE_TAG}" --stat > /tmp/pr_stats.txt 2>/dev/null || echo "" > /tmp/pr_stats.txt
+              COMMIT_COUNT=$(wc -l < /tmp/pr_commits_full.txt | tr -d ' ')
+            else
+              git log -30 --oneline > /tmp/pr_commits_full.txt 2>/dev/null || echo "" > /tmp/pr_commits_full.txt
+              echo "" > /tmp/pr_diff.txt
+              echo "" > /tmp/pr_stats.txt
+              COMMIT_COUNT="30+"
+            fi
+            echo "commit_count=${COMMIT_COUNT}" >> $GITHUB_OUTPUT
+            echo "Commits in release: ${COMMIT_COUNT}"
+
+            echo "::endgroup::"
+
+            # === B. RELEASE CONTEXT ===
+            echo "::group::Release Context"
+
+            # Release JSON metadata
+            cat << 'RELEASE_EOF' > /tmp/release_meta.json
+            {
+              "tag": "${{ github.event.release.tag_name }}",
+              "name": "${{ github.event.release.name }}",
+              "author": "${{ github.event.release.author.login }}",
+              "url": "${{ github.event.release.html_url }}",
+              "prerelease": ${{ github.event.release.prerelease }},
+              "draft": ${{ github.event.release.draft }}
+            }
+            RELEASE_EOF
+
+            # Recent releases
+            gh release list --limit 5 > /tmp/recent_releases.txt 2>/dev/null || echo "" > /tmp/recent_releases.txt
+            echo "Recent releases: $(wc -l < /tmp/recent_releases.txt | tr -d ' ')"
+
+            # CARTO documentation
+            cp CARTO_CLAUDE.md /tmp/carto_context.md 2>/dev/null || echo "No CARTO_CLAUDE.md found" > /tmp/carto_context.md
+
+            # Mode file
+            echo "mode=release" > /tmp/mode.txt
+
+            # Change scope (from release commits)
+            > /tmp/change_scope.txt
+            if [ -n "$PREV_TAG" ]; then
+              git diff "${PREV_TAG}..${RELEASE_TAG}" --name-only 2>/dev/null | grep -q "litellm/llms/" && echo "scope_providers=true" >> /tmp/change_scope.txt
+              git diff "${PREV_TAG}..${RELEASE_TAG}" --name-only 2>/dev/null | grep -q "litellm/proxy/" && echo "scope_proxy=true" >> /tmp/change_scope.txt
+              git diff "${PREV_TAG}..${RELEASE_TAG}" --name-only 2>/dev/null | grep -q ".github/" && echo "scope_ci=true" >> /tmp/change_scope.txt
+              git diff "${PREV_TAG}..${RELEASE_TAG}" --name-only 2>/dev/null | grep -q "Dockerfile" && echo "scope_docker=true" >> /tmp/change_scope.txt
+            fi
+            cat /tmp/change_scope.txt
+
+            echo "::endgroup::"
+            echo "::endgroup::"
+
+          else
+            # === DIRECT PUSH MODE ===
+            echo "::group::Direct Push Mode"
+            echo "mode=direct_push" >> $GITHUB_OUTPUT
+
+            BEFORE="${{ github.event.before }}"
+            AFTER="${{ github.event.after }}"
+            echo "push_before=${BEFORE}" >> $GITHUB_OUTPUT
+            echo "push_after=${AFTER}" >> $GITHUB_OUTPUT
+
+            # Get pushed commits
+            git log --oneline "${BEFORE}..${AFTER}" > /tmp/pushed_commits.txt 2>/dev/null || echo "" > /tmp/pushed_commits.txt
+            COMMIT_COUNT=$(wc -l < /tmp/pushed_commits.txt | tr -d ' ')
+            echo "commit_count=${COMMIT_COUNT}" >> $GITHUB_OUTPUT
+            echo "Commits pushed: ${COMMIT_COUNT}"
+
+            # Get commit messages (use as PR body equivalent)
+            git log --format="%s%n%b" "${BEFORE}..${AFTER}" > /tmp/pr_body.txt 2>/dev/null || echo "" > /tmp/pr_body.txt
+
+            # Get diff
+            git diff "${BEFORE}..${AFTER}" --patch 2>/dev/null | head -1000 > /tmp/pr_diff.txt || echo "" > /tmp/pr_diff.txt
+
+            # Get diff stats
+            git diff "${BEFORE}..${AFTER}" --stat > /tmp/pr_stats.txt 2>/dev/null || echo "" > /tmp/pr_stats.txt
+
+            # Get total stats
+            git diff "${BEFORE}..${AFTER}" --numstat 2>/dev/null | awk '{add+=$1; del+=$2} END {print "+"add" -"del}' > /tmp/total_stats.txt || echo "+0 -0" > /tmp/total_stats.txt
+
+            # Get SHA and author
+            echo "${AFTER:0:7}" > /tmp/merge_sha.txt
+            git log -1 --format="%an" "${AFTER}" > /tmp/pr_author.txt 2>/dev/null || echo "unknown" > /tmp/pr_author.txt
+            PUSH_AUTHOR=$(cat /tmp/pr_author.txt)
+            echo "pr_author=${PUSH_AUTHOR}" >> $GITHUB_OUTPUT
+
+            # Mode file
+            echo "mode=direct_push" > /tmp/mode.txt
+
+            # Fork context
+            cp CARTO_CLAUDE.md /tmp/carto_context.md 2>/dev/null || echo "No CARTO_CLAUDE.md found" > /tmp/carto_context.md
+
+            # File history for pushed files
+            > /tmp/file_history.txt
+            for file in $(git diff "${BEFORE}..${AFTER}" --name-only 2>/dev/null | head -5); do
+              echo "=== History: $file ===" >> /tmp/file_history.txt
+              git log --oneline -10 -- "$file" >> /tmp/file_history.txt 2>/dev/null || true
+              echo "" >> /tmp/file_history.txt
+            done
+
+            # Recent commits
+            git log carto/main --oneline -20 > /tmp/recent_carto_commits.txt 2>/dev/null || echo "" > /tmp/recent_carto_commits.txt
+
+            # Change scope
+            > /tmp/change_scope.txt
+            grep -q "litellm/llms/" /tmp/pr_stats.txt 2>/dev/null && echo "scope_providers=true" >> /tmp/change_scope.txt
+            grep -q "litellm/proxy/" /tmp/pr_stats.txt 2>/dev/null && echo "scope_proxy=true" >> /tmp/change_scope.txt
+            grep -q ".github/" /tmp/pr_stats.txt 2>/dev/null && echo "scope_ci=true" >> /tmp/change_scope.txt
+            grep -q "Dockerfile" /tmp/pr_stats.txt 2>/dev/null && echo "scope_docker=true" >> /tmp/change_scope.txt
+
+            echo "::endgroup::"
+          fi
+
+      - name: Generate changelog with Claude
+        id: changelog
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          show_full_output: false
+          claude_args: "--model claude-sonnet-4-5-20250929 --max-turns 25 --allowed-tools Read,Write,Bash,Grep,Glob"
+          prompt: |
+            # ROLE: Senior Staff AI Augmentation Engineer
+
+            You are analyzing changes to CARTO's LiteLLM fork. Your job is to provide
+            **GROUNDED INSIGHTS** - analysis backed by evidence from the actual data,
+            not just reformatted summaries.
+
+            **What makes an insight "grounded":**
+            - ✅ "This fixes the Python 3.12 issue introduced in commit abc123 last week" (references prior commit)
+            - ✅ "Part of ongoing Dockerfile improvements - 3rd PR this week" (references historical pattern)
+            - ✅ "The diff shows switching from `python:3.11-slim` to `wolfi-base`" (references diff content)
+            - ❌ "Switched Docker base image" (just restating title)
+            - ❌ "Improves things" (vague)
+
+            ---
+
+            # MODE: ${{ steps.context.outputs.mode }}
+
+            **Event info:**
+            ${{ steps.context.outputs.mode == 'pr_merge' && format('- PR Number: {0}', steps.context.outputs.pr_number) || '' }}
+            ${{ steps.context.outputs.mode == 'pr_merge' && format('- PR URL: {0}', steps.context.outputs.pr_url) || '' }}
+            ${{ steps.context.outputs.mode == 'direct_push' && format('- Commits: {0}', steps.context.outputs.commit_count) || '' }}
+            ${{ steps.context.outputs.mode == 'release' && format('- Release Tag: {0}', steps.context.outputs.release_tag) || '' }}
+            ${{ steps.context.outputs.mode == 'release' && format('- Release Name: {0}', steps.context.outputs.release_name) || '' }}
+            ${{ steps.context.outputs.mode == 'release' && format('- Release URL: {0}', steps.context.outputs.release_url) || '' }}
+            ${{ steps.context.outputs.mode == 'release' && format('- Previous Tag: {0}', steps.context.outputs.previous_tag) || '' }}
+            ${{ steps.context.outputs.mode == 'release' && format('- Commits in Release: {0}', steps.context.outputs.commit_count) || '' }}
+            - Author: ${{ steps.context.outputs.pr_author }}
+            - Upstream Version: ${{ steps.context.outputs.upstream_version }}
+            - Latest CARTO Tag: ${{ steps.context.outputs.latest_tag }}
+
+            ---
+
+            # ANALYSIS PROCESS
+
+            ## Step 1: Read Fork Context
+            Read `/tmp/carto_context.md` to understand:
+            - This is a fork of BerriAI/litellm for CARTO's AI infrastructure
+            - Branch strategy: `carto/main` is production
+            - Key directories: `litellm/llms/` (providers), `litellm/proxy/` (server), `.github/` (CI)
+
+            ## Step 2: Analyze Primary Data
+            Read in order:
+            1. `/tmp/pr_body.txt` - Author's explanation (WHY)
+            2. `/tmp/pr_diff.txt` - Actual code changes (WHAT)
+            3. `/tmp/pr_stats.txt` - Files and lines changed (SCOPE)
+            4. `/tmp/pr_meta.json` - Metadata (if exists)
+
+            ## Step 3: Analyze Historical Context
+            Read to establish patterns:
+            1. `/tmp/file_history.txt` - Previous changes to these files
+            2. `/tmp/author_recent_prs.txt` - Author's recent work (if exists)
+            3. `/tmp/related_prs.txt` - Related PRs (if exists)
+            4. `/tmp/recent_carto_commits.txt` - Recent team activity
+
+            ## Step 4: DYNAMIC INVESTIGATION (if needed)
+            If pre-gathered data isn't sufficient, USE these tools to dig deeper:
+
+            ```bash
+            # Find related commits
+            git log --oneline --grep="<keyword>" -20
+
+            # See full commit
+            git show <sha> --stat
+
+            # File history
+            git log --oneline --follow -10 -- <file>
+
+            # Search code in history
+            git log -S "<pattern>" --oneline -10
+
+            # Get more PR details
+            gh pr view <number> --json <fields>
+
+            # Upstream release notes
+            gh release view <tag> --repo BerriAI/litellm --json body
+            ```
+
+            ---
+
+            # OUTPUT: Create TWO files
+
+            ## 1. Main Message → `slack_message.txt`
+
+            ${{ steps.context.outputs.mode == 'pr_merge' && '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            :rocket:  *LiteLLM Fork Update*' || steps.context.outputs.mode == 'release' && '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            :tada:  *LiteLLM CARTO Release*' || '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            :zap:  *LiteLLM Direct Push*' }}
+
+            *[GROUNDED 1-line summary with specific evidence]*
+
+            ┌───────────────────────────────────────
+            │  :label:  *Type:* [Infrastructure | Feature | Bug Fix | Upstream Sync]
+            │  :dart:  *Impact:* [Providers | Proxy | CI/CD | Docker | Core]
+            │  :warning:  *Risk:* [Low | Medium | High] - [1-line reason]
+            └───────────────────────────────────────
+
+            :bulb: *Key Insight*
+            [GROUNDED analysis - MUST reference specific evidence from diff/history]
+
+            ${{ steps.context.outputs.mode == 'pr_merge' && format(':link: <{0}|PR #{1}>  •  @{2}', steps.context.outputs.pr_url, steps.context.outputs.pr_number, steps.context.outputs.pr_author) || steps.context.outputs.mode == 'release' && format(':link: <{0}|Release {1}>  •  @{2}  •  _{3} commit(s)_', steps.context.outputs.release_url, steps.context.outputs.release_tag, steps.context.outputs.pr_author, steps.context.outputs.commit_count) || format(':link: <https://github.com/CartoDB/litellm/commit/{0}|Commit `{0}`>  •  @{1}  •  _{2} commit(s)_', github.sha, steps.context.outputs.pr_author, steps.context.outputs.commit_count) }}
+            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+            ## 2. Thread Reply → `slack_thread.txt`
+
+            :mag: *Deep Dive Analysis*
+            ━━━━━━━━━━━━━━━━━━━━━━━━
+
+            *What Changed (from diff):*
+            • [Specific change 1 with file:line reference]
+            • [Specific change 2]
+
+            *Why (from PR body/commits):*
+            "[Quote actual text from PR body or commit message]"
+
+            *Historical Context:*
+            • Previous changes to affected files: [from /tmp/file_history.txt]
+            • Related PRs: [from /tmp/related_prs.txt if relevant]
+            • Author's recent work: [pattern from /tmp/author_recent_prs.txt]
+
+            *Impact Analysis:*
+            • *Scope:* X files, +Y/-Z lines
+            • *Areas:* [from /tmp/change_scope.txt]
+            • *Risk factors:* [specific risks]
+            • *Deployment:* [what happens next]
+
+            [FOR UPSTREAM SYNCS - add these sections:]
+            ━━━ UPSTREAM SYNC ━━━
+            :sparkles: *New from Upstream:* [cite release notes]
+            :rotating_light: *Breaking Changes:* [cite diff]
+
+            *Technical Details:*
+            [Deeper context for curious readers]
+
+            ---
+
+            # CRITICAL GUIDELINES
+
+            1. **ALWAYS cite evidence** - Line numbers, commit SHAs, PR numbers
+            2. **Read the diff** - Explain what code changes DO, not just file names
+            3. **Connect to history** - Reference prior commits/PRs when relevant
+            4. **Be specific** - "Changed base image on Dockerfile:15" not "Updated Docker"
+            5. **Use dynamic investigation** - Run git/gh commands if data is sparse
+
+            **Format rules:**
+            - Slack mrkdwn: *bold*, `code`, <url|text>
+            - Use • for bullets
+            - Emojis: :rocket: :zap: :label: :dart: :warning: :bulb: :link: :mag: :sparkles: :rotating_light:
+            - Box chars: ━ ┌ │ └
+            - Main message: under 1000 chars
+            - Thread: 1500-2500 chars
+
+            NOW: Read the data files, investigate if needed, and write both `slack_message.txt` and `slack_thread.txt`.
+        timeout-minutes: 10
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify messages were created
+        id: verify
+        run: |
+          echo "::group::Checking generated files"
+
+          if [ -f "slack_message.txt" ]; then
+            echo "✅ Main message generated"
+            echo "message_exists=true" >> $GITHUB_OUTPUT
+            echo "--- Main message ---"
+            cat slack_message.txt
+            echo "--- End ---"
+          else
+            echo "❌ Main message not found"
+            echo "message_exists=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          if [ -f "slack_thread.txt" ]; then
+            echo "✅ Thread message generated"
+            echo "thread_exists=true" >> $GITHUB_OUTPUT
+            echo "--- Thread message ---"
+            cat slack_thread.txt
+            echo "--- End ---"
+          else
+            echo "⚠️ Thread message not found (optional)"
+            echo "thread_exists=false" >> $GITHUB_OUTPUT
+          fi
+
+          echo "::endgroup::"
+
+      - name: Post main message to Slack
+        id: slack_post
+        if: steps.verify.outputs.message_exists == 'true'
+        env:
+          SLACK_CHANNEL: "C0A11FKJHDK"
+        run: |
+          set -eu
+          echo "::group::Posting main message to Slack"
+
+          if [[ -z "${{ secrets.SLACK_KEY }}" ]]; then
+            echo "::warning::SLACK_KEY not configured - skipping"
+            exit 0
+          fi
+
+          MESSAGE=$(cat slack_message.txt)
+
+          RESPONSE=$(curl -s -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer ${{ secrets.SLACK_KEY }}" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "channel=${SLACK_CHANNEL}" \
+            --data-urlencode "text=${MESSAGE}")
+
+          # Extract timestamp for threading
+          MESSAGE_TS=$(echo "$RESPONSE" | jq -r '.ts // empty')
+          if [ -n "$MESSAGE_TS" ]; then
+            echo "message_ts=${MESSAGE_TS}" >> $GITHUB_OUTPUT
+            echo "✅ Main message posted (ts: ${MESSAGE_TS})"
+          fi
+
+          if echo "$RESPONSE" | jq -e '.ok == true' > /dev/null 2>&1; then
+            echo "✅ Slack API success"
+          else
+            ERROR=$(echo "$RESPONSE" | jq -r '.error // "unknown"')
+            echo "❌ Slack API error: ${ERROR}"
+            exit 1
+          fi
+
+          echo "::endgroup::"
+
+      - name: Post thread reply to Slack
+        if: steps.slack_post.outputs.message_ts != '' && steps.verify.outputs.thread_exists == 'true'
+        env:
+          SLACK_CHANNEL: "C0A11FKJHDK"
+        run: |
+          set -eu
+          echo "::group::Posting thread reply"
+
+          THREAD_MSG=$(cat slack_thread.txt)
+          MESSAGE_TS="${{ steps.slack_post.outputs.message_ts }}"
+
+          RESPONSE=$(curl -s -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer ${{ secrets.SLACK_KEY }}" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "channel=${SLACK_CHANNEL}" \
+            --data-urlencode "thread_ts=${MESSAGE_TS}" \
+            --data-urlencode "text=${THREAD_MSG}")
+
+          if echo "$RESPONSE" | jq -e '.ok == true' > /dev/null 2>&1; then
+            echo "✅ Thread reply posted"
+          else
+            ERROR=$(echo "$RESPONSE" | jq -r '.error // "unknown"')
+            echo "⚠️ Thread reply failed: ${ERROR}"
+          fi
+
+          echo "::endgroup::"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Slack Changelog Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Mode:** ${{ steps.context.outputs.mode }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ -f "slack_message.txt" ]; then
+            echo "### Main Message" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat slack_message.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ -f "slack_thread.txt" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Thread Reply" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat slack_thread.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ ! -f "slack_message.txt" ]; then
+            echo "❌ Message generation failed" >> $GITHUB_STEP_SUMMARY
+          fi

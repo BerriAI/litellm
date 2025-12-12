@@ -578,3 +578,100 @@ class TestSnowflakeMessageTransformation:
         assert result["messages"][1]["role"] == "user"
         assert "content" in result["messages"][1]  # Must have content field
         assert "content_list" in result["messages"][1]
+
+
+class TestSnowflakeStreamingHandler:
+    """Test suite for Snowflake streaming response handling"""
+
+    def test_chunk_parser_with_created_field(self):
+        """
+        Test that streaming chunks with 'created' field are parsed correctly.
+        This is the standard case for models like mistral-7b and llama3.3.
+        """
+        from litellm.llms.snowflake.chat.transformation import (
+            SnowflakeStreamingHandler,
+        )
+
+        handler = SnowflakeStreamingHandler(
+            streaming_response=iter([]),
+            sync_stream=True,
+            json_mode=False,
+        )
+
+        chunk = {
+            "id": "chatcmpl-123",
+            "created": 1234567890,
+            "model": "mistral-7b",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": "Hello"},
+                    "finish_reason": None,
+                }
+            ],
+        }
+
+        result = handler.chunk_parser(chunk)
+
+        assert result.id == "chatcmpl-123"
+        assert result.created == 1234567890
+        assert result.model == "mistral-7b"
+        assert result.object == "chat.completion.chunk"
+        assert len(result.choices) == 1
+
+    def test_chunk_parser_without_created_field(self):
+        """
+        Test that streaming chunks WITHOUT 'created' field are parsed correctly.
+        This handles the case for Claude models (sonnet-3.5, sonnet-4-5) which
+        don't include the 'created' field in their streaming responses.
+        """
+        from litellm.llms.snowflake.chat.transformation import (
+            SnowflakeStreamingHandler,
+        )
+
+        handler = SnowflakeStreamingHandler(
+            streaming_response=iter([]),
+            sync_stream=True,
+            json_mode=False,
+        )
+
+        # Chunk without 'created' field (like claude-sonnet-4-5)
+        chunk = {
+            "id": "chatcmpl-456",
+            "model": "claude-sonnet-4-5",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": "Hi there"},
+                    "finish_reason": None,
+                }
+            ],
+        }
+
+        result = handler.chunk_parser(chunk)
+
+        assert result.id == "chatcmpl-456"
+        assert result.created is not None  # Should have a default timestamp
+        assert isinstance(result.created, int)  # Should be an integer timestamp
+        assert result.model == "claude-sonnet-4-5"
+        assert result.object == "chat.completion.chunk"
+        assert len(result.choices) == 1
+
+    def test_get_model_response_iterator(self):
+        """
+        Test that SnowflakeConfig returns the custom streaming handler.
+        """
+        from litellm.llms.snowflake.chat.transformation import (
+            SnowflakeStreamingHandler,
+            SnowflakeConfig,
+        )
+
+        config = SnowflakeConfig()
+
+        handler = config.get_model_response_iterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+            json_mode=False,
+        )
+
+        assert isinstance(handler, SnowflakeStreamingHandler)

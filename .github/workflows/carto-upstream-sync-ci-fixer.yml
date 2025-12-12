@@ -1,7 +1,8 @@
 name: CARTO Upstream Sync - CI Failure Auto-Fix
 
-# This workflow automatically fixes CI failures in upstream sync resolution PRs.
-# Triggered when CI checks fail on PRs created by the conflict resolver.
+# This workflow automatically fixes CI failures in upstream sync PRs.
+# Triggered when CI checks fail on PRs created by the upstream sync workflow
+# or the conflict resolver.
 
 on:
   workflow_run:
@@ -12,6 +13,7 @@ on:
     types:
       - completed
     branches:
+      - 'upstream-sync/**'
       - 'upstream-sync-resolver/**'
 
   workflow_dispatch:
@@ -76,16 +78,16 @@ jobs:
           echo "[Fixer] PR: #${PR_NUMBER}"
           echo "[Fixer] Labels: ${LABELS}"
 
-          # Only fix PRs with 'conflict-resolution' or 'automated' labels
-          if [[ ! "${LABELS}" =~ "conflict-resolution" && ! "${LABELS}" =~ "automated" ]]; then
-            echo "[Fixer] ❌ PR doesn't have required labels - skipping"
+          # Only fix PRs with upstream sync related labels
+          if [[ ! "${LABELS}" =~ "conflict-resolution" && ! "${LABELS}" =~ "automated" && ! "${LABELS}" =~ "upstream-sync" ]]; then
+            echo "[Fixer] ❌ PR doesn't have required labels (need: conflict-resolution, automated, or upstream-sync) - skipping"
             echo "should-fix=false" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          # Only fix upstream-sync-resolver branches
-          if [[ ! "${BRANCH_NAME}" =~ ^upstream-sync-resolver/ ]]; then
-            echo "[Fixer] ❌ Not an upstream-sync-resolver branch - skipping"
+          # Only fix upstream sync related branches
+          if [[ ! "${BRANCH_NAME}" =~ ^upstream-sync-resolver/ && ! "${BRANCH_NAME}" =~ ^upstream-sync/ ]]; then
+            echo "[Fixer] ❌ Not an upstream sync branch (need: upstream-sync-resolver/* or upstream-sync/*) - skipping"
             echo "should-fix=false" >> $GITHUB_OUTPUT
             exit 0
           fi
@@ -133,7 +135,7 @@ jobs:
             --repo ${{ github.repository }} \
             --commit ${HEAD_SHA} \
             --status failure \
-            --json databaseId,name,conclusion,url \
+            --json databaseId,name,url \
             --limit 10 > /tmp/failed_runs.json
 
           FAILED_COUNT=$(cat /tmp/failed_runs.json | jq 'length')
@@ -141,17 +143,17 @@ jobs:
           echo "[Fixer] Found ${FAILED_COUNT} failed workflow runs"
           cat /tmp/failed_runs.json | jq -r '.[] | "  - \(.name): \(.url)"'
 
-          # Get check runs details
+          # Get check runs details (gh pr checks uses 'state' not 'conclusion')
           gh pr checks ${PR_NUMBER} \
             --repo ${{ github.repository }} \
-            --json name,conclusion,detailsUrl \
+            --json name,state,link \
             > /tmp/check_runs.json
 
-          FAILED_CHECKS=$(cat /tmp/check_runs.json | jq '[.[] | select(.conclusion == "FAILURE" or .conclusion == "TIMED_OUT")]')
+          FAILED_CHECKS=$(cat /tmp/check_runs.json | jq '[.[] | select(.state == "FAILURE" or .state == "TIMED_OUT")]')
           echo "${FAILED_CHECKS}" > /tmp/failed_checks.json
 
           echo "[Fixer] Failed checks:"
-          echo "${FAILED_CHECKS}" | jq -r '.[] | "  - \(.name): \(.conclusion)"'
+          echo "${FAILED_CHECKS}" | jq -r '.[] | "  - \(.name): \(.state)"'
 
           echo "failed-count=${FAILED_COUNT}" >> $GITHUB_OUTPUT
           echo "head-sha=${HEAD_SHA}" >> $GITHUB_OUTPUT
@@ -187,21 +189,30 @@ jobs:
         run: |
           PR_NUMBER="${{ needs.check-ci-status.outputs.pr-number }}"
 
-          FAILED_CHECKS=$(cat /tmp/failed_checks.json | jq -r '.[] | "- **\(.name)**: \(.conclusion)"' | head -10)
+          FAILED_CHECKS=$(cat /tmp/failed_checks.json | jq -r '.[] | "- **\(.name)**: \(.state)"' | head -10)
 
           gh pr comment ${PR_NUMBER} \
             --repo ${{ github.repository }} \
             --body "$(cat <<EOF
-          ## 🔧 Auto-Fixing CI Failures
+          ## 🔧 CI Auto-Fix Started
 
-          Claude Code is analyzing and fixing the failed CI checks.
+          **Status:** ⏳ In progress...
+
+          Claude Code (Opus 4.5) is analyzing and fixing CI failures.
 
           **Failed Checks:**
           ${FAILED_CHECKS}
 
-          **Workflow:** [Run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          | Step | Status |
+          |------|--------|
+          | 🔍 Analyze failures | In progress |
+          | ✏️ Apply fixes | Pending |
+          | 📌 Push fixes | Pending |
 
-          _This may take 15-30 minutes..._
+          > [!NOTE]
+          > This may take **15-30 minutes**. Fixes will be pushed directly to this PR.
+
+          [View workflow run →](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
           EOF
           )"
 
@@ -212,7 +223,7 @@ jobs:
           github_token: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           show_full_output: true
-          claude_args: "--model claude-sonnet-4-5-20250929 --max-turns 150 --allowed-tools Read,Write,Edit,Bash,Grep,Glob"
+          claude_args: "--model claude-opus-4-5-20251101 --max-turns 150 --allowed-tools Read,Write,Edit,Bash,Grep,Glob"
           prompt: |
             # Fix CI Failures in Upstream Sync Resolution PR
 
@@ -469,16 +480,31 @@ jobs:
             gh pr comment ${PR_NUMBER} \
               --repo ${{ github.repository }} \
               --body "$(cat <<EOF
-          ## ✅ CI Fix Attempt Complete
+          ## ✅ CI Fix Complete
 
-          Claude Code has analyzed and attempted to fix the CI failures.
+          Fixes applied and pushed to this PR.
 
-          **Next Steps:**
-          - CI will re-run automatically on the new commits
-          - Monitor the check results on this PR
-          - If failures persist, manual review may be needed
+          | Step | Status |
+          |------|--------|
+          | 🔍 Analyze failures | ✅ Complete |
+          | ✏️ Apply fixes | ✅ Complete |
+          | 📌 Push fixes | ✅ Complete |
 
-          **Workflow:** [Run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          > [!NOTE]
+          > CI will re-run automatically. Monitor check results below.
+
+          ### Next Steps
+
+          1. Wait for CI checks to complete
+          2. If failures persist, manual review may be needed
+          3. Merge when all checks pass
+
+          <details>
+          <summary>🔧 Workflow Details (click to expand)</summary>
+
+          **Workflow Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          </details>
           EOF
           )"
           else
@@ -487,17 +513,33 @@ jobs:
               --body "$(cat <<EOF
           ## ❌ CI Fix Failed
 
-          Claude Code encountered an error while trying to fix the CI failures.
+          The automated fix encountered an error.
 
-          **Manual intervention needed:**
-          - Check the workflow logs: [Run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-          - Review the error messages
-          - May need human debugging
+          | Step | Status |
+          |------|--------|
+          | 🔍 Analyze failures | ${{ steps.claude-fix.outcome }} |
+          | ✏️ Apply fixes | - |
+          | 📌 Push fixes | - |
+
+          > [!WARNING]
+          > Manual intervention required. Check the workflow logs below.
+
+          <details>
+          <summary>🔧 Troubleshooting (click to expand)</summary>
 
           **Common issues:**
           - Complex merge conflicts requiring human judgment
           - Multiple interrelated failures
           - Test failures requiring code logic changes
+
+          **Manual fix steps:**
+          1. Check the workflow logs
+          2. Review error messages
+          3. Fix issues locally and push
+
+          </details>
+
+          [View workflow logs →](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
           EOF
           )"
           fi

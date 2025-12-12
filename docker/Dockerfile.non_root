@@ -1,6 +1,7 @@
-# Base images
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/python:latest-dev
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/python:latest-dev
+# Base images - Using wolfi-base to control Python version (avoids Python 3.14 issues)
+# See: https://github.com/BerriAI/litellm/pull/17406
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base
 
 # -----------------
 # Builder Stage
@@ -8,9 +9,13 @@ ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/python:latest-dev
 FROM $LITELLM_BUILD_IMAGE AS builder
 WORKDIR /app
 
-# Install build dependencies
+# Install build dependencies including Python
 USER root
-RUN apk add --no-cache build-base bash \
+RUN apk add --no-cache \
+    python3 \
+    py3-pip \
+    build-base \
+    bash \
   && pip install --no-cache-dir --upgrade pip build
 
 # Copy project files
@@ -40,9 +45,20 @@ ENV PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x"
 RUN pip install --no-cache-dir prisma==0.11.0 nodejs-bin==18.4.0a4 && \
     mkdir -p /app/.cache/npm
 
+# Dynamically detect Python version and set up paths
+# Copy packages to version-agnostic location for runtime stage
+RUN PYTHON_VERSION=$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')") && \
+    SITE_PACKAGES="/usr/lib/python${PYTHON_VERSION}/site-packages" && \
+    echo "Detected Python version: ${PYTHON_VERSION}" && \
+    mkdir -p /app/.python-packages && \
+    cp -r ${SITE_PACKAGES}/nodejs* /app/.python-packages/ && \
+    cp -r ${SITE_PACKAGES}/prisma* /app/.python-packages/ && \
+    cp -r ${SITE_PACKAGES}/tomlkit* /app/.python-packages/ && \
+    cp -r ${SITE_PACKAGES}/nodeenv* /app/.python-packages/ && \
+    ln -sf ${SITE_PACKAGES}/nodejs/bin /app/.nodejs-bin
 
-# Set PATH for Node.js
-ENV PATH="/usr/lib/python3.13/site-packages/nodejs/bin:${PATH}"
+# Set PATH for Node.js using symlink
+ENV PATH="/app/.nodejs-bin:${PATH}"
 
 # Download Prisma CLI and all required binaries
 RUN NPM_CONFIG_CACHE=/app/.cache/npm \
@@ -59,10 +75,10 @@ RUN prisma generate && \
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 WORKDIR /app
 
-# Install runtime dependencies
+# Install runtime dependencies including Python
 USER root
 RUN apk upgrade --no-cache && \
-  apk add --no-cache bash libstdc++ ca-certificates openssl supervisor
+  apk add --no-cache python3 py3-pip bash libstdc++ ca-certificates openssl supervisor nodejs npm
 
 # Copy only necessary artifacts from builder stage for runtime
 COPY . .
@@ -76,14 +92,19 @@ COPY --from=builder /wheels/ /wheels/
 COPY --from=builder /app/.cache /app/.cache
 # Copy litellm-proxy-extras directory if it has migrations
 COPY --from=builder /app/litellm-proxy-extras /app/litellm-proxy-extras
-# Copy nodejs and prisma installations from builder (needed by Prisma CLI)
-# Copy both the packages and their .dist-info directories for proper Python package registration
-COPY --from=builder /usr/lib/python3.13/site-packages/nodejs* /usr/lib/python3.13/site-packages/
-COPY --from=builder /usr/lib/python3.13/site-packages/prisma* /usr/lib/python3.13/site-packages/
-COPY --from=builder /usr/lib/python3.13/site-packages/tomlkit* /usr/lib/python3.13/site-packages/
-COPY --from=builder /usr/lib/python3.13/site-packages/nodeenv* /usr/lib/python3.13/site-packages/
-# Copy the prisma executable
+# Copy version-agnostic python packages cache from builder
+COPY --from=builder /app/.python-packages /app/.python-packages
+# Copy the prisma executables
 COPY --from=builder /usr/bin/prisma /usr/bin/prisma
+COPY --from=builder /usr/bin/prisma-client-py /usr/bin/prisma-client-py
+
+# Install packages from version-agnostic cache to the correct site-packages location
+RUN PYTHON_VERSION=$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')") && \
+    SITE_PACKAGES="/usr/lib/python${PYTHON_VERSION}/site-packages" && \
+    echo "Runtime Python version: ${PYTHON_VERSION}" && \
+    cp -r /app/.python-packages/* ${SITE_PACKAGES}/ && \
+    ln -sf ${SITE_PACKAGES}/nodejs/bin /app/.nodejs-bin && \
+    rm -rf /app/.python-packages
 
 # Install package from wheel and dependencies
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ \
@@ -104,16 +125,16 @@ ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries
 ENV PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x"
 
 # Make entrypoints executable
-# Prisma and nodejs-bin are already copied from builder stage
 RUN chmod +x docker/entrypoint.sh && \
     chmod +x docker/prod_entrypoint.sh && \
-    chmod +x /usr/bin/prisma
+    chmod +x /usr/bin/prisma && \
+    chmod +x /usr/bin/prisma-client-py
 
 # Create temporary directories needed at runtime
 RUN mkdir -p /tmp/.npm /nonexistent /.npm
 
-# Set PATH so node is available for npm scripts (same as builder)
-ENV PATH="/usr/lib/python3.13/site-packages/nodejs/bin:${PATH}"
+# Set PATH using version-agnostic symlink
+ENV PATH="/app/.nodejs-bin:${PATH}"
 
 # Verify Prisma CLI works in runtime
 RUN prisma --version && \
