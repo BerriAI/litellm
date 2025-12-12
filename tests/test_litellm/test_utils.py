@@ -19,10 +19,13 @@ from litellm.types.utils import (
     StreamingChoices,
 )
 from litellm.utils import (
-    ProviderConfigManager,
     TextCompletionStreamWrapper,
-    get_llm_provider,
     get_optional_params_image_gen,
+    is_text_content,
+    shorten_message_to_fit_limit,
+    shorten_message_with_list_content,
+    trim_messages,
+    trim_text,
 )
 
 # Adds the parent directory to the system path
@@ -758,10 +761,10 @@ def test_get_model_info_gemini():
     for model, info in model_map.items():
         if (
             model.startswith("gemini/")
-            and not "gemma" in model
-            and not "learnlm" in model
-            and not "imagen" in model
-            and not "veo" in model
+            and "gemma" not in model
+            and "learnlm" not in model
+            and "imagen" not in model
+            and "veo" not in model
         ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"
@@ -846,6 +849,7 @@ def test_check_provider_match():
     model_info = {"litellm_provider": "bedrock"}
     assert litellm.utils._check_provider_match(model_info, "openai") is False
 
+
 def test_get_provider_rerank_config():
     """
     Test the get_provider_rerank_config function for various providers
@@ -854,8 +858,11 @@ def test_get_provider_rerank_config():
     from litellm.utils import LlmProviders, ProviderConfigManager
 
     # Test for hosted_vllm provider
-    config = ProviderConfigManager.get_provider_rerank_config("my_model", LlmProviders.HOSTED_VLLM, 'http://localhost', [])
+    config = ProviderConfigManager.get_provider_rerank_config(
+        "my_model", LlmProviders.HOSTED_VLLM, "http://localhost", []
+    )
     assert isinstance(config, HostedVLLMRerankConfig)
+
 
 # Models that should be skipped during testing
 OLD_PROVIDERS = ["aleph_alpha", "palm"]
@@ -1367,7 +1374,7 @@ class TestProxyFunctionCalling:
         direct_result = supports_function_calling(model=direct_model)
         proxy_result = supports_function_calling(model=proxy_model)
 
-        print(f"\nDemonstration of proxy model resolution:")
+        print("\nDemonstration of proxy model resolution:")
         print(
             f"Direct model '{direct_model}' supports function calling: {direct_result}"
         )
@@ -2271,9 +2278,7 @@ def test_anthropic_claude_4_invoke_chat_provider_config():
 
 def test_bedrock_application_inference_profile():
     model = "arn:aws:bedrock:us-east-2:<AWS-ACCOUNT-ID>:inference-profile/us.anthropic.claude-3-5-haiku-20241022-v1:0"
-    from pydantic import BaseModel
 
-    from litellm import completion
     from litellm.utils import supports_tool_choice
 
     result = supports_tool_choice(model, custom_llm_provider="bedrock")
@@ -2340,7 +2345,6 @@ def test_block_key_hashing_logic():
     """
     Test that block_key() function only hashes keys that start with "sk-"
     """
-    import hashlib
 
     from litellm.proxy.utils import hash_token
 
@@ -2513,3 +2517,323 @@ class TestGetValidModelsWithCLI:
             assert "headers" in call_kwargs
             headers = call_kwargs["headers"]
             assert headers.get("Authorization") == "Bearer sk-test-cli-key-123"
+
+
+def test_trim_messages_with_list_content() -> None:
+    # This minimal case reproduces the bug
+    original_text = "First text, very long content that needs trimming." * 10
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": original_text},
+            ],
+        },
+    ]
+    result = trim_messages(messages, max_tokens=50)
+    assert result != messages
+    assert len(result[0]["content"][0]["text"]) < len(original_text)
+    assert ".." in result[0]["content"][0]["text"]
+
+
+def test_trim_text_basic() -> None:
+    """Test basic text trimming."""
+    text = "This is a long text that needs trimming" * 5
+    result = trim_text(text, tokens_needed=50, total_tokens=100)
+
+    assert len(result) < len(text)
+    assert ".." in result
+    assert result.startswith("This")
+    assert result.endswith("g")
+
+
+def test_trim_text_very_short() -> None:
+    """Test trimming to very short length."""
+    text = "This is a long text"
+    result = trim_text(text, tokens_needed=1, total_tokens=100)
+
+    assert result == ".."
+
+
+def test_string_content_no_trimming_needed() -> None:
+    """Test that short messages are not trimmed."""
+    message = {"role": "user", "content": "Short message"}
+    result = shorten_message_to_fit_limit(message, tokens_needed=1000, model="gpt-4")
+    assert result["content"] == "Short message"
+
+
+def test_string_content_with_trimming() -> None:
+    """Test that long string messages are trimmed."""
+    long_text = "This is a very long message that needs trimming. " * 50
+    message = {"role": "user", "content": long_text}
+    result = shorten_message_to_fit_limit(message, tokens_needed=50, model="gpt-4")
+    assert len(result["content"]) < len(long_text)
+    assert ".." in result["content"]
+
+
+def test_gpt_minimum_tokens_check() -> None:
+    """Test that GPT models don't trim if tokens_needed is too small."""
+    message = {"role": "user", "content": "Any message"}
+    result = shorten_message_to_fit_limit(message, tokens_needed=5, model="gpt-4")
+    # Should return unchanged due to minimum token check
+    assert result["content"] == "Any message"
+
+
+def test_list_no_trimming_needed() -> None:
+    """Test that messages within token limit are not modified."""
+    message = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Short text"},
+        ],
+    }
+    result = shorten_message_with_list_content(
+        message, tokens_needed=1000, model="gpt-4"
+    )
+    assert len(result["content"]) == 1
+    item = result["content"][0]
+    assert is_text_content(item)
+    if is_text_content(item):
+        assert item["text"] == "Short text"
+
+
+def test_list_text_only_with_trimming() -> None:
+    """Test trimming of text-only multimodal message."""
+    long_text = "This is a very long text. " * 100
+    message = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": long_text},
+        ],
+    }
+    result = shorten_message_with_list_content(message, tokens_needed=50, model="gpt-4")
+    assert len(result["content"]) == 1
+    item = result["content"][0]
+    assert is_text_content(item)
+    if is_text_content(item):
+        assert len(item["text"]) < len(long_text)
+        assert ".." in item["text"]
+
+
+def test_list_multiple_text_items() -> None:
+    """Test trimming with multiple text items."""
+    message = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "First text. " * 50},
+            {"type": "text", "text": "Second text. " * 50},
+            {"type": "text", "text": "Third text. " * 50},
+        ],
+    }
+    result = shorten_message_with_list_content(
+        message, tokens_needed=100, model="gpt-4"
+    )
+    # Should keep some items, possibly trim the last one
+    assert isinstance(result["content"], list)
+    assert len(result["content"]) >= 1
+    max_items_in_result = 3
+    assert len(result["content"]) <= max_items_in_result
+
+
+def test_list_text_and_image() -> None:
+    """Test trimming with text and image items."""
+    message = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Look at this image:"},
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": (
+                        "data:image/png;base64,"
+                        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+                    )
+                },
+            },
+            {"type": "text", "text": "Text after image"},
+        ],
+    }
+    result = shorten_message_with_list_content(
+        message, tokens_needed=100, model="gpt-4"
+    )
+    # All items should fit
+    max_items_in_result = 3
+    assert len(result["content"]) == max_items_in_result
+
+
+def test_list_image_preservation() -> None:
+    """Test that images are preserved when possible."""
+    message = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Very long text. " * 100},
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": (
+                        "data:image/png;base64,"
+                        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+                    )
+                },
+            },
+        ],
+    }
+    result = shorten_message_with_list_content(
+        message, tokens_needed=500, model="gpt-4"
+    )
+    # Should have text (possibly trimmed) and image
+    assert isinstance(result["content"], list)
+    # Check that we still have at least one item
+    assert len(result["content"]) >= 1
+
+
+def test_list_image_removal_when_oversized() -> None:
+    """Test that very large images are replaced with text placeholder."""
+    # Create a message with a very large base64 image (simulated)
+    large_image_url = "data:image/png;base64," + "A" * 100000  # Very long base64
+    message = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Check this huge image:"},
+            {"type": "image_url", "image_url": {"url": large_image_url}},
+        ],
+    }
+    result = shorten_message_with_list_content(message, tokens_needed=50, model="gpt-4")
+    # Image should be replaced with text
+    assert isinstance(result["content"], list)
+    # Check if the image was replaced
+    has_replacement_text = any(
+        is_text_content(item) and "[Multi-modal item removed:" in item.get("text", "")
+        for item in result["content"]
+    )
+    # Either replaced or removed
+    assert has_replacement_text or len(result["content"]) == 1
+
+
+def test_list_greedy_packing() -> None:
+    """Test that greedy packing keeps items in order."""
+    message = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "First. " * 10},
+            {"type": "text", "text": "Second. " * 10},
+            {"type": "text", "text": "Third. " * 10},
+            {"type": "text", "text": "Fourth. " * 10},
+        ],
+    }
+    result = shorten_message_with_list_content(
+        message, tokens_needed=100, model="gpt-4"
+    )
+    # Should keep items from the beginning
+    assert isinstance(result["content"], list)
+    assert len(result["content"]) >= 1
+    assert all(is_text_content(item) for item in result["content"])
+    first_item = result["content"][0]
+    assert "First" in first_item.get("text", "")
+
+
+def test_list_empty_content_list() -> None:
+    """Test handling of empty content list."""
+    message = {
+        "role": "user",
+        "content": [],
+    }
+    result = shorten_message_with_list_content(message, tokens_needed=50, model="gpt-4")
+    assert result["content"] == []
+
+
+def test_list_not_a_list_raises_error() -> None:
+    """Test that non-list content raises ValueError."""
+    message = {
+        "role": "user",
+        "content": "This is a string, not a list",
+    }
+    with pytest.raises(ValueError, match="Content is not a list"):
+        shorten_message_with_list_content(message, tokens_needed=50, model="gpt-4")
+
+
+def test_list_max_attempts_with_raise_error() -> None:
+    """Test that max attempts with raise_error_on_max_limit raises ValueError."""
+    # Create a scenario that's hard to trim (though in practice this is rare)
+    very_long_text_length = 10000
+    message = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "x" * very_long_text_length},  # Very long text
+        ],
+    }
+    # This should raise ValueError due to max attempts
+    with pytest.raises(ValueError, match="Failed to trim") as exc_info:
+        shorten_message_with_list_content(
+            message, tokens_needed=1, model="gpt-4", raise_error_on_max_limit=True
+        )
+    # Verify the error message
+    assert "Failed to trim" in str(exc_info.value)
+
+
+def test_dispatches_to_string_handler() -> None:
+    """Test that string content is handled by string logic."""
+    message = {"role": "user", "content": "String message " * 100}
+    result = shorten_message_to_fit_limit(message, tokens_needed=50, model="gpt-4")
+    assert isinstance(result["content"], str)
+    assert ".." in result["content"]
+
+
+def test_preserves_message_role() -> None:
+    """Test that message role is preserved after trimming."""
+    message = {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": "Long assistant message " * 100},
+        ],
+    }
+    result = shorten_message_to_fit_limit(message, tokens_needed=50, model="gpt-4")
+    assert result["role"] == "assistant"
+
+
+def test_zero_tokens_needed() -> None:
+    """Test behavior when tokens_needed is 0."""
+    message = {
+        "role": "user",
+        "content": [{"type": "text", "text": "Any text"}],
+    }
+    result = shorten_message_with_list_content(message, tokens_needed=0, model="gpt-4")
+    # Should return empty or minimal content
+    assert isinstance(result["content"], list)
+
+
+def test_single_character_text() -> None:
+    """Test trimming of very short text."""
+    message = {
+        "role": "user",
+        "content": [{"type": "text", "text": "x"}],
+    }
+    result = shorten_message_with_list_content(
+        message, tokens_needed=1000, model="gpt-4"
+    )
+    item = result["content"][0]
+    assert is_text_content(item)
+    if is_text_content(item):
+        assert item["text"] == "x"
+
+
+def test_mixed_content_with_tight_budget() -> None:
+    """Test mixed content with very tight token budget."""
+    message = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Text before"},
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfF"
+                    "cSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+                },
+            },
+            {"type": "text", "text": "Text after"},
+        ],
+    }
+    result = shorten_message_with_list_content(message, tokens_needed=50, model="gpt-4")
+    # With tight budget, should keep at least some content
+    assert isinstance(result["content"], list)
+    assert len(result["content"]) >= 1
