@@ -21,7 +21,7 @@ import {
   ToolOutlined,
   UserOutlined,
 } from "@ant-design/icons";
-import { ConfigProvider, Layout, Menu } from "antd";
+import { Badge, ConfigProvider, Layout, Menu } from "antd";
 import type { MenuProps } from "antd";
 import { all_admin_roles, internalUserRoles, isAdminRole, rolesWithWriteAccess } from "../utils/roles";
 import UsageIndicator from "./usage_indicator";
@@ -90,7 +90,11 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
         {
           key: "agents",
           page: "agents",
-          label: "Agents",
+          label: (
+            <span className="flex items-center gap-4">
+              Agents <Badge color="blue" count="New" />
+            </span>
+          ),
           icon: <RobotOutlined />,
           roles: rolesWithWriteAccess,
         },
@@ -136,9 +140,13 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
         {
           key: "new_usage",
           page: "new_usage",
-          label: "Usage",
           icon: <BarChartOutlined />,
           roles: [...all_admin_roles, ...internalUserRoles],
+          label: (
+            <span className="flex items-center gap-4">
+              Usage <Badge color="blue" count="New" />
+            </span>
+        ),
         },
         {
           key: "logs",
