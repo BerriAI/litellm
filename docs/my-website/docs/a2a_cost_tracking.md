@@ -104,7 +104,7 @@ Navigate to the Agent Usage tab in the Admin UI to view agent-level spend analyt
 
 Go to the Usage page in the Admin UI (`PROXY_BASE_URL/ui/?login=success&page=new_usage`) and click on the **Agent Usage** tab.
 
-<Image img={require('../../img/agent_usage_ui_navigation.png')} />
+<Image img={require('../img/agent_usage_ui_navigation.png')} />
 
 ### 2. View Agent Analytics
 
@@ -115,7 +115,7 @@ The Agent Usage dashboard provides:
 - **Model usage breakdown**: Understand which models each agent uses
 - **Activity metrics**: Track requests, tokens, and success rates per agent
 
-<Image img={require('../../img/agent_usage_analytics.png')} />
+<Image img={require('../img/agent_usage_analytics.png')} />
 
 ### 3. Filter by Agent
 
@@ -125,7 +125,7 @@ Use the agent filter dropdown to view spend for specific agents:
 - View filtered analytics, spend logs, and activity metrics
 - Compare spend across different agents
 
-<Image img={require('../../img/agent_usage_filter.png')} />
+<Image img={require('../img/agent_usage_filter.png')} />
 
 ## Cost Configuration Options
 
