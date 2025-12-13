@@ -22,7 +22,6 @@ import {
   getEndpointConfig,
   isAgentEndpoint,
   hasValidSelection,
-  getComparisonSelection,
   modelOptionsToSelectorOptions,
   agentOptionsToSelectorOptions,
 } from "./endpoint_config";
