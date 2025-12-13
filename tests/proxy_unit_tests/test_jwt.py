@@ -413,7 +413,7 @@ async def test_team_token_output(prisma_client, audience, monkeypatch):
 
     bearer_token = "Bearer " + token
 
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "headers": []})
     request._url = URL(url="/chat/completions")
 
     ## 1. INITIAL TEAM CALL - should fail
@@ -446,7 +446,7 @@ async def test_team_token_output(prisma_client, audience, monkeypatch):
                 models=["gpt-3.5-turbo", "gpt-4"],
             ),
             user_api_key_dict=result,
-            http_request=Request(scope={"type": "http"}),
+            http_request=Request(scope={"type": "http", "headers": []}),
         )
     except Exception as e:
         pytest.fail(f"This should not fail - {str(e)}")
@@ -614,7 +614,7 @@ async def aaaatest_user_token_output(
 
     bearer_token = "Bearer " + token
 
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "headers": []})
     request._url = URL(url="/chat/completions")
 
     ## 1. INITIAL TEAM CALL - should fail
@@ -641,7 +641,7 @@ async def aaaatest_user_token_output(
                 models=["gpt-3.5-turbo", "gpt-4"],
             ),
             user_api_key_dict=result,
-            http_request=Request(scope={"type": "http"}),
+            http_request=Request(scope={"type": "http", "headers": []}),
         )
         if default_team_id:
             await new_team(
@@ -652,7 +652,7 @@ async def aaaatest_user_token_output(
                     models=["gpt-3.5-turbo", "gpt-4"],
                 ),
                 user_api_key_dict=result,
-                http_request=Request(scope={"type": "http"}),
+                http_request=Request(scope={"type": "http", "headers": []}),
             )
     except Exception as e:
         pytest.fail(f"This should not fail - {str(e)}")
@@ -834,7 +834,7 @@ async def test_allowed_routes_admin(
             actual_routes.extend(LiteLLMRoutes[route].value)
 
     for route in actual_routes:
-        request = Request(scope={"type": "http"})
+        request = Request(scope={"type": "http", "headers": []})
 
         request._url = URL(url=route)
 
@@ -999,7 +999,7 @@ async def test_allow_access_by_email(
     ## RUN IT THROUGH USER API KEY AUTH
     bearer_token = "Bearer " + token
 
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "headers": []})
 
     request._url = URL(url="/chat/completions")
 
