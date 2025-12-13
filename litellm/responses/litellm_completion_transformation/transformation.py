@@ -692,22 +692,45 @@ class LiteLLMCompletionResponsesConfig:
                     user_location=_user_location,
                 )
             else:
-                typed_tool = cast(FunctionToolParam, tool)
-                # Ensure parameters has "type": "object" as required by providers like Anthropic
-                parameters = dict(typed_tool.get("parameters", {}) or {})
-                if not parameters or "type" not in parameters:
-                    parameters["type"] = "object"
-                chat_completion_tools.append(
-                    ChatCompletionToolParam(
-                        type="function",
-                        function=ChatCompletionToolParamFunctionChunk(
-                            name=typed_tool.get("name") or "",
-                            description=typed_tool.get("description") or "",
-                            parameters=parameters,
-                            strict=typed_tool.get("strict", False) or False,
-                        ),
+                # Handle both Responses API format (flat) and Chat Completion format (nested under 'function')
+                # Responses API format: {"type": "function", "name": "...", "parameters": {...}}
+                # Chat Completion format: {"type": "function", "function": {"name": "...", "parameters": {...}}}
+                function_data = tool.get("function")
+                if function_data and isinstance(function_data, dict):
+                    # Chat Completion format - already in the right structure
+                    # Ensure parameters has "type": "object" as required by providers like Anthropic
+                    parameters = dict(function_data.get("parameters", {}) or {})
+                    if not parameters or "type" not in parameters:
+                        parameters["type"] = "object"
+                    chat_completion_tools.append(
+                        ChatCompletionToolParam(
+                            type="function",
+                            function=ChatCompletionToolParamFunctionChunk(
+                                name=function_data.get("name") or "",
+                                description=function_data.get("description") or "",
+                                parameters=parameters,
+                                strict=function_data.get("strict", False) or False,
+                            ),
+                        )
                     )
-                )
+                else:
+                    # Responses API format (flat)
+                    typed_tool = cast(FunctionToolParam, tool)
+                    # Ensure parameters has "type": "object" as required by providers like Anthropic
+                    parameters = dict(typed_tool.get("parameters", {}) or {})
+                    if not parameters or "type" not in parameters:
+                        parameters["type"] = "object"
+                    chat_completion_tools.append(
+                        ChatCompletionToolParam(
+                            type="function",
+                            function=ChatCompletionToolParamFunctionChunk(
+                                name=typed_tool.get("name") or "",
+                                description=typed_tool.get("description") or "",
+                                parameters=parameters,
+                                strict=typed_tool.get("strict", False) or False,
+                            ),
+                        )
+                    )
         return chat_completion_tools, web_search_options
 
     @staticmethod

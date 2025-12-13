@@ -339,6 +339,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         from litellm.responses.utils import ResponseAPILoggingUtils
         from litellm.types.llms.openai import ResponsesAPIResponse
+        from litellm.types.responses.main import GenericResponseOutputItem, OutputFunctionToolCall
         from litellm.types.utils import Choices, Message
 
         if not isinstance(raw_response, ResponsesAPIResponse):
@@ -379,6 +380,50 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
                     reasoning_content = None  # flush reasoning content
                     index += 1
+            elif isinstance(item, GenericResponseOutputItem):
+                # Handle GenericResponseOutputItem (used by some providers like Anthropic via Cursor endpoint)
+                for content in item.content:
+                    response_text = getattr(content, "text", "")
+                    msg = Message(
+                        role=item.role,
+                        content=response_text if response_text else "",
+                        reasoning_content=reasoning_content,
+                    )
+
+                    choices.append(
+                        Choices(
+                            message=msg,
+                            finish_reason="stop",
+                            index=index,
+                        )
+                    )
+
+                    reasoning_content = None  # flush reasoning content
+                    index += 1
+            elif isinstance(item, OutputFunctionToolCall):
+                # Handle OutputFunctionToolCall (LiteLLM's internal type for tool calls)
+                from litellm.types.utils import ChatCompletionMessageToolCall, Function
+                
+                tool_call = ChatCompletionMessageToolCall(
+                    id=item.id or item.call_id or "",
+                    type="function",
+                    function=Function(
+                        name=item.name or "",
+                        arguments=item.arguments or "",
+                    ),
+                )
+                
+                msg = Message(
+                    content=None,
+                    tool_calls=[tool_call],
+                    reasoning_content=reasoning_content,
+                )
+
+                choices.append(
+                    Choices(message=msg, finish_reason="tool_calls", index=index)
+                )
+                reasoning_content = None  # flush reasoning content
+                index += 1
             elif isinstance(item, ResponseFunctionToolCall):
                 from litellm.responses.litellm_completion_transformation.transformation import (
                     LiteLLMCompletionResponsesConfig,
