@@ -49,7 +49,7 @@ import {
   adminGlobalActivityPerModel,
   getProxyUISettings,
 } from "./networking";
-import TopKeyView from "./top_key_view";
+import TopKeyView from "./UsagePage/components/EntityUsage/TopKeyView";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 console.log("process.env.NODE_ENV", process.env.NODE_ENV);
 
@@ -589,14 +589,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
                         Project Spend {new Date().toLocaleString("default", { month: "long" })} 1 -{" "}
                         {new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate()}
                       </Text>
-                      <ViewUserSpend
-                        userID={userID}
-                        userRole={userRole}
-                        accessToken={accessToken}
-                        userSpend={totalMonthlySpend}
-                        selectedTeam={null}
-                        userMaxBudget={null}
-                      />
+                      <ViewUserSpend userSpend={totalMonthlySpend} selectedTeam={null} userMaxBudget={null} />
                     </Col>
                     <Col numColSpan={2}>
                       <Card>
@@ -616,14 +609,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
                     <Col numColSpan={1}>
                       <Card className="h-full">
                         <Title>Top Virtual Keys</Title>
-                        <TopKeyView
-                          topKeys={topKeys}
-                          accessToken={accessToken}
-                          userID={userID}
-                          userRole={userRole}
-                          teams={null}
-                          premiumUser={premiumUser}
-                        />
+                        <TopKeyView topKeys={topKeys} teams={null} />
                       </Card>
                     </Col>
                     <Col numColSpan={1}>
