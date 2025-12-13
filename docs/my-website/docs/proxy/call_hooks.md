@@ -6,9 +6,7 @@ import Image from '@theme/IdealImage';
 - Reject data before making llm api calls / before returning the response 
 - Enforce 'user' param for all openai endpoint calls
 
-:::tip
-**Understanding Callback Hooks?** Check out our [Callback Management Guide](../observability/callback_management.md) to understand the differences between proxy-specific hooks like `async_pre_call_hook` and general logging hooks like `async_log_success_event`.
-:::
+
 
 ## Which Hook Should I Use?
 
