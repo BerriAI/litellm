@@ -96,6 +96,37 @@ Find your agent request in the list. You'll see the cost column showing the amou
 
 ![View Cost in Logs](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-13/1ae167ec-1a43-48a3-9251-43d4cb3e57f5/ascreenshot.jpeg?tl_px=335,11&br_px=2536,1242&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=524,277)
 
+## View Spend in Usage Page
+
+Navigate to the Agent Usage tab in the Admin UI to view agent-level spend analytics:
+
+### 1. Access Agent Usage
+
+Go to the Usage page in the Admin UI (`PROXY_BASE_URL/ui/?login=success&page=new_usage`) and click on the **Agent Usage** tab.
+
+<Image img={require('../../img/agent_usage_ui_navigation.png')} />
+
+### 2. View Agent Analytics
+
+The Agent Usage dashboard provides:
+
+- **Total spend per agent**: View aggregated spend across all agents
+- **Daily spend trends**: See how agent spend changes over time
+- **Model usage breakdown**: Understand which models each agent uses
+- **Activity metrics**: Track requests, tokens, and success rates per agent
+
+<Image img={require('../../img/agent_usage_analytics.png')} />
+
+### 3. Filter by Agent
+
+Use the agent filter dropdown to view spend for specific agents:
+
+- Select one or more agent IDs from the dropdown
+- View filtered analytics, spend logs, and activity metrics
+- Compare spend across different agents
+
+<Image img={require('../../img/agent_usage_filter.png')} />
+
 ## Cost Configuration Options
 
 You can mix and match these options depending on your pricing model:
