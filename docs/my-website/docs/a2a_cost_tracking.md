@@ -1,3 +1,5 @@
+import Image from '@theme/IdealImage';
+
 # A2A Agent Cost Tracking
 
 LiteLLM supports adding custom cost tracking for A2A agents. You can configure:
@@ -131,11 +133,11 @@ Use the agent filter dropdown to view spend for specific agents:
 
 You can mix and match these options depending on your pricing model:
 
-| Field | Description |
-|-------|-------------|
-| **Cost Per Query ($)** | Fixed cost charged for each agent request |
-| **Input Cost Per Token ($)** | Cost per input token processed |
-| **Output Cost Per Token ($)** | Cost per output token generated |
+| Field                         | Description                               |
+| ----------------------------- | ----------------------------------------- |
+| **Cost Per Query ($)**        | Fixed cost charged for each agent request |
+| **Input Cost Per Token ($)**  | Cost per input token processed            |
+| **Output Cost Per Token ($)** | Cost per output token generated           |
 
 For most use cases, a flat cost per query is simplest. Use token-based pricing if your agent costs vary significantly based on input/output length.
 
@@ -143,4 +145,3 @@ For most use cases, a flat cost per query is simplest. Use token-based pricing i
 
 - [A2A Agent Gateway](./a2a.md)
 - [Spend Tracking](./proxy/cost_tracking.md)
-
