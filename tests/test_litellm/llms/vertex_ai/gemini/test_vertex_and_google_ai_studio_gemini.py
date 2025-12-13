@@ -806,7 +806,7 @@ def test_vertex_ai_streaming_usage_web_search_calculation():
             {
                 "content": {"parts": [{"text": "Hello"}]},
                 "groundingMetadata": [
-                    {"webSearchQueries": ["What is the capital of France?"]}
+                    {"webSearchQueries": ["", "What is the capital of France?", "Capital of France"]}
                 ],
             }
         ],
@@ -821,7 +821,7 @@ def test_vertex_ai_streaming_usage_web_search_calculation():
 
     usage: Usage = completed_response.usage
     assert usage.prompt_tokens_details.web_search_requests is not None
-    assert usage.prompt_tokens_details.web_search_requests == 1
+    assert usage.prompt_tokens_details.web_search_requests == 2
 
 
 def test_vertex_ai_transform_parts():

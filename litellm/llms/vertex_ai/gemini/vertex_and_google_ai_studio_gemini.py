@@ -1553,9 +1553,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             for grounding_metadata_item in grounding_metadata:
                 web_search_queries = grounding_metadata_item.get("webSearchQueries")
                 if web_search_queries and web_search_requests:
-                    web_search_requests += len(web_search_queries)
+                    web_search_requests += len([q for q in web_search_queries if q])
                 elif web_search_queries:
-                    web_search_requests = len(grounding_metadata)
+                    web_search_requests = len([q for q in web_search_queries if q])
         return web_search_requests
 
     @staticmethod
