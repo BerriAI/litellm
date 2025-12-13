@@ -388,6 +388,10 @@ async def create_file(  # noqa: PLR0915
                     },
                 )
             
+            # Type narrowing: assert it's str after validation (mypy understands assert for narrowing)
+            assert not isinstance(expires_after_seconds_str, UploadFile), "Already validated above"
+            expires_after_seconds_str_validated: str = expires_after_seconds_str
+            
             # Validate anchor is "created_at"
             if expires_after_anchor != "created_at":
                 raise HTTPException(
@@ -399,7 +403,7 @@ async def create_file(  # noqa: PLR0915
             
             # Convert seconds to int
             try:
-                expires_after_seconds = int(expires_after_seconds_str)
+                expires_after_seconds = int(expires_after_seconds_str_validated)
             except (ValueError, TypeError) as e:
                 raise HTTPException(
                     status_code=400,
