@@ -1124,3 +1124,22 @@ def test_vertex_ai_moonshot_uses_openai_handler():
     assert VertexAIPartnerModels.should_use_openai_handler(
         "moonshotai/kimi-k2-thinking-maas"
     )
+
+@pytest.mark.parametrize(
+    "vertex_location, expected_endpoint",
+    [
+        ("global", "https://aiplatform.googleapis.com"),
+        ("us-central1", "https://us-central1-aiplatform.googleapis.com"),
+    ],
+)
+def test_vertex_ai_gemini_token_counting_endpoint(vertex_location, expected_endpoint):
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import (
+        VertexAIPartnerModelsTokenCounter,
+    )
+    endpoint = VertexAIPartnerModelsTokenCounter()._build_count_tokens_endpoint(
+        model="claude-sonnet-4.5",
+        project_id="test-project",
+        vertex_location=vertex_location,
+        api_base=None,
+    )
+    assert endpoint.startswith(expected_endpoint)
