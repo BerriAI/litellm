@@ -194,16 +194,33 @@ model_list:
       model: vertex_ai/gemini-2.5-pro
       vertex_project: "project-id"
       vertex_location: "us-central1"
-      vertex_credentials: "/path/to/service_account.json" # [OPTIONAL] Do this OR `!gcloud auth application-default login` - run this to add vertex credentials to your env
+      vertex_credentials: "/path/to/service_account.json" # [OPTIONAL] Use this OR run `gcloud auth application-default login` to add Vertex credentials to your environment
 ```
-or
+For a custom Vertex AI model that follows the Gemini API specification:
 ```yaml
 model_list:
- - model_name: gemini-pro
+  - model_name: gemini-pro
     litellm_params:
       model: vertex_ai/gemini-1.5-pro
       litellm_credential_name: vertex-global
       vertex_project: project-name-here
+      vertex_location: global
+      base_model: gemini
+      model_info:
+        provider: Vertex
+```
+
+**Custom Model Configuration**
+
+For custom models that follow the Gemini API specification:
+
+```yaml
+model_list:
+  - model_name: codenamecodename
+    litellm_params:
+      model: vertex_ai/codenamecodename
+      litellm_credential_name: vertex-global
+      vertex_project: level-district-390620
       vertex_location: global
       base_model: gemini
       model_info:
@@ -280,7 +297,7 @@ model_list:
       model: vertex_ai/gemini-2.5-pro
       vertex_project: "project-id"
       vertex_location: "us-central1"
-      vertex_credentials: "/path/to/service_account.json" # [OPTIONAL] Do this OR `!gcloud auth application-default login` - run this to add vertex credentials to your env
+      vertex_credentials: "/path/to/service_account.json" # [OPTIONAL] Use this OR run `gcloud auth application-default login` to add Vertex credentials to your environment
 ```
 
 2. Start Proxy 
