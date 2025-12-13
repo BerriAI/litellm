@@ -375,6 +375,7 @@ def test_web_search_tool_result_in_provider_specific_fields():
     response.choices[0].message.provider_specific_fields["web_search_results"]
     """
     import httpx
+
     from litellm.types.utils import ModelResponse
 
     config = AnthropicConfig()
@@ -514,6 +515,37 @@ def test_map_tool_choice():
     assert result is not None
     assert result["type"] == "none"
     print(result)
+
+
+def test_map_tool_choice_string_auto():
+    """Test that string 'auto' maps to Anthropic type='auto'"""
+    config = AnthropicConfig()
+    result = config._map_tool_choice(tool_choice="auto", parallel_tool_use=None)
+    assert result is not None
+    assert result["type"] == "auto"
+
+
+def test_map_tool_choice_string_required():
+    """Test that string 'required' maps to Anthropic type='any'"""
+    config = AnthropicConfig()
+    result = config._map_tool_choice(tool_choice="required", parallel_tool_use=None)
+    assert result is not None
+    assert result["type"] == "any"
+
+
+def test_map_tool_choice_dict_type_function_with_name():
+    """
+    Test that dict {"type": "function", "function": {"name": "my_tool"}}
+    (OpenAI format) maps to Anthropic type='tool' with name.
+    """
+    config = AnthropicConfig()
+    result = config._map_tool_choice(
+        tool_choice={"type": "function", "function": {"name": "my_tool"}},
+        parallel_tool_use=None,
+    )
+    assert result is not None
+    assert result["type"] == "tool"
+    assert result["name"] == "my_tool"
 
 
 def test_transform_response_with_prefix_prompt():
