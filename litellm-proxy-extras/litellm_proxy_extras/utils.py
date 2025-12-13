@@ -312,7 +312,7 @@ class ProxyExtrasDBManager:
                     try:
                         # Set migrations directory for Prisma
                         result = subprocess.run(
-                            ["prisma", "migrate", "deploy"],
+                            ["prisma", "migrate", "deploy", "--schema", schema_path],
                             timeout=60,
                             check=True,
                             capture_output=True,
