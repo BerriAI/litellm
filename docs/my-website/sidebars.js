@@ -413,6 +413,11 @@ const sidebars = {
             "a2a",
             "a2a_cost_tracking",
             "a2a_agent_permissions",
+            {
+              type: "link",
+              label: "Adding LangGraph Agents",
+              href: "/docs/providers/langgraph#litellm-a2a-gateway",
+            },
           ],
         },
         "assistants",
