@@ -165,7 +165,16 @@ const Navbar: React.FC<NavbarProps> = ({
 
             <div className="flex items-center">
               <Link href="/" className="flex items-center">
-                <img src={imageUrl} alt="LiteLLM Brand" className="h-10 w-auto" />
+                <div className="relative">
+                  <img src={imageUrl} alt="LiteLLM Brand" className="h-10 w-auto" />
+                  <span 
+                    className="absolute -top-1 -right-2 text-lg animate-bounce"
+                    style={{ animationDuration: '2s' }}
+                    title="Happy Holidays!"
+                  >
+                    🎄
+                  </span>
+                </div>
               </Link>
               {version && (
                 <a

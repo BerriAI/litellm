@@ -1860,6 +1860,25 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 </div>
               )}
 
+              {/* Suggested prompts - show when chat is empty and not loading */}
+              {chatHistory.length === 0 && !isLoading && (
+                <div className="flex items-center gap-2 mb-3 overflow-x-auto">
+                  {(endpointType === EndpointType.A2A_AGENTS
+                    ? ["What can you help me with?", "Tell me about yourself", "What tasks can you perform?"]
+                    : ["Write me a poem", "Explain quantum computing", "Draft a polite email requesting a meeting"]
+                  ).map((prompt) => (
+                    <button
+                      key={prompt}
+                      type="button"
+                      className="shrink-0 rounded-full border border-gray-200 px-3 py-1 text-xs font-medium text-gray-600 transition-colors hover:bg-blue-50 hover:border-blue-300 hover:text-blue-600 cursor-pointer"
+                      onClick={() => setInputMessage(prompt)}
+                    >
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               <div className="flex items-center gap-2">
                 <div className="flex items-center flex-1 bg-white border border-gray-300 rounded-xl px-3 py-1 min-h-[44px]">
                   {/* Left: attachment and code interpreter icons */}

@@ -337,7 +337,6 @@ export const makeA2AStreamMessageRequest = async (
               if (artifact.parts && Array.isArray(artifact.parts)) {
                 for (const part of artifact.parts) {
                   if (part.kind === "text" && part.text) {
-                    // Accumulate actual response content
                     accumulatedText += part.text;
                     onTextUpdate(accumulatedText, `a2a_agent/${agentId}`);
                   }
@@ -358,17 +357,11 @@ export const makeA2AStreamMessageRequest = async (
               }
             }
             // Handle status-update chunks (progress messages like "Processing request...")
-            // Only show these temporarily if we haven't received actual content yet
-            else if (chunkKind === "status-update" && result.status?.message?.parts) {
-              // Skip status messages once we have real content
-              if (!accumulatedText) {
-                for (const part of result.status.message.parts) {
-                  if (part.kind === "text" && part.text) {
-                    // Show as temporary status - will be replaced when real content arrives
-                    onTextUpdate(part.text, `a2a_agent/${agentId}`);
-                  }
-                }
-              }
+            // These are metadata/status updates, not actual response content
+            // We skip showing them in the chat UI - they're captured in metadata instead
+            else if (chunkKind === "status-update") {
+              // Status updates are handled via metadata extraction, not shown as text
+              // This prevents "Processing request..." from appearing in the response
             }
             // Direct parts array (fallback)
             else if (result.parts && Array.isArray(result.parts)) {
@@ -381,10 +374,16 @@ export const makeA2AStreamMessageRequest = async (
             }
           }
 
+          // Handle JSON-RPC error response
           if (chunk.error) {
-            throw new Error(chunk.error.message);
+            const errorMessage = chunk.error.message || "Unknown A2A error";
+            throw new Error(errorMessage);
           }
         } catch (parseError) {
+          // Re-throw if it's an actual error we threw (not a parse error)
+          if (parseError instanceof Error && parseError.message && !parseError.message.includes("JSON")) {
+            throw parseError;
+          }
           // Only warn if it's not a JSON parse error on an empty/partial line
           if (line.trim().length > 0) {
             console.warn("Failed to parse A2A streaming chunk:", line, parseError);
