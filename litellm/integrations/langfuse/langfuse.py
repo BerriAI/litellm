@@ -540,12 +540,15 @@ class LangFuseLogger:
             # Use standard_logging_object.trace_id if available (when trace_id from metadata is None)
             # This allows standard trace_id to be used when provided in standard_logging_object
             # However, we skip standard_logging_object.trace_id if it's a UUID (from litellm_trace_id default),
-            # as we want to fall back to litellm_call_id instead for better traceability
+            # as we want to fall back to litellm_call_id instead for better traceability.
+            # Note: Users can still explicitly set a UUID trace_id via metadata["trace_id"] (highest priority)
             if trace_id is None and standard_logging_object is not None:
                 standard_trace_id = cast(Optional[str], standard_logging_object.get("trace_id"))
                 # Only use standard_logging_object.trace_id if it's not a UUID
                 # UUIDs are 36 characters with hyphens in format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
                 # We check for this specific pattern to avoid rejecting valid trace_ids that happen to have hyphens
+                # This primarily filters out default litellm_trace_id UUIDs, while still allowing user-provided
+                # trace_ids via metadata["trace_id"] (which is checked first and not affected by this logic)
                 if standard_trace_id is not None:
                     # Check if it's a UUID: 36 chars, 4 hyphens, specific pattern
                     is_uuid = (
@@ -562,6 +565,10 @@ class LangFuseLogger:
             if trace_id is None:
                 trace_id = litellm_call_id
             existing_trace_id = clean_metadata.pop("existing_trace_id", None)
+            # If existing_trace_id is provided, use it as the trace_id to return
+            # This allows continuing an existing trace while still returning the correct trace_id
+            if existing_trace_id is not None:
+                trace_id = existing_trace_id
             update_trace_keys = cast(list, clean_metadata.pop("update_trace_keys", []))
             debug = clean_metadata.pop("debug_langfuse", None)
             mask_input = clean_metadata.pop("mask_input", False)
