@@ -1036,7 +1036,7 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
 
     # Create request
     request = Request(
-        scope={"type": "http", "headers": [("Authorization", "Bearer fake.jwt.token")]}
+        scope={"type": "http", "headers": [(b"authorization", b"Bearer fake.jwt.token")]}
     )
     request._url = URL(url="/team/new")
 
