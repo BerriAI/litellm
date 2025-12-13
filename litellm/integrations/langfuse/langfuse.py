@@ -3,7 +3,7 @@
 import os
 import traceback
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union, cast
 
 from packaging.version import Version
 
@@ -894,7 +894,7 @@ class LangFuseLogger:
         return Version(self.langfuse_sdk_version) >= Version("2.7.3")
 
     @staticmethod
-    def _apply_masking_function(data: Any, masking_function: callable) -> Any:
+    def _apply_masking_function(data: Any, masking_function: Callable[[Any], Any]) -> Any:
         """
         Apply a masking function to data, handling different data types.
 
