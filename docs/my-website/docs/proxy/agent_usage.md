@@ -6,7 +6,7 @@ import TabItem from '@theme/TabItem';
 
 Track and visualize agent-level spend directly in the dashboard. Monitor agent usage analytics, spend logs, and activity metrics to understand how your A2A agents are consuming LLM resources.
 
-This feature is **available in v1.80.8-stable and above**.
+This feature is **available in v1.80.10-stable and above**.
 
 ## Overview
 
