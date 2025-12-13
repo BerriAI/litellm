@@ -1857,7 +1857,7 @@ class OpenAIBatchResult(TypedDict, total=False):
 
 
 OpenAIChatCompletionFinishReason = Literal[
-    "stop", "content_filter", "function_call", "tool_calls", "length"
+    "stop", "content_filter", "function_call", "tool_calls", "length", "tool_code"
 ]
 
 
