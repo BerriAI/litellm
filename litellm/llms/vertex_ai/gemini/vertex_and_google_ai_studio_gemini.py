@@ -2054,7 +2054,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
 
 async def make_call(
-    client: Optional[AsyncHTTPHandler],
+    client: Optional[AsyncHTTPHandler],  # module-level client
+    gemini_client: Optional[AsyncHTTPHandler],  # if passed by user
     api_base: str,
     headers: dict,
     data: str,
@@ -2062,6 +2063,8 @@ async def make_call(
     messages: list,
     logging_obj,
 ):
+    if gemini_client is not None:
+        client = gemini_client
     if client is None:
         client = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.VERTEX_AI,
@@ -2233,7 +2236,11 @@ class VertexLLM(VertexBase):
             completion_stream=None,
             make_call=partial(
                 make_call,
-                client=client,
+                gemini_client=(
+                    client
+                    if client is not None and isinstance(client, AsyncHTTPHandler)
+                    else None
+                ),
                 api_base=api_base,
                 headers=headers,
                 data=request_body_str,
