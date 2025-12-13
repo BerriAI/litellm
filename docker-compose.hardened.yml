@@ -1,0 +1,46 @@
+services:
+  # Hardened stack: for testing the proxy under non-root, read-only, proxy-enforced constraints.
+  # Keep this file focused on hardening/QA scenarios; leave the main docker-compose.yml for default dev usage.
+  litellm:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.non_root
+      target: runtime
+      args:
+        PROXY_EXTRAS_SOURCE: "local"
+    depends_on:
+      - squid
+    user: "101:101"
+    group_add:
+      - "2345"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /app/cache:rw,noexec,nosuid,nodev,size=128m,uid=101,gid=101,mode=1777
+      - /app/migrations:rw,noexec,nosuid,nodev,size=64m,uid=101,gid=101,mode=1777
+    volumes:
+      - ./proxy_server_config.yaml:/app/config.yaml:ro
+    environment:
+      LITELLM_NON_ROOT: "true"
+      PRISMA_BINARY_CACHE_DIR: "/app/cache/prisma-python/binaries"
+      XDG_CACHE_HOME: "/app/cache"
+      LITELLM_MIGRATION_DIR: "/app/migrations"
+      HTTP_PROXY: "http://squid:3128"
+      HTTPS_PROXY: "http://squid:3128"
+      NO_PROXY: "localhost,127.0.0.1,db"
+    command:
+      - "--port"
+      - "4000"
+      - "--config"
+      - "/app/config.yaml"
+  squid:
+    image: sameersbn/squid:3.5.27-2
+    restart: unless-stopped
+    ports:
+      - "3128:3128"
+    tmpfs:
+      - /var/spool/squid:rw,noexec,nosuid,nodev,size=64m
+      - /var/log/squid:rw,noexec,nosuid,nodev,size=16m
