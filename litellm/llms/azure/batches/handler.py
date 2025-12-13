@@ -6,7 +6,7 @@ from typing import Any, Coroutine, Optional, Union, cast
 
 import httpx
 
-from litellm.llms.azure.azure import AsyncAzureOpenAI, AzureOpenAI
+from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 from litellm.types.llms.openai import (
     Batch,
     CancelBatchRequest,
@@ -51,7 +51,7 @@ class AzureBatchesAPI(BaseAzureLLM):
         litellm_params: Optional[dict] = None,
     ) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
         azure_client: Optional[
-            Union[AzureOpenAI, AsyncAzureOpenAI]
+            Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]
         ] = self.get_azure_openai_client(
             api_key=api_key,
             api_base=api_base,
@@ -97,7 +97,7 @@ class AzureBatchesAPI(BaseAzureLLM):
         litellm_params: Optional[dict] = None,
     ):
         azure_client: Optional[
-            Union[AzureOpenAI, AsyncAzureOpenAI]
+            Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]
         ] = self.get_azure_openai_client(
             api_key=api_key,
             api_base=api_base,
@@ -145,7 +145,7 @@ class AzureBatchesAPI(BaseAzureLLM):
         litellm_params: Optional[dict] = None,
     ):
         azure_client: Optional[
-            Union[AzureOpenAI, AsyncAzureOpenAI]
+            Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]
         ] = self.get_azure_openai_client(
             api_key=api_key,
             api_base=api_base,
@@ -184,7 +184,7 @@ class AzureBatchesAPI(BaseAzureLLM):
         litellm_params: Optional[dict] = None,
     ):
         azure_client: Optional[
-            Union[AzureOpenAI, AsyncAzureOpenAI]
+            Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]
         ] = self.get_azure_openai_client(
             api_key=api_key,
             api_base=api_base,
