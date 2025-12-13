@@ -335,7 +335,7 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
         return None
     
     if isinstance(data, dict):
-        result = {}
+        result: dict[str, Any] = {}
         for k, v in data.items():
             # Skip exception and callable values
             if isinstance(v, Exception) or (callable(v) and not isinstance(v, type)):
@@ -349,7 +349,7 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
                 continue
         return result
     elif isinstance(data, list):
-        result = []
+        result_list: list[Any] = []
         for item in data:
             # Skip exception and callable items
             if isinstance(item, Exception) or (callable(item) and not isinstance(item, type)):
@@ -357,11 +357,11 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
             try:
                 filtered = filter_exceptions_from_params(item, max_depth - 1)
                 if filtered is not None:
-                    result.append(filtered)
+                    result_list.append(filtered)
             except Exception:
                 # Skip items that cause errors during filtering
                 continue
-        return result
+        return result_list
     else:
         return data
 
