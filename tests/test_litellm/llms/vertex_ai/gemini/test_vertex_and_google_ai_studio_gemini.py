@@ -806,7 +806,7 @@ def test_vertex_ai_streaming_usage_web_search_calculation():
             {
                 "content": {"parts": [{"text": "Hello"}]},
                 "groundingMetadata": [
-                    {"webSearchQueries": ["What is the capital of France?", "Captial of France"]}
+                    {"webSearchQueries": ["", "What is the capital of France?", "Capital of France"]}
                 ],
             }
         ],
