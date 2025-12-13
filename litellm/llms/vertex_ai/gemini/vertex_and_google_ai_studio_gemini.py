@@ -1555,7 +1555,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if web_search_queries and web_search_requests:
                     web_search_requests += len(web_search_queries)
                 elif web_search_queries:
-                    web_search_requests = len(grounding_metadata)
+                    web_search_requests = len(web_search_queries)
         return web_search_requests
 
     @staticmethod
