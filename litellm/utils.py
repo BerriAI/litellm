@@ -809,7 +809,8 @@ def function_setup(  # noqa: PLR0915
             call_type == CallTypes.aresponses.value
             or call_type == CallTypes.responses.value
         ):
-            messages = args[0] if len(args) > 0 else kwargs["input"]
+            # Handle both 'input' (standard Responses API) and 'messages' (Cursor chat format)
+            messages = args[0] if len(args) > 0 else kwargs.get("input") or kwargs.get("messages", "default-message-value")
         else:
             messages = "default-message-value"
         stream = False
@@ -6822,10 +6823,12 @@ def is_cached_message(message: AllMessageValues) -> bool:
         if not isinstance(content_item, dict):
             continue
 
+        cache_control = content_item.get("cache_control")
         if (
             content_item.get("type") == "text"
-            and content_item.get("cache_control") is not None
-            and content_item.get("cache_control", {}).get("type") == "ephemeral"
+            and cache_control is not None
+            and isinstance(cache_control, dict)
+            and cache_control.get("type") == "ephemeral"
         ):
             return True
 
@@ -7001,7 +7004,7 @@ def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
                         for item in user_content:
                             if isinstance(item, dict):
                                 if item.get("type") not in ValidUserMessageContentTypes:
-                                    raise Exception("invalid content type")
+                                    raise Exception(f"invalid content type={item.get('type')}")
         except Exception as e:
             if isinstance(e, KeyError):
                 raise Exception(

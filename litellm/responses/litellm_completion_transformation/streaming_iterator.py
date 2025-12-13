@@ -18,6 +18,7 @@ from litellm.types.llms.openai import (
     ContentPartDonePartReasoningText,
     OutputItemAddedEvent,
     OutputItemDoneEvent,
+    OutputTextAnnotationAddedEvent,
     OutputTextDeltaEvent,
     OutputTextDoneEvent,
     ReasoningSummaryTextDeltaEvent,
@@ -29,7 +30,6 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
-    OutputTextAnnotationAddedEvent
 )
 from litellm.types.utils import Delta as ChatCompletionDelta
 from litellm.types.utils import (
@@ -104,9 +104,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if "text" in self.responses_api_request:
             response_created_event_data["text"] = self.responses_api_request["text"]
         if "tool_choice" in self.responses_api_request:
-            response_created_event_data["tool_choice"] = self.responses_api_request[
-                "tool_choice"
-            ]
+            # Transform tool_choice from dict format (e.g., {"type": "auto"}) to string format
+            response_created_event_data["tool_choice"] = LiteLLMCompletionResponsesConfig._transform_tool_choice(
+                self.responses_api_request["tool_choice"]
+            ) or "auto"
         else:
             response_created_event_data["tool_choice"] = "auto"
         if "tools" in self.responses_api_request:
@@ -348,14 +349,16 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 # Get the next chunk from the stream
                 try:
                     chunk = await self.litellm_custom_stream_wrapper.__anext__()
-                    self.collected_chat_completion_chunks.append(chunk)
-                    response_api_chunk = (
-                        self._transform_chat_completion_chunk_to_response_api_chunk(
-                            chunk
+                    if chunk is not None:
+                        chunk = cast(ModelResponseStream, chunk)
+                        self.collected_chat_completion_chunks.append(chunk)
+                        response_api_chunk = (
+                            self._transform_chat_completion_chunk_to_response_api_chunk(
+                                chunk
+                            )
                         )
-                    )
-                    if response_api_chunk:
-                        return response_api_chunk
+                        if response_api_chunk:
+                            return response_api_chunk
                 except StopAsyncIteration:
                     return self.common_done_event_logic(sync_mode=False)
 
