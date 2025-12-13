@@ -23758,6 +23758,60 @@
         "max_tokens": 8000,
         "mode": "chat"
     },
+    "stability/sd3": {
+        "litellm_provider": "stability",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.065,
+        "supported_endpoints": ["/v1/images/generations"]
+    },
+    "stability/sd3-large": {
+        "litellm_provider": "stability",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.065,
+        "supported_endpoints": ["/v1/images/generations"]
+    },
+    "stability/sd3-large-turbo": {
+        "litellm_provider": "stability",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "supported_endpoints": ["/v1/images/generations"]
+    },
+    "stability/sd3-medium": {
+        "litellm_provider": "stability",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.035,
+        "supported_endpoints": ["/v1/images/generations"]
+    },
+    "stability/sd3.5-large": {
+        "litellm_provider": "stability",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.065,
+        "supported_endpoints": ["/v1/images/generations"]
+    },
+    "stability/sd3.5-large-turbo": {
+        "litellm_provider": "stability",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "supported_endpoints": ["/v1/images/generations"]
+    },
+    "stability/sd3.5-medium": {
+        "litellm_provider": "stability",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.035,
+        "supported_endpoints": ["/v1/images/generations"]
+    },
+    "stability/stable-image-ultra": {
+        "litellm_provider": "stability",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "supported_endpoints": ["/v1/images/generations"]
+    },
+    "stability/stable-image-core": {
+        "litellm_provider": "stability",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "supported_endpoints": ["/v1/images/generations"]
+    },
     "stability.sd3-5-large-v1:0": {
         "litellm_provider": "bedrock",
         "max_input_tokens": 77,
