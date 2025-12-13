@@ -2,11 +2,13 @@ import React, { useState, useEffect } from "react";
 import { Card, Title, Text, Button as TremorButton, Tab, TabGroup, TabList, TabPanel, TabPanels} from "@tremor/react";
 import { Form, Input, Button as AntButton, message, Spin, Descriptions } from "antd";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
-import { getAgentInfo, patchAgentCall } from "../networking";
+import { getAgentInfo, patchAgentCall, getAgentCreateMetadata, AgentCreateInfo } from "../networking";
 import { Agent } from "./types";
 import AgentFormFields from "./agent_form_fields";
+import DynamicAgentFormFields, { buildDynamicAgentData } from "./dynamic_agent_form_fields";
 import { buildAgentDataFromForm, parseAgentForForm } from "./agent_config";
 import AgentCostView from "./agent_cost_view";
+import { detectAgentType, parseDynamicAgentForForm } from "./agent_type_utils";
 
 interface AgentInfoViewProps {
   agentId: string;
@@ -26,6 +28,20 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [form] = Form.useForm();
+  const [agentTypeMetadata, setAgentTypeMetadata] = useState<AgentCreateInfo[]>([]);
+  const [detectedAgentType, setDetectedAgentType] = useState<string>("a2a");
+
+  useEffect(() => {
+    const fetchMetadata = async () => {
+      try {
+        const metadata = await getAgentCreateMetadata();
+        setAgentTypeMetadata(metadata);
+      } catch (error) {
+        console.error("Error fetching agent metadata:", error);
+      }
+    };
+    fetchMetadata();
+  }, []);
 
   useEffect(() => {
     fetchAgentInfo();
@@ -38,7 +54,22 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
     try {
       const data = await getAgentInfo(accessToken, agentId);
       setAgent(data);
+      
+      // Detect agent type
+      const agentType = detectAgentType(data);
+      setDetectedAgentType(agentType);
+      
+      // Parse form values based on agent type
+      if (agentType === "a2a") {
+        form.setFieldsValue(parseAgentForForm(data));
+      } else {
+        const typeInfo = agentTypeMetadata.find(t => t.agent_type === agentType);
+        if (typeInfo) {
+          form.setFieldsValue(parseDynamicAgentForForm(data, typeInfo));
+        } else {
       form.setFieldsValue(parseAgentForForm(data));
+        }
+      }
     } catch (error) {
       console.error("Error fetching agent info:", error);
       message.error("Failed to load agent information");
@@ -47,12 +78,38 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
     }
   };
 
+  // Re-parse form when metadata is loaded
+  useEffect(() => {
+    if (agent && agentTypeMetadata.length > 0) {
+      const agentType = detectAgentType(agent);
+      if (agentType !== "a2a") {
+        const typeInfo = agentTypeMetadata.find(t => t.agent_type === agentType);
+        if (typeInfo) {
+          form.setFieldsValue(parseDynamicAgentForForm(agent, typeInfo));
+        }
+      }
+    }
+  }, [agentTypeMetadata, agent]);
+
+  const selectedAgentTypeInfo = agentTypeMetadata.find(t => t.agent_type === detectedAgentType);
+
   const handleUpdate = async (values: any) => {
     if (!accessToken || !agent) return;
 
     setIsSaving(true);
     try {
-      const updateData = buildAgentDataFromForm(values, agent);
+      let updateData: any;
+      
+      if (detectedAgentType === "a2a") {
+        updateData = buildAgentDataFromForm(values, agent);
+      } else if (selectedAgentTypeInfo) {
+        updateData = buildDynamicAgentData(values, selectedAgentTypeInfo);
+        // Preserve the agent_name from form
+        updateData.agent_name = values.agent_name;
+      } else {
+        updateData = buildAgentDataFromForm(values, agent);
+      }
+      
       await patchAgentCall(accessToken, agentId, updateData);
       message.success("Agent updated successfully");
       setIsEditing(false);
@@ -192,7 +249,13 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
                       <Input value={agent.agent_id} disabled />
                     </Form.Item>
 
+                    {detectedAgentType === "a2a" ? (
+                      <AgentFormFields showAgentName={true} />
+                    ) : selectedAgentTypeInfo ? (
+                      <DynamicAgentFormFields agentTypeInfo={selectedAgentTypeInfo} />
+                    ) : (
                     <AgentFormFields showAgentName={true} />
+                    )}
 
                     <div className="flex justify-end gap-2 mt-6">
                       <AntButton onClick={() => {

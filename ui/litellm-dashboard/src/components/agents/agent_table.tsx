@@ -51,18 +51,18 @@ const AgentTable: React.FC<AgentTableProps> = ({
       cell: ({ row }) => {
         const agent = row.original;
         const name = agent.agent_name || "";
-        return (
+  return (
           <div className="flex items-center gap-2">
             <Tooltip title={name}>
-              <Button
-                size="xs"
-                variant="light"
+                <Button
+                  size="xs"
+                  variant="light"
                 className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate min-w-[200px] justify-start"
-                onClick={() => onAgentClick(agent.agent_id)}
-              >
+                  onClick={() => onAgentClick(agent.agent_id)}
+                >
                 {name}
-              </Button>
-            </Tooltip>
+                </Button>
+              </Tooltip>
             <Tooltip title="Copy Agent ID">
               <CopyOutlined
                 onClick={(e) => {
@@ -201,12 +201,12 @@ const AgentTable: React.FC<AgentTableProps> = ({
                 <TableCell colSpan={columns.length} className="h-8 text-center">
                   <div className="text-center text-gray-500">
                     <p>No agents found. Create one to get started.</p>
-                  </div>
-                </TableCell>
+                </div>
+              </TableCell>
               </TableRow>
             )}
-          </TableBody>
-        </Table>
+      </TableBody>
+    </Table>
       </div>
     </div>
   );

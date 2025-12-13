@@ -71,6 +71,49 @@
     "litellm_params_template": {
       "custom_llm_provider": "bedrock"
     }
+  },
+  {
+    "agent_type": "azure_ai_foundry",
+    "agent_type_display_name": "Azure AI Foundry",
+    "description": "Connect to Microsoft Azure AI Foundry agents",
+    "logo_url": "/assets/logos/azure_ai_foundry.png",
+    "inherit_credentials_from_provider": "Azure AI",
+    "model_template": "azure_ai/agents/{agent_id}",
+    "credential_fields": [
+      {
+        "key": "agent_id",
+        "label": "Agent ID",
+        "placeholder": "asst_abc123",
+        "tooltip": "The agent/assistant ID from your Azure AI Foundry project (e.g., asst_abc123)",
+        "required": true,
+        "field_type": "text",
+        "default_value": null,
+        "include_in_litellm_params": false
+      },
+      {
+        "key": "api_base",
+        "label": "Azure AI API Base",
+        "placeholder": "https://your-project.services.ai.azure.com",
+        "tooltip": "The base URL for your Azure AI Foundry project endpoint",
+        "required": true,
+        "field_type": "text",
+        "default_value": null,
+        "include_in_litellm_params": true
+      },
+      {
+        "key": "api_key",
+        "label": "Azure AI API Key",
+        "placeholder": null,
+        "tooltip": "API key for authenticating with your Azure AI Foundry project",
+        "required": true,
+        "field_type": "password",
+        "default_value": null,
+        "include_in_litellm_params": true
+      }
+    ],
+    "litellm_params_template": {
+      "custom_llm_provider": "azure_ai"
+    }
   }
 ]
 

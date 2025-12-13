@@ -55,6 +55,7 @@ class A2ACompletionBridgeHandler:
         # Get completion params
         custom_llm_provider = litellm_params.get("custom_llm_provider")
         model = litellm_params.get("model", "agent")
+        api_key = litellm_params.get("api_key")
 
         # Build full model string if provider specified
         # Skip prepending if model already starts with the provider prefix
@@ -72,6 +73,7 @@ class A2ACompletionBridgeHandler:
             model=full_model,
             messages=openai_messages,
             api_base=api_base,
+            api_key=api_key,
             stream=False,
         )
 
@@ -127,6 +129,7 @@ class A2ACompletionBridgeHandler:
         # Get completion params
         custom_llm_provider = litellm_params.get("custom_llm_provider")
         model = litellm_params.get("model", "agent")
+        api_key = litellm_params.get("api_key")
 
         # Build full model string if provider specified
         # Skip prepending if model already starts with the provider prefix
@@ -157,6 +160,7 @@ class A2ACompletionBridgeHandler:
             model=full_model,
             messages=openai_messages,
             api_base=api_base,
+            api_key=api_key,
             stream=True,
         )
 
