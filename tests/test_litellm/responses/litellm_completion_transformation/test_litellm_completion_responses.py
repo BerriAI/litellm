@@ -685,6 +685,57 @@ class TestFunctionCallTransformation:
         assert tool_call.get("id") == "fallback_id"
 
 
+class TestToolChoiceTransformation:
+    """Test the tool_choice transformation fix for Cursor IDE bug"""
+
+    def test_transform_tool_choice_cursor_bug_fix(self):
+        """
+        Test that {"type": "tool"} is transformed to "required".
+        This fixes the Anthropic error: "tool_choice.tool.name: Field required"
+        """
+        result = LiteLLMCompletionResponsesConfig._transform_tool_choice({"type": "tool"})
+        assert result == "required"
+
+    def test_transform_tool_choice_preserves_function_with_name(self):
+        """Test that valid OpenAI format with function name passes through unchanged"""
+        tool_choice = {"type": "function", "function": {"name": "my_tool"}}
+        result = LiteLLMCompletionResponsesConfig._transform_tool_choice(tool_choice)
+        assert result == tool_choice
+
+
+class TestContentTypeTransformation:
+    """Test content type transformation from Responses API to Chat Completion format"""
+
+    def test_tool_result_content_type_transformed_to_text(self):
+        """
+        Test that 'tool_result' content type is transformed to 'text'.
+        This fixes: Invalid user message - content type 'tool_result' not valid.
+        """
+        result = LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type("tool_result")
+        assert result == "text"
+
+    def test_input_text_content_type_transformed_to_text(self):
+        """Test that 'input_text' content type is transformed to 'text'"""
+        result = LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type("input_text")
+        assert result == "text"
+
+    def test_none_text_blocks_filtered_out(self):
+        """
+        Test that content blocks with None text are filtered out.
+        This fixes: TypeError: object of type 'NoneType' has no len()
+        in Anthropic transformation when text is None.
+        """
+        content = [
+            {"type": "text", "text": "valid text"},
+            {"type": "text", "text": None},  # Should be filtered out
+            {"type": "text", "text": "another valid"},
+        ]
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(content)
+        assert len(result) == 2
+        assert result[0]["text"] == "valid text"
+        assert result[1]["text"] == "another valid"
+
+
 class TestUsageTransformation:
     """Test cases for usage transformation from Chat Completion to Responses API format"""
 
