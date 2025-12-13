@@ -724,6 +724,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         )
 
         for choice in response.choices:
+            # Type narrowing: StreamingChoices doesn't have .message attribute
+            if not hasattr(choice, "message"):
+                continue
             content = getattr(choice.message, "content", None)
             if content is None:
                 continue

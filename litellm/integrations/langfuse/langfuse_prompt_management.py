@@ -188,6 +188,8 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         tools: Optional[List[Dict]] = None,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
     ) -> Tuple[str, List[AllMessageValues], dict,]:
         return self.get_chat_completion_prompt(
             model,
@@ -196,8 +198,11 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             prompt_id,
             prompt_variables,
             dynamic_callback_params,
+            prompt_spec=prompt_spec,
             prompt_label=prompt_label,
             prompt_version=prompt_version,
+            ignore_prompt_manager_model=ignore_prompt_manager_model,
+            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
         )
 
     def should_run_prompt_management(
