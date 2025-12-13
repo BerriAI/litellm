@@ -809,7 +809,7 @@ def function_setup(  # noqa: PLR0915
             call_type == CallTypes.aresponses.value
             or call_type == CallTypes.responses.value
         ):
-            messages = args[0] if len(args) > 0 else kwargs["input"]
+            messages = args[0] if len(args) > 0 else kwargs.get("input", None)
         else:
             messages = "default-message-value"
         stream = False
@@ -1250,7 +1250,32 @@ def client(original_function):  # noqa: PLR0915
                 except Exception as e:
                     print_verbose(f"Error while checking max token limit: {str(e)}")
             # MODEL CALL
-            result = original_function(*args, **kwargs)
+            try:
+                result = original_function(*args, **kwargs)
+            except TypeError as e:
+                error_msg = str(e)
+                if "missing" in error_msg.lower() or "required" in error_msg.lower():
+                    # Extract the missing parameter name from the error message
+                    import re
+                    missing_param_match = re.search(r"missing (\d+ )?required positional argument[s]?:? '?([^']+)'?", error_msg)
+                    if missing_param_match:
+                        missing_param = missing_param_match.group(2)
+                        from litellm.exceptions import BadRequestError
+                        raise BadRequestError(
+                            message=f"Missing required parameter: {missing_param}",
+                            model=model,
+                            llm_provider="",
+                        )
+                    else:
+                        from litellm.exceptions import BadRequestError
+                        raise BadRequestError(
+                            message="Missing required parameters",
+                            model=model,
+                            llm_provider="",
+                        )
+                else:
+                    # Re-raise other TypeError exceptions
+                    raise e
             end_time = datetime.datetime.now()
             if _is_streaming_request(
                 kwargs=kwargs,
@@ -1488,7 +1513,32 @@ def client(original_function):  # noqa: PLR0915
                     print_verbose(f"Error while checking max token limit: {str(e)}")
 
             # MODEL CALL
-            result = await original_function(*args, **kwargs)
+            try:
+                result = await original_function(*args, **kwargs)
+            except TypeError as e:
+                error_msg = str(e)
+                if "missing" in error_msg.lower() or "required" in error_msg.lower():
+                    # Extract the missing parameter name from the error message
+                    import re
+                    missing_param_match = re.search(r"missing (\d+ )?required positional argument[s]?:? '?([^']+)'?", error_msg)
+                    if missing_param_match:
+                        missing_param = missing_param_match.group(2)
+                        from litellm.exceptions import BadRequestError
+                        raise BadRequestError(
+                            message=f"Missing required parameter: {missing_param}",
+                            model=model,
+                            llm_provider="",
+                        )
+                    else:
+                        from litellm.exceptions import BadRequestError
+                        raise BadRequestError(
+                            message="Missing required parameters",
+                            model=model,
+                            llm_provider="",
+                        )
+                else:
+                    # Re-raise other TypeError exceptions
+                    raise e
             end_time = datetime.datetime.now()
             if _is_streaming_request(
                 kwargs=kwargs,
