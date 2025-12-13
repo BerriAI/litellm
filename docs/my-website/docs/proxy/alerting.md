@@ -500,6 +500,10 @@ Database Alerts
 
 Management Endpoint Alerts - Virtual Key, Team, Internal User
 
+:::tip
+**Want more control?** You can also capture these events programmatically via [Custom Callbacks](../observability/custom_callback.md#management-event-hooks-proxy-only) for audit logging, compliance tracking, or integration with external systems.
+:::
+
 | Alert Type | Description | Default On |
 |------------|-------------|---------|
 | `new_virtual_key_created` | Notifications when a new virtual key is created | ❌ |
@@ -511,6 +515,45 @@ Management Endpoint Alerts - Virtual Key, Team, Internal User
 | `new_internal_user_created` | Notifications for new internal user accounts | ❌ |
 | `internal_user_updated` | Alerts when an internal user's details are changed | ❌ |
 | `internal_user_deleted` | Notifications when an internal user account is removed | ❌ |
+
+### Programmatic Access via Custom Callbacks
+
+In addition to Slack/Discord alerts, you can capture management events programmatically using custom callbacks. This is useful for:
+
+- **Audit logging** - Store all management actions in your database
+- **Compliance** - Forward events to compliance/security systems
+- **Custom notifications** - Send alerts through your own channels
+- **Analytics** - Track management operations for reporting
+
+**Example:**
+
+```python
+from litellm.integrations.custom_logger import CustomLogger
+
+class ManagementAuditLogger(CustomLogger):
+    async def async_log_management_event(
+        self,
+        event_name: str,
+        event_payload: dict,
+        user_api_key_dict=None,
+    ):
+        # Log to your audit system
+        await audit_db.insert({
+            "event": event_name,
+            "user": user_api_key_dict.user_id,
+            "timestamp": event_payload["triggered_at"],
+            "details": event_payload
+        })
+```
+
+**Setup in config.yaml:**
+
+```yaml
+litellm_settings:
+  callbacks: ["your_module.ManagementAuditLogger"]
+```
+
+👉 [See full documentation on management event hooks](../observability/custom_callback.md#management-event-hooks-proxy-only)
 
 
 ## `alerting_args` Specification
