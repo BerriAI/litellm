@@ -12,7 +12,12 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.core_helpers import (
+    filter_exceptions_from_params,
+    filter_internal_params,
+    map_finish_reason,
+    safe_deep_copy,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _parse_content_for_reasoning,
@@ -879,7 +884,10 @@ class AmazonConverseConfig(BaseConfig):
         self, optional_params: dict, model: str
     ) -> Tuple[dict, dict, dict]:
         """Prepare and separate request parameters."""
-        inference_params = copy.deepcopy(optional_params)
+        # Filter out exception objects before deepcopy to prevent deepcopy failures
+        # Exceptions should not be stored in optional_params (this is a defensive fix)
+        cleaned_params = filter_exceptions_from_params(optional_params)
+        inference_params = safe_deep_copy(cleaned_params)
         supported_converse_params = list(
             AmazonConverseConfig.__annotations__.keys()
         ) + ["top_k"]
@@ -904,11 +912,20 @@ class AmazonConverseConfig(BaseConfig):
         inference_params = {
             k: v for k, v in inference_params.items() if k in total_supported_params
         }
-
+        
         # Only set the topK value in for models that support it
         additional_request_params.update(
             self._handle_top_k_value(model, inference_params)
         )
+        
+        # Filter out internal/MCP-related parameters that shouldn't be sent to the API
+        # These are LiteLLM internal parameters, not API parameters
+        additional_request_params = filter_internal_params(additional_request_params)
+        
+        # Filter out non-serializable objects (exceptions, callables, logging objects, etc.)
+        # from additional_request_params to prevent JSON serialization errors
+        # This filters: Exception objects, callable objects (functions), Logging objects, etc.
+        additional_request_params = filter_exceptions_from_params(additional_request_params)
 
         return inference_params, additional_request_params, request_metadata
 
