@@ -56,6 +56,40 @@ def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
     assert kwargs["litellm_metadata"] == {"baz": 123}
 
 
+def test_router_close_idempotent():
+    import litellm
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ]
+    )
+
+    router.close()
+    # calling twice should be safe
+    router.close()
+    assert getattr(router, "_closed", False) is True
+
+
+def test_router_sync_context_manager():
+    import litellm
+
+    with litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ]
+    ) as r:
+        assert isinstance(r, litellm.Router)
+    # after exiting context, router should be closed
+    assert getattr(r, "_closed", False) is True
+
+
 def test_router_with_model_info_and_model_group():
     """
     Test edge case where user specifies model_group in model_info
@@ -120,6 +154,22 @@ async def test_arouter_with_tags_and_fallbacks():
             mock_testing_fallbacks=True,
             metadata={"tags": ["test"]},
         )
+
+
+@pytest.mark.asyncio
+async def test_router_async_context_manager():
+    import litellm
+
+    async with litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ]
+    ) as r:
+        assert isinstance(r, litellm.Router)
+    assert getattr(r, "_closed", False) is True
 
 
 @pytest.mark.asyncio
