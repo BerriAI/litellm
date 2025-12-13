@@ -1,0 +1,14 @@
+model_list:
+  - model_name: openai/*
+    litellm_params:
+      model: openai/*
+  - model_name: anthropic/*
+    litellm_params:
+      model: anthropic/*
+
+litellm_settings:
+  drop_params: True
+  telemetry: False
+
+general_settings:
+  master_key: sk-1234
