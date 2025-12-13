@@ -881,7 +881,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 return GenericStreamingChunk(
                     text="",
                     tool_use=tool_call_chunk,
-                    is_finished=True,
+                    is_finished=False,
                     finish_reason="tool_calls",
                     usage=None,
                 )
