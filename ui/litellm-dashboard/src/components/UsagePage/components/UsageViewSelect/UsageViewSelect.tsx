@@ -8,7 +8,7 @@ import {
   TagsOutlined,
   TeamOutlined,
 } from "@ant-design/icons";
-import { Select } from "antd";
+import { Badge, Select } from "antd";
 import React from "react";
 export type UsageOption = "global" | "organization" | "team" | "customer" | "tag" | "agent" | "user-agent-activity";
 export interface UsageViewSelectProps {
@@ -29,6 +29,7 @@ interface OptionConfig {
   showForNonAdmin?: string;
   descriptionForAdmin?: string;
   descriptionForNonAdmin?: string;
+  badgeText?: string;
 }
 const OPTIONS: OptionConfig[] = [
   {
@@ -37,8 +38,8 @@ const OPTIONS: OptionConfig[] = [
     showForAdmin: "Global Usage",
     showForNonAdmin: "Your Usage",
     description: "View usage across all resources",
-    descriptionForAdmin: "View usage across all resources and users",
-    descriptionForNonAdmin: "View your personal usage statistics",
+    descriptionForAdmin: "View usage across all resources",
+    descriptionForNonAdmin: "View your usage",
     icon: <GlobalOutlined style={{ fontSize: "16px" }} />,
   },
   {
@@ -48,7 +49,7 @@ const OPTIONS: OptionConfig[] = [
     showForNonAdmin: "Your Organization Usage",
     description: "View organization-level usage",
     descriptionForAdmin: "View usage across all organizations",
-    descriptionForNonAdmin: "View your organization's usage statistics",
+    descriptionForNonAdmin: "View your organization's usage",
     icon: <BankOutlined style={{ fontSize: "16px" }} />,
   },
   {
@@ -77,6 +78,7 @@ const OPTIONS: OptionConfig[] = [
     description: "View usage by AI agents",
     icon: <RobotOutlined style={{ fontSize: "16px" }} />,
     adminOnly: true,
+    badgeText: "New",
   },
   {
     value: "user-agent-activity",
@@ -114,6 +116,7 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
         label,
         description: desc,
         icon: option.icon,
+        badgeText: option.badgeText,
       };
     });
   };
@@ -134,7 +137,7 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
           <Select
             value={value}
             onChange={onChange}
-            className="w-48 sm:w-64 md:w-72"
+            className="w-54 sm:w-64 md:w-72"
             size="large"
             options={filteredOptions.map((opt) => ({
               value: opt.value,
@@ -144,12 +147,17 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
               const opt = filteredOptions.find((o) => o.value === option.value);
               if (!opt) return option.label;
               return (
-                <div className="flex items-start gap-2 py-1">
+                <div className="flex items-center gap-2 py-1">
                   <div className="flex-shrink-0 mt-0.5">{opt.icon}</div>
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium text-gray-900">{opt.label}</div>
                     <div className="text-xs text-gray-600 mt-0.5">{opt.description}</div>
                   </div>
+                  {opt.badgeText && (
+                    <div className="items-center">
+                      <Badge color="blue" count={opt.badgeText} />
+                    </div>
+                  )}
                 </div>
               );
             }}

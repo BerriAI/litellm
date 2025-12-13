@@ -43,10 +43,27 @@ const Navbar: React.FC<NavbarProps> = ({
 }) => {
   const baseUrl = getProxyBaseUrl();
   const [logoutUrl, setLogoutUrl] = useState("");
+  const [version, setVersion] = useState("");
   const { logoUrl } = useTheme();
 
   // Simple logo URL: use custom logo if available, otherwise default
   const imageUrl = logoUrl || `${baseUrl}/get_image`;
+
+  useEffect(() => {
+    const fetchVersion = async () => {
+      try {
+        const response = await fetch(`${baseUrl}/health/readiness`);
+        const data = await response.json();
+        if (data.litellm_version) {
+          setVersion(data.litellm_version);
+        }
+      } catch (error) {
+        console.error("Failed to fetch version:", error);
+      }
+    };
+
+    fetchVersion();
+  }, [baseUrl]);
 
   useEffect(() => {
     const initializeProxySettings = async () => {
@@ -146,9 +163,30 @@ const Navbar: React.FC<NavbarProps> = ({
               </button>
             )}
 
-            <Link href="/" className="flex items-center">
-              <img src={imageUrl} alt="LiteLLM Brand" className="h-10 w-auto" />
-            </Link>
+            <div className="flex items-center">
+              <Link href="/" className="flex items-center">
+                <div className="relative">
+                  <img src={imageUrl} alt="LiteLLM Brand" className="h-10 w-auto" />
+                  <span 
+                    className="absolute -top-1 -right-2 text-lg animate-bounce"
+                    style={{ animationDuration: '2s' }}
+                    title="Happy Holidays!"
+                  >
+                    🎄
+                  </span>
+                </div>
+              </Link>
+              {version && (
+                <a
+                  href="https://docs.litellm.ai/release_notes"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-gray-500 border border-gray-200 rounded-lg px-2 py-0.5 bg-gray-50 font-medium -ml-2 hover:bg-gray-100 transition-colors cursor-pointer z-10"
+                >
+                  v{version}
+                </a>
+              )}
+            </div>
           </div>
           {/* Right side nav items */}
           <div className="flex items-center space-x-5 ml-auto">

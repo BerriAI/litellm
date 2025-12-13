@@ -6,21 +6,63 @@ vi.mock("antd", async () => {
   const React = await import("react");
 
   function Select(props: any) {
-    const { value, onChange, options, ...rest } = props;
+    const { value, onChange, options, optionRender, labelRender, ...rest } = props;
+    const selectedOption = options?.find((opt: any) => opt.value === value);
+    const renderedLabel = labelRender ? labelRender({ value, label: selectedOption?.label }) : selectedOption?.label;
+
+    const optionElements = options?.map((opt: any) => {
+      const rendered = optionRender ? optionRender({ value: opt.value, label: opt.label }) : opt.label;
+      return React.createElement("option", { key: opt.value, value: opt.value }, opt.label);
+    });
+
+    const optionRenderOutputs = options
+      ?.map((opt: any) => {
+        if (optionRender) {
+          const rendered = optionRender({ value: opt.value, label: opt.label });
+          return React.createElement(
+            "div",
+            {
+              key: `option-render-${opt.value}`,
+              "data-testid": `option-render-${opt.value}`,
+              style: { display: "none" },
+            },
+            rendered,
+          );
+        }
+        return null;
+      })
+      .filter(Boolean);
+
     return React.createElement(
-      "select",
-      {
-        ...rest,
-        value,
-        onChange: (e: any) => onChange?.(e.target.value),
-        role: "combobox",
-      },
-      options?.map((opt: any) => React.createElement("option", { key: opt.value, value: opt.value }, opt.label)),
+      React.Fragment,
+      null,
+      React.createElement(
+        "select",
+        {
+          ...rest,
+          value,
+          onChange: (e: any) => onChange?.(e.target.value),
+          role: "combobox",
+        },
+        optionElements,
+      ),
+      ...(optionRenderOutputs || []),
     );
   }
   (Select as any).displayName = "AntdSelect";
 
-  return { Select };
+  function Badge(props: any) {
+    const { count, color, children, ...rest } = props;
+    return React.createElement(
+      "span",
+      { ...rest, "data-testid": "antd-badge", "data-color": color },
+      count && React.createElement("span", { "data-testid": "antd-badge-count" }, count),
+      children,
+    );
+  }
+  (Badge as any).displayName = "AntdBadge";
+
+  return { Select, Badge };
 });
 
 vi.mock("@ant-design/icons", async () => {
@@ -66,5 +108,14 @@ describe("UsageViewSelect", () => {
     });
 
     expect(mockOnChange).toHaveBeenCalledWith("team");
+  });
+
+  it("should render badge when option has badgeText", () => {
+    render(<UsageViewSelect value="agent" onChange={mockOnChange} isAdmin={true} />);
+
+    const badge = screen.getByTestId("antd-badge");
+    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveAttribute("data-color", "blue");
+    expect(screen.getByTestId("antd-badge-count")).toHaveTextContent("New");
   });
 });

@@ -1,6 +1,10 @@
 import React from "react";
-import { Form, Input, Select } from "antd";
+import { Form, Input, Select, Collapse } from "antd";
 import { AgentCreateInfo, AgentCredentialFieldMetadata } from "../networking";
+import { AGENT_FORM_CONFIG } from "./agent_config";
+import CostConfigFields from "./cost_config_fields";
+
+const { Panel } = Collapse;
 
 interface DynamicAgentFormFieldsProps {
   agentTypeInfo: AgentCreateInfo;
@@ -59,6 +63,12 @@ const DynamicAgentFormFields: React.FC<DynamicAgentFormFieldsProps> = ({
           )}
         </Form.Item>
       ))}
+
+      <Collapse style={{ marginBottom: 16 }}>
+        <Panel header={AGENT_FORM_CONFIG.cost.title} key={AGENT_FORM_CONFIG.cost.key}>
+          <CostConfigFields />
+        </Panel>
+      </Collapse>
     </>
   );
 };
@@ -82,6 +92,17 @@ export const buildDynamicAgentData = (
     if (value && field.include_in_litellm_params !== false) {
       litellmParams[field.key] = value;
     }
+  }
+
+  // Add cost configuration
+  if (values.cost_per_query) {
+    litellmParams.cost_per_query = parseFloat(values.cost_per_query);
+  }
+  if (values.input_cost_per_token) {
+    litellmParams.input_cost_per_token = parseFloat(values.input_cost_per_token);
+  }
+  if (values.output_cost_per_token) {
+    litellmParams.output_cost_per_token = parseFloat(values.output_cost_per_token);
   }
 
   // Apply model_template if defined (e.g., "bedrock/agentcore/{agent_runtime_arn}")

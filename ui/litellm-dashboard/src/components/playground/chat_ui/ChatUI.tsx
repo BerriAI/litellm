@@ -1208,6 +1208,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     placeholder="Select a Model"
                     onChange={onModelChange}
                     options={[
+                      { value: "custom", label: "Enter custom model", key: "custom" },
                       ...Array.from(
                         new Set(
                           modelInfo
@@ -1237,7 +1238,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         label: model_group,
                         key: index,
                       })),
-                      { value: "custom", label: "Enter custom model", key: "custom" },
                     ]}
                     style={{ width: "100%" }}
                     showSearch={true}
@@ -1857,6 +1857,25 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       ))}
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* Suggested prompts - show when chat is empty and not loading */}
+              {chatHistory.length === 0 && !isLoading && (
+                <div className="flex items-center gap-2 mb-3 overflow-x-auto">
+                  {(endpointType === EndpointType.A2A_AGENTS
+                    ? ["What can you help me with?", "Tell me about yourself", "What tasks can you perform?"]
+                    : ["Write me a poem", "Explain quantum computing", "Draft a polite email requesting a meeting"]
+                  ).map((prompt) => (
+                    <button
+                      key={prompt}
+                      type="button"
+                      className="shrink-0 rounded-full border border-gray-200 px-3 py-1 text-xs font-medium text-gray-600 transition-colors hover:bg-blue-50 hover:border-blue-300 hover:text-blue-600 cursor-pointer"
+                      onClick={() => setInputMessage(prompt)}
+                    >
+                      {prompt}
+                    </button>
+                  ))}
                 </div>
               )}
 

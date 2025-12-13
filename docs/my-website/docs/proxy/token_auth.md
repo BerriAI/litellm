@@ -247,6 +247,26 @@ OIDC Auth for API: [**See Walkthrough**](https://www.loom.com/share/00fe2deab59a
 - Validate if any group has model access
 - If all checks pass, allow the request
 
+### Select Team via Request Header
+
+When a JWT token contains multiple teams (via `team_ids_jwt_field`), you can explicitly select which team to use for a request by passing the `x-litellm-team-id` header.
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer <your-jwt-token>' \
+-H 'x-litellm-team-id: team_id_2' \
+-d '{
+  "model": "gpt-4",
+  "messages": [{"role": "user", "content": "Hello"}]
+}'
+```
+
+**Validation:**
+- The team ID in the header must exist in the JWT's `team_ids_jwt_field` list or match `team_id_jwt_field`
+- If an invalid team is specified, a 403 error is returned
+- If no header is provided, LiteLLM auto-selects the first team with access to the requested model
+
 
 ### Custom JWT Validate
 

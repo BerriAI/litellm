@@ -11,11 +11,24 @@ import type { TokenUsage } from "../chat_ui/ResponseMetrics";
 import type { MessageType, VectorStoreSearchResponse } from "../chat_ui/types";
 import { makeOpenAIChatCompletionRequest } from "../llm_calls/chat_completion";
 import { fetchAvailableModels } from "../llm_calls/fetch_models";
+import { Agent, fetchAvailableAgents } from "../llm_calls/fetch_agents";
+import { makeA2AStreamMessageRequest } from "../llm_calls/a2a_send_message";
 import { ComparisonPanel } from "./components/ComparisonPanel";
 import { MessageInput } from "./components/MessageInput";
+import {
+  EndpointId,
+  EndpointIdType,
+  getAvailableEndpoints,
+  getEndpointConfig,
+  isAgentEndpoint,
+  hasValidSelection,
+  modelOptionsToSelectorOptions,
+  agentOptionsToSelectorOptions,
+} from "./endpoint_config";
 export interface ComparisonInstance {
   id: string;
   model: string;
+  agent: string;
   messages: MessageType[];
   isLoading: boolean;
   tags: string[];
@@ -38,12 +51,13 @@ const GENERIC_FOLLOW_UPS = [
   "What are the next steps?",
 ];
 const SUGGESTED_PROMPTS = ["Write me a poem", "Explain quantum computing", "Draft a polite email requesting a meeting"];
-const DEFAULT_ENDPOINT = "/v1/chat/completions";
+const DEFAULT_ENDPOINT = EndpointId.CHAT_COMPLETIONS;
 export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: CompareUIProps) {
   const [comparisons, setComparisons] = useState<ComparisonInstance[]>([
     {
       id: "1",
       model: "",
+      agent: "",
       messages: [],
       isLoading: false,
       tags: [],
@@ -58,6 +72,7 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
     {
       id: "2",
       model: "",
+      agent: "",
       messages: [],
       isLoading: false,
       tags: [],
@@ -71,7 +86,18 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
     },
   ]);
   const [modelOptions, setModelOptions] = useState<string[]>([]);
+  const [agentOptions, setAgentOptions] = useState<Agent[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [isLoadingAgents, setIsLoadingAgents] = useState(false);
+  const [selectedEndpoint, setSelectedEndpoint] = useState<EndpointIdType>(DEFAULT_ENDPOINT);
+  
+  // Derived state from endpoint config
+  const endpointConfig = getEndpointConfig(selectedEndpoint);
+  const isA2AMode = isAgentEndpoint(selectedEndpoint);
+  const selectorOptions = isA2AMode
+    ? agentOptionsToSelectorOptions(agentOptions)
+    : modelOptionsToSelectorOptions(modelOptions);
+  const isLoadingOptions = isA2AMode ? isLoadingAgents : isLoadingModels;
   const [inputValue, setInputValue] = useState("");
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [uploadedFilePreviewUrl, setUploadedFilePreviewUrl] = useState<string | null>(null);
@@ -134,6 +160,37 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
       active = false;
     };
   }, [effectiveApiKey]);
+
+  // Fetch agents when A2A mode is selected
+  useEffect(() => {
+    let active = true;
+    const loadAgents = async () => {
+      if (!effectiveApiKey || !isA2AMode) {
+        setAgentOptions([]);
+        return;
+      }
+      setIsLoadingAgents(true);
+      try {
+        const agents = await fetchAvailableAgents(effectiveApiKey);
+        if (!active) return;
+        setAgentOptions(agents);
+      } catch (error) {
+        console.error("CompareUI: failed to fetch agents", error);
+        if (active) {
+          setAgentOptions([]);
+        }
+      } finally {
+        if (active) {
+          setIsLoadingAgents(false);
+        }
+      }
+    };
+    loadAgents();
+    return () => {
+      active = false;
+    };
+  }, [effectiveApiKey, isA2AMode]);
+
   useEffect(() => {
     if (modelOptions.length === 0) {
       return;
@@ -160,10 +217,12 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
     if (comparisons.length >= maxComparisons) {
       return;
     }
-    const fallback = modelOptions[comparisons.length % (modelOptions.length || 1)] ?? "";
+    const fallbackModel = modelOptions[comparisons.length % (modelOptions.length || 1)] ?? "";
+    const fallbackAgent = agentOptions[comparisons.length % (agentOptions.length || 1)]?.agent_name ?? "";
     const newComparison: ComparisonInstance = {
       id: Date.now().toString(),
-      model: fallback,
+      model: fallbackModel,
+      agent: fallbackAgent,
       messages: [],
       isLoading: false,
       tags: [],
@@ -430,8 +489,9 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
     if (targetComparisons.length === 0) {
       return;
     }
-    if (targetComparisons.some((comparison) => !comparison.model)) {
-      NotificationsManager.fromBackend("Select a model before sending a message.");
+    // Validate selection based on endpoint type
+    if (targetComparisons.some((comparison) => !hasValidSelection(comparison, selectedEndpoint))) {
+      NotificationsManager.fromBackend(endpointConfig.validationMessage);
       return;
     }
 
@@ -450,6 +510,8 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
       {
         id: string;
         model: string;
+        agent: string;
+        inputMessage: string;
         traceId: string;
         tags: string[];
         vectorStores: string[];
@@ -472,6 +534,8 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
       preparedTargets.set(comparison.id, {
         id: comparison.id,
         model: comparison.model,
+        agent: comparison.agent,
+        inputMessage: trimmed,
         traceId,
         tags: comparison.tags,
         vectorStores: comparison.vectorStores,
@@ -508,26 +572,55 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
       const guardrails = prepared.guardrails.length > 0 ? prepared.guardrails : undefined;
       const comparison = comparisons.find((c) => c.id === prepared.id);
       const useAdvancedParams = comparison?.useAdvancedParams ?? false;
-      makeOpenAIChatCompletionRequest(
-        prepared.apiChatHistory,
-        (chunk, model) => appendAssistantChunk(prepared.id, chunk, model),
-        prepared.model,
-        effectiveApiKey,
-        tags,
-        undefined,
-        (content) => appendReasoningContent(prepared.id, content),
-        (time) => updateTimingDataForComparison(prepared.id, time),
-        (usage) => updateUsageDataForComparison(prepared.id, usage),
-        prepared.traceId,
-        vectorStoreIds,
-        guardrails,
-        undefined,
-        undefined,
-        (searchResults) => updateSearchResultsForComparison(prepared.id, searchResults),
-        useAdvancedParams ? prepared.temperature : undefined,
-        useAdvancedParams ? prepared.maxTokens : undefined,
-        (latency) => updateTotalLatencyForComparison(prepared.id, latency),
-      )
+
+      // Use A2A or chat completion based on endpoint
+      const requestPromise = isA2AMode
+        ? makeA2AStreamMessageRequest(
+            prepared.agent,
+            prepared.inputMessage,
+            (text, model) => {
+              // A2A sends full accumulated text, so replace instead of append
+              setComparisons((prev) =>
+                prev.map((c) => {
+                  if (c.id !== prepared.id) return c;
+                  const messages = [...c.messages];
+                  const last = messages[messages.length - 1];
+                  if (last && last.role === "assistant") {
+                    messages[messages.length - 1] = { ...last, content: text, model: last.model ?? model };
+                  } else {
+                    messages.push({ role: "assistant", content: text, model });
+                  }
+                  return { ...c, messages };
+                }),
+              );
+            },
+            effectiveApiKey,
+            undefined,
+            (time) => updateTimingDataForComparison(prepared.id, time),
+            (latency) => updateTotalLatencyForComparison(prepared.id, latency),
+          )
+        : makeOpenAIChatCompletionRequest(
+            prepared.apiChatHistory,
+            (chunk, model) => appendAssistantChunk(prepared.id, chunk, model),
+            prepared.model,
+            effectiveApiKey,
+            tags,
+            undefined,
+            (content) => appendReasoningContent(prepared.id, content),
+            (time) => updateTimingDataForComparison(prepared.id, time),
+            (usage) => updateUsageDataForComparison(prepared.id, usage),
+            prepared.traceId,
+            vectorStoreIds,
+            guardrails,
+            undefined,
+            undefined,
+            (searchResults) => updateSearchResultsForComparison(prepared.id, searchResults),
+            useAdvancedParams ? prepared.temperature : undefined,
+            useAdvancedParams ? prepared.maxTokens : undefined,
+            (latency) => updateTotalLatencyForComparison(prepared.id, latency),
+          );
+
+      requestPromise
         .catch((error) => {
           const errorMessage = error instanceof Error ? error.message : String(error);
           console.error("CompareUI: failed to fetch response", error);
@@ -618,11 +711,20 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
             </div>
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium text-gray-600">Endpoint</span>
-              <Tooltip title="Other endpoints will be available soon">
-                <Select value={DEFAULT_ENDPOINT} disabled className="w-56">
-                  <Select.Option value={DEFAULT_ENDPOINT}>{DEFAULT_ENDPOINT}</Select.Option>
-                </Select>
-              </Tooltip>
+              <Select 
+                value={selectedEndpoint} 
+                onChange={(value) => setSelectedEndpoint(value as EndpointIdType)}
+                className="w-56"
+              >
+                {getAvailableEndpoints().map((endpoint) => (
+                  <Select.Option 
+                    key={endpoint.value} 
+                    value={endpoint.value}
+                  >
+                    {endpoint.label}
+                  </Select.Option>
+                ))}
+              </Select>
             </div>
             <div className="flex items-center gap-3">
               <Button onClick={clearAllChats} disabled={!hasMessages} icon={<ClearOutlined />}>
@@ -654,8 +756,9 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
               onUpdate={(updates, options) => updateComparison(comparison.id, updates, options)}
               onRemove={() => removeComparison(comparison.id)}
               canRemove={comparisons.length > 1}
-              modelOptions={modelOptions}
-              isLoadingModels={isLoadingModels}
+              selectorOptions={selectorOptions}
+              isLoadingOptions={isLoadingOptions}
+              endpointConfig={endpointConfig}
               apiKey={effectiveApiKey}
             />
           ))}
@@ -695,10 +798,10 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
                 ) : isAnyComparisonLoading ? (
                   <span className="flex items-center gap-2 text-sm text-gray-500">
                     <span className="h-2 w-2 rounded-full bg-blue-500 animate-pulse" aria-hidden />
-                    Gathering responses from all models...
+                    {endpointConfig.loadingMessage}
                   </span>
                 ) : (
-                  <span className="text-sm text-gray-500">Send a prompt to compare models</span>
+                  <span className="text-sm text-gray-500">{endpointConfig.inputPlaceholder}</span>
                 )}
               </div>
               {uploadedFile && (

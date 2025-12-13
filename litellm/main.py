@@ -69,6 +69,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.audio_utils.utils import (
     calculate_request_duration,
     get_audio_file_for_health_check,
@@ -1090,6 +1091,22 @@ def completion(  # type: ignore # noqa: PLR0915
     tools = validate_and_fix_openai_tools(tools=tools)
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
+
+    skip_mcp_handler = kwargs.pop("_skip_mcp_handler", False)
+    if not skip_mcp_handler and tools:
+        from litellm.responses.mcp.chat_completions_handler import (
+            handle_chat_completion_with_mcp,
+        )
+
+        mcp_handler_context = locals().copy()
+        completion_callable = globals().get("acompletion")
+        mcp_result = run_async_function(
+            handle_chat_completion_with_mcp,
+            mcp_handler_context,
+            completion_callable,
+        )
+        if mcp_result is not None:
+            return mcp_result
     ######### unpacking kwargs #####################
     args = locals()
     api_base = kwargs.get("api_base", None)

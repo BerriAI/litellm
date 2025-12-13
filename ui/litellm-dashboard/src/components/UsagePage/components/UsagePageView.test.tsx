@@ -99,7 +99,18 @@ vi.mock("antd", async () => {
   }
   (Alert as any).displayName = "AntdAlert";
 
-  return { Select, Alert };
+  function Badge(props: any) {
+    const { count, color, children, ...rest } = props;
+    return React.createElement(
+      "div",
+      { ...rest, "data-testid": "antd-badge", "data-color": color },
+      count && React.createElement("span", { "data-testid": "antd-badge-count" }, count),
+      children,
+    );
+  }
+  (Badge as any).displayName = "AntdBadge";
+
+  return { Select, Alert, Badge };
 });
 
 vi.mock("@ant-design/icons", async () => {
