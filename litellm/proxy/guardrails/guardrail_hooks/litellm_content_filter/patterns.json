@@ -118,7 +118,207 @@
       "pattern": "\\b(?:https?://|www\\.)[^\\s/$.?#].[^\\s]*\\b",
       "category": "Network Patterns",
       "description": "Detects URLs (http/https)"
+    },
+    {
+    "name": "passport_us",
+    "display_name": "Passport (US)",
+    "pattern": "\\b[0-9]{9}\\b",
+    "category": "PII Patterns",
+    "description": "US passport numbers (9 digits)"
+    },
+    {
+      "name": "passport_uk",
+      "display_name": "Passport (UK)",
+      "pattern": "\\b[0-9]{9}\\b",
+      "category": "PII Patterns",
+      "description": "UK passport numbers (9 digits)"
+    },
+    {
+      "name": "passport_germany",
+      "display_name": "Passport (Germany)",
+      "pattern": "\\b[CFGHJKLMNPRTVWXYZ0-9]{9}\\b",
+      "category": "PII Patterns",
+      "description": "German passport numbers (9 alphanumeric, no vowels)"
+    },
+    {
+      "name": "passport_france",
+      "display_name": "Passport (France)",
+      "pattern": "\\b[0-9]{2}[A-Z]{2}[0-9]{5}\\b",
+      "category": "PII Patterns",
+      "description": "French passport numbers (2 digits, 2 letters, 5 digits)"
+    },
+    {
+      "name": "passport_netherlands",
+      "display_name": "Passport (Netherlands)",
+      "pattern": "\\b[A-Z]{2}[A-Z0-9]{6}[0-9]\\b",
+      "category": "PII Patterns",
+      "description": "Dutch passport numbers (2 letters + 6 alphanumeric + 1 digit)"
+    },
+    {
+      "name": "passport_canada",
+      "display_name": "Passport (Canada)",
+      "pattern": "\\b[A-Z]{2}[0-9]{6}\\b",
+      "category": "PII Patterns",
+      "description": "Canadian passport numbers (2 letters + 6 digits)"
+    },
+    {
+      "name": "passport_india",
+      "display_name": "Passport (India)",
+      "pattern": "\\b[A-Z][0-9]{7}\\b",
+      "category": "PII Patterns",
+      "description": "Indian passport numbers (1 letter + 7 digits)"
+    },
+    {
+      "name": "passport_australia",
+      "display_name": "Passport (Australia)",
+      "pattern": "\\b[A-Z][0-9]{7}\\b",
+      "category": "PII Patterns",
+      "description": "Australian passport numbers (1 letter + 7 digits)"
+    },
+    {
+      "name": "passport_china",
+      "display_name": "Passport (China)",
+      "pattern": "\\b[EeGg][0-9]{8}\\b",
+      "category": "PII Patterns",
+      "description": "Chinese passport numbers (E/G prefix + 8 digits)"
+    },
+    {
+      "name": "passport_japan",
+      "display_name": "Passport (Japan)",
+      "pattern": "\\b[A-Z]{2}[0-9]{7}\\b",
+      "category": "PII Patterns",
+      "description": "Japanese passport numbers (2 letters + 7 digits)"
+    },
+    {
+      "name": "gender_sexual_orientation",
+      "display_name": "Gender & Sexual Orientation (Protected Class)",
+      "pattern": "\\b(non-?binary|enby|genderqueer|genderfluid|gender-?fluid|agender|bigender|pangender|two-?spirit|trans(gender|sexual|masc|fem)?|cis(gender)?|intersex|MTF|FTM|AMAB|AFAB|assigned\\s+(male|female)\\s+at\\s+birth|gay|lesbian|bisexual|pansexual|omnisexual|polysexual|asexual|aromantic|demisexual|heterosexual|homosexual|queer|LGBTQ\\+?|LGBT\\+?|LGBTQIA\\+?|same-?sex|opposite-?sex|sexual\\s+orientation|sexual\\s+preference|gender\\s+identity|sex\\s+change|gender\\s+reassignment|gender\\s+confirmation|sexual\\s+minority|he\\/him|she\\/her|they\\/them|xe\\/xem|ze\\/zir)\\b",
+      "category": "Protected Class - Fair Lending",
+      "description": "Detects gender identity and sexual orientation terms - protected under fair lending regulations"
+    },
+    {
+      "name": "race_ethnicity_national_origin",
+      "display_name": "Race, Ethnicity & National Origin (Protected Class)",
+      "pattern": "\\b(caucasian|african[- ]?american|black|white|asian|hispanic|latino|latina|latinx|pacific\\s+islander|native\\s+american|indigenous|first\\s+nations|aboriginal|mestizo|mulatto|biracial|multiracial|mixed[- ]?race|person\\s+of\\s+colou?r|POC|BIPOC|ethnic(ity)?|racial|race|arab|middle\\s+eastern|south\\s+asian|east\\s+asian|southeast\\s+asian|european|african|caribbean|west\\s+indian|haitian|jamaican|cuban|puerto\\s+rican|mexican|dominican|salvadoran|guatemalan|honduran|colombian|venezuelan|peruvian|brazilian|chinese|japanese|korean|vietnamese|filipino|filipina|indian|pakistani|bangladeshi|sri\\s+lankan|nepali|thai|indonesian|malaysian|burmese|cambodian|laotian|hmong|somali|ethiopian|nigerian|ghanaian|kenyan|south\\s+african|egyptian|moroccan|algerian|iranian|iraqi|syrian|lebanese|palestinian|israeli|turkish|afghan|uzbek|kazakh|russian|ukrainian|polish|german|italian|irish|british|french|spanish|portuguese|greek|albanian|serbian|croatian|bosnian|romani|roma|gypsy|jewish|ashkenazi|sephardic|mizrahi|native\\s+hawaiian|samoan|tongan|fijian|guamanian|chamorro|inuit|aleut|metis|maori|aboriginal\\s+australian|torres\\s+strait)\\b",
+      "category": "Protected Class - Fair Lending",
+      "description": "Detects race, ethnicity and national origin terms - protected under ECOA and Fair Housing Act"
+    },
+
+    {
+      "name": "religion",
+      "display_name": "Religion & Creed (Protected Class)",
+      "pattern": "\\b(christian|catholic|protestant|baptist|methodist|lutheran|presbyterian|episcopal|pentecostal|evangelical|orthodox\\s+christian|mormon|latter[- ]?day\\s+saint|LDS|jehovah'?s?\\s+witness|seventh[- ]?day\\s+adventist|amish|mennonite|quaker|jewish|jew|judaism|orthodox\\s+jew|hasidic|muslim|islam(ic)?|sunni|shia|shiite|sufi|nation\\s+of\\s+islam|hindu(ism)?|buddhist|buddhism|sikh(ism)?|jain(ism)?|shinto|taoist|taoism|confucian|zoroastrian|baha'?i|rastafari(an)?|pagan|wiccan|druid|satanist|scientolog(y|ist)|unitarian|agnostic|atheist|secular|non-?religious|spiritual\\s+but\\s+not\\s+religious|religious\\s+belief|religious\\s+practice|place\\s+of\\s+worship|church|mosque|synagogue|temple|gurdwara|kosher|halal|sabbath|shabbat|ramadan|lent|yom\\s+kippur|rosh\\s+hashanah|diwali|eid|hijab|yarmulke|kippah|turban|religious\\s+head\\s*covering)\\b",
+      "category": "Protected Class - Fair Lending",
+      "description": "Detects religious affiliation and practice terms - protected under ECOA"
+    },
+    {
+      "name": "age_discrimination",
+      "display_name": "Age-Related Terms (Protected Class)",
+      "pattern": "\\b(elderly|senior\\s+citizen|old\\s+age|aged\\s+\\d+|retiree|retired|pensioner|baby\\s+boomer|boomer|geriatric|over\\s+the\\s+hill|too\\s+old|too\\s+young|young\\s+person|millennial|gen[- ]?z|junior|age\\s+discrimination|ageism|years?\\s+old|date\\s+of\\s+birth|DOB|birth\\s*date|born\\s+in\\s+\\d{4}|age\\s+\\d{2,3})\\b",
+      "category": "Protected Class - Fair Lending",
+      "description": "Detects age-related terms - protected under ECOA for applicants 62+"
+    },
+    {
+      "name": "disability",
+      "display_name": "Disability Status (Protected Class)",
+      "pattern": "\\b(disabled|disability|handicap(ped)?|impair(ed|ment)|wheelchair|blind(ness)?|deaf(ness)?|hard\\s+of\\s+hearing|hearing\\s+impaired|visually\\s+impaired|mute|paralyz(ed|is)|quadriplegic|paraplegic|amputee|prosthetic|cripple[d]?|mentally\\s+ill|mental\\s+illness|mental\\s+disorder|psychiatric|schizophren(ia|ic)|bipolar|depression|depressed|anxiety\\s+disorder|PTSD|autis(m|tic)|asperger'?s?|ADHD|ADD|dyslexia|dyslexic|learning\\s+disabilit(y|ies)|intellectual\\s+disabilit(y|ies)|down'?s?\\s+syndrome|cerebral\\s+palsy|epilep(sy|tic)|seizure\\s+disorder|multiple\\s+sclerosis|MS\\s+patient|parkinson'?s?|alzheimer'?s?|dementia|chronic\\s+illness|chronic\\s+pain|fibromyalgia|lupus|crohn'?s?|cancer\\s+patient|HIV|AIDS|diabetic|diabetes|SSI|SSDI|disability\\s+benefits|disability\\s+income|ADA|reasonable\\s+accommodation|special\\s+needs|service\\s+animal|service\\s+dog|guide\\s+dog)\\b",
+      "category": "Protected Class - Fair Lending",
+      "description": "Detects disability-related terms - protected under ECOA and ADA"
+    },
+    {
+      "name": "marital_family_status",
+      "display_name": "Marital & Family Status (Protected Class)",
+      "pattern": "\\b(married|unmarried|single|divorced|separated|widowed|widow|widower|spouse|husband|wife|domestic\\s+partner|civil\\s+union|common[- ]?law|marital\\s+status|maiden\\s+name|alimony|child\\s+support|custody|pregnant|pregnancy|maternity|paternity|expecting|family\\s+status|number\\s+of\\s+children|dependents|childless|child[- ]?free|single\\s+parent|single\\s+mother|single\\s+father|unwed|out\\s+of\\s+wedlock|illegitimate|family\\s+planning|birth\\s+control|fertility|IVF|adoption|adopted|foster\\s+parent|guardian)\\b",
+      "category": "Protected Class - Fair Lending",
+      "description": "Detects marital and family status terms - protected under ECOA"
+    },
+    {
+      "name": "military_status",
+      "display_name": "Military Status (Protected Class)",
+      "pattern": "\\b(veteran|military|armed\\s+forces|army|navy|air\\s+force|marine(s|\\s+corps)?|coast\\s+guard|national\\s+guard|reserve(s|ist)?|active\\s+duty|deployment|deployed|enlisted|commissioned|honorable\\s+discharge|dishonorable\\s+discharge|VA\\s+benefits|GI\\s+bill|military\\s+service|service\\s+member|servicemember|SCRA|MLA|military\\s+lending)\\b",
+      "category": "Protected Class - Fair Lending", 
+      "description": "Detects military status terms - protected under SCRA and MLA"
+    },
+    {
+      "name": "public_assistance",
+      "display_name": "Public Assistance Status (Protected Class)",
+      "pattern": "\\b(welfare|public\\s+assistance|food\\s+stamps|SNAP|WIC|TANF|medicaid|section\\s+8|housing\\s+voucher|subsidized\\s+housing|public\\s+housing|government\\s+benefits|social\\s+services|unemployment\\s+(benefits|insurance)|UI\\s+benefits|EBT|benefit\\s+recipient)\\b",
+      "category": "Protected Class - Fair Lending",
+      "description": "Detects public assistance terms - protected under ECOA"
+    } ,
+    {
+      "name": "weapons_firearms",
+      "display_name": "Weapons & Firearms",
+      "pattern": "\\b(gun|firearm|rifle|shotgun|pistol|handgun|revolver|semi[- ]?automatic|automatic\\s+weapon|assault\\s+rifle|AR-?15|AK-?47|machine\\s+gun|submachine\\s+gun|SMG|ammunition|ammo|bullet(s)?|cartridge|caliber|9mm|\\.45|\\.38|\\.357|\\.22|12\\s+gauge|hollow\\s+point|armor\\s+piercing|magazine|clip|suppressor|silencer|bump\\s+stock|trigger|barrel|concealed\\s+carry|open\\s+carry|CCW|ghost\\s+gun|3D\\s+printed\\s+gun|untraceable\\s+firearm|straw\\s+purchase|gun\\s+show|FFL|firearms\\s+dealer)\\b",
+      "category": "Dangerous Content",
+      "action": "MASK",
+      "description": "Detects firearms and ammunition terminology"
+    },
+    {
+      "name": "weapons_other",
+      "display_name": "Other Weapons",
+      "pattern": "\\b(knife|blade|machete|switchblade|butterfly\\s+knife|balisong|brass\\s+knuckles|knuckle\\s+duster|baton|blackjack|taser|stun\\s+gun|pepper\\s+spray|mace|crossbow|bow\\s+and\\s+arrow|compound\\s+bow|sword|katana|throwing\\s+star|shuriken|nunchaku|nunchucks|tomahawk|hatchet|axe\\s+attack|ice\\s+pick|garrote|zip\\s+gun|improvised\\s+weapon|shiv|shank|pipe\\s+bomb)\\b",
+      "category": "Dangerous Content",
+      "action": "MASK",
+      "description": "Detects non-firearm weapons terminology"
+    },
+    {
+      "name": "explosives",
+      "display_name": "Explosives & Bombs",
+      "pattern": "\\b(bomb|explosive|detonate|detonator|detonation|IED|improvised\\s+explosive|pipe\\s+bomb|mail\\s+bomb|car\\s+bomb|truck\\s+bomb|suicide\\s+bomb|vest\\s+bomb|dirty\\s+bomb|fertilizer\\s+bomb|ANFO|ammonium\\s+nitrate|C-?4|plastic\\s+explosive|dynamite|TNT|nitroglycerin|black\\s+powder|gunpowder|blasting\\s+cap|fuse|timer\\s+device|remote\\s+detonation|pressure\\s+cooker\\s+bomb|nail\\s+bomb|shrapnel|fragmentation|incendiary|molotov|firebomb|thermite|napalm|grenade|hand\\s+grenade|frag\\s+grenade|flash\\s+bang|smoke\\s+bomb|landmine|claymore|semtex|RDX|PETN|how\\s+to\\s+(make|build|construct)\\s+(a\\s+)?bomb)\\b",
+      "category": "Dangerous Content - High Risk",
+      "action": "BLOCK",
+      "description": "Detects explosives and bomb-making terminology"
+    },
+    {
+      "name": "violence_threats",
+      "display_name": "Violence & Threats",
+      "pattern": "\\b(kill|murder|assassinate|execute|slaughter|massacre|bloodbath|genocide|ethnic\\s+cleansing|mass\\s+shooting|shooting\\s+spree|rampage|gun\\s+down|mow\\s+down|hunt\\s+(down|them)|take\\s+(them|him|her)\\s+out|eliminate|neutralize|liquidate|hit\\s+(list|man)|contract\\s+kill|hired\\s+gun|death\\s+threat|threat(en)?\\s+to\\s+kill|gonna\\s+kill|going\\s+to\\s+kill|want\\s+(to|him|her|them)\\s+dead|deserve\\s+to\\s+die|need(s)?\\s+to\\s+die|shoot\\s+up|bomb\\s+threat|terrorize|reign\\s+of\\s+terror|burning\\s+down|burn\\s+it\\s+down|blow\\s+(it|them|this)\\s+up|torture|mutilate|dismember|decapitate|behead|strangle|suffocate|drown|poison|stab|slash|cut\\s+(throat|them)|slit\\s+(throat|wrists)|beat\\s+to\\s+death|bludgeon|maim|cripple|kneecap)\\b",
+      "category": "Dangerous Content - High Risk",
+      "action": "BLOCK",
+      "description": "Detects violent threats and terminology"
+    },
+    {
+      "name": "terrorism",
+      "display_name": "Terrorism & Extremism",
+      "pattern": "\\b(terroris[tm]|jiha[di]|mujahideen|martyr(dom)?\\s+operation|holy\\s+war|caliphate|ISIS|ISIL|Islamic\\s+State|Al[- ]?Qaeda|Al[- ]?Shabaab|Boko\\s+Haram|Hezbollah|Hamas|Taliban|lone\\s+wolf|radicalize[d]?|radicalization|extremis[tm]|white\\s+supremac(y|ist)|neo[- ]?nazi|skinhead|aryan|white\\s+power|white\\s+nationalist|race\\s+war|day\\s+of\\s+the\\s+rope|Turner\\s+Diaries|accelerationism|boogaloo|proud\\s+boys|oath\\s+keepers|three\\s+percenter|militia\\s+movement|domestic\\s+terroris[tm]|cell|sleeper\\s+cell|attack\\s+planning|soft\\s+target|hard\\s+target|high\\s+value\\s+target|infidel|kuffar|crusader|manifest(o)?|insurgent|insurrection|armed\\s+uprising|overthrow\\s+the\\s+government|civil\\s+war\\s+2|RAHOWA|fourteen\\s+words|1488|88|HH)\\b",
+      "category": "Dangerous Content - High Risk",
+      "action": "BLOCK",
+      "description": "Detects terrorism and extremism terminology"
+    },
+    {
+      "name": "self_harm_suicide",
+      "display_name": "Self-Harm & Suicide",
+      "pattern": "\\b(suicid(e|al)|kill\\s+myself|end\\s+(my|it\\s+all)|take\\s+my\\s+(own\\s+)?life|don'?t\\s+want\\s+to\\s+live|want\\s+to\\s+die|better\\s+off\\s+dead|no\\s+reason\\s+to\\s+live|nothing\\s+to\\s+live\\s+for|end\\s+the\\s+pain|self[- ]?harm|cut(ting)?\\s+myself|slit\\s+(my\\s+)?wrists|overdose|OD|hang\\s+myself|jump\\s+off|jump\\s+from|bridge\\s+jump|train\\s+tracks|pills\\s+to\\s+die|lethal\\s+dose|LD50|how\\s+to\\s+kill\\s+(myself|yourself)|suicide\\s+method|painless\\s+death|exit\\s+bag|helium\\s+hood|suicide\\s+note|goodbye\\s+letter|final\\s+letter|last\\s+words|pro[- ]?ana|pro[- ]?mia|thinspiration|self[- ]?starv(e|ation)|purging)\\b",
+      "category": "Dangerous Content - Crisis",
+      "action": "MASK",
+      "description": "Detects self-harm and suicide terminology - recommend human review"
+    },
+    {
+      "name": "illegal_activities",
+      "display_name": "Illegal Activities",
+      "pattern": "\\b(money\\s+launder(ing)?|launder\\s+money|structuring|smurfing|wash\\s+(the\\s+)?money|clean\\s+money|dirty\\s+money|drug\\s+traffick(ing)?|narco|cartel|drug\\s+deal(er|ing)?|drug\\s+lord|kingpin|cocaine|heroin|fentanyl|meth(amphetamine)?|crack|opioid|human\\s+traffick(ing)?|sex\\s+traffick(ing)?|smuggl(e|ing)|contraband|black\\s+market|dark\\s+web|darknet|hitman|contract\\s+killer|murder\\s+for\\s+hire|arson|extort(ion)?|blackmail|ransom|kidnap(ping)?|abduct(ion)?|hostage|fraud\\s+scheme|ponzi|pyramid\\s+scheme|identity\\s+theft|credit\\s+card\\s+fraud|wire\\s+fraud|bank\\s+fraud|embezzle(ment)?|brib(e|ery)|kickback|racketeering|RICO|organized\\s+crime|mob|mafia|syndicate|gang\\s+activity|criminal\\s+enterprise)\\b",
+      "category": "Dangerous Content - Illegal",
+      "action": "MASK",
+      "description": "Detects illegal activity terminology - relevant to SAR filing"
+    },
+    {
+      "name": "harassment_hate",
+      "display_name": "Harassment & Hate Speech",
+      "pattern": "\\b(n[i1]gg[e3]r|f[a4]gg[o0]t|k[i1]ke|sp[i1]c|ch[i1]nk|g[o0]{2}k|w[e3]tb[a4]ck|r[e3]t[a4]rd|tr[a4]nny|shemale|dyke|cunt|kill\\s+all|gas\\s+the|lynch|hang\\s+the|exterminate|subhuman|untermensch|mongrel|mud\\s+people|race\\s+traitor|coal\\s+burner|oil\\s+driller|oven|lampshade|helicopter\\s+ride|throw\\s+from|rooftop|wood\\s+chipper|dox(x)?(ing)?|swat(ting)?|harass(ment)?|stalk(ing|er)?|cyber\\s*bully|death\\s+threat|rape\\s+threat|bomb\\s+threat|shoot\\s+up|gonna\\s+find\\s+you|know\\s+where\\s+you\\s+live|coming\\s+for\\s+you)\\b",
+      "category": "Dangerous Content - High Risk",
+      "action": "BLOCK",
+      "description": "Detects slurs, hate speech and harassment"
+    },
+    {
+      "name": "nl_bsn_contextual",
+      "display_name": "BSN (Dutch Citizen Service Number)",
+      "pattern": "\\b(?:BSN|B\\.S\\.N\\.|burgerservicenummer|burger\\s*service\\s*nummer|sofi\\s*nummer|sofinummer|persoonsnummer|identificatienummer|citizen\\s*service\\s*number)[:\\s]*[0-9]{9}\\b|\\b[0-9]{9}\\b(?=\\s*(?:BSN|burgerservicenummer|sofinummer))",
+      "category": "PII Patterns",
+      "action": "MASK",
+      "description": "Detects Dutch BSN numbers with contextual keywords"
     }
   ]
 }
+
 
