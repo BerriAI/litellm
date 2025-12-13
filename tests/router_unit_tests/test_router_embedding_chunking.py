@@ -32,16 +32,24 @@ class TestEmbeddingChunkingHelpers:
         )
 
     def test_approx_token_count_short_text(self):
-        """Test token count estimation for short text."""
-        text = "Hello world"  # 11 chars -> ~2-3 tokens
+        """Test token count estimation for short text.
+
+        With safety factor of 1.1, the estimate is conservative (higher):
+        11 chars / 4 * 1.1 = 3 (rounded)
+        """
+        text = "Hello world"  # 11 chars
         count = self.router._approx_token_count(text)
-        assert count == 2  # 11 // 4 = 2
+        assert count == 3  # int((11 / 4) * 1.1) = 3
 
     def test_approx_token_count_long_text(self):
-        """Test token count estimation for long text."""
-        text = "a" * 4000  # 4000 chars -> ~1000 tokens
+        """Test token count estimation for long text.
+
+        With safety factor of 1.1, the estimate is conservative (higher):
+        4000 chars / 4 * 1.1 = 1100
+        """
+        text = "a" * 4000  # 4000 chars
         count = self.router._approx_token_count(text)
-        assert count == 1000
+        assert count == 1100  # int((4000 / 4) * 1.1) = 1100
 
     def test_chunk_text_small_input(self):
         """Test that small inputs are not chunked."""
