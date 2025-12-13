@@ -683,26 +683,28 @@ async def test_team_alias():
 @pytest.mark.asyncio
 async def test_users_in_team_budget():
     """
-    - Create Team
     - Create User
+    - Create Team with User
     - Add User to team with budget = 0.0000001
     - Make Call 1 -> pass
     - Make Call 2 -> fail
     """
     get_user = f"krrish_{time.time()}@berri.ai"
     async with aiohttp.ClientSession() as session:
-        team = await new_team(session, 0, user_id=get_user)
-        print("New team=", team)
+        # Create user first to avoid user_id collision when creating team
         key_gen = await new_user(
             session,
             0,
             user_id=get_user,
             budget=10,
             budget_duration="5s",
-            team_id=team["team_id"],
             models=["fake-openai-endpoint"],
         )
         key = key_gen["key"]
+        
+        # Create team with the user (user already exists, so it will just add them)
+        team = await new_team(session, 0, user_id=get_user)
+        print("New team=", team)
 
         # update user to have budget = 0.0000001
         await update_member(
