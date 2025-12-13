@@ -1,14 +1,24 @@
-# What to Change in `/cursor/chat/completions` for Tool Calls
+# Analysis: Cursor BYOK and Tool Calls
 
-## Status: IMPLEMENTED ✅
+## Final Conclusion
 
-The changes have been implemented in:
-- **NEW FILE**: `litellm/proxy/response_api_endpoints/cursor_format.py` - Cursor format transformer
-- **UPDATED**: `litellm/proxy/response_api_endpoints/endpoints.py` - Uses new Cursor format generator
+After analyzing Cursor's Electron client code, I found that:
+
+**Cursor's BYOK mode uses standard OpenAI `/v1/chat/completions` format, NOT protobuf.**
+
+The `/cursor/chat/completions` endpoint is correctly returning OpenAI Chat Completions format.
 
 ## The Core Problem
 
-Cursor expects tool calls in its **proprietary protobuf format**, not standard OpenAI `tool_calls` format. Even though protobuf messages have `fromJson` methods, Cursor's BYOK client may not be parsing them correctly.
+**Cursor's BYOK mode likely doesn't support tool calls at all.**
+
+Evidence from Cursor client code shows BYOK only handles basic chat completion:
+- Sends standard OpenAI request format
+- Only includes `messages` and `model` parameters  
+- No `tools` parameter in requests
+- No `tool_calls` parsing in responses
+
+Tool execution is only supported through Cursor's **native protobuf API** (`api2.cursor.sh`).
 
 ## Cursor's Expected Streaming Response Format
 
