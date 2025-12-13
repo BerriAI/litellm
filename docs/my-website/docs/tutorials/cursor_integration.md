@@ -11,216 +11,107 @@ This tutorial shows you how to integrate Cursor IDE with LiteLLM Proxy, allowing
 
 ## Benefits of using Cursor with LiteLLM
 
-When you use Cursor IDE with LiteLLM you get the following benefits:
 
-**Developer Benefits:**
-- Universal Model Access: Use any LiteLLM supported model (Anthropic, OpenAI, Vertex AI, Bedrock, etc.) through the Cursor IDE interface.
-- Higher Rate Limits & Reliability: Load balance across multiple models and providers to avoid hitting individual provider limits, with fallbacks to ensure you get responses even if one provider fails.
-- Streaming Support: Full streaming support with proper response transformation for Cursor's expected format.
+## Setup Guide
 
-**Proxy Admin Benefits:**
-- Centralized Management: Control access to all models through a single LiteLLM proxy instance without giving your developers API Keys to each provider.
-- Budget Controls: Set spending limits and track costs across all Cursor usage.
-- Request Logging: Track all requests made through Cursor for debugging and monitoring.
+Follow these steps to connect Cursor IDE to your LiteLLM Proxy.
 
-## Prerequisites
+### Step 1: Open Cursor Settings
 
-Before you begin, ensure you have:
-- Cursor IDE installed
-- A running LiteLLM Proxy instance with **HTTPS enabled** (HTTP is not supported)
-- A valid LiteLLM Proxy API key
-- An HTTPS domain for your LiteLLM Proxy (required by Cursor)
+1. Click **Cursor** in the menu bar
+2. Select **Cursor Settings** from the dropdown menu
 
-## Quick Start Guide
+![Click Cursor menu](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-13/35918062-56a6-4706-a2c3-a5df6cb93d18/ascreenshot.jpeg?tl_px=0,0&br_px=1376,769&force_format=jpeg&q=100&width=1120.0)
 
-### Step 1: Install LiteLLM
+![Select Cursor Settings](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-13/f725f154-588d-448d-a1d7-3c8bffaf3cf3/ascreenshot.jpeg?tl_px=0,0&br_px=1376,769&force_format=jpeg&q=100&width=1120.0)
 
-Install LiteLLM with proxy support:
+### Step 2: Navigate to Models Settings
 
-```bash
-pip install litellm[proxy]
-```
+1. In the Cursor Settings panel, click on **Models** in the left sidebar
 
-### Step 2: Configure LiteLLM Proxy
+![Cursor Settings General tab](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-13/aaeee682-f4cc-4085-9b9c-1ce22aa14119/ascreenshot.jpeg?tl_px=0,0&br_px=1376,769&force_format=jpeg&q=100&width=1120.0)
 
-Create a `config.yaml` file with your model configurations:
+### Step 3: Configure OpenAI API Key and Base URL
 
-```yaml showLineNumbers title="config.yaml"
-model_list:
-  - model_name: gpt-4o
-    litellm_params:
-      model: gpt-4o
-      api_key: os.environ/OPENAI_API_KEY
-  
-  - model_name: claude-3-5-sonnet
-    litellm_params:
-      model: anthropic/claude-3-5-sonnet-20241022
-      api_key: os.environ/ANTHROPIC_API_KEY
+1. Scroll down to the **API Keys** section
+2. Enter your LiteLLM Virtual Key in the **OpenAI API Key** field
+3. Enable **Override OpenAI Base URL**
+4. Set the base URL to your LiteLLM Proxy URL with the `/cursor` endpoint:
+   ```
+   https://your-litellm-proxy.com/cursor
+   ```
 
-general_settings:
-  master_key: sk-1234567890 # Change this to a secure key
-```
+![API Keys section with Override OpenAI Base URL](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-13/76c52bec-e182-49ae-82a3-3fa6a1827665/ascreenshot.jpeg?tl_px=162,347&br_px=1538,1117&force_format=jpeg&q=100&width=1120.0)
 
-### Step 3: Start LiteLLM Proxy
+![Override OpenAI Base URL configuration](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-13/be616530-952a-4ed9-9cfe-dea505e7cfa6/ascreenshot.jpeg?tl_px=297,286&br_px=1673,1055&force_format=jpeg&q=100&width=1120.0)
 
-Start the proxy server with HTTPS enabled:
+### Step 4: Create a LiteLLM Virtual Key (if you don't have one)
 
-```bash
-litellm --config config.yaml --port 4000
-```
+1. Open your LiteLLM Dashboard in a browser
+2. Navigate to **Virtual Keys** in the left sidebar
+3. Click **+ Create New Key**
 
-:::warning HTTPS Required
+![LiteLLM Dashboard - Virtual Keys page](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-13/1d8156bc-1b12-433f-936d-77f876142e3f/ascreenshot.jpeg?tl_px=0,0&br_px=1376,769&force_format=jpeg&q=100&width=1120.0)
 
-**Important**: Cursor IDE requires HTTPS connections. HTTP (`http://`) will not work. You must:
-- Deploy your LiteLLM Proxy with HTTPS enabled
-- Use a valid SSL certificate
-- Access the proxy via an HTTPS domain (e.g., `https://your-proxy-domain.com`)
+4. Fill in the key details:
+   - **Key Name**: Enter a descriptive name (e.g., `cursor-test-key`)
+   - **Models**: Select the models you want to use (e.g., `gpt-5.1-openai`)
+5. Click **Create Key**
 
-For local development, you'll need to set up HTTPS (e.g., using a reverse proxy like nginx with SSL, or deploying to a cloud service with HTTPS).
+![Create new key form](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-13/c9a7ae9f-8b67-4299-926a-0f1d320fb97c/ascreenshot.jpeg?tl_px=352,347&br_px=1728,1117&force_format=jpeg&q=100&width=1120.0)
 
-:::
+6. Copy the generated Virtual Key (you will not be able to view it again)
 
-### Step 4: Configure Cursor IDE
+![Copy Virtual Key dialog](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-13/4022504d-fdba-4e17-b16e-bf8e935cbcad/ascreenshot.jpeg?tl_px=0,101&br_px=1376,870&force_format=jpeg&q=100&width=1120.0)
 
-Configure Cursor IDE to use your LiteLLM proxy with the `/cursor/chat/completions` endpoint:
+### Step 5: Get Your Model Name from LiteLLM
 
-1. Open Cursor IDE
-2. Go to **Settings** → **Features** → **AI**
-3. Enable **"Use Custom API"** or **"Bring Your Own Key"**
-4. Set the following:
-   - **Base URL**: `https://your-proxy-domain.com/cursor` (⚠️ **Important**: Must use HTTPS and include `/cursor`)
-   - **API Key**: Your LiteLLM Proxy API key (e.g., `sk-1234567890`)
+1. In the LiteLLM Dashboard, navigate to **Models + Endpoints**
+2. Find the model you want to use and copy its **Public Model Name**
 
-:::warning HTTPS Required
+![Models + Endpoints page](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-13/ffb217d8-605f-4160-88ac-9386889042ab/ascreenshot.jpeg?tl_px=0,0&br_px=1376,769&force_format=jpeg&q=100&width=1120.0)
 
-Cursor IDE **requires HTTPS** connections. HTTP (`http://`) will not work. You must:
-- Use an HTTPS URL for your base URL (e.g., `https://your-proxy-domain.com/cursor`)
-- Ensure your LiteLLM Proxy is accessible via HTTPS
-- Have a valid SSL certificate configured
+![Model details showing Public Model Name](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-13/2ee87f64-104a-4b37-8041-c92130a44896/ascreenshot.jpeg?tl_px=0,11&br_px=1376,780&force_format=jpeg&q=100&width=1120.0)
 
-:::
+### Step 6: Add Custom Model in Cursor
 
-**Example Configuration:**
+1. Back in Cursor Settings > Models, click **Add Custom Model**
+2. Enter the Public Model Name from LiteLLM (e.g., `gpt-5.1-openai`)
+3. Enable the model using the toggle
 
-```
-Base URL: https://your-proxy-domain.com/cursor
-API Key: sk-1234567890
-```
+![Cursor Models settings with custom model](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-13/fd9b9bac-89a2-4337-bb12-625d848edf7c/ascreenshot.jpeg?tl_px=0,0&br_px=1728,965&force_format=jpeg&q=100&width=1120.0)
 
-Replace `your-proxy-domain.com` with your actual HTTPS domain where LiteLLM Proxy is running.
+### Step 7: Start Using Cursor with LiteLLM
 
-:::info Why `/cursor` in the base URL?
+1. Open a new chat in Cursor (Cmd+L on Mac, Ctrl+L on Windows/Linux)
+2. Select your custom model from the model dropdown
+3. Start chatting - your requests will now route through LiteLLM Proxy
 
-Cursor automatically appends `/chat/completions` to the base URL you provide. By setting the base URL to `https://your-proxy-domain.com/cursor`, Cursor will send requests to `/cursor/chat/completions`, which is the special endpoint that handles Cursor's Responses API input format and transforms it to Chat Completions output format.
+![Cursor chat with LiteLLM model selected](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-13/05a5853a-58ed-44bf-a5c2-c14f9003eace/ascreenshot.jpeg?tl_px=0,151&br_px=1728,1117&force_format=jpeg&q=100&width=1120.0)
 
-If you set the base URL to just `https://your-proxy-domain.com`, Cursor would send requests to `/chat/completions`, which won't work correctly with Cursor's request format.
+## Configuration Summary
 
-
-:::
-
-### Step 5: Test the Integration
-
-1. Restart Cursor IDE to apply the settings
-2. Open a code file and try using Cursor's AI features (completions, chat, etc.)
-3. Your requests will now be routed through LiteLLM Proxy
-
-You can verify it's working by:
-- Checking the LiteLLM Proxy logs for incoming requests
-- Using Cursor's chat feature and seeing responses stream correctly
-- Checking your LiteLLM dashboard for request logs and cost tracking
-
-## How It Works
-
-The `/cursor/chat/completions` endpoint is specifically designed to handle Cursor's unique request format:
-
-1. **Input**: Cursor sends requests in OpenAI Responses API format (with `input` field)
-2. **Processing**: LiteLLM processes the request through its internal `/responses` flow
-3. **Output**: The response is transformed to OpenAI Chat Completions format (with `choices` field) that Cursor expects
-
-This transformation happens automatically for both streaming and non-streaming responses.
-
-## Advanced Configuration
-
-### Using Different Models
-
-You can configure Cursor to use different models by updating your `config.yaml`:
-
-```yaml showLineNumbers title="config.yaml"
-model_list:
-  - model_name: gpt-4o
-    litellm_params:
-      model: gpt-4o
-      api_key: os.environ/OPENAI_API_KEY
-  
-  - model_name: claude-3-5-sonnet
-    litellm_params:
-      model: anthropic/claude-3-5-sonnet-20241022
-      api_key: os.environ/ANTHROPIC_API_KEY
-  
-  - model_name: gemini-pro
-    litellm_params:
-      model: gemini/gemini-1.5-pro
-      api_key: os.environ/GEMINI_API_KEY
-```
-
-Then in Cursor, you can specify which model to use in your requests.
-
-### Rate Limiting and Budgets
-
-Set up rate limits and budgets in your `config.yaml`:
-
-```yaml showLineNumbers title="config.yaml"
-general_settings:
-  master_key: sk-1234567890
-
-litellm_settings:
-  # Set max budget per user
-  max_budget: 100.0
-  
-  # Set rate limits
-  rate_limit: 100  # requests per minute
-```
-
-### Request Logging
-
-All requests from Cursor will be logged by LiteLLM Proxy. You can:
-- View logs in the LiteLLM Admin UI
-- Export logs to your preferred logging service
-- Track costs per user/team
+| Setting | Value |
+|---------|-------|
+| OpenAI API Key | Your LiteLLM Virtual Key (e.g., `sk-...`) |
+| Override OpenAI Base URL | `https://your-litellm-proxy.com/cursor` |
+| Custom Model Name | Public Model Name from LiteLLM Dashboard |
 
 ## Troubleshooting
 
-### Cursor shows no output
+### Connection Issues
 
-- **Check base URL**: Ensure it uses HTTPS and includes `/cursor` (e.g., `https://your-proxy-domain.com/cursor`, not `http://` or without `/cursor`)
-- **Verify HTTPS**: Cursor requires HTTPS - HTTP connections will not work
-- **Check API key**: Verify your LiteLLM Proxy API key is correct
-- **Check proxy logs**: Look for errors in the LiteLLM Proxy logs
+- Verify your LiteLLM Proxy is running and accessible
+- Ensure the `/cursor` endpoint is included in the base URL
+- Check that your Virtual Key has access to the selected models
 
-### Requests failing
+### Model Not Working
 
-- **Verify HTTPS is enabled**: Cursor requires HTTPS connections. Ensure your LiteLLM Proxy is accessible via HTTPS with a valid SSL certificate
-- **Verify proxy is running**: Check that LiteLLM Proxy is accessible at your HTTPS base URL
-- **Check SSL certificate**: Ensure your SSL certificate is valid and not expired
-- **Check model configuration**: Ensure the model you're trying to use is configured in `config.yaml`
-- **Check API keys**: Verify provider API keys are set correctly in environment variables
+- Confirm the model name in Cursor matches the Public Model Name in LiteLLM exactly
+- Verify the model is enabled in your Virtual Key's allowed models list
 
-### HTTP not working
+### Authentication Errors
 
-If you're trying to use HTTP (`http://`) and it's not working:
-- **This is expected**: Cursor IDE requires HTTPS connections
-- **Solution**: Deploy your LiteLLM Proxy with HTTPS enabled (use a reverse proxy like nginx, or deploy to a cloud service that provides HTTPS)
-
-### Streaming not working
-
-The `/cursor/chat/completions` endpoint automatically handles streaming. If streaming isn't working:
-- Check that your model supports streaming
-- Verify the proxy logs for any transformation errors
-- Ensure Cursor IDE is up to date
-
-## Related Documentation
-
-- [Cursor Endpoint Documentation](/docs/proxy/cursor) - Detailed endpoint documentation
-- [LiteLLM Proxy Setup](/docs/proxy/quick_start) - General proxy setup guide
-- [Model Configuration](/docs/proxy/configs) - How to configure models
+- Regenerate your Virtual Key if it has expired
+- Ensure you copied the full key including the `sk-` prefix
 
