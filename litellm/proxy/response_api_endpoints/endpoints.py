@@ -186,16 +186,22 @@ async def cursor_chat_completions(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Cursor-specific endpoint that accepts Responses API input format but returns 
-    OpenAI Chat Completions format.
+    Cursor-specific endpoint that accepts Responses API input format and returns 
+    Cursor's native streaming format with tool call support.
     
     This endpoint handles requests from Cursor IDE which sends Responses API format (`input` field)
-    but expects OpenAI Chat Completions format response (`choices`, `delta`, etc.).
+    and transforms responses to Cursor's proprietary protobuf-JSON format that enables:
+    - Text streaming
+    - Tool calls (read_file, edit_file, run_terminal_command, etc.)
+    - Thinking/reasoning content
     
-    Note: Cursor's BYOK mode uses standard OpenAI /v1/chat/completions format.
-    Tool calls in the response are returned in standard OpenAI format, but Cursor's
-    BYOK mode may not parse/execute them (tool execution is only supported through
-    Cursor's native protobuf API).
+    The response format matches Cursor's internal StreamUnifiedChatResponse protobuf:
+    {
+      "text": "...",           // Text content
+      "tool_call_v2": {...},   // Complete tool call with parameters
+      "partial_tool_call": {...}, // Partial tool call announcement
+      "thinking": {...}        // Reasoning content
+    }
     
     ```bash
     curl -X POST http://localhost:4000/cursor/chat/completions \
@@ -205,7 +211,7 @@ async def cursor_chat_completions(
         "model": "gpt-4o",
         "input": [{"role": "user", "content": "Hello"}]
     }'
-    Responds back in OpenAI Chat Completions streaming format.
+    Responds back in Cursor's native streaming format.
     ```
     """
     from litellm.completion_extras.litellm_responses_transformation.handler import (
@@ -228,17 +234,22 @@ async def cursor_chat_completions(
     )
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
     from litellm.types.llms.openai import ResponsesAPIResponse
+    
+    # Import Cursor format transformers
+    from litellm.proxy.response_api_endpoints.cursor_format import (
+        cursor_async_data_generator,
+        openai_chunk_to_cursor_format,
+    )
 
     data = await _read_request_body(request=request)
     processor = ProxyBaseLLMRequestProcessing(data=data)
 
     def cursor_data_generator(response, user_api_key_dict, request_data):
         """
-        Custom generator that transforms Responses API streaming chunks to 
-        OpenAI Chat Completions chunks.
+        Custom generator that transforms streaming chunks to Cursor's native format.
         
-        This generator is used for the cursor endpoint to convert Responses API format 
-        responses to OpenAI Chat Completions format that Cursor's BYOK mode expects.
+        This generator converts OpenAI Chat Completions format responses to Cursor's
+        proprietary protobuf-JSON format that supports tool calls.
         
         Args:
             response: The streaming response (BaseResponsesAPIStreamingIterator or other)
@@ -246,7 +257,7 @@ async def cursor_chat_completions(
             request_data: Request data containing model, logging_obj, etc.
         
         Returns:
-            Async generator that yields SSE-formatted OpenAI Chat Completions chunks
+            Async generator that yields SSE-formatted Cursor-native chunks
         """
         # If response is a BaseResponsesAPIStreamingIterator, transform it first
         if isinstance(response, BaseResponsesAPIStreamingIterator):
@@ -264,17 +275,19 @@ async def cursor_chat_completions(
                 custom_llm_provider=None,
                 logging_obj=logging_obj,
             )
-            # Use async_data_generator to format as SSE (OpenAI format)
-            return async_data_generator(
+            # Use cursor_async_data_generator to format as SSE (Cursor format)
+            return cursor_async_data_generator(
                 response=streamwrapper,
                 user_api_key_dict=user_api_key_dict,
                 request_data=request_data,
+                proxy_logging_obj=proxy_logging_obj,
             )
-        # Otherwise, use the default generator
-        return async_data_generator(
+        # For other response types, use Cursor format generator
+        return cursor_async_data_generator(
             response=response,
             user_api_key_dict=user_api_key_dict,
             request_data=request_data,
+            proxy_logging_obj=proxy_logging_obj,
         )
 
     try:
@@ -297,10 +310,11 @@ async def cursor_chat_completions(
             version=version,
         )
 
-        # Transform non-streaming Responses API response to chat completions format
+        # Transform non-streaming Responses API response to Cursor format
         if isinstance(response, ResponsesAPIResponse):
             logging_obj = processor.data.get("litellm_logging_obj")
-            transformed_response = responses_api_bridge.transformation_handler.transform_response(
+            # First transform to OpenAI chat completions format
+            chat_response = responses_api_bridge.transformation_handler.transform_response(
                 model=processor.data.get("model", ""),
                 raw_response=response,
                 model_response=None,
@@ -313,7 +327,9 @@ async def cursor_chat_completions(
                 api_key=None,
                 json_mode=None,
             )
-            return transformed_response
+            # Then convert to Cursor format for tool calls
+            cursor_response = openai_chunk_to_cursor_format(chat_response)
+            return cursor_response
 
         # Streaming responses are already transformed by cursor_data_generator
         return response

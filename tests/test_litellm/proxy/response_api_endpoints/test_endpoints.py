@@ -58,8 +58,8 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
         """
         Test that /cursor/chat/completions endpoint:
         1. Accepts Responses API input format
-        2. Returns chat completions format response
-        3. Transforms streaming responses correctly
+        2. Returns Cursor's native streaming format response
+        3. Transforms responses to Cursor's protobuf-JSON format
         """
         from litellm.types.llms.openai import ResponsesAPIResponse
         from litellm.types.utils import ResponseOutputMessage, ResponseOutputText
@@ -106,13 +106,14 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
         # Should return 200 (or 401/500 if auth fails)
         assert response.status_code in [200, 401, 500]
 
-        # If successful, verify it returns chat completions format
+        # If successful, verify it returns Cursor's native format
         if response.status_code == 200:
             response_data = response.json()
-            # Should have chat completion structure
-            assert "choices" in response_data or "id" in response_data
+            # Should have Cursor format structure (text field)
+            # May also have tool_call_v2, partial_tool_call, or thinking
+            assert "text" in response_data or "tool_call_v2" in response_data
             # Should not have Responses API structure
-            assert "output" not in response_data or "status" not in response_data
+            assert "output" not in response_data
 
     @pytest.mark.asyncio
     @patch("litellm.proxy.proxy_server.llm_router")
