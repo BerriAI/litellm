@@ -587,6 +587,68 @@ class TestFunctionCallTransformation:
         assert tool_msg.get("content") == "Rainy"
         assert tool_msg.get("tool_call_id") == "call_1fe70e2a-a596-45ef-b72c-9b8567c460e5"
 
+    def test_function_call_outputs_preserve_input_order(self):
+        """Tool call outputs should stay in input order, not be buffered to the end"""
+        test_input = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "user req"}],
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "assistant msg1"}],
+            },
+            {
+                "type": "function_call",
+                "call_id": "142",
+                "name": "fill_and_submit_field",
+                "arguments": "{}",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "142",
+                "output": "response142",
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "assistant msg2"}],
+            },
+            {
+                "type": "function_call",
+                "call_id": "1250",
+                "name": "click_element",
+                "arguments": "{}",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "1250",
+                "output": "response1250",
+            },
+        ]
+
+        messages = LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
+            input=test_input
+        )
+
+        roles = [m.get("role") for m in messages]
+        assert roles == [
+            "user",
+            "assistant",
+            "assistant",
+            "tool",
+            "assistant",
+            "assistant",
+            "tool",
+        ]
+
+        assert messages[2].get("tool_calls")[0].get("id") == "142"
+        assert messages[3].get("tool_call_id") == "142"
+        assert messages[5].get("tool_calls")[0].get("id") == "1250"
+        assert messages[6].get("tool_call_id") == "1250"
+
     def test_complete_request_transformation_with_function_calls(self):
         """Test the complete request transformation that would be used by the responses API"""
         test_input = [
