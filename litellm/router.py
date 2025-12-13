@@ -285,6 +285,8 @@ class Router:
             RouterGeneralSettings
         ] = RouterGeneralSettings(),
         ignore_invalid_deployments: bool = False,
+        enforce_embedding_context_limit: bool = False,
+        embedding_chunk_size: int = 512,
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -318,6 +320,8 @@ class Router:
             alerting_config (AlertingConfig): Slack alerting configuration. Defaults to None.
             provider_budget_config (ProviderBudgetConfig): Provider budget configuration. Use this to set llm_provider budget limits. example $100/day to OpenAI, $100/day to Azure, etc. Defaults to None.
             ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
+            enforce_embedding_context_limit (bool): When True, automatically chunks large embedding inputs that exceed embedding_chunk_size. Defaults to False.
+            embedding_chunk_size (int): Maximum tokens per chunk for embedding inputs. Common values: 512 (most models), 2048, 8192. Defaults to 512.
         Returns:
             Router: An instance of the litellm.Router class.
 
@@ -354,7 +358,8 @@ class Router:
         router = Router(model_list=model_list, fallbacks=[{"azure-gpt-3.5-turbo": "openai-gpt-3.5-turbo"}])
         ```
         """
-
+        self.enforce_embedding_context_limit = enforce_embedding_context_limit
+        self.embedding_chunk_size = embedding_chunk_size
         self.set_verbose = set_verbose
         self.ignore_invalid_deployments = ignore_invalid_deployments
         self.debug_level = debug_level
@@ -1045,7 +1050,7 @@ class Router:
         self.delete_container = self.factory_function(
             delete_container, call_type="delete_container"
         )
-        
+
         # Auto-register JSON-generated container file endpoints
         for name, func in container_file_endpoints.items():
             setattr(self, name, self.factory_function(func, call_type=name))  # type: ignore[arg-type]
@@ -3147,6 +3152,60 @@ class Router:
                 self.fail_calls[model] += 1
             raise e
 
+    # Helper methods for embedding chunking
+    def _approx_token_count(self, text: str) -> int:
+        # Fast, conservative estimate (1 token approx 4 chars)
+        # not necessarilty accurate for languages other than English
+        return len(text) // 4
+
+    def _chunk_text(self, text: str, chunk_size: int) -> List[str]:
+        """
+        Fast text chunking with basic boundary detection.
+        Prioritizes speed over perfect semantic breaks.
+        """
+        chars_per_chunk = chunk_size * 4
+        text_len = len(text)
+
+        if text_len <= chars_per_chunk:
+            return [text]
+
+        chunks = []
+        current_pos = 0
+
+        while current_pos < text_len:
+            end_pos = min(current_pos + chars_per_chunk, text_len)
+
+            # Only look for break point if not at end
+            if end_pos < text_len:
+                # Search in last 10% for a space (fast boundary detection)
+                search_start = end_pos - min(chars_per_chunk // 10, 200)
+                space_pos = text.rfind(" ", search_start, end_pos)
+                if space_pos > current_pos:
+                    end_pos = space_pos + 1
+
+            chunk = text[current_pos:end_pos]
+            if chunk.strip():  # Skip empty chunks
+                chunks.append(chunk)
+            current_pos = end_pos
+
+        return chunks
+
+    def _merge_embeddings(self, embeddings: List[List[float]]) -> List[float]:
+        """
+        Fast vector averaging using list comprehensions.
+        Returns averaged embedding vector.
+        """
+        if not embeddings:
+            return []
+
+        if len(embeddings) == 1:
+            return embeddings[0]
+
+        num_vecs = len(embeddings)
+
+        # Fast averaging with zip (more cache-friendly)
+        return [sum(vecs) / num_vecs for vecs in zip(*embeddings)]
+
     def embedding(
         self,
         model: str,
@@ -3155,6 +3214,76 @@ class Router:
         **kwargs,
     ) -> EmbeddingResponse:
         try:
+            # Handle embedding context limit enforcement with chunking
+            if self.enforce_embedding_context_limit:
+                # Normalize to list
+                inputs = [input] if isinstance(input, str) else input
+                processed_embeddings = []
+                total_prompt_tokens = 0
+                total_tokens = 0
+
+                for text in inputs:
+                    if self._approx_token_count(text) > self.embedding_chunk_size:
+                        # Chunk logic for large inputs
+                        chunks = self._chunk_text(text, self.embedding_chunk_size)
+                        chunk_vectors = []
+
+                        # Embed each chunk
+                        for chunk in chunks:
+                            kwargs["model"] = model
+                            kwargs["input"] = [chunk]
+                            kwargs["original_function"] = self._embedding
+                            kwargs["num_retries"] = kwargs.get(
+                                "num_retries", self.num_retries
+                            )
+                            kwargs.setdefault("metadata", {}).update(
+                                {"model_group": model}
+                            )
+                            response = self.function_with_fallbacks(**kwargs)
+                            chunk_vectors.append(response["data"][0]["embedding"])
+                            # Accumulate usage
+                            if hasattr(response, "usage") and response.usage:
+                                total_prompt_tokens += getattr(
+                                    response.usage, "prompt_tokens", 0
+                                )
+                                total_tokens += getattr(
+                                    response.usage, "total_tokens", 0
+                                )
+
+                        # Merge chunk embeddings
+                        merged_vector = self._merge_embeddings(chunk_vectors)
+                        processed_embeddings.append(merged_vector)
+                    else:
+                        # Normal path for small inputs
+                        kwargs["model"] = model
+                        kwargs["input"] = [text]
+                        kwargs["original_function"] = self._embedding
+                        kwargs["num_retries"] = kwargs.get(
+                            "num_retries", self.num_retries
+                        )
+                        kwargs.setdefault("metadata", {}).update({"model_group": model})
+                        response = self.function_with_fallbacks(**kwargs)
+                        processed_embeddings.append(response["data"][0]["embedding"])
+                        # Accumulate usage
+                        if hasattr(response, "usage") and response.usage:
+                            total_prompt_tokens += getattr(
+                                response.usage, "prompt_tokens", 0
+                            )
+                            total_tokens += getattr(response.usage, "total_tokens", 0)
+
+                # Reconstruct response object
+                return EmbeddingResponse(
+                    model=model,
+                    data=[
+                        {"object": "embedding", "embedding": vec, "index": i}
+                        for i, vec in enumerate(processed_embeddings)
+                    ],
+                    usage=Usage(
+                        prompt_tokens=total_prompt_tokens, total_tokens=total_tokens
+                    ),
+                )
+
+            # Default path when enforce_embedding_context_limit is False
             kwargs["model"] = model
             kwargs["input"] = input
             kwargs["original_function"] = self._embedding
@@ -3229,6 +3358,72 @@ class Router:
         **kwargs,
     ) -> EmbeddingResponse:
         try:
+            # Handle embedding context limit enforcement with chunking
+            if self.enforce_embedding_context_limit:
+                # Normalize to list
+                inputs = [input] if isinstance(input, str) else input
+                processed_embeddings = []
+                total_prompt_tokens = 0
+                total_tokens = 0
+
+                for text in inputs:
+                    if self._approx_token_count(text) > self.embedding_chunk_size:
+                        # Chunk logic for large inputs
+                        chunks = self._chunk_text(text, self.embedding_chunk_size)
+                        chunk_vectors = []
+
+                        # Embed each chunk
+                        for chunk in chunks:
+                            kwargs["model"] = model
+                            kwargs["input"] = [chunk]
+                            kwargs["original_function"] = self._aembedding
+                            self._update_kwargs_before_fallbacks(
+                                model=model, kwargs=kwargs
+                            )
+                            response = await self.async_function_with_fallbacks(
+                                **kwargs
+                            )
+                            chunk_vectors.append(response["data"][0]["embedding"])
+                            # Accumulate usage
+                            if hasattr(response, "usage") and response.usage:
+                                total_prompt_tokens += getattr(
+                                    response.usage, "prompt_tokens", 0
+                                )
+                                total_tokens += getattr(
+                                    response.usage, "total_tokens", 0
+                                )
+
+                        # Merge chunk embeddings
+                        merged_vector = self._merge_embeddings(chunk_vectors)
+                        processed_embeddings.append(merged_vector)
+                    else:
+                        # Normal path for small inputs
+                        kwargs["model"] = model
+                        kwargs["input"] = [text]
+                        kwargs["original_function"] = self._aembedding
+                        self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
+                        response = await self.async_function_with_fallbacks(**kwargs)
+                        processed_embeddings.append(response["data"][0]["embedding"])
+                        # Accumulate usage
+                        if hasattr(response, "usage") and response.usage:
+                            total_prompt_tokens += getattr(
+                                response.usage, "prompt_tokens", 0
+                            )
+                            total_tokens += getattr(response.usage, "total_tokens", 0)
+
+                # Reconstruct response object
+                return EmbeddingResponse(
+                    model=model,
+                    data=[
+                        {"object": "embedding", "embedding": vec, "index": i}
+                        for i, vec in enumerate(processed_embeddings)
+                    ],
+                    usage=Usage(
+                        prompt_tokens=total_prompt_tokens, total_tokens=total_tokens
+                    ),
+                )
+
+            # Default path when enforce_embedding_context_limit is False
             kwargs["model"] = model
             kwargs["input"] = input
             kwargs["original_function"] = self._aembedding
@@ -6723,42 +6918,44 @@ class Router:
         """
         return candidate_id in self.model_id_to_deployment_index_map
 
-    def resolve_model_name_from_model_id(self, model_id: Optional[str]) -> Optional[str]:
+    def resolve_model_name_from_model_id(
+        self, model_id: Optional[str]
+    ) -> Optional[str]:
         """
         Resolve model_name from model_id.
-        
+
         This method attempts to find the correct model_name to use with the router
         so that litellm_params can be automatically injected from the model config.
-        
+
         Strategy:
         1. First, check if model_id directly matches a model_name or deployment ID
         2. If not, search through router's model_list to find a match by litellm_params.model
         3. Return the model_name if found, None otherwise
-        
+
         Args:
             model_id: The model_id extracted from decoded video_id
                      (could be model_name or litellm_params.model value)
-        
+
         Returns:
             model_name if found, None otherwise. If None, the request will fall through
             to normal flow using environment variables.
         """
         if not model_id:
             return None
-        
+
         # Strategy 1: Check if model_id directly matches a model_name or deployment ID
         if model_id in self.model_names or self.has_model_id(model_id):
             return model_id
-        
+
         # Strategy 2: Search through router's model_list to find by litellm_params.model
         all_models = self.get_model_list(model_name=None)
         if not all_models:
             return None
-        
+
         for deployment in all_models:
             litellm_params = deployment.get("litellm_params", {})
             actual_model = litellm_params.get("model")
-            
+
             # Match by exact match or by checking if actual_model ends with /model_id or :model_id
             # e.g., model_id="veo-2.0-generate-001" matches actual_model="vertex_ai/veo-2.0-generate-001"
             matches = (
@@ -6766,12 +6963,12 @@ class Router:
                 or (actual_model and actual_model.endswith(f"/{model_id}"))
                 or (actual_model and actual_model.endswith(f":{model_id}"))
             )
-            
+
             if matches:
                 model_name = deployment.get("model_name")
                 if model_name:
                     return model_name
-        
+
         # No match found
         return None
 
@@ -7561,14 +7758,18 @@ class Router:
             request_kwargs=request_kwargs,
         )
 
-        verbose_router_logger.debug(f"healthy_deployments after team filter: {healthy_deployments}")
+        verbose_router_logger.debug(
+            f"healthy_deployments after team filter: {healthy_deployments}"
+        )
 
         healthy_deployments = filter_web_search_deployments(
             healthy_deployments=healthy_deployments,
             request_kwargs=request_kwargs,
         )
 
-        verbose_router_logger.debug(f"healthy_deployments after web search filter: {healthy_deployments}")
+        verbose_router_logger.debug(
+            f"healthy_deployments after web search filter: {healthy_deployments}"
+        )
 
         if isinstance(healthy_deployments, dict):
             return healthy_deployments
