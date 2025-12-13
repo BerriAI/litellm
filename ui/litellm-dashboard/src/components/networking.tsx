@@ -295,13 +295,7 @@ export const getAgentCreateMetadata = async (): Promise<AgentCreateInfo[]> => {
   }
 
   const jsonData: AgentCreateInfo[] = await response.json();
-  
-  // Transform logo_url paths to be compatible with static UI
-  // JSON uses "/assets/logos/..." but static UI needs "../ui/assets/logos/..."
-  return jsonData.map(agent => ({
-    ...agent,
-    logo_url: agent.logo_url?.replace(/^\/assets\/logos\//, "../ui/assets/logos/") || null,
-  }));
+  return jsonData;
 };
 
 // Global variable for the header name
