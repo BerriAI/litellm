@@ -6785,6 +6785,8 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     prompt = request.prompt
     messages = request.messages
     contents = request.contents
+    system = request.system
+    tools = request.tools
 
     #########################################################
     # Validate request
@@ -6845,6 +6847,8 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
                 contents=contents,
                 deployment=deployment,
                 request_model=request.model,
+                system=system,
+                tools=tools,
             )
             #########################################################
             # Transfrom the Response to the well known format
