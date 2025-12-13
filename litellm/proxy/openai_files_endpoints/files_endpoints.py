@@ -380,16 +380,15 @@ async def create_file(  # noqa: PLR0915
                 )
             
             # Validate expires_after[seconds] is a string (not UploadFile)
-            if isinstance(expires_after_seconds_str, UploadFile):
+            # Use positive isinstance check for proper type narrowing (matches codebase pattern)
+            if not isinstance(expires_after_seconds_str, str):
                 raise HTTPException(
                     status_code=400,
                     detail={
                         "error": "expires_after[seconds] must be a string, not a file upload",
                     },
                 )
-            
-            # Type narrowing: assert it's str after validation (mypy understands assert for narrowing)
-            assert not isinstance(expires_after_seconds_str, UploadFile), "Already validated above"
+            # After this check, mypy knows expires_after_seconds_str is str
             expires_after_seconds_str_validated: str = expires_after_seconds_str
             
             # Validate anchor is "created_at"
