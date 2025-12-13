@@ -15,6 +15,8 @@ from functools import partial
 from typing import Optional
 from datetime import datetime, timezone, timedelta
 
+import orjson
+
 from litellm._logging import print_verbose, verbose_logger
 
 from .base_cache import BaseCache
@@ -137,7 +139,7 @@ class S3Cache(BaseCache):
                     cached_response["Body"].read().decode("utf-8")
                 )  # Convert bytes to string
                 try:
-                    cached_response = json.loads(
+                    cached_response = orjson.loads(
                         cached_response
                     )  # Convert string to dictionary
                 except Exception:

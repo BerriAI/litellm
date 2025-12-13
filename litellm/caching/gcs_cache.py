@@ -5,6 +5,8 @@ import json
 import asyncio
 from typing import Optional
 
+import orjson
+
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 from litellm.llms.custom_httpx.http_handler import (
@@ -62,7 +64,7 @@ class GCSCache(BaseCache):
             url = f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{object_name}?alt=media"
             response = self.sync_client.get(url=url, headers=headers)
             if response.status_code == 200:
-                cached_response = json.loads(response.text)
+                cached_response = orjson.loads(response.text)
                 verbose_logger.debug(
                     f"Got GCS Cache: key: {key}, cached_response {cached_response}. Type Response {type(cached_response)}"
                 )
@@ -79,7 +81,7 @@ class GCSCache(BaseCache):
             url = f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{object_name}?alt=media"
             response = await self.async_client.get(url=url, headers=headers)
             if response.status_code == 200:
-                return json.loads(response.text)
+                return orjson.loads(response.text)
             return None
         except Exception as e:
             verbose_logger.error(f"GCS Caching: async_get_cache() - Got exception from GCS: {e}")
