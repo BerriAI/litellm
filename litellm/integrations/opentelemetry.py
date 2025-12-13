@@ -762,15 +762,14 @@ class OpenTelemetry(CustomLogger):
             return val.timestamp()
         if isinstance(val, (int, float)):
             return float(val)
-        if isinstance(val, str):
+        # isinstance(val, str) - parse datetime string (with or without microseconds)
+        try:
+            return datetime.strptime(val, '%Y-%m-%d %H:%M:%S.%f').timestamp()
+        except ValueError:
             try:
-                return datetime.strptime(val, '%Y-%m-%d %H:%M:%S.%f').timestamp()
+                return datetime.strptime(val, '%Y-%m-%d %H:%M:%S').timestamp()
             except ValueError:
-                try:
-                    return datetime.strptime(val, '%Y-%m-%d %H:%M:%S').timestamp()
-                except ValueError:
-                    return None
-        return None
+                return None
 
     def _record_time_to_first_token_metric(self, kwargs: dict, common_attrs: dict):
         """Record Time to First Token (TTFT) metric for streaming requests."""
