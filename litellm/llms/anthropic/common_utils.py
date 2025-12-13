@@ -12,7 +12,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.types.llms.anthropic import AllAnthropicToolsValues, AnthropicMcpServerTool, ANTHROPIC_HOSTED_TOOLS
+from litellm.types.llms.anthropic import (
+    AllAnthropicToolsValues,
+    AnthropicMcpServerTool,
+    ANTHROPIC_HOSTED_TOOLS,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import TokenCountResponse
 
@@ -79,7 +83,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if tools is None:
             return False
         for tool in tools:
-            if "type" in tool and tool["type"].startswith(ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value):
+            if "type" in tool and tool["type"].startswith(
+                ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value
+            ):
                 return True
         return False
 
@@ -105,85 +111,100 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         """
         if not tools:
             return False
-        
+
         for tool in tools:
             tool_type = tool.get("type", "")
-            if tool_type in ["tool_search_tool_regex_20251119", "tool_search_tool_bm25_20251119"]:
+            if tool_type in [
+                "tool_search_tool_regex_20251119",
+                "tool_search_tool_bm25_20251119",
+            ]:
                 return True
         return False
-    
+
     def is_programmatic_tool_calling_used(self, tools: Optional[List]) -> bool:
         """
         Check if programmatic tool calling is being used (tools with allowed_callers field).
-        
+
         Returns True if any tool has allowed_callers containing 'code_execution_20250825'.
         """
         if not tools:
             return False
-        
+
         for tool in tools:
             # Check top-level allowed_callers
             allowed_callers = tool.get("allowed_callers", None)
             if allowed_callers and isinstance(allowed_callers, list):
                 if "code_execution_20250825" in allowed_callers:
                     return True
-            
+
             # Check function.allowed_callers for OpenAI format tools
             function = tool.get("function", {})
             if isinstance(function, dict):
                 function_allowed_callers = function.get("allowed_callers", None)
-                if function_allowed_callers and isinstance(function_allowed_callers, list):
+                if function_allowed_callers and isinstance(
+                    function_allowed_callers, list
+                ):
                     if "code_execution_20250825" in function_allowed_callers:
                         return True
-        
+
         return False
-    
+
     def is_input_examples_used(self, tools: Optional[List]) -> bool:
         """
         Check if input_examples is being used in any tools.
-        
+
         Returns True if any tool has input_examples field.
         """
         if not tools:
             return False
-        
+
         for tool in tools:
             # Check top-level input_examples
             input_examples = tool.get("input_examples", None)
-            if input_examples and isinstance(input_examples, list) and len(input_examples) > 0:
+            if (
+                input_examples
+                and isinstance(input_examples, list)
+                and len(input_examples) > 0
+            ):
                 return True
-            
+
             # Check function.input_examples for OpenAI format tools
             function = tool.get("function", {})
             if isinstance(function, dict):
                 function_input_examples = function.get("input_examples", None)
-                if function_input_examples and isinstance(function_input_examples, list) and len(function_input_examples) > 0:
+                if (
+                    function_input_examples
+                    and isinstance(function_input_examples, list)
+                    and len(function_input_examples) > 0
+                ):
                     return True
-        
+
         return False
-    
-    def is_effort_used(self, optional_params: Optional[dict], model: Optional[str] = None) -> bool:
+
+    def is_effort_used(
+        self, optional_params: Optional[dict], model: Optional[str] = None
+    ) -> bool:
         """
         Check if effort parameter is being used.
-        
+
         Returns True if effort-related parameters are present.
         """
         if not optional_params:
             return False
-        
+
         # Check if reasoning_effort is provided for Claude Opus 4.5
         if model and ("opus-4-5" in model.lower() or "opus_4_5" in model.lower()):
             reasoning_effort = optional_params.get("reasoning_effort")
             if reasoning_effort and isinstance(reasoning_effort, str):
                 return True
-        
+
         # Check if output_config is directly provided
         output_config = optional_params.get("output_config")
         if output_config and isinstance(output_config, dict):
             effort = output_config.get("effort")
             if effort and isinstance(effort, str):
                 return True
-        
+
         return False
 
     def _get_user_anthropic_beta_headers(
@@ -196,10 +217,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     def get_computer_tool_beta_header(self, computer_tool_version: str) -> str:
         """
         Get the appropriate beta header for a given computer tool version.
-        
+
         Args:
             computer_tool_version: The computer tool version (e.g., 'computer_20250124', 'computer_20241022')
-            
+
         Returns:
             The corresponding beta header string
         """
@@ -222,36 +243,36 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     ) -> List[str]:
         """
         Get list of common beta headers based on the features that are active.
-        
+
         Returns:
             List of beta header strings
         """
         from litellm.types.llms.anthropic import (
             ANTHROPIC_EFFORT_BETA_HEADER,
         )
-        
+
         betas = []
-        
+
         # Detect features
         effort_used = self.is_effort_used(optional_params, model)
-        
+
         if effort_used:
             betas.append(ANTHROPIC_EFFORT_BETA_HEADER)  # effort-2025-11-24
-        
+
         if computer_tool_used:
             beta_header = self.get_computer_tool_beta_header(computer_tool_used)
             betas.append(beta_header)
-        
+
         if prompt_caching_set:
             betas.append("prompt-caching-2024-07-31")
-        
+
         if file_id_used:
             betas.append("files-api-2025-04-14")
             betas.append("code-execution-2025-05-22")
-        
+
         if mcp_server_used:
             betas.append("mcp-client-2025-04-04")
-        
+
         return list(set(betas))
 
     def get_anthropic_headers(
@@ -287,11 +308,13 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         # Tool search, programmatic tool calling, and input_examples all use the same beta header
         if tool_search_used or programmatic_tool_calling_used or input_examples_used:
             from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
+
             betas.add(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
-        
+
         # Effort parameter uses a separate beta header
         if effort_used:
             from litellm.types.llms.anthropic import ANTHROPIC_EFFORT_BETA_HEADER
+
             betas.add(ANTHROPIC_EFFORT_BETA_HEADER)
 
         headers = {
@@ -309,7 +332,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             # Vertex AI requires web search beta header for web search to work
             if web_search_tool_used:
                 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
-                headers["anthropic-beta"] = ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
+
+                headers[
+                    "anthropic-beta"
+                ] = ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
         elif len(betas) > 0:
             headers["anthropic-beta"] = ",".join(betas)
 
@@ -342,7 +368,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         file_id_used = self.is_file_id_used(messages=messages)
         web_search_tool_used = self.is_web_search_tool_used(tools=tools)
         tool_search_used = self.is_tool_search_used(tools=tools)
-        programmatic_tool_calling_used = self.is_programmatic_tool_calling_used(tools=tools)
+        programmatic_tool_calling_used = self.is_programmatic_tool_calling_used(
+            tools=tools
+        )
         input_examples_used = self.is_input_examples_used(tools=tools)
         effort_used = self.is_effort_used(optional_params=optional_params, model=model)
         user_anthropic_beta_headers = self._get_user_anthropic_beta_headers(
@@ -421,7 +449,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     def get_token_counter(self) -> Optional[BaseTokenCounter]:
         """
         Factory method to create an Anthropic token counter.
-        
+
         Returns:
             AnthropicTokenCounter instance for this provider.
         """
@@ -432,12 +460,13 @@ class AnthropicTokenCounter(BaseTokenCounter):
     """Token counter implementation for Anthropic provider."""
 
     def should_use_token_counting_api(
-        self, 
+        self,
         custom_llm_provider: Optional[str] = None,
     ) -> bool:
         from litellm.types.utils import LlmProviders
+
         return custom_llm_provider == LlmProviders.ANTHROPIC.value
-    
+
     async def count_tokens(
         self,
         model_to_use: str,
@@ -447,13 +476,13 @@ class AnthropicTokenCounter(BaseTokenCounter):
         request_model: str = "",
     ) -> Optional[TokenCountResponse]:
         from litellm.proxy.utils import count_tokens_with_anthropic_api
-        
+
         result = await count_tokens_with_anthropic_api(
             model_to_use=model_to_use,
             messages=messages,
             deployment=deployment,
         )
-        
+
         if result is not None:
             return TokenCountResponse(
                 total_tokens=result.get("total_tokens", 0),
@@ -462,7 +491,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
                 tokenizer_type=result.get("tokenizer_used", ""),
                 original_response=result,
             )
-        
+
         return None
 
 

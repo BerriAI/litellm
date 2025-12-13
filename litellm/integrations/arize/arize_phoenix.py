@@ -12,7 +12,9 @@ from litellm.integrations.opentelemetry import OpenTelemetry
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    from litellm.integrations.opentelemetry import OpenTelemetryConfig as _OpenTelemetryConfig
+    from litellm.integrations.opentelemetry import (
+        OpenTelemetryConfig as _OpenTelemetryConfig,
+    )
     from litellm.types.integrations.arize import Protocol as _Protocol
 
     Protocol = _Protocol
@@ -59,7 +61,9 @@ class ArizePhoenixLogger(OpenTelemetry):
 
         if collector_endpoint:
             # Parse the endpoint to determine protocol
-            if collector_endpoint.startswith("grpc://") or (":4317" in collector_endpoint and "/v1/traces" not in collector_endpoint):
+            if collector_endpoint.startswith("grpc://") or (
+                ":4317" in collector_endpoint and "/v1/traces" not in collector_endpoint
+            ):
                 endpoint = collector_endpoint
                 protocol = "otlp_grpc"
             else:
@@ -133,7 +137,6 @@ class ArizePhoenixLogger(OpenTelemetry):
         pass  # suppress additional spans
 
     async def async_health_check(self):
-
         config = self.get_arize_phoenix_config()
 
         if not config.otlp_auth_headers:

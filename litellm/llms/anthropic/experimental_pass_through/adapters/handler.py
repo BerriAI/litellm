@@ -165,10 +165,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 return transformed_stream
             raise ValueError("Failed to transform streaming response")
         else:
-            anthropic_response = (
-                ANTHROPIC_ADAPTER.translate_completion_output_params(
-                    cast(ModelResponse, completion_response)
-                )
+            anthropic_response = ANTHROPIC_ADAPTER.translate_completion_output_params(
+                cast(ModelResponse, completion_response)
             )
             if anthropic_response is not None:
                 return anthropic_response
@@ -247,10 +245,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 return transformed_stream
             raise ValueError("Failed to transform streaming response")
         else:
-            anthropic_response = (
-                ANTHROPIC_ADAPTER.translate_completion_output_params(
-                    cast(ModelResponse, completion_response)
-                )
+            anthropic_response = ANTHROPIC_ADAPTER.translate_completion_output_params(
+                cast(ModelResponse, completion_response)
             )
             if anthropic_response is not None:
                 return anthropic_response

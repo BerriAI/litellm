@@ -49,9 +49,9 @@ class AzureAIAgentsConfig(BaseConfig):
 
     Azure AI Agent Service is a fully managed service for building AI agents
     that can understand natural language and perform tasks.
-    
+
     Model format: azure_ai/agents/<agent_id>
-    
+
     The flow is:
     1. Create a thread
     2. Add user messages to the thread
@@ -61,7 +61,7 @@ class AzureAIAgentsConfig(BaseConfig):
 
     # Default API version for Azure AI Agent Service
     DEFAULT_API_VERSION = "2024-07-01-preview"
-    
+
     # Polling configuration
     MAX_POLL_ATTEMPTS = 60
     POLL_INTERVAL_SECONDS = 1.0
@@ -73,7 +73,7 @@ class AzureAIAgentsConfig(BaseConfig):
     def is_azure_ai_agents_route(model: str) -> bool:
         """
         Check if the model is an Azure AI Agents route.
-        
+
         Model format: azure_ai/agents/<agent_id>
         """
         return "agents/" in model
@@ -82,7 +82,7 @@ class AzureAIAgentsConfig(BaseConfig):
     def get_agent_id_from_model(model: str) -> str:
         """
         Extract agent ID from the model string.
-        
+
         Model format: azure_ai/agents/<agent_id> -> <agent_id>
         or: agents/<agent_id> -> <agent_id>
         """
@@ -144,12 +144,12 @@ class AzureAIAgentsConfig(BaseConfig):
     ) -> str:
         """
         Get the base URL for Azure AI Agent Service.
-        
+
         The actual endpoint will vary based on the operation:
         - /openai/threads for creating threads
         - /openai/threads/{thread_id}/messages for adding messages
         - /openai/threads/{thread_id}/runs for creating runs
-        
+
         This returns the base URL that will be modified for each operation.
         """
         if api_base is None:
@@ -169,7 +169,9 @@ class AzureAIAgentsConfig(BaseConfig):
 
         model format: "azure_ai/agents/<agent_id>" or "agents/<agent_id>" or just "<agent_id>"
         """
-        agent_id = optional_params.get("agent_id") or optional_params.get("assistant_id")
+        agent_id = optional_params.get("agent_id") or optional_params.get(
+            "assistant_id"
+        )
         if agent_id:
             return agent_id
 
@@ -186,7 +188,7 @@ class AzureAIAgentsConfig(BaseConfig):
     ) -> dict:
         """
         Transform the request for Azure Agents.
-        
+
         This stores the necessary data for the multi-step agent flow.
         The actual API calls happen in the custom handler.
         """
@@ -311,7 +313,7 @@ class AzureAIAgentsConfig(BaseConfig):
     ) -> Any:
         """
         Dispatch method for Azure AI Agents completion.
-        
+
         Routes to sync or async completion based on acompletion flag.
         Supports native streaming via SSE when stream=True and acompletion=True.
         """

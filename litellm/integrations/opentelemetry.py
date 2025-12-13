@@ -557,9 +557,9 @@ class OpenTelemetry(CustomLogger):
 
     def _get_dynamic_otel_headers_from_kwargs(self, kwargs) -> Optional[dict]:
         """Extract dynamic headers from kwargs if available."""
-        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
-            kwargs.get("standard_callback_dynamic_params")
-        )
+        standard_callback_dynamic_params: Optional[
+            StandardCallbackDynamicParams
+        ] = kwargs.get("standard_callback_dynamic_params")
 
         if not standard_callback_dynamic_params:
             return None
@@ -1247,7 +1247,9 @@ class OpenTelemetry(CustomLogger):
                 )
                 return
             elif self.callback_name == "weave_otel":
-                from litellm.integrations.weave.weave_otel import set_weave_otel_attributes
+                from litellm.integrations.weave.weave_otel import (
+                    set_weave_otel_attributes,
+                )
 
                 set_weave_otel_attributes(span, kwargs, response_obj)
                 return

@@ -25,14 +25,14 @@ from .types import (
 class VertexBGEConfig:
     """
     Configuration and transformation logic for BGE models on Vertex AI.
-    
+
     BGE (BAAI General Embedding) models use a different request format
     where the input field is named "prompt" instead of "content".
-    
+
     Supported model patterns (after provider split in main.py):
     - "bge-small-en-v1.5" (model name)
     - "bge/204379420394258432" (endpoint ID pattern)
-    
+
     Note: Model name transformation (bge/ -> numeric ID) is handled automatically
     in common_utils._get_vertex_url(). This class focuses on request/response format only.
     """
@@ -41,14 +41,14 @@ class VertexBGEConfig:
     def is_bge_model(model: str) -> bool:
         """
         Check if the model is a BGE (BAAI General Embedding) model.
-        
+
         After provider split in main.py, supports:
         - "bge-small-en-v1.5" (model name)
         - "bge/204379420394258432" (endpoint ID pattern)
-        
+
         Args:
             model: The model name after provider split
-            
+
         Returns:
             bool: True if the model is a BGE model
         """
@@ -62,14 +62,14 @@ class VertexBGEConfig:
     ) -> VertexEmbeddingRequest:
         """
         Transforms an OpenAI request to a Vertex BGE embedding request.
-        
+
         BGE models use "prompt" instead of "content" as the input field.
-        
+
         Args:
             input: The input text(s) to embed
             optional_params: Optional parameters for the request
             model: The model name
-            
+
         Returns:
             VertexEmbeddingRequest: The transformed request
         """
@@ -124,7 +124,7 @@ class VertexBGEConfig:
     ) -> EmbeddingResponse:
         """
         Transforms a Vertex BGE embedding response to OpenAI format.
-        
+
         BGE models return embeddings directly as arrays in predictions:
         {
           "predictions": [
@@ -132,26 +132,28 @@ class VertexBGEConfig:
             [0.003, 0.022, ...]
           ]
         }
-        
+
         Args:
             response: The raw response from Vertex AI
             model: The model name
             model_response: The EmbeddingResponse object to populate
-            
+
         Returns:
             EmbeddingResponse: The transformed response in OpenAI format
-            
+
         Raises:
             KeyError: If response doesn't contain 'predictions'
             ValueError: If predictions is not a list or contains invalid data
         """
         if "predictions" not in response:
             raise KeyError("Response missing 'predictions' field")
-        
+
         _predictions = response["predictions"]
-        
+
         if not isinstance(_predictions, list):
-            raise ValueError(f"Expected 'predictions' to be a list, got {type(_predictions)}")
+            raise ValueError(
+                f"Expected 'predictions' to be a list, got {type(_predictions)}"
+            )
 
         embedding_response = []
         # BGE models don't return token counts, so we estimate or set to 0
@@ -162,7 +164,7 @@ class VertexBGEConfig:
                 raise ValueError(
                     f"Expected embedding at index {idx} to be a list, got {type(embedding_values)}"
                 )
-            
+
             embedding_response.append(
                 {
                     "object": "embedding",
@@ -179,4 +181,3 @@ class VertexBGEConfig:
         )
         setattr(model_response, "usage", usage)
         return model_response
-

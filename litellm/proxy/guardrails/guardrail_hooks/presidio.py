@@ -254,7 +254,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         if "error" in analyze_results:
                             verbose_proxy_logger.warning(
                                 "Presidio analyzer returned error: %s, returning empty list",
-                                analyze_results.get("error")
+                                analyze_results.get("error"),
                             )
                             return []
                         # If it's a dict but not an error, try to process it as a single item
@@ -266,7 +266,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         except Exception as e:
                             verbose_proxy_logger.warning(
                                 "Failed to parse Presidio dict response: %s, returning empty list",
-                                e
+                                e,
                             )
                             return []
 

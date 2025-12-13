@@ -35,6 +35,7 @@ __all__ = [
     "retrieve_container",
 ]
 
+
 ##### Container Create #######################
 @client
 async def acreate_container(
@@ -160,10 +161,7 @@ def create_container(
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
-) -> Union[
-    ContainerObject,
-    Coroutine[Any, Any, ContainerObject],
-]:
+) -> Union[ContainerObject, Coroutine[Any, Any, ContainerObject],]:
     """Create a container using the OpenAI Container API.
 
     Currently supports OpenAI
@@ -171,7 +169,7 @@ def create_container(
     Example:
     ```python
     import litellm
-    
+
     response = litellm.create_container(
         name="My Container",
         custom_llm_provider="openai",
@@ -197,19 +195,23 @@ def create_container(
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = (
-            ProviderConfigManager.get_provider_container_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        container_provider_config: Optional[
+            BaseContainerConfig
+        ] = ProviderConfigManager.get_provider_container_config(
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if container_provider_config is None:
-            raise ValueError(f"container operations are not supported for {custom_llm_provider}")
+            raise ValueError(
+                f"container operations are not supported for {custom_llm_provider}"
+            )
 
         local_vars.update(kwargs)
         # Get ContainerCreateOptionalRequestParams with only valid parameters
         container_create_optional_params: ContainerCreateOptionalRequestParams = (
-            ContainerRequestUtils.get_requested_container_create_optional_param(local_vars)
+            ContainerRequestUtils.get_requested_container_create_optional_param(
+                local_vars
+            )
         )
 
         # Get optional parameters for the container API
@@ -378,10 +380,7 @@ def list_containers(
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
-) -> Union[
-    ContainerListResponse,
-    Coroutine[Any, Any, ContainerListResponse],
-]:
+) -> Union[ContainerListResponse, Coroutine[Any, Any, ContainerListResponse],]:
     """List containers using the OpenAI Container API.
 
     Currently supports OpenAI
@@ -404,18 +403,22 @@ def list_containers(
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = (
-            ProviderConfigManager.get_provider_container_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        container_provider_config: Optional[
+            BaseContainerConfig
+        ] = ProviderConfigManager.get_provider_container_config(
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if container_provider_config is None:
-            raise ValueError(f"Container provider config not found for provider: {custom_llm_provider}")
+            raise ValueError(
+                f"Container provider config not found for provider: {custom_llm_provider}"
+            )
 
         # Get container list request parameters
         container_list_optional_params: ContainerListOptionalRequestParams = (
-            ContainerRequestUtils.get_requested_container_list_optional_param(local_vars)
+            ContainerRequestUtils.get_requested_container_list_optional_param(
+                local_vars
+            )
         )
 
         # Pre Call logging
@@ -566,10 +569,7 @@ def retrieve_container(
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
-) -> Union[
-    ContainerObject,
-    Coroutine[Any, Any, ContainerObject],
-]:
+) -> Union[ContainerObject, Coroutine[Any, Any, ContainerObject],]:
     """Retrieve a container using the OpenAI Container API.
 
     Currently supports OpenAI
@@ -592,14 +592,16 @@ def retrieve_container(
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = (
-            ProviderConfigManager.get_provider_container_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        container_provider_config: Optional[
+            BaseContainerConfig
+        ] = ProviderConfigManager.get_provider_container_config(
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if container_provider_config is None:
-            raise ValueError(f"Container provider config not found for provider: {custom_llm_provider}")
+            raise ValueError(
+                f"Container provider config not found for provider: {custom_llm_provider}"
+            )
 
         # Pre Call logging
         litellm_logging_obj.update_environment_variables(
@@ -746,10 +748,7 @@ def delete_container(
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
-) -> Union[
-    DeleteContainerResult,
-    Coroutine[Any, Any, DeleteContainerResult],
-]:
+) -> Union[DeleteContainerResult, Coroutine[Any, Any, DeleteContainerResult],]:
     """Delete a container using the OpenAI Container API.
 
     Currently supports OpenAI
@@ -772,14 +771,16 @@ def delete_container(
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = (
-            ProviderConfigManager.get_provider_container_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        container_provider_config: Optional[
+            BaseContainerConfig
+        ] = ProviderConfigManager.get_provider_container_config(
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if container_provider_config is None:
-            raise ValueError(f"Container provider config not found for provider: {custom_llm_provider}")
+            raise ValueError(
+                f"Container provider config not found for provider: {custom_llm_provider}"
+            )
 
         # Pre Call logging
         litellm_logging_obj.update_environment_variables(
@@ -940,10 +941,7 @@ def list_container_files(
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
-) -> Union[
-    ContainerFileListResponse,
-    Coroutine[Any, Any, ContainerFileListResponse],
-]:
+) -> Union[ContainerFileListResponse, Coroutine[Any, Any, ContainerFileListResponse],]:
     """List files in a container using the OpenAI Container API.
 
     Currently supports OpenAI
@@ -966,19 +964,26 @@ def list_container_files(
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = (
-            ProviderConfigManager.get_provider_container_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        container_provider_config: Optional[
+            BaseContainerConfig
+        ] = ProviderConfigManager.get_provider_container_config(
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if container_provider_config is None:
-            raise ValueError(f"Container provider config not found for provider: {custom_llm_provider}")
+            raise ValueError(
+                f"Container provider config not found for provider: {custom_llm_provider}"
+            )
 
         # Pre Call logging
         litellm_logging_obj.update_environment_variables(
             model="",
-            optional_params={"container_id": container_id, "after": after, "limit": limit, "order": order},
+            optional_params={
+                "container_id": container_id,
+                "after": after,
+                "limit": limit,
+                "order": order,
+            },
             litellm_params={
                 "litellm_call_id": litellm_call_id,
             },
@@ -1010,4 +1015,3 @@ def list_container_files(
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
-

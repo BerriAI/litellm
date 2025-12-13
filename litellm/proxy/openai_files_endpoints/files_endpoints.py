@@ -142,7 +142,7 @@ async def route_create_file(
 ) -> OpenAIFileObject:
     """
     Route file creation request to the appropriate provider.
-    
+
     Priority:
     1. If target_storage is specified and not "default" -> use storage backend
     2. If model parameter provided -> use model credentials and encode ID
@@ -150,14 +150,16 @@ async def route_create_file(
     4. If target_model_names_list -> managed files (requires DB)
     5. Else -> use custom_llm_provider with files_settings
     """
-    
+
     # Handle custom storage backend
     if target_storage and target_storage != "default":
-        from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
-        
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            extract_file_data,
+        )
+
         # Extract file data
         file_data = extract_file_data(cast(Any, _create_file_request.get("file")))
-        
+
         # Use storage backend service to handle upload
         file_object = await StorageBackendFileService.upload_file_to_storage_backend(
             file_data=file_data,
@@ -167,9 +169,9 @@ async def route_create_file(
             proxy_logging_obj=proxy_logging_obj,
             user_api_key_dict=user_api_key_dict,
         )
-        
+
         return file_object
-    
+
     # NEW: Handle model-based routing (no DB required)
     if model is not None:
         # Get credentials from model_list via router
@@ -178,19 +180,19 @@ async def route_create_file(
             model_id=model,
             operation_context="file upload",
         )
-        
+
         # Merge credentials into the request
         prepare_data_with_credentials(
             data=_create_file_request,  # type: ignore
             credentials=credentials,
         )
-        
+
         # Create the file with model credentials
         response = await litellm.acreate_file(
-            **_create_file_request, 
-            custom_llm_provider=credentials["custom_llm_provider"]
+            **_create_file_request,
+            custom_llm_provider=credentials["custom_llm_provider"],
         )  # type: ignore
-        
+
         # Encode the file ID with model information
         if response and hasattr(response, "id") and response.id:
             original_id = response.id
@@ -199,9 +201,9 @@ async def route_create_file(
             verbose_proxy_logger.debug(
                 f"Encoded file ID: {original_id} -> {encoded_id} (model: {model})"
             )
-        
+
         return response
-    
+
     # EXISTING: Deprecated loadbalancing approach
     if (
         litellm.enable_loadbalancing_on_batch_endpoints is True
@@ -331,7 +333,7 @@ async def create_file(  # noqa: PLR0915
             target_model_names_form=target_model_names,
             target_storage_form=target_storage,
         )
-        
+
         target_storage = file_params.target_storage
         target_model_names_list = file_params.target_model_names
         model_param = file_params.model
@@ -350,7 +352,7 @@ async def create_file(  # noqa: PLR0915
         purpose = cast(OpenAIFilesPurpose, purpose)
 
         data = {}
-        
+
         # Add litellm_metadata to data if provided (from form field)
         if litellm_metadata is not None:
             data["litellm_metadata"] = litellm_metadata
@@ -360,7 +362,7 @@ async def create_file(  # noqa: PLR0915
         form_data = await request.form()
         expires_after_anchor = form_data.get("expires_after[anchor]")
         expires_after_seconds_str = form_data.get("expires_after[seconds]")
-        
+
         if expires_after_anchor is not None or expires_after_seconds_str is not None:
             if expires_after_anchor is None or expires_after_seconds_str is None:
                 raise HTTPException(
@@ -399,10 +401,10 @@ async def create_file(  # noqa: PLR0915
                 )
 
         _create_file_request = CreateFileRequest(
-            file=file_data, 
+            file=file_data,
             purpose=cast(CREATE_FILE_REQUESTS_PURPOSE, purpose),
             expires_after=expires_after,
-            **data
+            **data,
         )
 
         response = await route_create_file(
@@ -574,26 +576,32 @@ async def get_file_content(  # noqa: PLR0915
                     param="None",
                     code=500,
                 )
-            
+
             # Check if file is stored in a storage backend (check DB)
-            if hasattr(managed_files_obj, "prisma_client") and managed_files_obj.prisma_client:
+            if (
+                hasattr(managed_files_obj, "prisma_client")
+                and managed_files_obj.prisma_client
+            ):
                 db_file = await managed_files_obj.prisma_client.db.litellm_managedfiletable.find_first(
                     where={"unified_file_id": file_id}
                 )
                 if db_file and db_file.storage_backend and db_file.storage_url:
                     # File is stored in a storage backend, download it
-                    from litellm.llms.base_llm.files.storage_backend_factory import get_storage_backend
-                    
+                    from litellm.llms.base_llm.files.storage_backend_factory import (
+                        get_storage_backend,
+                    )
+
                     storage_backend_name = db_file.storage_backend
                     storage_url = db_file.storage_url
-                    
+
                     try:
                         # Get storage backend (uses same env vars as callback)
                         storage_backend = get_storage_backend(storage_backend_name)
                         file_content = await storage_backend.download_file(storage_url)
-                        
+
                         # Return file content
                         from fastapi.responses import Response as FastAPIResponse
+
                         return FastAPIResponse(
                             content=file_content,
                             media_type="application/octet-stream",
@@ -605,7 +613,7 @@ async def get_file_content(  # noqa: PLR0915
                             param="file_id",
                             code=400,
                         )
-            
+
             model = cast(Optional[str], data.get("model"))
             if model:
                 response = await llm_router.afile_content(
@@ -627,14 +635,19 @@ async def get_file_content(  # noqa: PLR0915
                 )
         else:
             # Check for model-based credential routing
-            should_route, model_used, original_file_id, credentials = handle_model_based_routing(
+            (
+                should_route,
+                model_used,
+                original_file_id,
+                credentials,
+            ) = handle_model_based_routing(
                 file_id=file_id,
                 request=request,
                 llm_router=llm_router,
                 data=data,
                 check_file_id_encoding=True,
             )
-            
+
             if should_route:
                 # Use model-based routing with credentials from config
                 prepare_data_with_credentials(
@@ -642,15 +655,19 @@ async def get_file_content(  # noqa: PLR0915
                     credentials=credentials,  # type: ignore
                     file_id=original_file_id,  # Use decoded file ID if from encoded ID
                 )
-                
+
                 response = await litellm.afile_content(
                     custom_llm_provider=credentials["custom_llm_provider"],  # type: ignore
-                    **data
+                    **data,
                 )  # type: ignore
-                
+
                 verbose_proxy_logger.debug(
                     f"Retrieved file content using model: {model_used}"
-                    + (f", file_id: {file_id} -> {original_file_id}" if original_file_id else "")
+                    + (
+                        f", file_id: {file_id} -> {original_file_id}"
+                        if original_file_id
+                        else ""
+                    )
                 )
             else:
                 # Fallback to default behavior (uses env variables or provider-based routing)
@@ -768,7 +785,6 @@ async def get_file(
 
     data: Dict = {}
     try:
-
         custom_llm_provider = (
             provider
             or get_custom_llm_provider_from_request_headers(request=request)
@@ -794,15 +810,20 @@ async def get_file(
 
         ## Check for model-based credential routing
         from litellm.proxy.proxy_server import llm_router
-        
-        should_route, model_used, original_file_id, credentials = handle_model_based_routing(
+
+        (
+            should_route,
+            model_used,
+            original_file_id,
+            credentials,
+        ) = handle_model_based_routing(
             file_id=file_id,
             request=request,
             llm_router=llm_router,
             data=data,
             check_file_id_encoding=True,
         )
-        
+
         if should_route:
             # Use model-based routing with credentials from config
             prepare_data_with_credentials(
@@ -812,16 +833,21 @@ async def get_file(
             )
 
             response = await litellm.afile_retrieve(**data)  # type: ignore
-            
+
             # Keep the encoded ID in response if it was originally encoded
-            if original_file_id and response and hasattr(response, "id") and response.id:
+            if (
+                original_file_id
+                and response
+                and hasattr(response, "id")
+                and response.id
+            ):
                 response.id = file_id
-            
+
             verbose_proxy_logger.debug(
                 f"Retrieved file using model: {model_used}"
                 + (f", original_id: {original_file_id}" if original_file_id else "")
             )
-        
+
         ## EXISTING: check if file_id is a litellm managed file
         elif _is_base64_encoded_unified_file_id(file_id):
             managed_files_obj = proxy_logging_obj.get_proxy_hook("managed_files")
@@ -965,14 +991,19 @@ async def delete_file(
         )
 
         # Check for model-based credential routing
-        should_route, model_used, original_file_id, credentials = handle_model_based_routing(
+        (
+            should_route,
+            model_used,
+            original_file_id,
+            credentials,
+        ) = handle_model_based_routing(
             file_id=file_id,
             request=request,
             llm_router=llm_router,
             data=data,
             check_file_id_encoding=True,
         )
-        
+
         if should_route:
             # Use model-based routing with credentials from config
             prepare_data_with_credentials(
@@ -980,14 +1011,14 @@ async def delete_file(
                 credentials=credentials,  # type: ignore
                 file_id=original_file_id,
             )
-            
+
             response = await litellm.afile_delete(**data)  # type: ignore
-            
+
             verbose_proxy_logger.debug(
                 f"Deleted file using model: {model_used}"
                 + (f", original_id: {original_file_id}" if original_file_id else "")
             )
-        
+
         ## EXISTING: check if file_id is a litellm managed file
         elif _is_base64_encoded_unified_file_id(file_id):
             managed_files_obj = proxy_logging_obj.get_proxy_hook("managed_files")
@@ -1137,7 +1168,7 @@ async def list_files(
         )
 
         response: Optional[Any] = None
-        
+
         # Check for model-based credential routing (no file_id encoding check for list)
         should_route, model_used, _, credentials = handle_model_based_routing(
             file_id="",  # No file_id for list endpoint
@@ -1146,18 +1177,18 @@ async def list_files(
             data=data,
             check_file_id_encoding=False,
         )
-        
+
         if should_route:
             # Use model-based routing with credentials from config
             data.update(credentials)  # type: ignore
             response = await litellm.afile_list(
                 custom_llm_provider=credentials["custom_llm_provider"],  # type: ignore
                 purpose=purpose,
-                **data  # type: ignore
+                **data,  # type: ignore
             )
-            
+
             verbose_proxy_logger.debug(f"Listed files using model: {model_used}")
-        
+
         elif target_model_names and isinstance(target_model_names, str):
             target_model_names_list = target_model_names.split(",")
             if len(target_model_names_list) != 1:

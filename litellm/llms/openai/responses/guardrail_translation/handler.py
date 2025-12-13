@@ -402,11 +402,9 @@ class OpenAIResponsesHandler(BaseTranslation):
                         # Check if it's an OutputText with text
                         if isinstance(content_item, OutputText):
                             if content_item.text:
-
                                 return True
                         elif isinstance(content_item, dict):
                             if content_item.get("text"):
-
                                 return True
         return False
 

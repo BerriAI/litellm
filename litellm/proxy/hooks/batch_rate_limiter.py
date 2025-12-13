@@ -60,17 +60,20 @@ else:
     RateLimitStatus = Dict[str, Any]
     RateLimitDescriptor = Dict[str, Any]
 
+
 class BatchFileUsage(BaseModel):
     """
     Internal model for batch file usage tracking, used for batch rate limiting
     """
+
     total_tokens: int
     request_count: int
+
 
 class _PROXY_BatchRateLimiter(CustomLogger):
     """
     Rate limiter for batch API requests.
-    
+
     Handles rate limiting at two points:
     1. Batch submission - reads input file and reserves capacity
     2. Batch completion - reads output file and adjusts for actual usage
@@ -83,7 +86,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
     ):
         """
         Initialize the batch rate limiter.
-        
+
         Note: These dependencies are automatically injected by ProxyLogging._add_proxy_hooks()
         when this hook is registered in PROXY_HOOKS. See BATCH_RATE_LIMITER_INTEGRATION.md.
 
@@ -106,22 +109,29 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         # Find the descriptor for this status
         descriptor_index = next(
-            (i for i, d in enumerate(descriptors) 
-             if d.get("key") == status.get("descriptor_key")),
-            0
+            (
+                i
+                for i, d in enumerate(descriptors)
+                if d.get("key") == status.get("descriptor_key")
+            ),
+            0,
         )
-        descriptor: RateLimitDescriptor = descriptors[descriptor_index] if descriptors else {"key": "", "value": "", "rate_limit": None}
-        
+        descriptor: RateLimitDescriptor = (
+            descriptors[descriptor_index]
+            if descriptors
+            else {"key": "", "value": "", "rate_limit": None}
+        )
+
         now = datetime.now().timestamp()
         window_size = self.parallel_request_limiter.window_size
         reset_time = now + window_size
         reset_time_formatted = datetime.fromtimestamp(reset_time).strftime(
             "%Y-%m-%d %H:%M:%S UTC"
         )
-        
+
         remaining_display = max(0, status["limit_remaining"])
         current_limit = status["current_limit"]
-        
+
         if limit_type == "requests":
             detail = (
                 f"Batch rate limit exceeded for {descriptor.get('key', 'unknown')}: {descriptor.get('value', 'unknown')}. "
@@ -136,7 +146,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 f"out of {current_limit} TPM limit. "
                 f"Limit resets at: {reset_time_formatted}"
             )
-        
+
         raise HTTPException(
             status_code=429,
             detail=detail,
@@ -155,7 +165,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
     ) -> None:
         """
         Check rate limits and increment counters by the batch amounts.
-        
+
         Raises HTTPException if any limit would be exceeded.
         """
         from litellm.types.caching import RedisPipelineIncrementOperation
@@ -168,30 +178,32 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             tpm_limit_type=None,
             model_has_failures=False,
         )
-        
+
         # Check current usage without incrementing
         rate_limit_response = await self.parallel_request_limiter.should_rate_limit(
             descriptors=descriptors,
             parent_otel_span=user_api_key_dict.parent_otel_span,
             read_only=True,
         )
-        
+
         # Verify batch won't exceed any limits
         for status in rate_limit_response["statuses"]:
             rate_limit_type = status["rate_limit_type"]
             limit_remaining = status["limit_remaining"]
-            
+
             required_capacity = (
-                batch_usage.request_count if rate_limit_type == "requests" 
-                else batch_usage.total_tokens if rate_limit_type == "tokens"
+                batch_usage.request_count
+                if rate_limit_type == "requests"
+                else batch_usage.total_tokens
+                if rate_limit_type == "tokens"
                 else 0
             )
-            
+
             if required_capacity > limit_remaining:
                 self._raise_rate_limit_error(
                     status, descriptors, batch_usage, rate_limit_type
                 )
-        
+
         # Build pipeline operations for batch increments
         # Reuse the same keys that descriptors check
         pipeline_operations: List[RedisPipelineIncrementOperation] = []
@@ -229,7 +241,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                         ttl=self.parallel_request_limiter.window_size,
                     )
                 )
-        
+
         # Execute increments
         if pipeline_operations:
             await self.parallel_request_limiter.async_increment_tokens_with_ttl_preservation(
@@ -244,11 +256,11 @@ class _PROXY_BatchRateLimiter(CustomLogger):
     ) -> BatchFileUsage:
         """
         Count number of requests and tokens in a batch input file.
-        
+
         Args:
             file_id: The file ID to read
             custom_llm_provider: The custom LLM provider to use for token encoding
-            
+
         Returns:
             BatchFileUsage with total_tokens and request_count
         """
@@ -259,9 +271,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 custom_llm_provider=custom_llm_provider,
             )
 
-            file_content_as_dict = _get_file_content_as_dictionary(
-                file_content.content
-            )
+            file_content_as_dict = _get_file_content_as_dictionary(file_content.content)
 
             input_file_usage = _get_batch_job_input_file_usage(
                 file_content_dictionary=file_content_as_dict,
@@ -272,7 +282,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 total_tokens=input_file_usage.total_tokens,
                 request_count=request_count,
             )
-            
+
         except Exception as e:
             verbose_proxy_logger.error(
                 f"Error counting input file usage for {file_id}: {str(e)}"
@@ -288,7 +298,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
     ) -> Union[Exception, str, Dict, None]:
         """
         Pre-call hook for batch operations.
-        
+
         Only handles batch creation (acreate_batch):
         - Reads input file
         - Counts tokens and requests
@@ -355,7 +365,9 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 batch_usage=batch_usage,
             )
 
-            verbose_proxy_logger.debug("Batch rate limit check passed, counters incremented")
+            verbose_proxy_logger.debug(
+                "Batch rate limit check passed, counters incremented"
+            )
             return data
 
         except HTTPException:
@@ -367,10 +379,3 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             )
             # Don't block the request if rate limiting fails
             return data
-    
-
-
-
-
-
-

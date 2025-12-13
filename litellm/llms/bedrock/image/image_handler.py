@@ -270,7 +270,9 @@ class BedrockImageGeneration(BaseAWSLLM):
             dict: The request body to use for the Bedrock Image Generation API
         """
         config_class = self.get_config_class(model=model)
-        request_body = config_class.transform_request_body(text=prompt, optional_params=optional_params)
+        request_body = config_class.transform_request_body(
+            text=prompt, optional_params=optional_params
+        )
         return dict(request_body)
 
     def _transform_response_dict_to_openai_response(

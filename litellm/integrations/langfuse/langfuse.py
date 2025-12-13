@@ -551,7 +551,9 @@ class LangFuseLogger:
             mask_output = clean_metadata.pop("mask_output", False)
             # Look for masking function in the dedicated location first (set by scrub_sensitive_keys_in_metadata)
             # Fall back to metadata for backwards compatibility
-            masking_function = litellm_params.get("_langfuse_masking_function") or clean_metadata.pop("langfuse_masking_function", None)
+            masking_function = litellm_params.get(
+                "_langfuse_masking_function"
+            ) or clean_metadata.pop("langfuse_masking_function", None)
 
             # Apply custom masking function if provided
             if masking_function is not None and callable(masking_function):

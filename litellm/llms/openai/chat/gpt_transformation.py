@@ -169,7 +169,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             model_specific_params.append("response_format")
 
         # Normalize model name for responses API (e.g., "responses/gpt-4.1" -> "gpt-4.1")
-        model_for_check = model.split("responses/", 1)[1] if "responses/" in model else model
+        model_for_check = (
+            model.split("responses/", 1)[1] if "responses/" in model else model
+        )
         if (
             model_for_check in litellm.open_ai_chat_completion_models
         ) or model_for_check in litellm.open_ai_text_completion_models:
@@ -362,10 +364,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                         List[OpenAIMessageContentListBlock], message_content
                     )
                     for i, content_item in enumerate(message_content_types):
-                        message_content_types[i] = (
-                            await self._async_transform_content_item(
-                                cast(OpenAIMessageContentListBlock, content_item),
-                            )
+                        message_content_types[
+                            i
+                        ] = await self._async_transform_content_item(
+                            cast(OpenAIMessageContentListBlock, content_item),
                         )
             return messages
 
@@ -452,12 +454,13 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         transformed_messages = await self._transform_messages(
             messages=messages, model=model, is_async=True
         )
-        transformed_messages, tools = (
-            self.remove_cache_control_flag_from_messages_and_tools(
-                model=model,
-                messages=transformed_messages,
-                tools=optional_params.get("tools", []),
-            )
+        (
+            transformed_messages,
+            tools,
+        ) = self.remove_cache_control_flag_from_messages_and_tools(
+            model=model,
+            messages=transformed_messages,
+            tools=optional_params.get("tools", []),
         )
         if tools is not None and len(tools) > 0:
             optional_params["tools"] = tools

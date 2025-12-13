@@ -27,7 +27,9 @@ router = APIRouter()
 
 async def parse_rag_ingest_request(
     request: Request,
-) -> Tuple[Dict[str, Any], Optional[Tuple[str, bytes, str]], Optional[str], Optional[str]]:
+) -> Tuple[
+    Dict[str, Any], Optional[Tuple[str, bytes, str]], Optional[str], Optional[str]
+]:
     """
     Parse RAG ingest request.
 
@@ -98,7 +100,9 @@ async def parse_rag_ingest_request(
     if "vector_store" not in ingest_options:
         raise HTTPException(
             status_code=400,
-            detail={"error": "ingest_options must contain 'vector_store' configuration"},
+            detail={
+                "error": "ingest_options must contain 'vector_store' configuration"
+            },
         )
 
     return ingest_options, file_data, file_url, file_id
@@ -163,7 +167,9 @@ async def rag_ingest(
 
     try:
         # Parse request
-        ingest_options, file_data, file_url, file_id = await parse_rag_ingest_request(request)
+        ingest_options, file_data, file_url, file_id = await parse_rag_ingest_request(
+            request
+        )
 
         # Add litellm data
         request_data: Dict[str, Any] = {}

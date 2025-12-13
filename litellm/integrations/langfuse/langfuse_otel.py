@@ -156,7 +156,11 @@ class LangfuseOtelLogger(OpenTelemetry):
                         "arguments": arguments_obj,
                     }
                     transformed_tool_calls.append(langfuse_tool_call)
-                safe_set_attribute(span, LangfuseSpanAttributes.OBSERVATION_OUTPUT.value, safe_dumps(transformed_tool_calls))
+                safe_set_attribute(
+                    span,
+                    LangfuseSpanAttributes.OBSERVATION_OUTPUT.value,
+                    safe_dumps(transformed_tool_calls),
+                )
             else:
                 output_data = {}
                 if message.get("role"):
@@ -164,7 +168,11 @@ class LangfuseOtelLogger(OpenTelemetry):
                 if message.get("content") is not None:
                     output_data["content"] = message.get("content")
                 if output_data:
-                    safe_set_attribute(span, LangfuseSpanAttributes.OBSERVATION_OUTPUT.value, safe_dumps(output_data))
+                    safe_set_attribute(
+                        span,
+                        LangfuseSpanAttributes.OBSERVATION_OUTPUT.value,
+                        safe_dumps(output_data),
+                    )
 
         output = response_obj.get("output", [])
         if output:
@@ -175,15 +183,28 @@ class LangfuseOtelLogger(OpenTelemetry):
                     if item_type == "reasoning" and hasattr(item, "summary"):
                         for summary in item.summary:
                             if hasattr(summary, "text"):
-                                output_items_data.append({"role": "reasoning_summary", "content": summary.text})
+                                output_items_data.append(
+                                    {
+                                        "role": "reasoning_summary",
+                                        "content": summary.text,
+                                    }
+                                )
                     elif item_type == "message":
-                        output_items_data.append({
-                            "role": getattr(item, "role", "assistant"),
-                            "content": getattr(getattr(item, "content", [{}])[0], "text", "")
-                        })
+                        output_items_data.append(
+                            {
+                                "role": getattr(item, "role", "assistant"),
+                                "content": getattr(
+                                    getattr(item, "content", [{}])[0], "text", ""
+                                ),
+                            }
+                        )
                     elif item_type == "function_call":
                         arguments_str = getattr(item, "arguments", "{}")
-                        arguments_obj = json.loads(arguments_str) if isinstance(arguments_str, str) else arguments_str
+                        arguments_obj = (
+                            json.loads(arguments_str)
+                            if isinstance(arguments_str, str)
+                            else arguments_str
+                        )
                         langfuse_tool_call = {
                             "id": getattr(item, "id", ""),
                             "name": getattr(item, "name", ""),
@@ -193,7 +214,11 @@ class LangfuseOtelLogger(OpenTelemetry):
                         }
                         output_items_data.append(langfuse_tool_call)
             if output_items_data:
-                safe_set_attribute(span, LangfuseSpanAttributes.OBSERVATION_OUTPUT.value, safe_dumps(output_items_data))
+                safe_set_attribute(
+                    span,
+                    LangfuseSpanAttributes.OBSERVATION_OUTPUT.value,
+                    safe_dumps(output_items_data),
+                )
 
     @staticmethod
     def _set_langfuse_specific_attributes(span: Span, kwargs, response_obj):
@@ -210,14 +235,22 @@ class LangfuseOtelLogger(OpenTelemetry):
 
         langfuse_environment = os.environ.get("LANGFUSE_TRACING_ENVIRONMENT")
         if langfuse_environment:
-            safe_set_attribute(span, LangfuseSpanAttributes.LANGFUSE_ENVIRONMENT.value, langfuse_environment)
+            safe_set_attribute(
+                span,
+                LangfuseSpanAttributes.LANGFUSE_ENVIRONMENT.value,
+                langfuse_environment,
+            )
 
         metadata = LangfuseOtelLogger._extract_langfuse_metadata(kwargs)
         LangfuseOtelLogger._set_metadata_attributes(span=span, metadata=metadata)
 
         messages = kwargs.get("messages")
         if messages:
-            safe_set_attribute(span, LangfuseSpanAttributes.OBSERVATION_INPUT.value, safe_dumps(messages))
+            safe_set_attribute(
+                span,
+                LangfuseSpanAttributes.OBSERVATION_INPUT.value,
+                safe_dumps(messages),
+            )
 
         LangfuseOtelLogger._set_observation_output(span=span, response_obj=response_obj)
 

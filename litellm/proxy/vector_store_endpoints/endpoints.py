@@ -27,10 +27,10 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
 
     """
     if litellm.vector_store_registry is not None:
-        vector_store_to_run: Optional[LiteLLM_ManagedVectorStore] = (
-            litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry(
-                vector_store_id=vector_store_id
-            )
+        vector_store_to_run: Optional[
+            LiteLLM_ManagedVectorStore
+        ] = litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry(
+            vector_store_id=vector_store_id
         )
         if vector_store_to_run is not None:
             if "custom_llm_provider" in vector_store_to_run:
@@ -54,7 +54,8 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
     dependencies=[Depends(user_api_key_auth)],
 )
 @router.post(
-    "/vector_stores/{vector_store_id:path}/search", dependencies=[Depends(user_api_key_auth)]
+    "/vector_stores/{vector_store_id:path}/search",
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def vector_store_search(
     request: Request,

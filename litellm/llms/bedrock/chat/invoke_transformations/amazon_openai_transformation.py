@@ -27,14 +27,14 @@ else:
 class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
     """
     Configuration for Bedrock imported models that use OpenAI Chat Completions format.
-    
+
     This class handles the transformation of requests and responses for Bedrock
     imported models that accept the OpenAI API format directly.
-    
+
     Inherits from OpenAIGPTConfig to leverage standard OpenAI parameter handling
     and response transformation, while adding Bedrock-specific URL generation
     and AWS request signing.
-    
+
     Usage:
         model = "bedrock/openai/arn:aws:bedrock:us-east-1:123456789012:imported-model/abc123"
     """
@@ -50,18 +50,18 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
     def _get_openai_model_id(self, model: str) -> str:
         """
         Extract the actual model ID from the LiteLLM model name.
-        
+
         Input format: bedrock/openai/<model-id>
         Returns: <model-id>
         """
         # Remove bedrock/ prefix if present
         if model.startswith("bedrock/"):
             model = model[8:]
-        
+
         # Remove openai/ prefix
         if model.startswith("openai/"):
             model = model[7:]
-        
+
         return model
 
     def get_complete_url(
@@ -75,16 +75,16 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
     ) -> str:
         """
         Get the complete URL for the Bedrock invoke endpoint.
-        
+
         Uses the standard Bedrock invoke endpoint format.
         """
         model_id = self._get_openai_model_id(model)
-        
+
         # Get AWS region
         aws_region_name = self._get_aws_region_name(
             optional_params=optional_params, model=model
         )
-        
+
         # Get runtime endpoint
         aws_bedrock_runtime_endpoint = optional_params.get(
             "aws_bedrock_runtime_endpoint", None
@@ -94,13 +94,15 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             aws_region_name=aws_region_name,
         )
-        
+
         # Build the invoke URL
         if stream:
-            endpoint_url = f"{endpoint_url}/model/{model_id}/invoke-with-response-stream"
+            endpoint_url = (
+                f"{endpoint_url}/model/{model_id}/invoke-with-response-stream"
+            )
         else:
             endpoint_url = f"{endpoint_url}/model/{model_id}/invoke"
-        
+
         return endpoint_url
 
     def sign_request(
@@ -139,20 +141,20 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
     ) -> dict:
         """
         Transform the request to OpenAI Chat Completions format for Bedrock imported models.
-        
+
         Removes AWS-specific params and stream param (handled separately in URL),
         then delegates to parent class for standard OpenAI request transformation.
         """
         # Remove stream from optional_params as it's handled separately in URL
         optional_params.pop("stream", None)
-        
+
         # Remove AWS-specific params that shouldn't be in the request body
         inference_params = {
             k: v
             for k, v in optional_params.items()
             if k not in self.aws_authentication_params
         }
-        
+
         # Use parent class transform_request for OpenAI format
         return super().transform_request(
             model=self._get_openai_model_id(model),
@@ -174,7 +176,7 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
     ) -> dict:
         """
         Validate the environment and return headers.
-        
+
         For Bedrock, we don't need Bearer token auth since we use AWS SigV4.
         """
         return headers

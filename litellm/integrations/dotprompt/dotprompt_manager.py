@@ -123,7 +123,6 @@ class DotpromptManager(CustomPromptManagement):
             raise ValueError("prompt_id is required for dotprompt manager")
 
         try:
-
             # Get the prompt template (versioned or base)
             template = self.prompt_manager.get_prompt(
                 prompt_id=prompt_id, version=prompt_version
@@ -200,7 +199,6 @@ class DotpromptManager(CustomPromptManagement):
         ignore_prompt_manager_model: Optional[bool] = False,
         ignore_prompt_manager_optional_params: Optional[bool] = False,
     ) -> Tuple[str, List[AllMessageValues], dict]:
-
         from litellm.integrations.prompt_management_base import PromptManagementBase
 
         return PromptManagementBase.get_chat_completion_prompt(

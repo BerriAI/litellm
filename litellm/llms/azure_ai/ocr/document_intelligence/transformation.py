@@ -35,15 +35,15 @@ from litellm.secret_managers.main import get_secret_str
 class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
     """
     Azure Document Intelligence OCR transformation configuration.
-    
+
     Supports Azure Document Intelligence v4.0 (2024-11-30) API.
     Model route: azure_ai/doc-intelligence/<model>
-    
+
     Supported models:
     - prebuilt-layout: Extracts text with markdown, tables, and structure (closest to Mistral OCR)
     - prebuilt-read: Basic text extraction optimized for reading
     - prebuilt-document: General document analysis
-    
+
     Reference: https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/
     """
 
@@ -53,7 +53,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
     def get_supported_ocr_params(self, model: str) -> list:
         """
         Get supported OCR parameters for Azure Document Intelligence.
-        
+
         Azure DI has minimal optional parameters compared to Mistral OCR.
         Most Mistral-specific params are ignored during transformation.
         """
@@ -70,7 +70,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
     ) -> Dict:
         """
         Validate environment and return headers for Azure Document Intelligence.
-        
+
         Authentication uses Ocp-Apim-Subscription-Key header.
         """
         # Get API key from environment if not provided
@@ -109,16 +109,16 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
     ) -> str:
         """
         Get complete URL for Azure Document Intelligence endpoint.
-        
+
         Format: {endpoint}/documentintelligence/documentModels/{modelId}:analyze?api-version=2024-11-30
-        
+
         Note: API version 2024-11-30 uses /documentintelligence/ path (not /formrecognizer/)
-        
+
         Args:
             api_base: Azure Document Intelligence endpoint (e.g., https://your-resource.cognitiveservices.azure.com)
             model: Model ID (e.g., "prebuilt-layout", "prebuilt-read")
             optional_params: Optional parameters
-            
+
         Returns: Complete URL for Azure DI analyze endpoint
         """
         if api_base is None:
@@ -143,10 +143,10 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
     def _extract_base64_from_data_uri(self, data_uri: str) -> str:
         """
         Extract base64 content from a data URI.
-        
+
         Args:
             data_uri: Data URI like "data:application/pdf;base64,..."
-            
+
         Returns:
             Base64 string without the data URI prefix
         """
@@ -166,7 +166,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
     ) -> OCRRequestData:
         """
         Transform OCR request to Azure Document Intelligence format.
-        
+
         Mistral OCR format:
         {
             "document": {
@@ -174,7 +174,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
                 "document_url": "https://example.com/doc.pdf"
             }
         }
-        
+
         Azure DI format:
         {
             "urlSource": "https://example.com/doc.pdf"
@@ -183,13 +183,13 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         {
             "base64Source": "base64_encoded_content"
         }
-        
+
         Args:
             model: Model name
             document: Document dict from user (Mistral format)
             optional_params: Already mapped optional parameters
             headers: Request headers
-            
+
         Returns:
             OCRRequestData with JSON data
         """
@@ -238,12 +238,12 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
     def _extract_page_markdown(self, page_data: Dict[str, Any]) -> str:
         """
         Extract text from Azure DI page and format as markdown.
-        
+
         Azure DI provides text in 'lines' array. We concatenate them with newlines.
-        
+
         Args:
             page_data: Azure DI page object
-            
+
         Returns:
             Markdown-formatted text
         """
@@ -262,14 +262,14 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
     ) -> OCRPageDimensions:
         """
         Convert Azure DI dimensions to pixels.
-        
+
         Azure DI provides dimensions in inches. We convert to pixels using configured DPI.
-        
+
         Args:
             width: Width in specified unit
             height: Height in specified unit
             unit: Unit of measurement (e.g., "inch")
-            
+
         Returns:
             OCRPageDimensions with pixel values
         """
@@ -289,11 +289,11 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
     def _check_timeout(start_time: float, timeout_secs: int) -> None:
         """
         Check if operation has timed out.
-        
+
         Args:
             start_time: Start time of the operation
             timeout_secs: Timeout duration in seconds
-            
+
         Raises:
             TimeoutError: If operation has exceeded timeout
         """
@@ -306,10 +306,10 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
     def _get_retry_after(response: httpx.Response) -> int:
         """
         Get retry-after duration from response headers.
-        
+
         Args:
             response: HTTP response
-            
+
         Returns:
             Retry-after duration in seconds (default: 2)
         """
@@ -321,13 +321,13 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
     def _check_operation_status(response: httpx.Response) -> str:
         """
         Check Azure DI operation status from response.
-        
+
         Args:
             response: HTTP response from operation endpoint
-            
+
         Returns:
             Operation status string
-            
+
         Raises:
             ValueError: If operation failed or status is unknown
         """
@@ -363,15 +363,15 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
     ) -> httpx.Response:
         """
         Poll Azure Document Intelligence operation until completion (sync).
-        
+
         Azure DI POST returns 202 with Operation-Location header.
         We need to poll that URL until status is "succeeded" or "failed".
-        
+
         Args:
             operation_url: The Operation-Location URL to poll
             headers: Request headers (including auth)
             timeout_secs: Total timeout in seconds
-            
+
         Returns:
             Final response with completed analysis
         """
@@ -406,12 +406,12 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
     ) -> httpx.Response:
         """
         Poll Azure Document Intelligence operation until completion (async).
-        
+
         Args:
             operation_url: The Operation-Location URL to poll
             headers: Request headers (including auth)
             timeout_secs: Total timeout in seconds
-            
+
         Returns:
             Final response with completed analysis
         """
@@ -448,10 +448,10 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
     ) -> OCRResponse:
         """
         Transform Azure Document Intelligence response to Mistral OCR format.
-        
+
         Handles async operation polling: If response is 202 Accepted, polls Operation-Location
         until analysis completes.
-        
+
         Azure DI response (after polling):
         {
             "status": "succeeded",
@@ -468,7 +468,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
                 ]
             }
         }
-        
+
         Mistral OCR format:
         {
             "pages": [
@@ -482,12 +482,12 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             "usage_info": {"pages_processed": 1},
             "object": "ocr"
         }
-        
+
         Args:
             model: Model name
             raw_response: Raw HTTP response from Azure DI (may be 202 Accepted)
             logging_obj: Logging object
-            
+
         Returns:
             OCRResponse in Mistral format
         """
@@ -591,15 +591,15 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
     ) -> OCRResponse:
         """
         Async transform Azure Document Intelligence response to Mistral OCR format.
-        
+
         Handles async operation polling: If response is 202 Accepted, polls Operation-Location
         until analysis completes using async polling.
-        
+
         Args:
             model: Model name
             raw_response: Raw HTTP response from Azure DI (may be 202 Accepted)
             logging_obj: Logging object
-            
+
         Returns:
             OCRResponse in Mistral format
         """
@@ -693,4 +693,3 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
                 f"Error parsing Azure Document Intelligence response (async): {e}"
             )
             raise e
-
