@@ -369,9 +369,49 @@ async def create_file(  # noqa: PLR0915
                         "error": "Both expires_after[anchor] and expires_after[seconds] must be provided if expires_after is specified",
                     },
                 )
+            
+            # Validate expires_after[anchor] is a string (not UploadFile)
+            if isinstance(expires_after_anchor, UploadFile):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "expires_after[anchor] must be a string, not a file upload",
+                    },
+                )
+            
+            # Validate expires_after[seconds] is a string (not UploadFile)
+            if isinstance(expires_after_seconds_str, UploadFile):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "expires_after[seconds] must be a string, not a file upload",
+                    },
+                )
+            
+            # Validate anchor is "created_at"
+            if expires_after_anchor != "created_at":
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"expires_after[anchor] must be 'created_at', got '{expires_after_anchor}'",
+                    },
+                )
+            
+            # Convert seconds to int
+            try:
+                expires_after_seconds = int(expires_after_seconds_str)
+            except (ValueError, TypeError) as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"expires_after[seconds] must be a valid integer, got '{expires_after_seconds_str}': {e}",
+                    },
+                )
+            
+            # Use literal "created_at" (not variable) for TypedDict to satisfy Literal type
             expires_after = FileExpiresAfter(
-                anchor=expires_after_anchor,
-                seconds=int(expires_after_seconds_str),
+                anchor="created_at",  # Literal, not expires_after_anchor variable
+                seconds=expires_after_seconds,
             )
 
         # Include original request and headers in the data
