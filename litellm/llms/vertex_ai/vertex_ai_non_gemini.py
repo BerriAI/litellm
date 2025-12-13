@@ -370,18 +370,15 @@ def completion(  # noqa: PLR0915
                     "request_str": request_str,
                 },
             )
-            llm_model = aiplatform.gapic.PredictionServiceClient(
-                client_options=client_options
+            llm_model = aiplatform.Endpoint(
+                endpoint_name=model,
+                project=vertex_project,
+                location=vertex_location,
             )
-            request_str += f"llm_model = aiplatform.gapic.PredictionServiceClient(client_options={client_options})\n"
-            endpoint_path = llm_model.endpoint_path(
-                project=vertex_project, location=vertex_location, endpoint=model
-            )
-            request_str += (
-                f"llm_model.predict(endpoint={endpoint_path}, instances={instances})\n"
-            )
+            request_str += f"llm_model = aiplatform.Endpoint(endpoint_name={model}, project={vertex_project}, location={vertex_location})\n"
+            request_str += f"llm_model.predict(instances={instances})\n"
             response = llm_model.predict(
-                endpoint=endpoint_path, instances=instances
+                instances=instances,
             ).predictions
 
             completion_response = response[0]
