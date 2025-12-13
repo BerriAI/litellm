@@ -388,11 +388,12 @@ def test_gpt5_2_pro_allows_reasoning_effort_xhigh(config: OpenAIConfig):
     assert params["reasoning_effort"] == "xhigh"
 
 
-def test_gpt5_2_rejects_reasoning_effort_xhigh_for_base_model(config: OpenAIConfig):
-    with pytest.raises(litellm.utils.UnsupportedParamsError):
-        config.map_openai_params(
-            non_default_params={"reasoning_effort": "xhigh"},
-            optional_params={},
-            model="gpt-5.2",
-            drop_params=False,
-        )
+def test_gpt5_2_allows_reasoning_effort_xhigh(config: OpenAIConfig):
+    """Test that gpt-5.2 (base model) also supports reasoning_effort='xhigh'."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="gpt-5.2",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "xhigh"

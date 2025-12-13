@@ -13,6 +13,7 @@ from litellm.integrations.prompt_management_base import (
     PromptManagementClient,
 )
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import StandardCallbackDynamicParams
 
 GITLAB_PREFIX = "gitlab::"
@@ -454,19 +455,24 @@ class GitLabPromptManager(CustomPromptManagement):
 
     def should_run_prompt_management(
         self,
-        prompt_id: str,
+        prompt_id: Optional[str],
+        prompt_spec: Optional[PromptSpec],
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> bool:
-        return True
+        return prompt_id is not None
 
     def _compile_prompt_helper(
         self,
-        prompt_id: str,
+        prompt_id: Optional[str],
+        prompt_spec: Optional[PromptSpec],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
     ) -> PromptManagementClient:
+        if prompt_id is None:
+            raise ValueError("prompt_id is required for GitLab prompt manager")
+
         try:
             decoded_id = decode_prompt_id(prompt_id)
             if decoded_id not in self.prompt_manager.prompts:
@@ -505,6 +511,31 @@ class GitLabPromptManager(CustomPromptManagement):
         except Exception as e:
             raise ValueError(f"Error compiling prompt '{prompt_id}': {e}")
 
+    async def async_compile_prompt_helper(
+        self,
+        prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
+        dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_spec: Optional[PromptSpec] = None,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
+    ) -> PromptManagementClient:
+        """
+        Async version of compile prompt helper. Since GitLab operations use sync client,
+        this simply delegates to the sync version.
+        """
+        if prompt_id is None:
+            raise ValueError("prompt_id is required for GitLab prompt manager")
+
+        return self._compile_prompt_helper(
+            prompt_id=prompt_id,
+            prompt_spec=prompt_spec,
+            prompt_variables=prompt_variables,
+            dynamic_callback_params=dynamic_callback_params,
+            prompt_label=prompt_label,
+            prompt_version=prompt_version,
+        )
+
     def get_chat_completion_prompt(
         self,
         model: str,
@@ -513,6 +544,7 @@ class GitLabPromptManager(CustomPromptManagement):
         prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_spec: Optional[PromptSpec] = None,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
         ignore_prompt_manager_model: Optional[bool] = False,
@@ -526,8 +558,41 @@ class GitLabPromptManager(CustomPromptManagement):
             prompt_id,
             prompt_variables,
             dynamic_callback_params,
-            prompt_label,
-            prompt_version,
+            prompt_spec=prompt_spec,
+            prompt_label=prompt_label,
+            prompt_version=prompt_version,
+        )
+
+    async def async_get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        non_default_params: dict,
+        prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
+        dynamic_callback_params: StandardCallbackDynamicParams,
+        litellm_logging_obj: Any,
+        prompt_spec: Optional[PromptSpec] = None,
+        tools: Optional[List[Dict]] = None,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
+    ) -> Tuple[str, List[AllMessageValues], dict]:
+        """
+        Async version - delegates to PromptManagementBase async implementation.
+        """
+        return await PromptManagementBase.async_get_chat_completion_prompt(
+            self,
+            model,
+            messages,
+            non_default_params,
+            prompt_id=prompt_id,
+            prompt_variables=prompt_variables,
+            litellm_logging_obj=litellm_logging_obj,
+            dynamic_callback_params=dynamic_callback_params,
+            prompt_spec=prompt_spec,
+            tools=tools,
+            prompt_label=prompt_label,
+            prompt_version=prompt_version,
         )
 
 

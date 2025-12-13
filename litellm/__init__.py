@@ -399,7 +399,10 @@ disable_copilot_system_to_assistant: bool = (
 public_mcp_servers: Optional[List[str]] = None
 public_model_groups: Optional[List[str]] = None
 public_agent_groups: Optional[List[str]] = None
-public_model_groups_links: Dict[str, str] = {}
+# Supports both old format (Dict[str, str]) and new format (Dict[str, Dict[str, Any]])
+# New format: { "displayName": { "url": "...", "index": 0 } }
+# Old format: { "displayName": "url" } (for backward compatibility)
+public_model_groups_links: Dict[str, Union[str, Dict[str, Any]]] = {}
 #### REQUEST PRIORITIZATION #######
 priority_reservation: Optional[Dict[str, Union[float, PriorityReservationDict]]] = None
 priority_reservation_settings: "PriorityReservationSettings" = (

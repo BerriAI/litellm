@@ -23,6 +23,7 @@ from litellm.utils import (
     TextCompletionStreamWrapper,
     get_llm_provider,
     get_optional_params_image_gen,
+    is_cached_message,
 )
 
 # Adds the parent directory to the system path
@@ -846,6 +847,7 @@ def test_check_provider_match():
     model_info = {"litellm_provider": "bedrock"}
     assert litellm.utils._check_provider_match(model_info, "openai") is False
 
+
 def test_get_provider_rerank_config():
     """
     Test the get_provider_rerank_config function for various providers
@@ -854,8 +856,11 @@ def test_get_provider_rerank_config():
     from litellm.utils import LlmProviders, ProviderConfigManager
 
     # Test for hosted_vllm provider
-    config = ProviderConfigManager.get_provider_rerank_config("my_model", LlmProviders.HOSTED_VLLM, 'http://localhost', [])
+    config = ProviderConfigManager.get_provider_rerank_config(
+        "my_model", LlmProviders.HOSTED_VLLM, "http://localhost", []
+    )
     assert isinstance(config, HostedVLLMRerankConfig)
+
 
 # Models that should be skipped during testing
 OLD_PROVIDERS = ["aleph_alpha", "palm"]
@@ -2513,3 +2518,87 @@ class TestGetValidModelsWithCLI:
             assert "headers" in call_kwargs
             headers = call_kwargs["headers"]
             assert headers.get("Authorization") == "Bearer sk-test-cli-key-123"
+
+
+class TestIsCachedMessage:
+    """Test is_cached_message function for context caching detection.
+
+    Fixes GitHub issue #17821 - TypeError when content is string instead of list.
+    """
+
+    def test_string_content_returns_false(self):
+        """String content should return False without crashing."""
+        message = {"role": "user", "content": "Hello world"}
+        assert is_cached_message(message) is False
+
+    def test_none_content_returns_false(self):
+        """None content should return False."""
+        message = {"role": "user", "content": None}
+        assert is_cached_message(message) is False
+
+    def test_missing_content_returns_false(self):
+        """Message without content key should return False."""
+        message = {"role": "user"}
+        assert is_cached_message(message) is False
+
+    def test_list_content_without_cache_control_returns_false(self):
+        """List content without cache_control should return False."""
+        message = {"role": "user", "content": [{"type": "text", "text": "Hello"}]}
+        assert is_cached_message(message) is False
+
+    def test_list_content_with_cache_control_returns_true(self):
+        """List content with cache_control ephemeral should return True."""
+        message = {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Hello",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }
+        assert is_cached_message(message) is True
+
+    def test_list_with_non_dict_items_skips_them(self):
+        """List content with non-dict items should skip them gracefully."""
+        message = {
+            "role": "user",
+            "content": ["string_item", 123, {"type": "text", "text": "Hello"}],
+        }
+        assert is_cached_message(message) is False
+
+    def test_list_with_mixed_items_finds_cached(self):
+        """Mixed content list should find cached item."""
+        message = {
+            "role": "user",
+            "content": [
+                "string_item",
+                {"type": "image", "url": "..."},
+                {
+                    "type": "text",
+                    "text": "cached",
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        }
+        assert is_cached_message(message) is True
+
+    def test_wrong_cache_control_type_returns_false(self):
+        """Non-ephemeral cache_control type should return False."""
+        message = {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Hello",
+                    "cache_control": {"type": "permanent"},
+                }
+            ],
+        }
+        assert is_cached_message(message) is False
+
+    def test_empty_list_content_returns_false(self):
+        """Empty list content should return False."""
+        message = {"role": "user", "content": []}
+        assert is_cached_message(message) is False

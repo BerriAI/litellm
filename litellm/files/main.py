@@ -27,6 +27,7 @@ from litellm.llms.vertex_ai.files.handler import VertexAIFilesHandler
 from litellm.types.llms.openai import (
     CreateFileRequest,
     FileContentRequest,
+    FileExpiresAfter,
     FileTypes,
     HttpxBinaryResponseContent,
     OpenAIFileObject,
@@ -58,6 +59,7 @@ anthropic_files_instance = AnthropicFilesHandler()
 async def acreate_file(
     file: FileTypes,
     purpose: Literal["assistants", "batch", "fine-tune"],
+    expires_after: Optional[FileExpiresAfter] = None,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -75,6 +77,7 @@ async def acreate_file(
         call_args = {
             "file": file,
             "purpose": purpose,
+            "expires_after": expires_after,
             "custom_llm_provider": custom_llm_provider,
             "extra_headers": extra_headers,
             "extra_body": extra_body,
@@ -83,7 +86,6 @@ async def acreate_file(
 
         # Use a partial function to pass your keyword arguments
         func = partial(create_file, **call_args)
-
         # Add the context to the function
         ctx = contextvars.copy_context()
         func_with_context = partial(ctx.run, func)
@@ -102,6 +104,7 @@ async def acreate_file(
 def create_file(
     file: FileTypes,
     purpose: Literal["assistants", "batch", "fine-tune"],
+    expires_after: Optional[FileExpiresAfter] = None,
     custom_llm_provider: Optional[Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -141,12 +144,21 @@ def create_file(
         elif timeout is None:
             timeout = 600.0
 
-        _create_file_request = CreateFileRequest(
-            file=file,
-            purpose=purpose,
-            extra_headers=extra_headers,
-            extra_body=extra_body,
-        )
+        if expires_after is not None:
+            _create_file_request = CreateFileRequest(
+                file=file,
+                purpose=purpose,
+                expires_after=expires_after,
+                extra_headers=extra_headers,
+                extra_body=extra_body,
+            )
+        else:
+            _create_file_request = CreateFileRequest(
+                file=file,
+                purpose=purpose,
+                extra_headers=extra_headers,
+                extra_body=extra_body,
+            )
 
         provider_config = ProviderConfigManager.get_provider_files_config(
             model="",

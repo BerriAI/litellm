@@ -49,6 +49,16 @@ http://localhost:4000/metrics
 # <proxy_base_url>/metrics
 ```
 
+### Multiple Workers
+
+When using LiteLLM with multiple workers, you need to set the `PROMETHEUS_MULTIPROC_DIR` environment variable to enable aggregated metric collection across worker processes.
+
+```shell
+export PROMETHEUS_MULTIPROC_DIR="/prometheus_multiproc"
+```
+
+This directory is used by the Prometheus client library to store metric files that can be shared across multiple worker processes. Make sure the directory exists and is writable by your LiteLLM process.
+
 ## Virtual Keys, Teams, Internal Users
 
 Use this for for tracking per [user, key, team, etc.](virtual_keys)

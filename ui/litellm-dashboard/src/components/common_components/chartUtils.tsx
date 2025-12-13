@@ -1,6 +1,6 @@
 import React from "react";
 import type { CustomTooltipProps } from "@tremor/react";
-import { SpendMetrics } from "../usage/types";
+import { SpendMetrics } from "../UsagePage/types";
 
 interface ChartDataPoint {
   date: string;
