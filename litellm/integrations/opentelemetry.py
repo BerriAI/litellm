@@ -753,6 +753,24 @@ class OpenTelemetry(CustomLogger):
         )
         self._record_response_duration_metric(kwargs, end_time, common_attrs)
 
+    @staticmethod
+    def _to_timestamp(val: Optional[Union[datetime, float, str]]) -> Optional[float]:
+        """Convert datetime/float/string to timestamp."""
+        if val is None:
+            return None
+        if isinstance(val, datetime):
+            return val.timestamp()
+        if isinstance(val, (int, float)):
+            return float(val)
+        # isinstance(val, str) - parse datetime string (with or without microseconds)
+        try:
+            return datetime.strptime(val, '%Y-%m-%d %H:%M:%S.%f').timestamp()
+        except ValueError:
+            try:
+                return datetime.strptime(val, '%Y-%m-%d %H:%M:%S').timestamp()
+            except ValueError:
+                return None
+
     def _record_time_to_first_token_metric(self, kwargs: dict, common_attrs: dict):
         """Record Time to First Token (TTFT) metric for streaming requests."""
         optional_params = kwargs.get("optional_params", {})
@@ -767,16 +785,12 @@ class OpenTelemetry(CustomLogger):
         completion_start_time = kwargs.get("completion_start_time", None)
         
         if api_call_start_time is not None and completion_start_time is not None:
-            # Convert to timestamps if needed (handles both datetime and float)
-            if isinstance(api_call_start_time, datetime):
-                api_call_start_ts = api_call_start_time.timestamp()
-            else:
-                api_call_start_ts = api_call_start_time
+            # Convert to timestamps if needed (handles datetime, float, and string)
+            api_call_start_ts = self._to_timestamp(api_call_start_time)
+            completion_start_ts = self._to_timestamp(completion_start_time)
             
-            if isinstance(completion_start_time, datetime):
-                completion_start_ts = completion_start_time.timestamp()
-            else:
-                completion_start_ts = completion_start_time
+            if api_call_start_ts is None or completion_start_ts is None:
+                return  # Skip recording if conversion failed
             
             time_to_first_token_seconds = completion_start_ts - api_call_start_ts
             self._time_to_first_token_histogram.record(
@@ -812,29 +826,35 @@ class OpenTelemetry(CustomLogger):
         completion_start_time = kwargs.get("completion_start_time", None)
         api_call_start_time = kwargs.get("api_call_start_time", None)
         
-        # Convert end_time to timestamp
-        if isinstance(end_time, datetime):
-            end_time_ts = end_time.timestamp()
-        else:
-            end_time_ts = end_time
+        # Convert end_time to timestamp (handles datetime, float, and string)
+        end_time_ts = self._to_timestamp(end_time)
+        if end_time_ts is None:
+            # Fallback to duration_s if conversion failed
+            generation_time_seconds = duration_s
+            if generation_time_seconds > 0:
+                time_per_output_token_seconds = generation_time_seconds / completion_tokens
+                self._time_per_output_token_histogram.record(
+                    time_per_output_token_seconds, attributes=common_attrs
+                )
+            return
         
         if completion_start_time is not None:
             # Streaming: use completion_start_time (when first token arrived)
             # This measures time to generate all tokens after the first one
-            if isinstance(completion_start_time, datetime):
-                completion_start_ts = completion_start_time.timestamp()
+            completion_start_ts = self._to_timestamp(completion_start_time)
+            if completion_start_ts is None:
+                # Fallback to duration_s if conversion failed
+                generation_time_seconds = duration_s
             else:
-                completion_start_ts = completion_start_time
-            
-            generation_time_seconds = end_time_ts - completion_start_ts
+                generation_time_seconds = end_time_ts - completion_start_ts
         elif api_call_start_time is not None:
             # Non-streaming: use api_call_start_time (total generation time)
-            if isinstance(api_call_start_time, datetime):
-                api_call_start_ts = api_call_start_time.timestamp()
+            api_call_start_ts = self._to_timestamp(api_call_start_time)
+            if api_call_start_ts is None:
+                # Fallback to duration_s if conversion failed
+                generation_time_seconds = duration_s
             else:
-                api_call_start_ts = api_call_start_time
-            
-            generation_time_seconds = end_time_ts - api_call_start_ts
+                generation_time_seconds = end_time_ts - api_call_start_ts
         else:
             # Fallback: use duration_s (already calculated as (end_time - start_time).total_seconds())
             generation_time_seconds = duration_s
@@ -874,16 +894,12 @@ class OpenTelemetry(CustomLogger):
         if _end_time is None:
             _end_time = datetime.now()
         
-        # Convert to timestamps if needed (handles both datetime and float)
-        if isinstance(api_call_start_time, datetime):
-            api_call_start_ts = api_call_start_time.timestamp()
-        else:
-            api_call_start_ts = api_call_start_time
+        # Convert to timestamps if needed (handles datetime, float, and string)
+        api_call_start_ts = self._to_timestamp(api_call_start_time)
+        end_time_ts = self._to_timestamp(_end_time)
         
-        if isinstance(_end_time, datetime):
-            end_time_ts = _end_time.timestamp()
-        else:
-            end_time_ts = _end_time
+        if api_call_start_ts is None or end_time_ts is None:
+            return  # Skip recording if conversion failed
         
         response_duration_seconds = end_time_ts - api_call_start_ts
         
