@@ -97,30 +97,6 @@ The cost is now tracked and displayed in the logs for each agent request.
 | **Input Cost Per Token ($)** | Cost per input token processed |
 | **Output Cost Per Token ($)** | Cost per output token generated |
 
-## API Configuration
-
-You can also configure agent costs via the API when creating or updating an agent:
-
-```bash
-curl -X POST "http://localhost:4000/v1/agents" \
-  -H "Authorization: Bearer <your_api_key>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "agent": {
-      "agent_name": "my-agent",
-      "agent_card_params": {
-        "name": "My Agent",
-        "description": "A helpful agent",
-        "url": "http://my-agent-url.com/"
-      },
-      "litellm_params": {
-        "cost_per_query": 0.05,
-        "input_cost_per_token": 0.000001,
-        "output_cost_per_token": 0.000002
-      }
-    }
-  }'
-```
 
 ## Related
 
