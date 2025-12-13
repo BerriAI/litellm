@@ -6,6 +6,7 @@ import { getAgentInfo, patchAgentCall } from "../networking";
 import { Agent } from "./types";
 import AgentFormFields from "./agent_form_fields";
 import { buildAgentDataFromForm, parseAgentForForm } from "./agent_config";
+import AgentCostView from "./agent_cost_view";
 
 interface AgentInfoViewProps {
   agentId: string;
@@ -146,6 +147,8 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
               <Descriptions.Item label="Created At">{formatDate(agent.created_at)}</Descriptions.Item>
               <Descriptions.Item label="Updated At">{formatDate(agent.updated_at)}</Descriptions.Item>
             </Descriptions>
+
+            <AgentCostView agent={agent} />
 
             {agent.agent_card_params?.skills && agent.agent_card_params.skills.length > 0 && (
               <div style={{ marginTop: 24 }}>
