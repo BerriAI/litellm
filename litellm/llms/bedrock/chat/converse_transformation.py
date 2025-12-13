@@ -14,6 +14,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import (
     filter_exceptions_from_params,
+    filter_internal_params,
     map_finish_reason,
     safe_deep_copy,
 )
@@ -916,6 +917,10 @@ class AmazonConverseConfig(BaseConfig):
         additional_request_params.update(
             self._handle_top_k_value(model, inference_params)
         )
+        
+        # Filter out internal/MCP-related parameters that shouldn't be sent to the API
+        # These are LiteLLM internal parameters, not API parameters
+        additional_request_params = filter_internal_params(additional_request_params)
         
         # Filter out non-serializable objects (exceptions, callables, logging objects, etc.)
         # from additional_request_params to prevent JSON serialization errors
