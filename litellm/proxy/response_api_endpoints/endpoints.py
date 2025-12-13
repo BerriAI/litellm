@@ -186,10 +186,11 @@ async def cursor_chat_completions(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Cursor-specific endpoint that accepts Responses API input format but returns chat completions format.
+    Cursor-specific endpoint that accepts Responses API input format and returns
+    Cursor's proprietary streaming format for tool calls.
     
     This endpoint handles requests from Cursor IDE which sends Responses API format (`input` field)
-    but expects chat completions format response (`choices`, `messages`, etc.).
+    and expects responses in Cursor's protobuf-JSON format with tool_call_v2, partial_tool_call, etc.
     
     ```bash
     curl -X POST http://localhost:4000/cursor/chat/completions \
@@ -199,7 +200,7 @@ async def cursor_chat_completions(
         "model": "gpt-4o",
         "input": [{"role": "user", "content": "Hello"}]
     }'
-    Responds back in chat completions format.
+    Responds back in Cursor's streaming format.
     ```
     """
     from litellm.completion_extras.litellm_responses_transformation.handler import (
@@ -220,6 +221,10 @@ async def cursor_chat_completions(
         user_temperature,
         version,
     )
+    from litellm.proxy.response_api_endpoints.cursor_format import (
+        cursor_async_data_generator,
+        openai_chunk_to_cursor_format,
+    )
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
     from litellm.types.llms.openai import ResponsesAPIResponse
 
@@ -228,10 +233,10 @@ async def cursor_chat_completions(
 
     def cursor_data_generator(response, user_api_key_dict, request_data):
         """
-        Custom generator that transforms Responses API streaming chunks to chat completion chunks.
+        Custom generator that transforms streaming chunks to Cursor's format.
         
-        This generator is used for the cursor endpoint to convert Responses API format responses
-        to chat completion format that Cursor IDE expects.
+        This generator converts responses to Cursor's protobuf-JSON format with
+        tool_call_v2, partial_tool_call, thinking, etc.
         
         Args:
             response: The streaming response (BaseResponsesAPIStreamingIterator or other)
@@ -239,7 +244,7 @@ async def cursor_chat_completions(
             request_data: Request data containing model, logging_obj, etc.
         
         Returns:
-            Async generator that yields SSE-formatted chat completion chunks
+            Async generator that yields SSE-formatted Cursor-format chunks
         """
         # If response is a BaseResponsesAPIStreamingIterator, transform it first
         if isinstance(response, BaseResponsesAPIStreamingIterator):
@@ -257,17 +262,19 @@ async def cursor_chat_completions(
                 custom_llm_provider=None,
                 logging_obj=logging_obj,
             )
-            # Use async_data_generator to format as SSE
-            return async_data_generator(
+            # Use cursor_async_data_generator to format as Cursor's SSE format
+            return cursor_async_data_generator(
                 response=streamwrapper,
                 user_api_key_dict=user_api_key_dict,
                 request_data=request_data,
+                proxy_logging_obj=proxy_logging_obj,
             )
-        # Otherwise, use the default generator
-        return async_data_generator(
+        # Otherwise, use the Cursor format generator
+        return cursor_async_data_generator(
             response=response,
             user_api_key_dict=user_api_key_dict,
             request_data=request_data,
+            proxy_logging_obj=proxy_logging_obj,
         )
 
     try:
@@ -290,9 +297,11 @@ async def cursor_chat_completions(
             version=version,
         )
 
-        # Transform non-streaming Responses API response to chat completions format
+        # Transform non-streaming Responses API response to Cursor format
         if isinstance(response, ResponsesAPIResponse):
+            import json
             logging_obj = processor.data.get("litellm_logging_obj")
+            # First transform to chat completions format
             transformed_response = responses_api_bridge.transformation_handler.transform_response(
                 model=processor.data.get("model", ""),
                 raw_response=response,
@@ -306,9 +315,11 @@ async def cursor_chat_completions(
                 api_key=None,
                 json_mode=None,
             )
-            return transformed_response
+            # Then convert to Cursor format
+            cursor_response = openai_chunk_to_cursor_format(transformed_response)
+            return cursor_response
 
-        # Streaming responses are already transformed by cursor_select_data_generator
+        # Streaming responses are already transformed by cursor_data_generator
         return response
     except Exception as e:
         raise await processor._handle_llm_api_exception(
