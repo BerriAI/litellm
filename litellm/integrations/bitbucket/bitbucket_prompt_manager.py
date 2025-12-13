@@ -3,11 +3,16 @@ BitBucket prompt manager that integrates with LiteLLM's prompt management system
 Fetches .prompt files from BitBucket repositories and provides team-based access control.
 """
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from jinja2 import DictLoader, Environment, select_autoescape
 
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = Any
 from litellm.integrations.prompt_management_base import (
     PromptManagementBase,
     PromptManagementClient,
@@ -550,11 +555,13 @@ class BitBucketPromptManager(CustomPromptManagement):
         prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
-        litellm_logging_obj: Any,
+        litellm_logging_obj: LiteLLMLoggingObj,
         prompt_spec: Optional[PromptSpec] = None,
         tools: Optional[List[Dict]] = None,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Async version - delegates to PromptManagementBase async implementation.
@@ -572,4 +579,6 @@ class BitBucketPromptManager(CustomPromptManagement):
             tools=tools,
             prompt_label=prompt_label,
             prompt_version=prompt_version,
+            ignore_prompt_manager_model=ignore_prompt_manager_model,
+            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
         )

@@ -15,7 +15,7 @@ from litellm.llms.base_llm.files.storage_backend_factory import get_storage_back
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
-from litellm.types.llms.openai import OpenAIFileObject
+from litellm.types.llms.openai import OpenAIFileObject, OpenAIFilesPurpose
 from litellm.types.utils import SpecialEnums
 
 
@@ -35,7 +35,7 @@ class StorageBackendFileService:
         file_data: Mapping[str, Any],
         target_storage: str,
         target_model_names: List[str],
-        purpose: str,
+        purpose: OpenAIFilesPurpose,
         proxy_logging_obj: ProxyLogging,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> OpenAIFileObject:
@@ -112,7 +112,7 @@ class StorageBackendFileService:
     def _create_file_object_with_storage_metadata(
         file_content: bytes,
         filename: str,
-        purpose: str,
+        purpose: OpenAIFilesPurpose,
         target_storage: str,
         storage_url: str,
     ) -> OpenAIFileObject:
