@@ -16,6 +16,7 @@ from litellm.types.llms.openai import (
     ContentPartDoneEvent,
     ContentPartDonePartOutputText,
     ContentPartDonePartReasoningText,
+    FunctionCallArgumentsDeltaEvent,
     OutputItemAddedEvent,
     OutputItemDoneEvent,
     OutputTextAnnotationAddedEvent,
@@ -79,6 +80,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             Union[ModelResponse, TextCompletionResponse]
         ] = None
         self.final_text: str = ""
+        self.current_tool_call_id: Optional[str] = None
+        self.next_output_index: int = 1
 
     def _default_response_created_event_data(self) -> dict:
         response_created_event_data = {
@@ -468,6 +471,47 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if hasattr(self, '_pending_annotation_events') and self._pending_annotation_events:
             event = self._pending_annotation_events.pop(0)
             return event
+
+        # Priority 4: Handle tool calls
+        if chunk.choices and chunk.choices[0].delta.tool_calls:
+            tool_call = chunk.choices[0].delta.tool_calls[0]
+            
+            # If it has an ID, it's the start of a new tool call
+            if tool_call.id:
+                # New tool call
+                self.current_tool_call_id = tool_call.id
+                output_index = self.next_output_index
+                self.next_output_index += 1
+                
+                # Emit Added event
+                # item needs to be a response object
+                item = BaseLiteLLMOpenAIResponseObject(
+                    type="function_call",
+                    id=tool_call.id,
+                    call_id=tool_call.id,
+                    name=tool_call.function.name,
+                    status="in_progress",
+                    arguments=""
+                )
+                
+                return OutputItemAddedEvent(
+                    type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+                    output_index=output_index,
+                    item=item
+                )
+            
+            # If it has arguments, emit Delta
+            if self.current_tool_call_id and tool_call.function.arguments:
+                # We assume the current tool call matches the last one we saw
+                # output_index is next_output_index - 1
+                output_index = self.next_output_index - 1
+                
+                return FunctionCallArgumentsDeltaEvent(
+                    type=ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
+                    item_id=self.current_tool_call_id,
+                    output_index=output_index,
+                    delta=tool_call.function.arguments
+                )
 
         return None
 

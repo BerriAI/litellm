@@ -693,18 +693,33 @@ class LiteLLMCompletionResponsesConfig:
                 )
             else:
                 typed_tool = cast(FunctionToolParam, tool)
+                
+                # Check if it's standard OpenAI tool format (nested function)
+                if typed_tool.get("function") and isinstance(typed_tool.get("function"), dict):
+                    function_def = typed_tool.get("function")
+                    name = function_def.get("name")
+                    description = function_def.get("description")
+                    parameters = function_def.get("parameters")
+                    strict = function_def.get("strict")
+                else:
+                    # Responses API format (flattened)
+                    name = typed_tool.get("name")
+                    description = typed_tool.get("description")
+                    parameters = typed_tool.get("parameters")
+                    strict = typed_tool.get("strict")
+
                 # Ensure parameters has "type": "object" as required by providers like Anthropic
-                parameters = dict(typed_tool.get("parameters", {}) or {})
+                parameters = dict(parameters or {})
                 if not parameters or "type" not in parameters:
                     parameters["type"] = "object"
                 chat_completion_tools.append(
                     ChatCompletionToolParam(
                         type="function",
                         function=ChatCompletionToolParamFunctionChunk(
-                            name=typed_tool.get("name") or "",
-                            description=typed_tool.get("description") or "",
+                            name=name or "",
+                            description=description or "",
                             parameters=parameters,
-                            strict=typed_tool.get("strict", False) or False,
+                            strict=strict or False,
                         ),
                     )
                 )
