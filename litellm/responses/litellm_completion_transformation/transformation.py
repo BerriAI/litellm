@@ -380,50 +380,6 @@ class LiteLLMCompletionResponsesConfig:
             tool_call_id=tool_call_output.get("call_id") or "",
         )
 
-        _tool_use_definition = TOOL_CALLS_CACHE.get_cache(
-            key=tool_call_output.get("call_id") or "",
-        )
-        if _tool_use_definition:
-            """
-            Append the tool use definition to the list of messages
-
-
-            Providers like Anthropic require the tool use definition to be included with the tool output
-
-            - Input:
-                {'function':
-                    arguments:'{"command": ["echo","<html>\\n<head>\\n  <title>Hello</title>\\n</head>\\n<body>\\n  <h1>Hi</h1>\\n</body>\\n</html>",">","index.html"]}',
-                    name='shell',
-                    'id': 'toolu_018KFWsEySHjdKZPdUzXpymJ',
-                    'type': 'function'
-                }
-            - Output:
-                {
-                    "id": "toolu_018KFWsEySHjdKZPdUzXpymJ",
-                    "type": "function",
-                    "function": {
-                        "name": "get_weather",
-                        "arguments": "{\"latitude\":48.8566,\"longitude\":2.3522}"
-                        }
-                }
-
-            """
-            function: dict = _tool_use_definition.get("function") or {}
-            tool_call_chunk = ChatCompletionToolCallChunk(
-                id=_tool_use_definition.get("id") or "",
-                type=_tool_use_definition.get("type") or "function",
-                function=ChatCompletionToolCallFunctionChunk(
-                    name=function.get("name") or "",
-                    arguments=function.get("arguments") or "",
-                ),
-                index=0,
-            )
-            chat_completion_response_message = ChatCompletionResponseMessage(
-                tool_calls=[tool_call_chunk],
-                role="assistant",
-            )
-            return [chat_completion_response_message, tool_output_message]
-
         return [tool_output_message]
 
     @staticmethod
