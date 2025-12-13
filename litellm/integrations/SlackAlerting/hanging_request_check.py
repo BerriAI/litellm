@@ -8,6 +8,7 @@ Notes:
 """
 
 import asyncio
+import time
 from typing import TYPE_CHECKING, Any, Optional
 
 import litellm
@@ -101,6 +102,8 @@ class AlertingHangingRequestCheck:
             n=MAX_OLDEST_HANGING_REQUESTS_TO_CHECK,
         )
 
+        current_time = time.time()
+
         for request_id in hanging_requests:
             hanging_request_data: Optional[HangingRequestData] = (
                 await self.hanging_request_cache.async_get_cache(
@@ -110,6 +113,11 @@ class AlertingHangingRequestCheck:
 
             if hanging_request_data is None:
                 continue
+
+            # Check if request has actually been hanging for more than the alerting threshold
+            request_duration = current_time - hanging_request_data.start_time
+            if request_duration < self.slack_alerting_object.alerting_threshold:
+                continue  # Request hasn't been hanging long enough yet
 
             request_status = (
                 await proxy_logging_obj.internal_usage_cache.async_get_cache(
