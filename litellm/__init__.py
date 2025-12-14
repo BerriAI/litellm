@@ -268,6 +268,7 @@ ovhcloud_key: Optional[str] = None
 lemonade_key: Optional[str] = None
 sap_service_key: Optional[str] = None
 amazon_nova_api_key: Optional[str] = None
+venice_ai_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
@@ -1273,6 +1274,7 @@ from .llms.anthropic.skills.transformation import AnthropicSkillsConfig
 from .llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 
 from .llms.gradient_ai.chat.transformation import GradientAIConfig
+from .llms.venice_ai.chat.transformation import VeniceAIChatConfig
 
 openaiOSeriesConfig = OpenAIOSeriesConfig()
 from .llms.openai.chat.gpt_transformation import (
@@ -1295,6 +1297,7 @@ from .llms.openai.chat.gpt_audio_transformation import (
 
 openAIGPTAudioConfig = OpenAIGPTAudioConfig()
 openAIGPT5Config = OpenAIGPT5Config()
+veniceAIChatConfig = VeniceAIChatConfig()
 
 from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig
 from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig

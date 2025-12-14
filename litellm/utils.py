@@ -7305,6 +7305,8 @@ class ProviderConfigManager:
             from litellm.llms.langgraph.chat.transformation import LangGraphConfig
 
             return LangGraphConfig()
+        elif litellm.LlmProviders.VENICE_AI == provider:
+            return litellm.VeniceAIChatConfig()
         return None
 
     @staticmethod

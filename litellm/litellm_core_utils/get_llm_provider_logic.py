@@ -273,6 +273,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://api.inference.wandb.ai/v1":
                         custom_llm_provider = "wandb"
                         dynamic_api_key = get_secret_str("WANDB_API_KEY")
+                    elif "venice.ai" in endpoint or endpoint == "https://api.venice.ai/api/v1":
+                        custom_llm_provider = "venice_ai"
+                        dynamic_api_key = get_secret_str("VENICE_AI_API_KEY")
 
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception(
@@ -880,6 +883,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or "http://localhost:2024"
         )
         dynamic_api_key = api_key or get_secret_str("LANGGRAPH_API_KEY")
+    elif custom_llm_provider == "venice_ai":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.VeniceAIChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
 
     if api_base is not None and not isinstance(api_base, str):
         raise Exception("api base needs to be a string. api_base={}".format(api_base))
