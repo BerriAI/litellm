@@ -22,6 +22,7 @@ import { clearTokenCookies } from "@/utils/cookieUtils";
 export interface ProxySettings {
   PROXY_BASE_URL: string | null;
   PROXY_LOGOUT_URL: string | null;
+  LITELLM_UI_API_DOC_BASE_URL?: string | null;
   DEFAULT_TEAM_DISABLED: boolean;
   SSO_ENABLED: boolean;
   DISABLE_EXPENSIVE_DB_QUERIES: boolean;

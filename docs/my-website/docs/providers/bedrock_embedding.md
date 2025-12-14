@@ -4,7 +4,8 @@
 
 | Provider | LiteLLM Route | AWS Documentation | Cost Tracking |
 |----------|---------------|-------------------|---------------|
-| Amazon Titan | `bedrock/amazon.*` | [Amazon Titan Embeddings](https://docs.aws.amazon.com/bedrock/latest/userguide/titan-embedding-models.html) | ✅ |
+| Amazon Titan | `bedrock/amazon.titan-*` | [Amazon Titan Embeddings](https://docs.aws.amazon.com/bedrock/latest/userguide/titan-embedding-models.html) | ✅ |
+| Amazon Nova | `bedrock/amazon.nova-*` | [Amazon Nova Embeddings](https://docs.aws.amazon.com/bedrock/latest/userguide/nova-embed.html) | ✅ |
 | Cohere | `bedrock/cohere.*` | [Cohere Embeddings](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-cohere-embed.html) | ✅ |
 | TwelveLabs | `bedrock/us.twelvelabs.*` | [TwelveLabs](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-twelvelabs.html) | ✅ |
 
@@ -16,6 +17,7 @@ LiteLLM supports AWS Bedrock's async-invoke feature for embedding models that re
 
 | Provider | Async Invoke Route | Use Case |
 |----------|-------------------|----------|
+| Amazon Nova | `bedrock/async_invoke/amazon.nova-2-multimodal-embeddings-v1:0` | Multimodal embeddings with segmentation for long text, video, and audio |
 | TwelveLabs Marengo | `bedrock/async_invoke/us.twelvelabs.marengo-embed-2-7-v1:0` | Video, audio, image, and text embeddings |
 
 ### Required Parameters
@@ -116,7 +118,7 @@ def check_async_job_status(invocation_arn, aws_region_name="us-east-1"):
     """Check the status of an async invoke job using LiteLLM batch API"""
     try:
         response = retrieve_batch(
-            batch_id=invocation_arn,
+            batch_id=invocation_arn,  # Pass the invocation ARN here
             custom_llm_provider="bedrock",
             aws_region_name=aws_region_name
         )
@@ -128,11 +130,47 @@ def check_async_job_status(invocation_arn, aws_region_name="us-east-1"):
 # Check status
 status = check_async_job_status(invocation_arn, "us-east-1")
 if status:
-    print(f"Job Status: {status.status}")
-    print(f"Output Location: {status.output_file_id}")
+    print(f"Job Status: {status.status}")  # "in_progress", "completed", or "failed"
+    print(f"Output Location: {status.metadata['output_file_id']}")  # S3 URI where results are stored
 ```
 
-**Note:** The actual embedding results are stored in S3. The `output_file_id` from the batch status can be used to locate the results file in your S3 bucket.
+#### Polling Until Complete
+
+Here's a complete example of polling for job completion:
+
+```python
+def wait_for_async_job(invocation_arn, aws_region_name="us-east-1", max_wait=3600):
+    """Poll job status until completion"""
+    start_time = time.time()
+    
+    while True:
+        status = retrieve_batch(
+            batch_id=invocation_arn,
+            custom_llm_provider="bedrock",
+            aws_region_name=aws_region_name,
+        )
+        
+        if status.status == "completed":
+            print("✅ Job completed!")
+            return status
+        elif status.status == "failed":
+            error_msg = status.metadata.get('failure_message', 'Unknown error')
+            raise Exception(f"❌ Job failed: {error_msg}")
+        else:
+            elapsed = time.time() - start_time
+            if elapsed > max_wait:
+                raise TimeoutError(f"Job timed out after {max_wait} seconds")
+            
+            print(f"⏳ Job still processing... (elapsed: {elapsed:.0f}s)")
+            time.sleep(10)  # Wait 10 seconds before checking again
+
+# Wait for completion
+completed_status = wait_for_async_job(invocation_arn)
+output_s3_uri = completed_status.metadata['output_file_id']
+print(f"Results available at: {output_s3_uri}")
+```
+
+**Note:** The actual embedding results are stored in S3. When the job is completed, download the results from the S3 location specified in `status.metadata['output_file_id']`. The results will be in JSON/JSONL format containing the embedding vectors.
 
 ### Error Handling
 
@@ -179,7 +217,7 @@ except Exception as e:
 
 ### Limitations
 
-- Async-invoke is currently only supported for TwelveLabs Marengo models
+- Async-invoke is supported for TwelveLabs Marengo and Amazon Nova models
 - Results are stored in S3 and must be retrieved separately using the output file ID
 - Job status checking requires using LiteLLM's `retrieve_batch()` function
 - No built-in polling mechanism in LiteLLM (must implement your own status checking loop)
@@ -259,6 +297,7 @@ print(response)
 
 | Model Name           | Usage                               | Supported Additional OpenAI params |
 |----------------------|---------------------------------------------|-----|
+| **Amazon Nova Multimodal Embeddings** | `embedding(model="bedrock/amazon.nova-2-multimodal-embeddings-v1:0", input=input)` | Supports multimodal input (text, image, video, audio), multiple purposes, dimensions (256, 384, 1024, 3072) |
 | Titan Embeddings V2 | `embedding(model="bedrock/amazon.titan-embed-text-v2:0", input=input)` | [here](https://github.com/BerriAI/litellm/blob/f5905e100068e7a4d61441d7453d7cf5609c2121/litellm/llms/bedrock/embed/amazon_titan_v2_transformation.py#L59) |
 | Titan Embeddings - V1 | `embedding(model="bedrock/amazon.titan-embed-text-v1", input=input)` | [here](https://github.com/BerriAI/litellm/blob/f5905e100068e7a4d61441d7453d7cf5609c2121/litellm/llms/bedrock/embed/amazon_titan_g1_transformation.py#L53)
 | Titan Multimodal Embeddings | `embedding(model="bedrock/amazon.titan-embed-image-v1", input=input)` | [here](https://github.com/BerriAI/litellm/blob/f5905e100068e7a4d61441d7453d7cf5609c2121/litellm/llms/bedrock/embed/amazon_titan_multimodal_transformation.py#L28) |

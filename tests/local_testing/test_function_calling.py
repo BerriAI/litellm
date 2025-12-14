@@ -707,10 +707,16 @@ def test_passing_tool_result_as_list(model):
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=6, delay=1)
-async def test_watsonx_tool_choice(sync_mode):
+async def test_watsonx_tool_choice(sync_mode, monkeypatch):
     from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
     import json
     from litellm import acompletion, completion
+
+    # Mock the IAM token generation to avoid actual API calls
+    monkeypatch.setenv("WATSONX_API_KEY", "mock-api-key")
+    monkeypatch.setenv("WATSONX_TOKEN", "mock-watsonx-token")
+    monkeypatch.setenv("WATSONX_API_BASE", "https://us-south.ml.cloud.ibm.com")
+    monkeypatch.setenv("WATSONX_PROJECT_ID", "mock-project-id")
 
     litellm.set_verbose = True
     tools = [
@@ -761,7 +767,7 @@ async def test_watsonx_tool_choice(sync_mode):
             mock_completion.assert_called_once()
             print(mock_completion.call_args.kwargs)
             json_data = json.loads(mock_completion.call_args.kwargs["data"])
-            json_data["tool_choice_option"] == "auto"
+            assert json_data["tool_choice_option"] == "auto"
         except Exception as e:
             print(e)
             if "The read operation timed out" in str(e):

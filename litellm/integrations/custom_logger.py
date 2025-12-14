@@ -20,6 +20,7 @@ from litellm.caching.caching import DualCache
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
 from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
+from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import (
     AdapterCompletionStreamWrapper,
     CallTypes,
@@ -80,6 +81,44 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         self.turn_off_message_logging = turn_off_message_logging
         pass
 
+    @staticmethod
+    def get_callback_env_vars(callback_name: Optional[str] = None) -> List[str]:
+        """
+        Return the environment variables associated with a given callback
+        name as defined in the proxy callback registry.
+
+        Args:
+            callback_name: The name of the callback to look up.
+
+        Returns:
+            List[str]: A list of required environment variable names.
+        """
+        if callback_name is None:
+            return []
+
+        normalized_name = callback_name.lower()
+
+        alias_map = {
+            "langfuse_otel": "langfuse",
+        }
+        lookup_name = alias_map.get(normalized_name, normalized_name)
+
+        try:
+            from litellm.proxy._types import AllCallbacks
+        except Exception:
+            return []
+
+        callbacks = AllCallbacks()
+        callback_info = getattr(callbacks, lookup_name, None)
+        if callback_info is None:
+            return []
+
+        params = getattr(callback_info, "litellm_callback_params", None)
+        if not params:
+            return []
+
+        return list(params)
+
     def log_pre_api_call(self, model, messages, kwargs):
         pass
 
@@ -120,9 +159,12 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: LiteLLMLoggingObj,
+        prompt_spec: Optional[PromptSpec] = None,
         tools: Optional[List[Dict]] = None,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Returns:
@@ -140,8 +182,11 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_spec: Optional[PromptSpec] = None,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Returns:
@@ -514,8 +559,11 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         from copy import copy
 
         from litellm import Choices, Message, ModelResponse
-        turn_off_message_logging: bool = getattr(self, "turn_off_message_logging", False)
-        
+
+        turn_off_message_logging: bool = getattr(
+            self, "turn_off_message_logging", False
+        )
+
         if turn_off_message_logging is False:
             return model_call_details
 
@@ -541,6 +589,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             if isinstance(response, dict) and "output" in response:
                 # Make a copy to avoid modifying the original
                 from copy import deepcopy
+
                 response_copy = deepcopy(response)
                 # Redact content in output array
                 if isinstance(response_copy.get("output"), list):
@@ -549,7 +598,10 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                             if isinstance(output_item["content"], list):
                                 # Redact text in content items
                                 for content_item in output_item["content"]:
-                                    if isinstance(content_item, dict) and "text" in content_item:
+                                    if (
+                                        isinstance(content_item, dict)
+                                        and "text" in content_item
+                                    ):
                                         content_item["text"] = redacted_str
                 standard_logging_object_copy["response"] = response_copy
             else:
@@ -577,29 +629,34 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     def handle_callback_failure(self, callback_name: str):
         """
         Handle callback logging failures by incrementing Prometheus metrics.
-        
+
         Call this method in exception handlers within your callback when logging fails.
         """
         try:
             import litellm
             from litellm._logging import verbose_logger
-            
+
             all_callbacks = litellm.logging_callback_manager._get_all_callbacks()
-            
+
             for callback_obj in all_callbacks:
-                if hasattr(callback_obj, 'increment_callback_logging_failure'):
-                    verbose_logger.debug(f"Incrementing callback failure metric for {callback_name}")
+                if hasattr(callback_obj, "increment_callback_logging_failure"):
+                    verbose_logger.debug(
+                        f"Incrementing callback failure metric for {callback_name}"
+                    )
                     callback_obj.increment_callback_logging_failure(callback_name=callback_name)  # type: ignore
                     return
-            
+
             verbose_logger.debug(
                 f"No callback with increment_callback_logging_failure method found for {callback_name}. "
                 "Ensure 'prometheus' is in your callbacks config."
             )
-                    
+
         except Exception as e:
             from litellm._logging import verbose_logger
-            verbose_logger.debug(f"Error in handle_callback_failure for {callback_name}: {str(e)}")
+
+            verbose_logger.debug(
+                f"Error in handle_callback_failure for {callback_name}: {str(e)}"
+            )
 
     async def _strip_base64_from_messages(
         self,
@@ -618,10 +675,14 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         raw_messages: Any = payload.get("messages", [])
         messages: List[Any] = raw_messages if isinstance(raw_messages, list) else []
-        verbose_logger.debug(f"[CustomLogger] Stripping base64 from {len(messages)} messages")
+        verbose_logger.debug(
+            f"[CustomLogger] Stripping base64 from {len(messages)} messages"
+        )
 
         if messages:
-            payload["messages"] = self._process_messages(messages=messages, max_depth=max_depth)
+            payload["messages"] = self._process_messages(
+                messages=messages, max_depth=max_depth
+            )
 
         total_items = 0
         for m in payload.get("messages", []) or []:
@@ -636,7 +697,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         return payload
 
     def _strip_base64_from_messages_sync(
-            self, payload: "StandardLoggingPayload", max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
+        self,
+        payload: "StandardLoggingPayload",
+        max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER,
     ) -> "StandardLoggingPayload":
         """
         Removes or redacts base64-encoded file data (e.g., PDFs, images, audio)
@@ -650,7 +713,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         raw_messages: Any = payload.get("messages", [])
         messages: List[Any] = raw_messages if isinstance(raw_messages, list) else []
-        verbose_logger.debug(f"[CustomLogger] Stripping base64 from {len(messages)} messages")
+        verbose_logger.debug(
+            f"[CustomLogger] Stripping base64 from {len(messages)} messages"
+        )
 
         if messages:
             payload["messages"] = self._process_messages(
@@ -713,7 +778,11 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         ctype = content.get("type")
         return not (isinstance(ctype, str) and ctype != "text")
 
-    def _process_messages(self, messages: List[Any], max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER) -> List[Dict[str, Any]]:
+    def _process_messages(
+        self,
+        messages: List[Any],
+        max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER,
+    ) -> List[Dict[str, Any]]:
         filtered_messages: List[Dict[str, Any]] = []
         for msg in messages:
             if not isinstance(msg, dict):

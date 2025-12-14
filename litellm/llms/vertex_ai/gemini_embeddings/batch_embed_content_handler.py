@@ -8,7 +8,7 @@ from typing import Any, Literal, Optional, Union
 import httpx
 
 import litellm
-from litellm import EmbeddingResponse
+from litellm.types.utils import EmbeddingResponse
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,

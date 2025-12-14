@@ -142,7 +142,13 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
         elif WatsonXModelPattern.IBM_MISTRAL.value in model:
             return mistral_instruct_pt(messages=messages)
         elif WatsonXModelPattern.GPT_OSS.value in model:
-            hf_model = model.split("watsonx/")[-1] if "watsonx/" in model else model
+            # Extract HuggingFace model name from watsonx/ or watsonx_text/ prefix
+            if "watsonx/" in model:
+                hf_model = model.split("watsonx/")[-1]
+            elif "watsonx_text/" in model:
+                hf_model = model.split("watsonx_text/")[-1]
+            else:
+                hf_model = model
             try:
                 return hf_template_fn(model=hf_model, messages=messages)
             except Exception:
@@ -188,7 +194,13 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
         elif WatsonXModelPattern.IBM_MISTRAL.value in model:
             return mistral_instruct_pt(messages=messages)
         elif WatsonXModelPattern.GPT_OSS.value in model:
-            hf_model = model.split("watsonx/")[-1] if "watsonx/" in model else model
+            # Extract HuggingFace model name from watsonx/ or watsonx_text/ prefix
+            if "watsonx/" in model:
+                hf_model = model.split("watsonx/")[-1]
+            elif "watsonx_text/" in model:
+                hf_model = model.split("watsonx_text/")[-1]
+            else:
+                hf_model = model
             try:
                 # Use sync if cached, async if not
                 if hf_model in litellm.known_tokenizer_config:

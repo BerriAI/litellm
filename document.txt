@@ -1,0 +1,19 @@
+LiteLLM provides a unified interface for calling 100+ different LLM providers.
+
+Key capabilities:
+- Translate requests to provider-specific formats
+- Consistent OpenAI-compatible responses
+- Retry and fallback logic across deployments
+- Proxy server with authentication and rate limiting
+- Support for streaming, function calling, and embeddings
+
+Popular providers supported:
+- OpenAI (GPT-4, GPT-3.5)
+- Anthropic (Claude)
+- AWS Bedrock
+- Azure OpenAI
+- Google Vertex AI
+- Cohere
+- And 95+ more
+
+This allows developers to easily switch between providers without code changes.

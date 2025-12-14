@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ToolTestPanel } from "./ToolTestPanel";
-import { MCPTool, MCPToolsViewerProps, CallMCPToolResponse } from "./types";
+import { MCPTool, MCPToolsViewerProps, MCPContent, CallMCPToolResponse } from "./types";
 import { listMCPTools, callMCPTool } from "../networking";
 
 import { Card, Title, Text } from "@tremor/react";
@@ -16,7 +16,7 @@ const MCPToolsViewer = ({
   serverAlias, // Add serverAlias prop
 }: MCPToolsViewerProps) => {
   const [selectedTool, setSelectedTool] = useState<MCPTool | null>(null);
-  const [toolResult, setToolResult] = useState<CallMCPToolResponse | null>(null);
+  const [toolResult, setToolResult] = useState<MCPContent[] | null>(null);
   const [toolError, setToolError] = useState<Error | null>(null);
 
   // Query to fetch MCP tools
@@ -40,14 +40,14 @@ const MCPToolsViewer = ({
       if (!accessToken) throw new Error("Access Token required");
 
       try {
-        const result = await callMCPTool(accessToken, args.tool.name, args.arguments);
+        const result: CallMCPToolResponse = await callMCPTool(accessToken, args.tool.name, args.arguments);
         return result;
       } catch (error) {
         throw error;
       }
     },
     onSuccess: (data) => {
-      setToolResult(data);
+      setToolResult(data.content);
       setToolError(null);
     },
     onError: (error: Error) => {

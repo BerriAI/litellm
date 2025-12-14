@@ -6,6 +6,9 @@ metadata:
   name: {{ include "litellm.fullname" . }}
   labels:
     {{- include "litellm.labels" . | nindent 4 }}
+    {{- if .Values.deploymentLabels }}
+    {{- toYaml .Values.deploymentLabels | nindent 4 }}
+    {{- end }}
 spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
@@ -126,9 +129,20 @@ spec:
             - configMapRef:
                 name: {{ . }}
           {{- end }}
+          {{- if .Values.command }}
+          command: {{ toYaml .Values.command | nindent 12 }}
+          {{- end }}
+          {{- if .Values.args }}
+          args: {{ toYaml .Values.args | nindent 12 }}
+          {{- else }}
           args:
             - --config
             - /etc/litellm/config.yaml
+            {{ if .Values.numWorkers }}
+            - --num_workers
+            - {{ .Values.numWorkers | quote }}
+            {{- end }}
+          {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
@@ -207,4 +221,9 @@ spec:
       {{- with .Values.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds | default 90 }}
+      {{- if .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml .Values.topologySpreadConstraints | nindent 8 }}
       {{- end }}

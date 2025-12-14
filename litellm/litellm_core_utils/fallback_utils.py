@@ -3,7 +3,7 @@ from typing import Optional
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import safe_deep_copy
+from litellm.litellm_core_utils.core_helpers import safe_deep_copy, filter_internal_params
 
 from .asyncify import run_async_function
 
@@ -48,6 +48,9 @@ async def async_completion_with_fallbacks(**kwargs):
                 completion_kwargs.update(fallback)
             else:
                 model = fallback
+
+            # Filter out internal parameters that shouldn't be sent to provider APIs
+            completion_kwargs = filter_internal_params(completion_kwargs)
 
             response = await litellm.acompletion(
                 **completion_kwargs,

@@ -1692,3 +1692,35 @@ async def test_router_acompletion_with_unknown_model_and_no_fallback():
     # Check that the error message is correct.
     # The router returns 'no healthy deployments' because get_model_list returns [] not None.
     assert "no healthy deployments for this model" in str(excinfo.value)
+
+
+def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint():
+    """
+    Test that get_deployment_credentials_with_provider correctly copies
+    aws_bedrock_runtime_endpoint from deployment litellm_params to credentials.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-claude-model",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    "aws_access_key_id": "test-access-key",
+                    "aws_secret_access_key": "test-secret-key",
+                    "aws_region_name": "us-east-1",
+                    "aws_bedrock_runtime_endpoint": "https://bedrock-runtime.us-east-1.amazonaws.com",
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(
+        model_id="bedrock-claude-model"
+    )
+
+    assert credentials is not None
+    assert credentials["aws_bedrock_runtime_endpoint"] == "https://bedrock-runtime.us-east-1.amazonaws.com"
+    assert credentials["aws_access_key_id"] == "test-access-key"
+    assert credentials["aws_secret_access_key"] == "test-secret-key"
+    assert credentials["aws_region_name"] == "us-east-1"
+    assert credentials["custom_llm_provider"] == "bedrock"

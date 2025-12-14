@@ -28,7 +28,7 @@ class TestVertexImageGeneration:
     def test_transform_optional_params_empty_dict(self):
         """Test transform_optional_params with empty dict"""
         result = self.vertex_image_gen.transform_optional_params({})
-        expected = {}
+        expected = {"sampleCount": 1}
         assert result == expected
 
     def test_transform_optional_params_no_underscores(self):
@@ -94,6 +94,7 @@ class TestVertexImageGeneration:
             "veryLongParameterName": "test",
             "multiWordConfigSetting": 42,
             "anotherTestParam": True,
+            "sampleCount": 1,
         }
         assert result == expected
 
@@ -101,7 +102,7 @@ class TestVertexImageGeneration:
         """Test transform_optional_params with single underscore params"""
         input_params = {"test_param": "value", "a_b": "short"}
         result = self.vertex_image_gen.transform_optional_params(input_params)
-        expected = {"testParam": "value", "aB": "short"}
+        expected = {"testParam": "value", "aB": "short", "sampleCount": 1}
         assert result == expected
 
     def test_transform_optional_params_preserves_values(self):
@@ -124,6 +125,7 @@ class TestVertexImageGeneration:
             "listParam": [1, 2, 3],
             "dictParam": {"nested": "value"},
             "noneParam": None,
+            "sampleCount": 1,
         }
         assert result == expected
 

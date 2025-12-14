@@ -382,7 +382,7 @@ async def mistral_proxy_route(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    [Docs](https://docs.litellm.ai/docs/anthropic_completion)
+    [Docs](https://docs.litellm.ai/docs/pass_through/mistral)
     """
     base_target_url = os.getenv("MISTRAL_API_BASE") or "https://api.mistral.ai"
     encoded_endpoint = httpx.URL(endpoint).path
@@ -578,7 +578,7 @@ async def anthropic_proxy_route(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    [Docs](https://docs.litellm.ai/docs/anthropic_completion)
+    [Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)
     """
     base_target_url = os.getenv("ANTHROPIC_API_BASE") or "https://api.anthropic.com"
     encoded_endpoint = httpx.URL(endpoint).path

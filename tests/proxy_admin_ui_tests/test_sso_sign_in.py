@@ -82,6 +82,7 @@ async def test_auth_callback_new_user(mock_google_sso, mock_env_vars, prisma_cli
         mock_sso_result.email = unique_user_email
         mock_sso_result.id = unique_user_id
         mock_sso_result.provider = "google"
+        mock_sso_result.user_role = None  # Explicitly set to None so it doesn't return a MagicMock
         mock_google_sso.return_value.verify_and_process = AsyncMock(
             return_value=mock_sso_result
         )

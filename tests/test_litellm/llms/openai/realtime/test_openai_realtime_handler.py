@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from litellm.llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
+
 sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
@@ -119,6 +121,7 @@ async def test_async_realtime_success():
         async def __aexit__(self, exc_type, exc, tb):
             return None
 
+    shared_context = get_shared_realtime_ssl_context()
     with patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect, \
          patch("litellm.llms.openai.realtime.handler.RealTimeStreaming") as mock_realtime_streaming:
         mock_streaming_instance = MagicMock()
@@ -165,6 +168,7 @@ async def test_async_realtime_url_contains_model():
         async def __aexit__(self, exc_type, exc, tb):
             return None
 
+    shared_context = get_shared_realtime_ssl_context()
     with patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect, \
          patch("litellm.llms.openai.realtime.handler.RealTimeStreaming") as mock_realtime_streaming:
         
@@ -195,6 +199,7 @@ async def test_async_realtime_url_contains_model():
         extra_headers = called_kwargs["extra_headers"]
         assert extra_headers["Authorization"] == f"Bearer {api_key}"
         assert extra_headers["OpenAI-Beta"] == "realtime=v1"
+        assert called_kwargs["ssl"] is shared_context
         
         mock_realtime_streaming.assert_called_once()
         mock_streaming_instance.bidirectional_forward.assert_awaited_once()
@@ -230,6 +235,7 @@ async def test_async_realtime_uses_max_size_parameter():
         async def __aexit__(self, exc_type, exc, tb):
             return None
 
+    shared_context = get_shared_realtime_ssl_context()
     with patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect, \
          patch("litellm.llms.openai.realtime.handler.RealTimeStreaming") as mock_realtime_streaming:
         
@@ -253,6 +259,7 @@ async def test_async_realtime_uses_max_size_parameter():
         # Verify max_size is set (default None for unlimited, matching OpenAI's SDK)
         assert "max_size" in called_kwargs
         assert called_kwargs["max_size"] is None
+        assert called_kwargs["ssl"] is shared_context
         # Default should be None (unlimited) to match OpenAI's official agents SDK
         # https://github.com/openai/openai-agents-python/blob/cf1b933660e44fd37b4350c41febab8221801409/src/agents/realtime/openai_realtime.py#L235
 

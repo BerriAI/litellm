@@ -14,6 +14,7 @@ import litellm
 from litellm._logging import verbose_router_logger
 from litellm.constants import (
     DEFAULT_COOLDOWN_TIME_SECONDS,
+    DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS,
     DEFAULT_FAILURE_THRESHOLD_PERCENT,
     SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD,
 )
@@ -231,8 +232,10 @@ def _should_cooldown_deployment(
             return True
         elif (
             percent_fails > DEFAULT_FAILURE_THRESHOLD_PERCENT
+            and total_requests_this_minute >= DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS
             and not is_single_deployment_model_group  # by default we should avoid cooldowns on single deployment model groups
         ):
+            # Only apply error rate cooldown when we have enough requests to make the percentage meaningful
             return True
 
         elif (

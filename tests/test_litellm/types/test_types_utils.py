@@ -119,7 +119,8 @@ def test_usage_completion_tokens_details_text_tokens():
         'audio_tokens': None,
         'reasoning_tokens': 65,
         'rejected_prediction_tokens': None,
-        'text_tokens': 12
+        'text_tokens': 12,
+        'image_tokens': None
     }
     assert dump_result['completion_tokens_details'] == expected_completion_details
     

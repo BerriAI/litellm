@@ -133,9 +133,8 @@ def test_oidc_circleci_v2():
     print(f"secret_val: {redact_oidc_signature(secret_val)}")
 
 
-@pytest.mark.skipif(
-    os.environ.get("CIRCLE_OIDC_TOKEN") is None,
-    reason="Cannot run without being in CircleCI Runner",
+@pytest.mark.skip(
+    reason="Quarantined: Flaky test - fails with 401 Unauthorized from Azure OAuth. TODO: Switch to our own Azure account or fix authentication"
 )
 def test_oidc_circleci_with_azure():
     # TODO: Switch to our own Azure account, currently using ai.moda's account

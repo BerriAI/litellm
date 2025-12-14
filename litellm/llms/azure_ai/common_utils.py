@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
@@ -7,6 +7,17 @@ from litellm.types.llms.openai import AllMessageValues
 
 
 class AzureFoundryModelInfo(BaseLLMModelInfo):
+    @staticmethod
+    def get_azure_ai_route(model: str) -> Literal["agents", "default"]:
+        """
+        Get the Azure AI route for the given model.
+        
+        Similar to BedrockModelInfo.get_bedrock_route().
+        """
+        if "agents/" in model:
+            return "agents"
+        return "default"
+
     @staticmethod
     def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
         return (

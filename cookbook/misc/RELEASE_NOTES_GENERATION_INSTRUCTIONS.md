@@ -43,6 +43,14 @@ hide_table_of_contents: false
 ## Key Highlights
 [3-5 bullet points of major features - prioritize MCP OAuth 2.0, scheduled key rotations, and major model updates]
 
+## New Providers and Endpoints
+
+### New Providers
+[Table with Provider, Supported Endpoints, Description columns]
+
+### New LLM API Endpoints
+[Optional table for new endpoint additions with Endpoint, Method, Description, Documentation columns]
+
 ## New Models / Updated Models
 #### New Model Support
 [Model pricing table]
@@ -52,9 +60,6 @@ hide_table_of_contents: false
 
 ### Bug Fixes
 [Provider-specific bug fixes organized by provider]
-
-#### New Provider Support
-[New provider integrations]
 
 ## LLM API Endpoints
 #### Features
@@ -70,15 +75,19 @@ hide_table_of_contents: false
 #### Bugs
 [Management-related bug fixes]
 
-## Logging / Guardrail / Prompt Management Integrations
-#### Features
-[Organized by integration provider with proper doc links]
+## AI Integrations
 
-#### Guardrails
+### Logging
+[Logging integrations organized by provider with proper doc links, includes General subsection]
+
+### Guardrails
 [Guardrail-specific features and fixes]
 
-#### Prompt Management
+### Prompt Management
 [Prompt management integrations like BitBucket]
+
+### Secret Managers
+[Secret manager integrations - AWS, HashiCorp Vault, CyberArk, etc.]
 
 ## Spend Tracking, Budgets and Rate Limiting
 [Cost tracking, service tier pricing, rate limiting improvements]
@@ -149,26 +158,34 @@ hide_table_of_contents: false
 - Admin settings updates
 - Management routes and endpoints
 
-**Logging / Guardrail / Prompt Management Integrations:**
+**AI Integrations:**
 - **Structure:**
-  - `#### Features` - organized by integration provider with proper doc links
-  - `#### Guardrails` - guardrail-specific features and fixes
-  - `#### Prompt Management` - prompt management integrations
-  - `#### New Integration` - major new integrations
-- **Integration Categories:**
+  - `### Logging` - organized by integration provider with proper doc links, includes **General** subsection
+  - `### Guardrails` - guardrail-specific features and fixes
+  - `### Prompt Management` - prompt management integrations
+  - `### Secret Managers` - secret manager integrations
+- **Logging Categories:**
   - **[DataDog](../../docs/proxy/logging#datadog)** - group all DataDog-related changes
   - **[Langfuse](../../docs/proxy/logging#langfuse)** - Langfuse-specific features
   - **[Prometheus](../../docs/proxy/logging#prometheus)** - monitoring improvements
   - **[PostHog](../../docs/observability/posthog)** - observability integration
   - **[SQS](../../docs/proxy/logging#sqs)** - SQS logging features
   - **[Opik](../../docs/proxy/logging#opik)** - Opik integration improvements
+  - **[Arize Phoenix](../../docs/observability/arize_phoenix)** - Arize Phoenix integration
+  - **General** - miscellaneous logging features like callback controls, sensitive data masking
   - Other logging providers with proper doc links
 - **Guardrail Categories:**
-  - LakeraAI, Presidio, Noma, and other guardrail providers
+  - LakeraAI, Presidio, Noma, Grayswan, IBM Guardrails, and other guardrail providers
 - **Prompt Management:**
   - BitBucket, GitHub, and other prompt management integrations
+  - Prompt versioning, testing, and UI features
+- **Secret Managers:**
+  - **[AWS Secrets Manager](../../docs/secret_managers)** - AWS secret manager features
+  - **[HashiCorp Vault](../../docs/secret_managers)** - Vault integrations
+  - **[CyberArk](../../docs/secret_managers)** - CyberArk integrations
+  - **General** - cross-secret-manager features
 - Use bullet points under each provider for multiple features
-- Separate logging features from guardrails and prompt management clearly
+- Separate logging, guardrails, prompt management, and secret managers clearly
 
 ### 4. Documentation Linking Strategy
 
@@ -232,6 +249,9 @@ From git diff analysis, create tables like:
 - **Cost breakdown in logging** → Spend Tracking section
 - **MCP configuration/OAuth** → MCP Gateway (NOT General Proxy Improvements)
 - **All documentation PRs** → Documentation Updates section for visibility
+- **Callback controls/logging features** → AI Integrations > Logging > General
+- **Secret manager features** → AI Integrations > Secret Managers
+- **Video generation tag-based routing** → LLM API Endpoints > Video Generation API
 
 ### 7. Writing Style Guidelines
 
@@ -370,10 +390,107 @@ This release has a known issue...
   - **Virtual Keys** - Key rotation and management
   - **Models + Endpoints** - Provider and endpoint management
 
-**Logging Section Expansion:**
-- Rename to "Logging / Guardrail / Prompt Management Integrations"
-- Add **Prompt Management** subsection for BitBucket, GitHub integrations
-- Keep guardrails separate from logging features
+**AI Integrations Section Expansion:**
+- Renamed from "Logging / Guardrail / Prompt Management Integrations" to "AI Integrations"
+- Structure with four main subsections:
+  - **Logging** - with **General** subsection for miscellaneous logging features
+  - **Guardrails** - separate from logging features
+  - **Prompt Management** - BitBucket, GitHub integrations, versioning features
+  - **Secret Managers** - AWS, HashiCorp Vault, CyberArk, etc.
+
+**New Providers and Endpoints Section:**
+- Add section after Key Highlights and before New Models / Updated Models
+- Include tables for:
+  - **New Providers** - Provider name, supported endpoints, description
+  - **New LLM API Endpoints** (optional) - Endpoint, method, description, documentation link
+- Only include major new provider integrations, not minor provider updates
+- **IMPORTANT**: When adding new providers, also update `provider_endpoints_support.json` in the repository root (see Section 13)
+
+### 12. Section Header Counts
+
+**Always include counts in section headers for:**
+- **New Providers** - Add count in parentheses: `### New Providers (X new providers)`
+- **New LLM API Endpoints** - Add count in parentheses: `### New LLM API Endpoints (X new endpoints)`
+- **New Model Support** - Add count in parentheses: `#### New Model Support (X new models)`
+
+**Format:**
+```markdown
+### New Providers (4 new providers)
+
+| Provider | Supported LiteLLM Endpoints | Description |
+| -------- | --------------------------- | ----------- |
+...
+
+### New LLM API Endpoints (2 new endpoints)
+
+| Endpoint | Method | Description | Documentation |
+| -------- | ------ | ----------- | ------------- |
+...
+
+#### New Model Support (32 new models)
+
+| Provider | Model | Context Window | Input ($/1M tokens) | Output ($/1M tokens) | Features |
+| -------- | ----- | -------------- | ------------------- | -------------------- | -------- |
+...
+```
+
+**Counting Rules:**
+- Count each row in the table (excluding the header row)
+- For models, count each model entry in the pricing table
+- For providers, count each new provider added
+- For endpoints, count each new API endpoint added
+
+### 13. Update provider_endpoints_support.json
+
+**When adding new providers or endpoints, you MUST also update `provider_endpoints_support.json` in the repository root.**
+
+This file tracks which endpoints are supported by each LiteLLM provider and is used to generate documentation.
+
+**Required Steps:**
+1. For each new provider added to the release notes, add a corresponding entry to `provider_endpoints_support.json`
+2. For each new endpoint type added, update the schema comment and add the endpoint to relevant providers
+
+**Provider Entry Format:**
+```json
+"provider_slug": {
+  "display_name": "Provider Name (`provider_slug`)",
+  "url": "https://docs.litellm.ai/docs/providers/provider_slug",
+  "endpoints": {
+    "chat_completions": true,
+    "messages": true,
+    "responses": true,
+    "embeddings": false,
+    "image_generations": false,
+    "audio_transcriptions": false,
+    "audio_speech": false,
+    "moderations": false,
+    "batches": false,
+    "rerank": false,
+    "a2a": true
+  }
+}
+```
+
+**Available Endpoint Types:**
+- `chat_completions` - `/chat/completions` endpoint
+- `messages` - `/messages` endpoint (Anthropic format)
+- `responses` - `/responses` endpoint (OpenAI/Anthropic unified)
+- `embeddings` - `/embeddings` endpoint
+- `image_generations` - `/image/generations` endpoint
+- `audio_transcriptions` - `/audio/transcriptions` endpoint
+- `audio_speech` - `/audio/speech` endpoint
+- `moderations` - `/moderations` endpoint
+- `batches` - `/batches` endpoint
+- `rerank` - `/rerank` endpoint
+- `ocr` - `/ocr` endpoint
+- `search` - `/search` endpoint
+- `vector_stores` - `/vector_stores` endpoint
+- `a2a` - `/a2a/{agent}/message/send` endpoint (A2A Protocol)
+
+**Checklist:**
+- [ ] All new providers from release notes are added to `provider_endpoints_support.json`
+- [ ] Endpoint support flags accurately reflect provider capabilities
+- [ ] Documentation URL points to correct provider docs page
 
 ## Example Command Workflow
 

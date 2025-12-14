@@ -1,10 +1,11 @@
-import { render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { alertingSettingsCall, getCallbacksCall } from "./networking";
+import { alertingSettingsCall, getCallbackConfigsCall, getCallbacksCall } from "./networking";
 import Settings from "./settings";
 
 vi.mock("./networking", () => ({
   getCallbacksCall: vi.fn(),
+  getCallbackConfigsCall: vi.fn(),
   setCallbacksCall: vi.fn(),
   serviceHealthCheck: vi.fn(),
   deleteCallback: vi.fn(),
@@ -65,6 +66,7 @@ describe("Settings", () => {
     premiumUser: false,
   };
   const mockGetCallbacksCall = vi.mocked(getCallbacksCall);
+  const mockGetCallbackConfigsCall = vi.mocked(getCallbackConfigsCall);
   const mockAlertingSettingsCall = vi.mocked(alertingSettingsCall);
 
   beforeEach(() => {
@@ -74,6 +76,7 @@ describe("Settings", () => {
       available_callbacks: [],
       alerts: [],
     });
+    mockGetCallbackConfigsCall.mockResolvedValue([]);
     mockAlertingSettingsCall.mockResolvedValue([]);
   });
 
@@ -92,6 +95,96 @@ describe("Settings", () => {
       expect(getByText("Alerting Types")).toBeInTheDocument();
       expect(getByText("Alerting Settings")).toBeInTheDocument();
       expect(getByText("Email Alerts")).toBeInTheDocument();
+    });
+  });
+
+  it("should load callback configs from the backend when access token is provided", async () => {
+    render(<Settings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockGetCallbackConfigsCall).toHaveBeenCalledWith(defaultProps.accessToken);
+    });
+  });
+
+  it("should display edit modal with fields when edit is clicked", async () => {
+    const mockCallback = {
+      name: "langfuse",
+      variables: {
+        LANGFUSE_PUBLIC_KEY: "test-public-key",
+        LANGFUSE_SECRET_KEY: "test-secret-key",
+        LANGFUSE_HOST: "https://test.langfuse.com",
+        SLACK_WEBHOOK_URL: null,
+        OPENMETER_API_KEY: null,
+      },
+    };
+
+    const mockCallbackConfig = {
+      id: "langfuse",
+      displayName: "Langfuse",
+      dynamic_params: {
+        LANGFUSE_PUBLIC_KEY: {
+          type: "text",
+          ui_name: "Public Key",
+          required: true,
+        },
+        LANGFUSE_SECRET_KEY: {
+          type: "password",
+          ui_name: "Secret Key",
+          required: true,
+        },
+        LANGFUSE_HOST: {
+          type: "text",
+          ui_name: "Host",
+          required: false,
+        },
+      },
+    };
+
+    mockGetCallbacksCall.mockResolvedValue({
+      callbacks: [mockCallback],
+      available_callbacks: {
+        langfuse: {
+          litellm_callback_name: "langfuse",
+          litellm_callback_params: ["LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST"],
+          ui_callback_name: "Langfuse",
+        },
+      },
+      alerts: [],
+    });
+
+    mockGetCallbackConfigsCall.mockResolvedValue([mockCallbackConfig]);
+
+    const { getByText, container } = render(<Settings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(getByText("Langfuse")).toBeInTheDocument();
+    });
+
+    const actionsCell = container.querySelector('[class*="flex justify-end gap-2"]');
+    expect(actionsCell).toBeTruthy();
+
+    const icons = actionsCell?.querySelectorAll("svg");
+    expect(icons?.length).toBeGreaterThanOrEqual(2);
+
+    const editIconParent = icons?.[1]?.closest('[class*="cursor-pointer"]');
+    expect(editIconParent).toBeTruthy();
+
+    act(() => {
+      fireEvent.click(editIconParent!);
+    });
+
+    await waitFor(() => {
+      expect(getByText("Edit Callback Settings")).toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(getByText("Public Key")).toBeInTheDocument();
+      expect(getByText("Secret Key")).toBeInTheDocument();
+      expect(getByText("Host")).toBeInTheDocument();
     });
   });
 });

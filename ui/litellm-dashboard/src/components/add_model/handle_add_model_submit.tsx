@@ -1,6 +1,6 @@
-import { provider_map, Providers } from "../provider_info_helpers";
-import { modelCreateCall, Model } from "../networking";
 import NotificationManager from "../molecules/notifications_manager";
+import { Model, modelCreateCall } from "../networking";
+import { provider_map } from "../provider_info_helpers";
 
 export const prepareModelAddRequest = async (formValues: Record<string, any>, accessToken: string, form: any) => {
   try {
@@ -14,8 +14,10 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
 
     // Handle wildcard case
     if (formValues["model"] && formValues["model"].includes("all-wildcard")) {
-      const customProvider: Providers = formValues["custom_llm_provider"];
-      const litellm_custom_provider = provider_map[customProvider as keyof typeof Providers];
+      const customProviderKey = formValues["custom_llm_provider"] as string;
+      const mappedProvider =
+        provider_map[customProviderKey as keyof typeof provider_map] ?? customProviderKey.toLowerCase();
+      const litellm_custom_provider = mappedProvider;
       const wildcardModel = litellm_custom_provider + "/*";
       formValues["model_name"] = wildcardModel;
       modelMappings.push({
@@ -59,7 +61,8 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
           litellmParamsObj["model"] = value;
         } else if (key == "custom_llm_provider") {
           console.log("custom_llm_provider:", value);
-          const mappingResult = provider_map[value]; // Get the corresponding value from the mapping
+          const providerKey = value as string;
+          const mappingResult = provider_map[providerKey as keyof typeof provider_map] ?? providerKey.toLowerCase();
           litellmParamsObj["custom_llm_provider"] = mappingResult;
           console.log("custom_llm_provider mappingResult:", mappingResult);
         } else if (key == "model") {

@@ -39,6 +39,7 @@ export interface passThroughItem {
   include_subpath?: boolean;
   cost_per_request?: number;
   auth?: boolean;
+  guardrails?: Record<string, { request_fields?: string[]; response_fields?: string[] } | null>;
 }
 
 // Password field component for headers

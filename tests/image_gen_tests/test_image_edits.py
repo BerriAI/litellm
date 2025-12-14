@@ -472,6 +472,7 @@ async def test_azure_image_edit_cost_tracking():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Recraft image edit API only tested locally")
 async def test_recraft_image_edit_api():
     from litellm import aimage_edit
     import requests

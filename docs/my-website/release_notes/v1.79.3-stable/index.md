@@ -1,5 +1,5 @@
 ---
-title: "[Preview] v1.79.3-stable - Built-in Guardrails on AI Gateway"
+title: "v1.79.3-stable - Built-in Guardrails on AI Gateway"
 slug: "v1-79-3"
 date: 2025-11-08T10:00:00
 authors:
@@ -27,7 +27,7 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.79.3.rc.1
+ghcr.io/berriai/litellm:v1.79.3-stable
 ```
 
 </TabItem>

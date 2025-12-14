@@ -126,6 +126,8 @@ resp = completion(
 )
 
 print("Received={}".format(resp))
+
+events_list = EventsList.model_validate_json(resp.choices[0].message.content)
 ```
 </TabItem>
 <TabItem value="proxy" label="PROXY">

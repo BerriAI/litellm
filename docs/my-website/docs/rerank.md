@@ -16,7 +16,7 @@ LiteLLM Follows the [cohere api request / response for the rerank api](https://c
 | Fallbacks | ✅ | Works between supported models |
 | Loadbalancing | ✅ | Works between supported models |
 | Guardrails | ✅ | Applies to input query only (not documents) |
-| Supported Providers | Cohere, Together AI, Azure AI, DeepInfra, Nvidia NIM, Infinity | |
+| Supported Providers | Cohere, Together AI, Azure AI, DeepInfra, Nvidia NIM, Infinity, Fireworks AI, Voyage AI | |
 
 ## **LiteLLM Python SDK Usage**
 ### Quick Start 
@@ -134,4 +134,6 @@ curl http://0.0.0.0:4000/rerank \
 | Infinity|   [Usage](../docs/providers/infinity)                 |  
 | vLLM|   [Usage](../docs/providers/vllm#rerank-endpoint)                 |  
 | DeepInfra|   [Usage](../docs/providers/deepinfra#rerank-endpoint)                 |
-| Vertex AI|   [Usage](../docs/providers/vertex#rerank-api)                 |  
+| Vertex AI|   [Usage](../docs/providers/vertex#rerank-api)                 |
+| Fireworks AI|   [Usage](../docs/providers/fireworks_ai#rerank-endpoint)                 |
+| Voyage AI|   [Usage](../docs/providers/voyage#rerank)                 |  

@@ -57,7 +57,12 @@ class IBMDetectorOptionalParams(BaseModel):
 
     detector_params: Optional[Dict[str, Any]] = Field(
         default_factory=lambda: {},
-        description="Dictionary of arguments to pass to the detector. Can be set per-request or hard-coded at guardrail config time.",
+        description="Dictionary of arguments to pass to the detector.",
+    )
+
+    extra_headers: Optional[Dict[str, Any]] = Field(
+        default_factory=lambda: {},
+        description="Dictionary of extra headers to pass to the detector.",
     )
 
     score_threshold: Optional[float] = Field(

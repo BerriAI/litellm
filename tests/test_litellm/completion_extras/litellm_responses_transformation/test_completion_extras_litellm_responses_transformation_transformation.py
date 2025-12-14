@@ -52,6 +52,90 @@ def test_convert_chat_completion_messages_to_responses_api_image_input():
     assert response[0]["content"][1]["image_url"] == user_image
 
 
+def test_convert_chat_completion_messages_to_responses_api_tool_result_with_image():
+    """
+    Test that tool messages with image content are correctly transformed to Responses API format.
+
+    This is a regression test for issue #17762 where images in tool results were not
+    correctly transformed from Chat Completion format (image_url with nested object)
+    to Responses API format (input_image with flat string).
+
+    Chat Completion format:
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
+
+    Responses API format:
+        {"type": "input_image", "image_url": "data:image/png;base64,..."}
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    test_image_base64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+
+    # Chat Completion format with image in tool result
+    messages = [
+        {
+            "role": "user",
+            "content": "Fetch the image from this URL",
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_abc123",
+                    "type": "function",
+                    "function": {
+                        "name": "fetch_image",
+                        "arguments": '{"url": "https://example.com/image.png"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_abc123",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": test_image_base64},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": "What color is the image?",
+        },
+    ]
+
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    # Find the function_call_output item
+    function_call_output = None
+    for item in response:
+        if item.get("type") == "function_call_output":
+            function_call_output = item
+            break
+
+    assert function_call_output is not None, "function_call_output not found in response"
+    assert function_call_output["call_id"] == "call_abc123"
+
+    # Check that the output is correctly transformed
+    output = function_call_output["output"]
+    assert isinstance(output, list), "output should be a list"
+    assert len(output) == 1, "output should have one item"
+
+    image_item = output[0]
+    # Should be transformed to Responses API format
+    assert image_item["type"] == "input_image", f"Expected type 'input_image', got '{image_item.get('type')}'"
+    assert image_item["image_url"] == test_image_base64, "image_url should be a flat string, not a nested object"
+    assert "detail" in image_item, "detail field should be present"
+
+    print("✓ Tool result with image correctly transformed to Responses API format")
+
+
 def test_openai_responses_chunk_parser_reasoning_summary():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,
@@ -84,6 +168,73 @@ def test_openai_responses_chunk_parser_reasoning_summary():
     assert delta.reasoning_content == "**Compar"
     assert delta.tool_calls is None
     assert delta.function_call is None
+
+
+def test_chunk_parser_string_output_text_delta_produces_text():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {"type": "response.output_text.delta", "delta": "literal text"}
+
+    result = iterator.chunk_parser(chunk)
+
+    assert result["text"] == "literal text"
+    assert result.get("tool_use") is None
+    assert result.get("finish_reason") == ""
+    assert not result.get("is_finished")
+
+
+def test_chunk_parser_enum_output_text_delta_produces_text():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    from litellm.types.llms.openai import ResponsesAPIStreamEvents
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {"type": ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, "delta": "enum text"}
+
+    result = iterator.chunk_parser(chunk)
+
+    assert result["text"] == "enum text"
+    assert result.get("tool_use") is None
+    assert result.get("finish_reason") == ""
+    assert not result.get("is_finished")
+
+
+def test_chunk_parser_function_call_added_produces_tool_use():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    from litellm.types.llms.openai import ResponsesAPIStreamEvents
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {
+        "type": ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+        "arguments": '{"key": "value"}',
+        "item": {"type": "function_call", "name": "fn", "call_id": "call-42"},
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    tool_use = result["tool_use"]
+    assert tool_use is not None
+    assert tool_use["id"] == "call-42"
+    assert tool_use["type"] == "function"
+    assert tool_use["function"]["name"] == "fn"
+    assert tool_use["function"]["arguments"] == '{"key": "value"}'
+    assert result.get("finish_reason") == ""
+    assert not result.get("is_finished")
 
 
 def test_transform_response_with_reasoning_and_output():
@@ -273,3 +424,234 @@ def test_convert_tools_to_responses_format():
     result = handler._convert_tools_to_responses_format(tools)
 
     assert result[0]["name"] == "test"
+
+
+def test_extract_extra_body_params_reasoning_effort_override():
+    """Test that reasoning_effort from extra_body overrides top-level reasoning_effort"""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Test case: reasoning_effort in extra_body (with summary) should override top-level string
+    optional_params = {
+        "reasoning_effort": "high",  # Top-level string
+        "extra_body": {
+            "reasoning_effort": {
+                "effort": "high",
+                "summary": {"type": "summary_text"},
+            },  # More complete dict in extra_body
+            "previous_response_id": "resp_123",  # Supported param
+            "custom_param": "will_stay_in_extra_body",  # Unsupported param
+        },
+    }
+
+    result = handler._extract_extra_body_params(optional_params)
+
+    # reasoning_effort from extra_body should override top-level
+    assert result["reasoning_effort"] == {
+        "effort": "high",
+        "summary": {"type": "summary_text"},
+    }
+
+    # previous_response_id should be extracted to top-level
+    assert result["previous_response_id"] == "resp_123"
+
+    # extra_body should no longer be in optional_params (it was popped)
+    assert "extra_body" not in result
+
+
+def test_transform_request_single_char_keys_not_matched():
+    """Test that single-character keys are not incorrectly matched to 'metadata' or 'previous_response_id'
+
+    This is a regression test for a bug where:
+    - key in ("metadata") was used instead of key == "metadata"
+    - In Python, ("metadata") is a string, not a tuple
+    - So "m" in ("metadata") returns True (character in string)
+    - This caused single-char keys like "m", "e", "t", etc. to incorrectly match
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Create mock objects
+    logging_obj = Mock()
+
+    messages = [{"role": "user", "content": "test"}]
+
+    # Test with single-character keys that are in "metadata" string
+    # These should NOT be treated as metadata
+    optional_params = {
+        "m": "should_not_be_metadata",  # "m" is in "metadata"
+        "e": "should_not_be_metadata",  # "e" is in "metadata"
+        "t": "should_not_be_metadata",  # "t" is in "metadata"
+        "p": "should_not_be_previous_response_id",  # "p" is in "previous_response_id"
+        "r": "should_not_be_previous_response_id",  # "r" is in "previous_response_id"
+    }
+
+    litellm_params = {}
+    headers = {}
+
+    result = handler.transform_request(
+        model="gpt-4",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        headers=headers,
+        litellm_logging_obj=logging_obj,
+    )
+
+    # Verify that single-char keys were NOT mapped to metadata or previous_response_id
+    assert result.get("metadata") != "should_not_be_metadata"
+    assert result.get("previous_response_id") != "should_not_be_previous_response_id"
+
+    # Now test that the actual keys DO work correctly
+    optional_params_correct = {
+        "metadata": {"user_id": "123"},
+        "previous_response_id": "resp_abc",
+    }
+
+    result_correct = handler.transform_request(
+        model="gpt-4",
+        messages=messages,
+        optional_params=optional_params_correct,
+        litellm_params=litellm_params,
+        headers=headers,
+        litellm_logging_obj=logging_obj,
+    )
+
+    # Verify that the correct keys ARE mapped properly
+    assert result_correct.get("metadata") == {"user_id": "123"}
+    assert result_correct.get("previous_response_id") == "resp_abc"
+
+    print("✓ Single-character keys are not incorrectly matched to metadata/previous_response_id")
+
+
+# =============================================================================
+# Tests for issue #17246: Streaming tool_calls dropped when text + tool_calls
+# =============================================================================
+
+
+def test_message_done_does_not_emit_is_finished():
+    """
+    Test that OUTPUT_ITEM_DONE for a message does NOT emit is_finished=True.
+    This is the core fix for issue #17246.
+
+    Before fix: message completion emitted is_finished=True, causing tool_calls
+    that came after to be dropped.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {
+        "type": "response.output_item.done",
+        "item": {"type": "message", "content": []}
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    # After the fix, message completion should NOT set is_finished=True
+    assert result["is_finished"] == False, "message completion should not emit is_finished=True"
+    assert result["finish_reason"] == "", "message completion should not emit finish_reason"
+
+
+def test_response_completed_emits_is_finished():
+    """
+    Test that response.completed DOES emit is_finished=True.
+    This ensures streaming ends properly after ALL output items are sent.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {"type": "response.completed"}
+
+    result = iterator.chunk_parser(chunk)
+
+    assert result["is_finished"] == True, "response.completed should emit is_finished=True"
+    assert result["finish_reason"] == "stop", "response.completed should emit finish_reason='stop'"
+
+
+def test_function_call_done_emits_is_finished():
+    """
+    Test that OUTPUT_ITEM_DONE for a function_call still emits is_finished=True.
+    This preserves existing behavior for tool_calls.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {
+        "type": "response.output_item.done",
+        "item": {
+            "type": "function_call",
+            "name": "get_weather",
+            "call_id": "call_123",
+            "arguments": '{"location": "Tokyo"}'
+        }
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    assert result["is_finished"] == True, "function_call completion should emit is_finished=True"
+    assert result["finish_reason"] == "tool_calls", "function_call should emit finish_reason='tool_calls'"
+    assert result["tool_use"] is not None, "function_call should include tool_use"
+
+
+def test_text_plus_tool_calls_sequence():
+    """
+    Test the full sequence when model returns text + tool_calls.
+    This is the main scenario for issue #17246.
+
+    Expected: is_finished=True should NOT appear until function_call is done,
+    not when message is done.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    # Simulate the sequence from OpenAI Responses API
+    chunks = [
+        {"type": "response.output_text.delta", "delta": "Hello"},
+        {"type": "response.output_text.delta", "delta": "!"},
+        {"type": "response.output_item.done", "item": {"type": "message", "content": []}},  # message done
+        {"type": "response.output_item.added", "item": {"type": "function_call", "name": "get_weather", "call_id": "call_123"}},
+        {"type": "response.function_call_arguments.delta", "delta": '{"location":"Tokyo"}'},
+        {"type": "response.output_item.done", "item": {"type": "function_call", "name": "get_weather", "call_id": "call_123", "arguments": '{"location":"Tokyo"}'}},
+        {"type": "response.completed"},
+    ]
+
+    results = [iterator.chunk_parser(chunk) for chunk in chunks]
+
+    # Check message done (index 2) does NOT have is_finished=True
+    message_done_result = results[2]
+    assert message_done_result["is_finished"] == False, "message done should not have is_finished=True"
+
+    # Check function_call done (index 5) DOES have is_finished=True
+    function_done_result = results[5]
+    assert function_done_result["is_finished"] == True, "function_call done should have is_finished=True"
+    assert function_done_result["finish_reason"] == "tool_calls"
+
+    # Check response.completed (index 6) also has is_finished=True
+    completed_result = results[6]
+    assert completed_result["is_finished"] == True, "response.completed should have is_finished=True"

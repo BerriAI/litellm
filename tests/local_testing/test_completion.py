@@ -981,7 +981,7 @@ def test_completion_gpt4_vision():
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                                "url": "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png"
                             },
                         },
                     ],
@@ -1209,7 +1209,7 @@ def test_completion_fireworks_ai():
             },
         ]
         response = completion(
-            model="fireworks_ai/llama4-maverick-instruct-basic",
+            model="fireworks_ai/llama-v3p3-70b-instruct",
             messages=messages,
         )
         print(response)
@@ -3118,8 +3118,9 @@ async def test_completion_bedrock_httpx_models(sync_mode, model):
 
 def test_completion_bedrock_titan_null_response():
     try:
+        # amazon.titan-text-lite-v1 is deprecated, using titan-text-express-v1 instead
         response = completion(
-            model="bedrock/amazon.titan-text-lite-v1",
+            model="bedrock/amazon.titan-text-express-v1",
             messages=[
                 {
                     "role": "user",

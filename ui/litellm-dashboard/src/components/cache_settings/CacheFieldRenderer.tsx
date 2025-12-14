@@ -4,7 +4,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { NumberInput, TextInput } from "@tremor/react";
 import { Select } from "antd";
 import React, { useEffect, useState } from "react";
-import { fetchAvailableModels, ModelGroup } from "../chat_ui/llm_calls/fetch_models";
+import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_models";
 import NumericalInput from "../shared/numerical_input";
 
 interface CacheFieldRendererProps {

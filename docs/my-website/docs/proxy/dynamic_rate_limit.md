@@ -149,6 +149,7 @@ litellm_settings:
   priority_reservation_settings:
     default_priority: 0  # Weight (0%) assigned to keys without explicit priority metadata
     saturation_threshold: 0.50 #  A model is saturated if it has hit 50% of its RPM limit
+    saturation_check_cache_ttl: 60 # How long (seconds) saturation values are cached locally
 
 general_settings:
   master_key: sk-1234 # OR set `LITELLM_MASTER_KEY=".."` in your .env
@@ -168,6 +169,8 @@ general_settings:
 - **default_priority (float)**: Weight/percentage (0.0 to 1.0) assigned to API keys that have no priority metadata set (defaults to 0.5)
 - **saturation_threshold (float)**: Saturation level (0.0 to 1.0) at which strict priority enforcement begins for a model. Saturation is calculated as `max(current_rpm/max_rpm, current_tpm/max_tpm)`. Below this threshold, generous mode allows priority borrowing from unused capacity. Above this threshold, strict mode enforces normalized priority limits.
   - Example: When model usage is low, keys can use more than their allocated share. When model usage is high, keys are strictly limited to their allocated share.
+- **saturation_check_cache_ttl (int)**: TTL in seconds for local cache when reading saturation values from Redis (defaults to 60). In multi-node deployments, this controls how quickly nodes converge on the same saturation state. Lower values mean faster convergence but more Redis reads.
+  - Example: Set to `5` for faster multi-node consistency, or `0` to always read directly from Redis.
 
 **Start Proxy**
 
@@ -175,7 +178,37 @@ general_settings:
 litellm --config /path/to/config.yaml
 ```
 
-#### 2. Create Keys with Priority Levels
+### Set priority on either a team or a key
+
+Priority can be set at either the **team level** or **key level**. Team-level priority takes precedence over key-level priority.
+
+**Option A: Set Priority on Team (Recommended)**
+
+All keys within a team will inherit the team's priority. This is useful when you want all keys for a specific environment or project to have the same priority.
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/team/new' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+  "team_alias": "production-team",
+  "metadata": {"priority": "prod"}
+}'
+```
+
+Create a key for this team:
+```bash
+curl -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+  "team_id": "team-id-from-previous-response"
+}'
+```
+
+**Option B: Set Priority on Individual Keys**
+
+Set priority directly on the key. This is useful when you need fine-grained control per key.
 
 **Production Key:**
 ```bash
@@ -205,7 +238,7 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
 -d '{}'
 ```
 
-**Expected Response for both:**
+**Expected Response:**
 ```json
 {
   "key": "sk-...",
@@ -213,6 +246,11 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
   ...
 }
 ```
+
+**Priority Resolution Order:**
+1. If key belongs to a team with `metadata.priority` set → use team priority
+2. Else if key has `metadata.priority` set → use key priority  
+3. Else → use `default_priority` from config
 
 #### 3. Test Priority Allocation
 

@@ -13,7 +13,7 @@ import Image from "next/image";
 const { TextArea } = Input;
 
 // Search provider logos folder path (matches existing provider logo pattern)
-const searchProviderLogosFolder = "/ui/assets/logos/";
+const searchProviderLogosFolder = "../ui/assets/logos/";
 
 // Helper function to get logo path for a search provider
 const getSearchProviderLogo = (providerName: string): string => {

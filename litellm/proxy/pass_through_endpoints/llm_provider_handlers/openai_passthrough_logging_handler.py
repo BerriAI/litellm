@@ -91,6 +91,21 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             and "/v1/images/edits" in parsed_url.path
         )
 
+    @staticmethod
+    def is_openai_responses_route(url_route: str) -> bool:
+        """Check if the URL route is an OpenAI responses API endpoint."""
+        if not url_route:
+            return False
+        parsed_url = urlparse(url_route)
+        return bool(
+            parsed_url.hostname
+            and (
+                "api.openai.com" in parsed_url.hostname
+                or "openai.azure.com" in parsed_url.hostname
+            )
+            and ("/v1/responses" in parsed_url.path or "/responses" in parsed_url.path)
+        )
+
     def _get_user_from_metadata(
         self,
         passthrough_logging_payload: PassthroughStandardLoggingPayload,
@@ -187,7 +202,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         **kwargs,
     ) -> PassThroughEndpointLoggingTypedDict:
         """
-        Handle OpenAI passthrough logging with cost tracking for chat completions, image generation, and image editing.
+        Handle OpenAI passthrough logging with cost tracking for chat completions, image generation, image editing, and responses API.
         """
         # Check if this is a supported endpoint for cost tracking
         is_chat_completions = (
@@ -199,8 +214,11 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         is_image_editing = (
             OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
         )
+        is_responses = (
+            OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
+        )
 
-        if not (is_chat_completions or is_image_generation or is_image_editing):
+        if not (is_chat_completions or is_image_generation or is_image_editing or is_responses):
             # For unsupported endpoints, return None to let the system fall back to generic behavior
             return {
                 "result": None,
@@ -232,9 +250,13 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             litellm_model_response: Optional[Union[ModelResponse, TextCompletionResponse, ImageResponse]] = None
             handler_instance = OpenAIPassthroughLoggingHandler()
 
+            custom_llm_provider = kwargs.get("custom_llm_provider", "openai")
+            
             if is_chat_completions:
                 # Handle chat completions with existing logic
                 provider_config = handler_instance.get_provider_config(model=model)
+                # Preserve existing litellm_params to maintain metadata tags
+                existing_litellm_params = kwargs.get("litellm_params", {}) or {}
                 litellm_model_response = provider_config.transform_response(
                     raw_response=httpx_response,
                     model_response=litellm.ModelResponse(),
@@ -247,14 +269,14 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     encoding=litellm.encoding,
                     json_mode=request_body.get("response_format", {}).get("type")
                     == "json_object",
-                    litellm_params={},
+                    litellm_params=existing_litellm_params,
                 )
 
                 # Calculate cost using LiteLLM's cost calculator
                 response_cost = litellm.completion_cost(
                     completion_response=litellm_model_response,
                     model=model,
-                    custom_llm_provider="openai",
+                    custom_llm_provider=custom_llm_provider,
                 )
             elif is_image_generation:
                 # Handle image generation cost calculation
@@ -306,11 +328,36 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 if not hasattr(litellm_model_response, "_hidden_params"):
                     litellm_model_response._hidden_params = {}
                 litellm_model_response._hidden_params["response_cost"] = response_cost
+            elif is_responses:
+                # Handle responses API cost calculation
+                provider_config = handler_instance.get_provider_config(model=model)
+                existing_litellm_params = kwargs.get("litellm_params", {}) or {}
+                litellm_model_response = provider_config.transform_response(
+                    raw_response=httpx_response,
+                    model_response=litellm.ModelResponse(),
+                    model=model,
+                    messages=request_body.get("messages", []),
+                    logging_obj=logging_obj,
+                    optional_params=request_body.get("optional_params", {}),
+                    api_key="",
+                    request_data=request_body,
+                    encoding=litellm.encoding,
+                    json_mode=False,
+                    litellm_params=existing_litellm_params,
+                )
+
+                # Calculate cost using LiteLLM's cost calculator with responses call type
+                response_cost = litellm.completion_cost(
+                    completion_response=litellm_model_response,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    call_type="responses",
+                )
 
             # Update kwargs with cost information
             kwargs["response_cost"] = response_cost
             kwargs["model"] = model
-            kwargs["custom_llm_provider"] = "openai"
+            kwargs["custom_llm_provider"] = custom_llm_provider
 
             # Extract user information for tracking
             passthrough_logging_payload: Optional[
@@ -321,10 +368,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     passthrough_logging_payload=passthrough_logging_payload,
                 )
                 if user:
-                    kwargs.setdefault("litellm_params", {})
-                    kwargs["litellm_params"].update(
-                        {"proxy_server_request": {"body": {"user": user}}}
-                    )
+                    kwargs["litellm_params"].setdefault("proxy_server_request", {}).setdefault("body", {})["user"] = user
 
             # Create standard logging object
             if litellm_model_response is not None:
@@ -339,7 +383,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
             # Update logging object with cost information
             logging_obj.model_call_details["model"] = model
-            logging_obj.model_call_details["custom_llm_provider"] = "openai"
+            logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
             logging_obj.model_call_details["response_cost"] = response_cost
 
             endpoint_type = (
@@ -481,18 +525,27 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     "kwargs": {},
                 }
 
+            custom_llm_provider = litellm_logging_obj.model_call_details.get(
+                "custom_llm_provider", "openai"
+            )            
             # Calculate cost using LiteLLM's cost calculator
             response_cost = litellm.completion_cost(
                 completion_response=complete_response,
                 model=model,
-                custom_llm_provider="openai",
+                custom_llm_provider=custom_llm_provider,
             )
 
+            # Preserve existing litellm_params to maintain metadata tags
+            existing_litellm_params = litellm_logging_obj.model_call_details.get(
+                "litellm_params", {}
+            ) or {}
+            
             # Prepare kwargs for logging
             kwargs = {
                 "response_cost": response_cost,
                 "model": model,
-                "custom_llm_provider": "openai",
+                "custom_llm_provider": custom_llm_provider,
+                "litellm_params": existing_litellm_params.copy(),
             }
 
             # Extract user information for tracking
@@ -506,10 +559,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     passthrough_logging_payload=passthrough_logging_payload,
                 )
                 if user:
-                    kwargs.setdefault("litellm_params", {})
-                    kwargs["litellm_params"].update(
-                        {"proxy_server_request": {"body": {"user": user}}}
-                    )
+                    kwargs["litellm_params"].setdefault("proxy_server_request", {}).setdefault("body", {})["user"] = user
 
             # Create standard logging object
             get_standard_logging_object_payload(
@@ -523,7 +573,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
             # Update logging object with cost information
             litellm_logging_obj.model_call_details["model"] = model
-            litellm_logging_obj.model_call_details["custom_llm_provider"] = "openai"
+            litellm_logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
             litellm_logging_obj.model_call_details["response_cost"] = response_cost
 
             verbose_proxy_logger.debug(

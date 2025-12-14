@@ -164,12 +164,15 @@ class GenerateContentHelper:
                 model=model,
             )
         )
+        # Extract systemInstruction from kwargs to pass to transform
+        system_instruction = kwargs.get("systemInstruction") or kwargs.get("system_instruction")
         request_body = (
             generate_content_provider_config.transform_generate_content_request(
                 model=model,
                 contents=contents,
                 tools=tools,
                 generate_content_config_dict=generate_content_config_dict,
+                system_instruction=system_instruction,
             )
         )
 
@@ -311,6 +314,9 @@ def generate_content(
             **kwargs,
         )
 
+        # Extract systemInstruction from kwargs to pass to handler
+        system_instruction = kwargs.get("systemInstruction") or kwargs.get("system_instruction")
+
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:
             # Use the adapter to convert to completion format
@@ -340,6 +346,7 @@ def generate_content(
             _is_async=_is_async,
             client=kwargs.get("client"),
             litellm_metadata=kwargs.get("litellm_metadata", {}),
+            system_instruction=system_instruction,
         )
 
         return response
@@ -395,6 +402,9 @@ async def agenerate_content_stream(
             **kwargs,
         )
 
+        # Extract systemInstruction from kwargs to pass to handler
+        system_instruction = kwargs.get("systemInstruction") or kwargs.get("system_instruction")
+
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:
             # Use the adapter to convert to completion format
@@ -428,6 +438,7 @@ async def agenerate_content_stream(
             client=kwargs.get("client"),
             stream=True,
             litellm_metadata=kwargs.get("litellm_metadata", {}),
+            system_instruction=system_instruction,
         )
 
     except Exception as e:

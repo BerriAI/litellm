@@ -3,7 +3,11 @@ from unittest.mock import Mock
 
 import pytest
 
-from litellm.router_utils.common_utils import filter_team_based_models
+from litellm.router_utils.common_utils import (
+    _deployment_supports_web_search,
+    filter_team_based_models,
+    filter_web_search_deployments,
+)
 
 
 class TestFilterTeamBasedModels:
@@ -187,3 +191,152 @@ class TestFilterTeamBasedModels:
         expected_ids = ["deployment-1", "deployment-2"]
         result_ids = [d.get("model_info", {}).get("id") for d in result]
         assert sorted(result_ids) == sorted(expected_ids)
+
+
+class TestDeploymentSupportsWebSearch:
+    """Test cases for _deployment_supports_web_search helper function"""
+
+    def test_model_info_true(self):
+        """model_info.supports_web_search=True returns True"""
+        deployment = {"model_info": {"supports_web_search": True}}
+        assert _deployment_supports_web_search(deployment) is True
+
+    def test_model_info_false(self):
+        """model_info.supports_web_search=False returns False"""
+        deployment = {"model_info": {"supports_web_search": False}}
+        assert _deployment_supports_web_search(deployment) is False
+
+    def test_no_config_defaults_to_true(self):
+        """When no supports_web_search in config, default to True"""
+        deployment = {"litellm_params": {"model": "gpt-4"}, "model_info": {"id": "123"}}
+        assert _deployment_supports_web_search(deployment) is True
+
+    def test_empty_deployment_defaults_to_true(self):
+        """Empty deployment defaults to True"""
+        assert _deployment_supports_web_search({}) is True
+
+    def test_missing_model_info_defaults_to_true(self):
+        """When model_info missing, default to True"""
+        deployment = {"litellm_params": {"model": "gpt-4"}}
+        assert _deployment_supports_web_search(deployment) is True
+
+
+class TestFilterWebSearchDeployments:
+    """Test cases for filter_web_search_deployments function"""
+
+    @pytest.fixture
+    def sample_deployments(self) -> List[Dict]:
+        """Sample deployments with varying web search support"""
+        return [
+            {"model_info": {"id": "deployment-1"}},  # default True
+            {"model_info": {"id": "deployment-2", "supports_web_search": True}},
+            {"model_info": {"id": "deployment-3", "supports_web_search": False}},
+        ]
+
+    def test_no_request_kwargs_returns_all(self, sample_deployments):
+        """When request_kwargs is None, return all deployments"""
+        result = filter_web_search_deployments(sample_deployments, None)
+        assert result == sample_deployments
+
+    def test_no_tools_returns_all(self, sample_deployments):
+        """When no tools in request, return all deployments"""
+        result = filter_web_search_deployments(sample_deployments, {"other": "value"})
+        assert result == sample_deployments
+
+    def test_empty_tools_returns_all(self, sample_deployments):
+        """When tools list is empty, return all deployments"""
+        result = filter_web_search_deployments(sample_deployments, {"tools": []})
+        assert result == sample_deployments
+
+    def test_none_tools_returns_all(self, sample_deployments):
+        """When tools is explicitly None, return all deployments (regression test for #17672)"""
+        result = filter_web_search_deployments(sample_deployments, {"tools": None})
+        assert result == sample_deployments
+
+    def test_non_web_search_tools_returns_all(self, sample_deployments):
+        """When tools don't include web_search, return all deployments"""
+        request_kwargs = {"tools": [{"type": "function", "function": {}}]}
+        result = filter_web_search_deployments(sample_deployments, request_kwargs)
+        assert result == sample_deployments
+
+    def test_web_search_filters_unsupported(self, sample_deployments):
+        """When web_search tool present, filter out deployments that don't support it"""
+        request_kwargs = {"tools": [{"type": "web_search"}]}
+        result = filter_web_search_deployments(sample_deployments, request_kwargs)
+        # Should exclude deployment-3 (supports_web_search=False)
+        assert len(result) == 2
+        result_ids = [d["model_info"]["id"] for d in result]
+        assert "deployment-1" in result_ids
+        assert "deployment-2" in result_ids
+        assert "deployment-3" not in result_ids
+
+    def test_web_search_preview_filters_unsupported(self, sample_deployments):
+        """web_search_preview type should also trigger filtering"""
+        request_kwargs = {"tools": [{"type": "web_search_preview"}]}
+        result = filter_web_search_deployments(sample_deployments, request_kwargs)
+        assert len(result) == 2
+        result_ids = [d["model_info"]["id"] for d in result]
+        assert "deployment-3" not in result_ids
+
+    def test_web_search_with_other_tools(self, sample_deployments):
+        """Web search filtering works when mixed with other tools"""
+        request_kwargs = {
+            "tools": [
+                {"type": "function", "function": {"name": "get_weather"}},
+                {"type": "web_search"},
+            ]
+        }
+        result = filter_web_search_deployments(sample_deployments, request_kwargs)
+        assert len(result) == 2
+        result_ids = [d["model_info"]["id"] for d in result]
+        assert "deployment-3" not in result_ids
+
+    def test_all_deployments_support_web_search(self):
+        """When all deployments support web search, none are filtered"""
+        deployments = [
+            {"model_info": {"id": "d1", "supports_web_search": True}},
+            {"model_info": {"id": "d2", "supports_web_search": True}},
+        ]
+        request_kwargs = {"tools": [{"type": "web_search"}]}
+        result = filter_web_search_deployments(deployments, request_kwargs)
+        assert len(result) == 2
+
+    def test_no_deployments_support_web_search(self):
+        """When no deployments support web search, all are filtered out"""
+        deployments = [
+            {"model_info": {"id": "d1", "supports_web_search": False}},
+            {"model_info": {"id": "d2", "supports_web_search": False}},
+        ]
+        request_kwargs = {"tools": [{"type": "web_search"}]}
+        result = filter_web_search_deployments(deployments, request_kwargs)
+        assert len(result) == 0
+
+    def test_missing_config_defaults_to_supported(self):
+        """Deployments without supports_web_search config default to True"""
+        deployments = [
+            {"model_info": {"id": "d1"}},  # No supports_web_search - defaults to True
+            {"model_info": {"id": "d2"}},  # No supports_web_search - defaults to True
+            {"model_info": {"id": "d3", "supports_web_search": False}},  # Explicit False
+        ]
+        request_kwargs = {"tools": [{"type": "web_search"}]}
+        result = filter_web_search_deployments(deployments, request_kwargs)
+        # d1 and d2 should be included (default True), d3 excluded (explicit False)
+        assert len(result) == 2
+        result_ids = [d["model_info"]["id"] for d in result]
+        assert "d1" in result_ids
+        assert "d2" in result_ids
+        assert "d3" not in result_ids
+
+    def test_empty_deployments_list(self):
+        """Empty deployments list returns empty list"""
+        request_kwargs = {"tools": [{"type": "web_search"}]}
+        result = filter_web_search_deployments([], request_kwargs)
+        assert result == []
+
+    def test_dict_deployment_passthrough(self):
+        """When deployment is a dict (single deployment), pass through unchanged"""
+        deployment = {"model_info": {"id": "d1", "supports_web_search": False}}
+        request_kwargs = {"tools": [{"type": "web_search"}]}
+        result = filter_web_search_deployments(deployment, request_kwargs)
+        # Should return the dict unchanged, not filter it
+        assert result == deployment

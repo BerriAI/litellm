@@ -258,7 +258,7 @@ def llm_passthrough_route(
         model=model,
         messages=[],
         optional_params={},
-        litellm_params={},
+        litellm_params=litellm_params_dict,
         api_key=provider_api_key,
         api_base=base_target_url,
     )

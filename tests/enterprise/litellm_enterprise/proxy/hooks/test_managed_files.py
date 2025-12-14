@@ -453,3 +453,140 @@ async def test_async_post_call_success_hook_twice_assert_no_unique_violation():
             await asyncio.gather(*tasks, return_exceptions=True)
             for task in tasks:
                 assert task.exception() is None, f"Error: {task.exception()}"
+
+
+def test_update_responses_input_with_unified_file_id():
+    """
+    Test that update_responses_input_with_model_file_ids correctly decodes
+    unified file IDs and extracts llm_output_file_id from responses API input.
+    """
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        update_responses_input_with_model_file_ids,
+    )
+    
+    # Create a base64-encoded unified file ID
+    # This decodes to: litellm_proxy:application/pdf;unified_id,6c0b5890-8914-48e0-b8f4-0ae5ed3c14a5;target_model_names,gpt-4o;llm_output_file_id,file-ECBPW7ML9g7XHdwGgUPZaM;llm_output_file_model_id,e26453f9e76e7993680d0068d98c1f4cc205bbad0967a33c664893568ca743c2
+    unified_file_id = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9wZGY7dW5pZmllZF9pZCw2YzBiNTg5MC04OTE0LTQ4ZTAtYjhmNC0wYWU1ZWQzYzE0YTU7dGFyZ2V0X21vZGVsX25hbWVzLGdwdC00bztsbG1fb3V0cHV0X2ZpbGVfaWQsZmlsZS1FQ0JQVzdNTDlnN1hIZHdHZ1VQWmFNO2xsbV9vdXRwdXRfZmlsZV9tb2RlbF9pZCxlMjY0NTNmOWU3NmU3OTkzNjgwZDAwNjhkOThjMWY0Y2MyMDViYmFkMDk2N2EzM2M2NjQ4OTM1NjhjYTc0M2My"
+    
+    # Test input with unified file ID in content array
+    input_data = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_file",
+                    "file_id": unified_file_id,
+                },
+                {
+                    "type": "input_text",
+                    "text": "What is the first dragon in the book?",
+                },
+            ],
+        }
+    ]
+    
+    # Update the input
+    updated_input = update_responses_input_with_model_file_ids(input=input_data)
+    
+    # Verify the file_id was updated to the provider-specific file ID
+    assert updated_input[0]["content"][0]["type"] == "input_file"
+    assert updated_input[0]["content"][0]["file_id"] == "file-ECBPW7ML9g7XHdwGgUPZaM"
+    assert updated_input[0]["content"][1]["type"] == "input_text"
+    assert updated_input[0]["content"][1]["text"] == "What is the first dragon in the book?"
+
+
+def test_update_responses_input_with_regular_file_id():
+    """
+    Test that update_responses_input_with_model_file_ids keeps regular
+    OpenAI file IDs unchanged.
+    """
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        update_responses_input_with_model_file_ids,
+    )
+    
+    # Regular OpenAI file ID (not a unified file ID)
+    regular_file_id = "file-abc123xyz"
+    
+    input_data = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_file",
+                    "file_id": regular_file_id,
+                },
+                {
+                    "type": "input_text",
+                    "text": "What is this file?",
+                },
+            ],
+        }
+    ]
+    
+    # Update the input
+    updated_input = update_responses_input_with_model_file_ids(input=input_data)
+    
+    # Verify the file_id was kept unchanged (regular OpenAI file ID)
+    assert updated_input[0]["content"][0]["type"] == "input_file"
+    assert updated_input[0]["content"][0]["file_id"] == regular_file_id
+    assert updated_input[0]["content"][1]["type"] == "input_text"
+
+
+def test_update_responses_input_with_string_input():
+    """
+    Test that update_responses_input_with_model_file_ids returns string input unchanged.
+    """
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        update_responses_input_with_model_file_ids,
+    )
+    
+    input_data = "What is AI?"
+    
+    updated_input = update_responses_input_with_model_file_ids(input=input_data)
+    
+    assert updated_input == input_data
+    assert isinstance(updated_input, str)
+
+
+def test_update_responses_input_with_multiple_file_ids():
+    """
+    Test that update_responses_input_with_model_file_ids handles multiple file IDs
+    (both unified and regular) in the same input.
+    """
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        update_responses_input_with_model_file_ids,
+    )
+    
+    # Unified file ID
+    unified_file_id = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9wZGY7dW5pZmllZF9pZCw2YzBiNTg5MC04OTE0LTQ4ZTAtYjhmNC0wYWU1ZWQzYzE0YTU7dGFyZ2V0X21vZGVsX25hbWVzLGdwdC00bztsbG1fb3V0cHV0X2ZpbGVfaWQsZmlsZS1FQ0JQVzdNTDlnN1hIZHdHZ1VQWmFNO2xsbV9vdXRwdXRfZmlsZV9tb2RlbF9pZCxlMjY0NTNmOWU3NmU3OTkzNjgwZDAwNjhkOThjMWY0Y2MyMDViYmFkMDk2N2EzM2M2NjQ4OTM1NjhjYTc0M2My"
+    # Regular OpenAI file ID
+    regular_file_id = "file-regular123"
+    
+    input_data = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_file",
+                    "file_id": unified_file_id,
+                },
+                {
+                    "type": "input_text",
+                    "text": "Compare these files",
+                },
+                {
+                    "type": "input_file",
+                    "file_id": regular_file_id,
+                },
+            ],
+        }
+    ]
+    
+    updated_input = update_responses_input_with_model_file_ids(input=input_data)
+    
+    # Verify unified file ID was updated
+    assert updated_input[0]["content"][0]["file_id"] == "file-ECBPW7ML9g7XHdwGgUPZaM"
+    # Verify regular file ID was kept unchanged
+    assert updated_input[0]["content"][2]["file_id"] == regular_file_id
+    # Verify text content was preserved
+    assert updated_input[0]["content"][1]["text"] == "Compare these files"

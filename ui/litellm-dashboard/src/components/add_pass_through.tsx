@@ -27,6 +27,7 @@ import { passThroughItem } from "./pass_through_settings";
 import RoutePreview from "./route_preview";
 import NotificationsManager from "./molecules/notifications_manager";
 import PassThroughSecuritySection from "./common_components/PassThroughSecuritySection";
+import PassThroughGuardrailsSection from "./common_components/PassThroughGuardrailsSection";
 const { Option } = Select2;
 
 interface AddFallbacksProps {
@@ -51,11 +52,13 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
   const [targetValue, setTargetValue] = useState("");
   const [includeSubpath, setIncludeSubpath] = useState(true);
   const [authEnabled, setAuthEnabled] = useState(false);
+  const [guardrails, setGuardrails] = useState<Record<string, { request_fields?: string[]; response_fields?: string[] } | null>>({});
   const handleCancel = () => {
     form.resetFields();
     setPathValue("");
     setTargetValue("");
     setIncludeSubpath(true);
+    setGuardrails({});
     setIsModalVisible(false);
   };
 
@@ -77,6 +80,12 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
       if (!premiumUser && 'auth' in formValues) {
         delete formValues.auth;
       }
+      
+      // Add guardrails to formValues (only if not empty)
+      if (guardrails && Object.keys(guardrails).length > 0) {
+        formValues.guardrails = guardrails;
+      }
+      
       console.log(`formValues: ${JSON.stringify(formValues)}`);
 
       const response = await createPassThroughEndpoint(accessToken, formValues);
@@ -92,6 +101,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
       setPathValue("");
       setTargetValue("");
       setIncludeSubpath(true);
+      setGuardrails({});
       setIsModalVisible(false);
     } catch (error) {
       NotificationsManager.fromBackend("Error creating pass-through endpoint: " + error);
@@ -249,6 +259,14 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                 form.setFieldsValue({ auth: checked });
               }}
             />
+
+            {/* Guardrails Section */}
+            <PassThroughGuardrailsSection
+              accessToken={accessToken}
+              value={guardrails}
+              onChange={setGuardrails}
+            />
+
             {/* Billing Section */}
             <Card className="p-6">
               <Title className="text-lg font-semibold text-gray-900 mb-2">Billing</Title>

@@ -821,6 +821,40 @@ async def add_new_model(
     model_params: Deployment,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    Add a new model to the proxy.
+
+    Parameters:
+    - model_name: str - The name users will use to call this model (required)
+    - litellm_params: dict - LiteLLM-specific parameters (required)
+        - model: str - The actual model identifier, e.g., "azure/my-deployment-name" (required - this is the only required field in litellm_params)
+        - api_key: str - API key for the provider (optional)
+        - api_base: str - API base URL (optional)
+        - Other optional params: api_version, timeout, max_retries, etc.
+    - model_info: dict - Additional model metadata returned in /v1/model/info (optional)
+
+    Example curl:
+
+    ```bash
+    curl -L -X POST 'http://0.0.0.0:4000/model/new' \
+    -H 'Authorization: Bearer LITELLM_VIRTUAL_KEY' \
+    -H 'Content-Type: application/json' \
+    -d '{
+      "model_name": "my-azure-model",
+      "litellm_params": {
+        "model": "azure/my-deployment-name",
+        "api_key": "my-azure-api-key",
+        "api_base": "https://my-endpoint.openai.azure.com"
+      },
+      "model_info": {
+        "my_custom_key": "my_custom_value"
+      }
+    }'
+    ```
+
+    Returns:
+    - The created model entry with model_id
+    """
     from litellm.proxy.proxy_server import (
         general_settings,
         premium_user,

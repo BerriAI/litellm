@@ -107,3 +107,18 @@ docker run \
     litellm_test_image \
     --config /app/config.yaml --detailed_debug
 ```
+### Running LiteLLM Proxy Locally
+
+1. cd into the `proxy/` directory
+
+```
+cd litellm/litellm/proxy
+```
+
+2. Run the proxy
+
+```shell
+python3 proxy_cli.py --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```

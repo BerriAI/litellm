@@ -83,6 +83,8 @@ export interface KeyResponse {
     mcp_access_groups?: string[];
     mcp_tool_permissions?: Record<string, string[]>;
     vector_stores: string[];
+    agents?: string[];
+    agent_access_groups?: string[];
   };
   auto_rotate?: boolean;
   rotation_interval?: string;

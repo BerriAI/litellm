@@ -384,6 +384,7 @@ async def test_azure_ava_tts_async():
 
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
+@pytest.mark.skip(reason="RunwayML TTS API only tested locally")
 async def test_runwayml_tts_async():
     """
     Test RunwayML Text-to-Speech with real API request.

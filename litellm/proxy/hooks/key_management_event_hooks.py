@@ -7,7 +7,6 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy._types import (
-    CommonProxyErrors,
     GenerateKeyRequest,
     GenerateKeyResponse,
     KeyRequest,
@@ -45,9 +44,13 @@ class KeyManagementEventHooks:
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
-        await KeyManagementEventHooks._send_key_created_email(
-            response.model_dump(exclude_none=True)
-        )
+        # Send email notification - non-blocking, independent operation
+        try:
+            await KeyManagementEventHooks._send_key_created_email(
+                response.model_dump(exclude_none=True)
+            )
+        except Exception as e:
+            verbose_proxy_logger.warning(f"Failed to send key created email: {e}")
 
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         if litellm.store_audit_logs is True:
@@ -69,11 +72,17 @@ class KeyManagementEventHooks:
                     )
                 )
             )
-        # store the generated key in the secret manager
-        await KeyManagementEventHooks._store_virtual_key_in_secret_manager(
-            secret_name=data.key_alias or f"virtual-key-{response.token_id}",
-            secret_token=response.key,
-        )
+
+        # Store the generated key in the secret manager - non-blocking, independent operation
+        try:
+            await KeyManagementEventHooks._store_virtual_key_in_secret_manager(
+                secret_name=data.key_alias or f"virtual-key-{response.token_id}",
+                secret_token=response.key,
+            )
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                f"Failed to store virtual key in secret manager: {e}"
+            )
 
     @staticmethod
     async def async_key_updated_hook(
@@ -132,22 +141,31 @@ class KeyManagementEventHooks:
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
-        # store the generated key in the secret manager
+        # Store the generated key in the secret manager - non-blocking, independent operation
         if data is not None and response.token_id is not None:
-            initial_secret_name = (
-                existing_key_row.key_alias or f"virtual-key-{existing_key_row.token}"
-            )
-            await KeyManagementEventHooks._rotate_virtual_key_in_secret_manager(
-                current_secret_name=initial_secret_name,
-                new_secret_name=data.key_alias or f"virtual-key-{response.token_id}",
-                new_secret_value=response.key,
-            )
+            try:
+                initial_secret_name = (
+                    existing_key_row.key_alias
+                    or f"virtual-key-{existing_key_row.token}"
+                )
+                await KeyManagementEventHooks._rotate_virtual_key_in_secret_manager(
+                    current_secret_name=initial_secret_name,
+                    new_secret_name=data.key_alias or f"virtual-key-{response.token_id}",
+                    new_secret_value=response.key,
+                )
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    f"Failed to rotate virtual key in secret manager: {e}"
+                )
 
-        # send key rotated email if configured
-        await KeyManagementEventHooks._send_key_rotated_email(
-            response=response.model_dump(exclude_none=True),
-            existing_key_alias=existing_key_row.key_alias,
-        )
+        # Send key rotated email if configured - non-blocking, independent operation
+        try:
+            await KeyManagementEventHooks._send_key_rotated_email(
+                response=response.model_dump(exclude_none=True),
+                existing_key_alias=existing_key_row.key_alias,
+            )
+        except Exception as e:
+            verbose_proxy_logger.warning(f"Failed to send key rotated email: {e}")
 
         # store the audit log
         if litellm.store_audit_logs is True and existing_key_row.token is not None:
@@ -324,66 +342,109 @@ class KeyManagementEventHooks:
                             )
 
     @staticmethod
-    async def _send_key_created_email(response: dict):
+    def _is_email_sending_enabled() -> bool:
+        """
+        Check if email sending is enabled via v2 enterprise loggers or v0 alerting config.
+
+        Returns True only if email is actually configured, preventing any email
+        processing when the user has not opted in.
+        """
+        # Check v2 enterprise email loggers
         try:
             from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
                 BaseEmailLogger,
             )
-        except ImportError:
-            raise Exception(
-                "Trying to use Email Hooks"
-                + CommonProxyErrors.missing_enterprise_package.value
+
+            initialized_email_loggers = (
+                litellm.logging_callback_manager.get_custom_loggers_for_type(
+                    callback_type=BaseEmailLogger
+                )
             )
+            if len(initialized_email_loggers) > 0:
+                return True
+        except ImportError:
+            pass
+
+        # Check v0 alerting config
+        from litellm.proxy.proxy_server import general_settings
+
+        if "email" in general_settings.get("alerting", []):
+            return True
+
+        return False
+
+    @staticmethod
+    async def _send_key_created_email(response: dict):
+        """
+        Send key created email if email sending is enabled.
+
+        This method is non-blocking - it will return silently if email is not
+        configured, and will log warnings instead of raising exceptions on failure.
+        """
+        # Early exit if email is not enabled
+        if not KeyManagementEventHooks._is_email_sending_enabled():
+            verbose_proxy_logger.debug(
+                "Email sending not enabled, skipping key created email"
+            )
+            return
 
         from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
 
+        ##########################
+        # v2 integration for emails (enterprise)
+        ##########################
         try:
+            from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
+                BaseEmailLogger,
+            )
             from litellm_enterprise.types.enterprise_callbacks.send_emails import (
                 SendKeyCreatedEmailEvent,
             )
+
+            initialized_email_loggers = (
+                litellm.logging_callback_manager.get_custom_loggers_for_type(
+                    callback_type=BaseEmailLogger
+                )
+            )
+            if len(initialized_email_loggers) > 0:
+                event = SendKeyCreatedEmailEvent(
+                    virtual_key=response.get("key", ""),
+                    event="key_created",
+                    event_group=Litellm_EntityType.KEY,
+                    event_message="API Key Created",
+                    token=response.get("token", ""),
+                    spend=response.get("spend", 0.0),
+                    max_budget=response.get("max_budget", 0.0),
+                    user_id=response.get("user_id", None),
+                    team_id=response.get("team_id", "Default Team"),
+                    key_alias=response.get("key_alias", None),
+                )
+                for email_logger in initialized_email_loggers:
+                    if isinstance(email_logger, BaseEmailLogger):
+                        await email_logger.send_key_created_email(
+                            send_key_created_email_event=event,
+                        )
+                return
         except ImportError:
-            raise Exception(
-                "Trying to use Email Hooks"
-                + CommonProxyErrors.missing_enterprise_package.value
-            )
-
-        event = SendKeyCreatedEmailEvent(
-            virtual_key=response.get("key", ""),
-            event="key_created",
-            event_group=Litellm_EntityType.KEY,
-            event_message="API Key Created",
-            token=response.get("token", ""),
-            spend=response.get("spend", 0.0),
-            max_budget=response.get("max_budget", 0.0),
-            user_id=response.get("user_id", None),
-            team_id=response.get("team_id", "Default Team"),
-            key_alias=response.get("key_alias", None),
-        )
-
-        ##########################
-        # v2 integration for emails
-        ##########################
-        initialized_email_loggers = (
-            litellm.logging_callback_manager.get_custom_loggers_for_type(
-                callback_type=BaseEmailLogger
-            )
-        )
-        if len(initialized_email_loggers) > 0:
-            for email_logger in initialized_email_loggers:
-                if isinstance(email_logger, BaseEmailLogger):
-                    await email_logger.send_key_created_email(
-                        send_key_created_email_event=event,
-                    )
+            pass
 
         ##########################
         # v0 integration for emails
         ##########################
-        else:
-            if "email" not in general_settings.get("alerting", []):
-                raise ValueError(
-                    "Email alerting not setup on config.yaml. Please set `alerting=['email']. \nDocs: https://docs.litellm.ai/docs/proxy/email`"
-                )
+        if "email" in general_settings.get("alerting", []):
+            from litellm.proxy._types import WebhookEvent
 
+            event = WebhookEvent(
+                event="key_created",
+                event_group=Litellm_EntityType.KEY,
+                event_message="API Key Created",
+                token=response.get("token", ""),
+                spend=response.get("spend", 0.0),
+                max_budget=response.get("max_budget", 0.0),
+                user_id=response.get("user_id", None),
+                team_id=response.get("team_id", "Default Team"),
+                key_alias=response.get("key_alias", None),
+            )
             # If user configured email alerting - send an Email letting their end-user know the key was created
             asyncio.create_task(
                 proxy_logging_obj.slack_alerting_instance.send_key_created_or_user_invited_email(
@@ -393,25 +454,39 @@ class KeyManagementEventHooks:
 
     @staticmethod
     async def _send_key_rotated_email(response: dict, existing_key_alias: Optional[str]):
+        """
+        Send key rotated email if email sending is enabled.
+
+        This method is non-blocking - it will return silently if email is not
+        configured, and will log warnings instead of raising exceptions on failure.
+        """
+        # Early exit if email is not enabled
+        if not KeyManagementEventHooks._is_email_sending_enabled():
+            verbose_proxy_logger.debug(
+                "Email sending not enabled, skipping key rotated email"
+            )
+            return
+
         try:
             from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
                 BaseEmailLogger,
             )
         except ImportError:
-            raise Exception(
-                "Trying to use Email Hooks"
-                + CommonProxyErrors.missing_enterprise_package.value
+            # Enterprise package not installed - v0 doesn't support key rotated email
+            verbose_proxy_logger.debug(
+                "Enterprise package not installed, skipping key rotated email"
             )
+            return
 
         try:
             from litellm_enterprise.types.enterprise_callbacks.send_emails import (
                 SendKeyRotatedEmailEvent,
             )
         except ImportError:
-            raise Exception(
-                "Trying to use Email Hooks"
-                + CommonProxyErrors.missing_enterprise_package.value
+            verbose_proxy_logger.debug(
+                "Enterprise types not available, skipping key rotated email"
             )
+            return
 
         event = SendKeyRotatedEmailEvent(
             virtual_key=response.get("key", ""),

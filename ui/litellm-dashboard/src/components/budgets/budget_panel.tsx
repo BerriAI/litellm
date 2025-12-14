@@ -21,9 +21,9 @@ import {
   TabPanels,
   Text,
 } from "@tremor/react";
-import { Modal } from "antd";
 import React, { useEffect, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import NotificationsManager from "../molecules/notifications_manager";
 import { budgetDeleteCall, getBudgetList } from "../networking";
 import BudgetModal from "./budget_modal";
@@ -166,20 +166,21 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
           </TableBody>
         </Table>
       </Card>
-      {isDeleteModalVisible && (
-        <Modal
-          title="Delete Budget"
-          open={isDeleteModalVisible}
-          onOk={handleDeleteConfirm}
-          onCancel={handleDeleteCancel}
-          confirmLoading={isDeleting}
-          okText="Delete"
-          okButtonProps={{ danger: true }}
-        >
-          <p>Are you sure you want to delete budget: {selectedBudget?.budget_id} ?</p>
-          <p>This action cannot be undone.</p>
-        </Modal>
-      )}
+      <DeleteResourceModal
+        isOpen={isDeleteModalVisible}
+        title="Delete Budget?"
+        message="Are you sure you want to delete this budget? This action cannot be undone."
+        resourceInformationTitle="Budget Information"
+        resourceInformation={[
+          { label: "Budget ID", value: selectedBudget?.budget_id, code: true },
+          { label: "Max Budget", value: selectedBudget?.max_budget },
+          { label: "TPM", value: selectedBudget?.tpm_limit },
+          { label: "RPM", value: selectedBudget?.rpm_limit },
+        ]}
+        onCancel={handleDeleteCancel}
+        onOk={handleDeleteConfirm}
+        confirmLoading={isDeleting}
+      />
       <div className="mt-5">
         <Text className="text-base">How to use budget id</Text>
         <TabGroup>

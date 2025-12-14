@@ -67,7 +67,26 @@ For an indepth guide, see [CLI Authentication](./cli_sso).
 
 :::
 
+### Prerequisites
 
+:::warning[Beta Feature - Required Environment Variable]
+
+CLI SSO Authentication is currently in beta. You must set this environment variable **when starting up your LiteLLM Proxy**:
+
+```bash
+export EXPERIMENTAL_UI_LOGIN="True"
+litellm --config config.yaml
+```
+
+Or add it to your proxy startup command:
+
+```bash
+EXPERIMENTAL_UI_LOGIN="True" litellm --config config.yaml
+```
+
+:::
+
+### Steps
 
 1. **Set up the proxy URL**
 

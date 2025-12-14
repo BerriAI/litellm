@@ -15,17 +15,16 @@ from litellm.images.utils import ImageEditRequestUtils
 import litellm
 from litellm.types.llms.gemini import GeminiLongRunningOperationResponse, GeminiVideoGenerationInstance, GeminiVideoGenerationParameters, GeminiVideoGenerationRequest
 from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
+from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
-    from ...base_llm.videos.transformation import BaseVideoConfig as _BaseVideoConfig
     from ...base_llm.chat.transformation import BaseLLMException as _BaseLLMException
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
-    BaseVideoConfig = _BaseVideoConfig
     BaseLLMException = _BaseLLMException
 else:
     LiteLLMLoggingObj = Any
-    BaseVideoConfig = Any
     BaseLLMException = Any
 
 
@@ -161,11 +160,16 @@ class GeminiVideoConfig(BaseVideoConfig):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        litellm_params: Optional[GenericLiteLLMParams] = None,
     ) -> dict:
         """
         Validate environment and add Gemini API key to headers.
         Gemini uses x-goog-api-key header for authentication.
         """
+        # Use api_key from litellm_params if available, otherwise fall back to other sources
+        if litellm_params and litellm_params.api_key:
+            api_key = api_key or litellm_params.api_key
+        
         api_key = (
             api_key
             or litellm.api_key

@@ -8,7 +8,7 @@ from .parallel_request_limiter import _PROXY_MaxParallelRequestsHandler
 from .parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
 from .responses_id_security import ResponsesIDSecurity
 
-### CHECK IF ENTERPRISE HOOKS ARE AVAILABLE ###
+### CHECK IF ENTERPRISE HOOKS ARE AVAILABLE ####
 
 try:
     from enterprise.enterprise_hooks import ENTERPRISE_PROXY_HOOKS

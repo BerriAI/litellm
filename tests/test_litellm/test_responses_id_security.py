@@ -115,14 +115,17 @@ class TestEncryptResponseId:
             "litellm.proxy.hooks.responses_id_security.encrypt_value_helper"
         ) as mock_encrypt:
             mock_encrypt.return_value = "encrypted_base64_value"
+            
+            with patch.object(
+                responses_id_security, "_get_signing_key", return_value="test-key"
+            ):
+                result = responses_id_security._encrypt_response_id(
+                    mock_response, mock_user_api_key_dict
+                )
 
-            result = responses_id_security._encrypt_response_id(
-                mock_response, mock_user_api_key_dict
-            )
-
-            assert result.id == "resp_encrypted_base64_value"
-            assert result.id.startswith("resp_")
-            mock_encrypt.assert_called_once()
+                assert result.id == "resp_encrypted_base64_value"
+                assert result.id.startswith("resp_")
+                mock_encrypt.assert_called_once()
 
     def test_encrypt_response_id_maintains_prefix(
         self, responses_id_security, mock_user_api_key_dict
@@ -136,12 +139,15 @@ class TestEncryptResponseId:
             "litellm.proxy.hooks.responses_id_security.encrypt_value_helper"
         ) as mock_encrypt:
             mock_encrypt.return_value = "encrypted_value_456"
+            
+            with patch.object(
+                responses_id_security, "_get_signing_key", return_value="test-key"
+            ):
+                result = responses_id_security._encrypt_response_id(
+                    mock_response, mock_user_api_key_dict
+                )
 
-            result = responses_id_security._encrypt_response_id(
-                mock_response, mock_user_api_key_dict
-            )
-
-            assert result.id.startswith("resp_")
+                assert result.id.startswith("resp_")
 
 
 class TestCheckUserAccessToResponseId:

@@ -65,6 +65,8 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         # Use custom api_base if provided, otherwise construct default
         if api_base:
             base_url = api_base
+        elif vertex_location == "global":
+            base_url = "https://aiplatform.googleapis.com"
         else:
             base_url = f"https://{vertex_location}-aiplatform.googleapis.com"
 

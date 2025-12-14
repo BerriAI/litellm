@@ -1079,3 +1079,86 @@ def test_has_special_delta_attribute(
     assert not initialized_custom_stream_wrapper._has_special_delta_attribute(
         delta_with_none, "audio"
     )
+
+
+def test_is_chunk_non_empty_with_empty_tool_calls(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Test that is_chunk_non_empty returns False when tool_calls is an empty list.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/17425
+    Empty tool_calls in delta should not be considered non-empty chunks.
+    """
+    chunk = {
+        "id": "test-chunk-id",
+        "object": "chat.completion.chunk",
+        "created": 1741037890,
+        "model": "claude-sonnet-4-20250514",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "content": None,
+                    "tool_calls": [],  # Empty tool_calls list
+                },
+                "logprobs": None,
+                "finish_reason": None,
+            }
+        ],
+    }
+    # Empty tool_calls should return False
+    assert (
+        initialized_custom_stream_wrapper.is_chunk_non_empty(
+            completion_obj={},  # completion_obj has no tool_calls
+            model_response=ModelResponseStream(**chunk),
+            response_obj={},
+        )
+        is False
+    )
+
+
+def test_is_chunk_non_empty_with_valid_tool_calls(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Test that is_chunk_non_empty returns True when tool_calls has valid entries.
+
+    Companion test for https://github.com/BerriAI/litellm/issues/17425
+    Non-empty tool_calls in delta should be considered non-empty chunks.
+    """
+    chunk = {
+        "id": "test-chunk-id",
+        "object": "chat.completion.chunk",
+        "created": 1741037890,
+        "model": "claude-sonnet-4-20250514",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_123",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"location": "NYC"}',
+                            },
+                        }
+                    ],
+                },
+                "logprobs": None,
+                "finish_reason": None,
+            }
+        ],
+    }
+    # Non-empty tool_calls should return True
+    assert (
+        initialized_custom_stream_wrapper.is_chunk_non_empty(
+            completion_obj={},
+            model_response=ModelResponseStream(**chunk),
+            response_obj={},
+        )
+        is True
+    )

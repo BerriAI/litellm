@@ -371,6 +371,22 @@ model_list:
       web_search_options: {}  # Enables web search with default settings
 ```
 
+### Advanced
+You can configure LiteLLM's router to optionally drop models that do not support WebSearch, for example
+```yaml
+  - model_name: gpt-4.1
+    litellm_params:
+      model: openai/gpt-4.1
+  - model_name: gpt-4.1
+    litellm_params:
+      model: azure/gpt-4.1
+      api_base: "x.openai.azure.com/"
+      api_version: 2025-03-01-preview
+    model_info:
+      supports_web_search: False <---- KEY CHANGE!
+```
+In this example, LiteLLM will still route LLM requests to both deployments, but for WebSearch, will solely route to OpenAI.
+
 </TabItem>
 <TabItem value="custom" label="Custom Search Context">
 

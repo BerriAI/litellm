@@ -32,3 +32,43 @@ def test_get_supported_params_thinking():
     config = VertexAIAnthropicConfig()
     params = config.get_supported_openai_params(model="claude-sonnet-4")
     assert "thinking" in params
+
+
+def test_vertex_ai_anthropic_web_search_header_in_completion():
+    """Test that web search tool adds the required beta header for Vertex AI completion requests"""
+    from unittest.mock import MagicMock, patch
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+    
+    # Create the config instance
+    model_info = AnthropicModelInfo()
+    
+    # Test the header generation directly
+    tools = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}]
+    
+    # Check if web search tool is detected
+    web_search_detected = model_info.is_web_search_tool_used(tools=tools)
+    assert web_search_detected is True, "Web search tool should be detected"
+    
+    # Generate headers with is_vertex_request=True
+    headers = model_info.get_anthropic_headers(
+        api_key="test-key",
+        web_search_tool_used=web_search_detected,
+        is_vertex_request=True,
+    )
+    
+    # Assert that the anthropic-beta header with web-search is present
+    assert "anthropic-beta" in headers, "anthropic-beta header should be present"
+    assert headers["anthropic-beta"] == "web-search-2025-03-05", \
+        f"anthropic-beta should be 'web-search-2025-03-05', got: {headers['anthropic-beta']}"
+    
+    # Test that header is NOT added for non-Vertex requests
+    headers_non_vertex = model_info.get_anthropic_headers(
+        api_key="test-key",
+        web_search_tool_used=web_search_detected,
+        is_vertex_request=False,
+    )
+    
+    # For non-Vertex (Anthropic-hosted), the web search header should NOT be in anthropic-beta
+    # because Anthropic doesn't require it
+    assert "anthropic-beta" not in headers_non_vertex or "web-search" not in headers_non_vertex.get("anthropic-beta", ""), \
+        "anthropic-beta with web-search should not be present for non-Vertex requests"

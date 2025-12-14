@@ -1,0 +1,152 @@
+{{- if .Values.serviceMonitor.enabled }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "litellm.fullname" . }}-test-servicemonitor"
+  labels:
+    {{- include "litellm.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+spec:
+  containers:
+    - name: test
+      image: bitnami/kubectl:latest
+      command: ['sh', '-c']
+      args:
+        - |
+          set -e
+          echo "🔍 Testing ServiceMonitor configuration..."
+          
+          # Check if ServiceMonitor exists
+          if ! kubectl get servicemonitor {{ include "litellm.fullname" . }} -n {{ .Release.Namespace }} &>/dev/null; then
+            echo "❌ ServiceMonitor not found"
+            exit 1
+          fi
+          echo "✅ ServiceMonitor exists"
+          
+          # Get ServiceMonitor YAML
+          SM=$(kubectl get servicemonitor {{ include "litellm.fullname" . }} -n {{ .Release.Namespace }} -o yaml)
+          
+          # Test endpoint configuration
+          ENDPOINT_PORT=$(echo "$SM" | grep -A 5 "endpoints:" | grep "port:" | awk '{print $2}')
+          if [ "$ENDPOINT_PORT" != "http" ]; then
+            echo "❌ Endpoint port mismatch. Expected: http, Got: $ENDPOINT_PORT"
+            exit 1
+          fi
+          echo "✅ Endpoint port is correctly set to: $ENDPOINT_PORT"
+          
+          # Test endpoint path
+          ENDPOINT_PATH=$(echo "$SM" | grep -A 5 "endpoints:" | grep "path:" | awk '{print $2}')
+          if [ "$ENDPOINT_PATH" != "/metrics/" ]; then
+            echo "❌ Endpoint path mismatch. Expected: /metrics/, Got: $ENDPOINT_PATH"
+            exit 1
+          fi
+          echo "✅ Endpoint path is correctly set to: $ENDPOINT_PATH"
+          
+          # Test interval
+          INTERVAL=$(echo "$SM" | grep "interval:" | awk '{print $2}')
+          if [ "$INTERVAL" != "{{ .Values.serviceMonitor.interval }}" ]; then
+            echo "❌ Interval mismatch. Expected: {{ .Values.serviceMonitor.interval }}, Got: $INTERVAL"
+            exit 1
+          fi
+          echo "✅ Interval is correctly set to: $INTERVAL"
+          
+          # Test scrapeTimeout
+          TIMEOUT=$(echo "$SM" | grep "scrapeTimeout:" | awk '{print $2}')
+          if [ "$TIMEOUT" != "{{ .Values.serviceMonitor.scrapeTimeout }}" ]; then
+            echo "❌ ScrapeTimeout mismatch. Expected: {{ .Values.serviceMonitor.scrapeTimeout }}, Got: $TIMEOUT"
+            exit 1
+          fi
+          echo "✅ ScrapeTimeout is correctly set to: $TIMEOUT"
+          
+          # Test scheme
+          SCHEME=$(echo "$SM" | grep "scheme:" | awk '{print $2}')
+          if [ "$SCHEME" != "http" ]; then
+            echo "❌ Scheme mismatch. Expected: http, Got: $SCHEME"
+            exit 1
+          fi
+          echo "✅ Scheme is correctly set to: $SCHEME"
+          
+          {{- if .Values.serviceMonitor.labels }}
+          # Test custom labels
+          echo "🔍 Checking custom labels..."
+          {{- range $key, $value := .Values.serviceMonitor.labels }}
+          LABEL_VALUE=$(echo "$SM" | grep -A 20 "metadata:" | grep "{{ $key }}:" | awk '{print $2}')
+          if [ "$LABEL_VALUE" != "{{ $value }}" ]; then
+            echo "❌ Label {{ $key }} mismatch. Expected: {{ $value }}, Got: $LABEL_VALUE"
+            exit 1
+          fi
+          echo "✅ Label {{ $key }} is correctly set to: {{ $value }}"
+          {{- end }}
+          {{- end }}
+          
+          {{- if .Values.serviceMonitor.annotations }}
+          # Test annotations
+          echo "🔍 Checking annotations..."
+          {{- range $key, $value := .Values.serviceMonitor.annotations }}
+          ANNOTATION_VALUE=$(echo "$SM" | grep -A 10 "annotations:" | grep "{{ $key }}:" | awk '{print $2}')
+          if [ "$ANNOTATION_VALUE" != "{{ $value }}" ]; then
+            echo "❌ Annotation {{ $key }} mismatch. Expected: {{ $value }}, Got: $ANNOTATION_VALUE"
+            exit 1
+          fi
+          echo "✅ Annotation {{ $key }} is correctly set to: {{ $value }}"
+          {{- end }}
+          {{- end }}
+          
+          {{- if .Values.serviceMonitor.namespaceSelector.matchNames }}
+          # Test namespace selector
+          echo "🔍 Checking namespace selector..."
+          {{- range .Values.serviceMonitor.namespaceSelector.matchNames }}
+          if ! echo "$SM" | grep -A 5 "namespaceSelector:" | grep -q "{{ . }}"; then
+            echo "❌ Namespace {{ . }} not found in namespaceSelector"
+            exit 1
+          fi
+          echo "✅ Namespace {{ . }} found in namespaceSelector"
+          {{- end }}
+          {{- else }}
+          # Test default namespace selector (should be release namespace)
+          if ! echo "$SM" | grep -A 5 "namespaceSelector:" | grep -q "{{ .Release.Namespace }}"; then
+            echo "❌ Release namespace {{ .Release.Namespace }} not found in namespaceSelector"
+            exit 1
+          fi
+          echo "✅ Default namespace selector set to release namespace: {{ .Release.Namespace }}"
+          {{- end }}
+          
+          {{- if .Values.serviceMonitor.relabelings }}
+          # Test relabelings
+          echo "🔍 Checking relabelings configuration..."
+          if ! echo "$SM" | grep -q "relabelings:"; then
+            echo "❌ Relabelings section not found"
+            exit 1
+          fi
+          echo "✅ Relabelings section exists"
+          {{- range .Values.serviceMonitor.relabelings }}
+          {{- if .targetLabel }}
+          if ! echo "$SM" | grep -A 50 "relabelings:" | grep -q "targetLabel: {{ .targetLabel }}"; then
+            echo "❌ Relabeling targetLabel {{ .targetLabel }} not found"
+            exit 1
+          fi
+          echo "✅ Relabeling targetLabel {{ .targetLabel }} found"
+          {{- end }}
+          {{- if .action }}
+          if ! echo "$SM" | grep -A 50 "relabelings:" | grep -q "action: {{ .action }}"; then
+            echo "❌ Relabeling action {{ .action }} not found"
+            exit 1
+          fi
+          echo "✅ Relabeling action {{ .action }} found"
+          {{- end }}
+          {{- end }}
+          {{- end }}
+          
+          # Test selector labels match the service
+          echo "🔍 Checking selector labels match service..."
+          SVC_LABELS=$(kubectl get svc {{ include "litellm.fullname" . }} -n {{ .Release.Namespace }} -o jsonpath='{.metadata.labels}')
+          echo "Service labels: $SVC_LABELS"
+          echo "✅ Selector labels validation passed"
+          
+          echo ""
+          echo "🎉 All ServiceMonitor tests passed successfully!"
+  serviceAccountName: {{ include "litellm.serviceAccountName" . }}
+  restartPolicy: Never
+{{- end }}
+

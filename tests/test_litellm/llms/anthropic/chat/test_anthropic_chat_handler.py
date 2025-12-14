@@ -460,3 +460,322 @@ def test_streaming_chunks_have_stable_ids():
     response_two = iterator.chunk_parser(chunk=second_chunk)
 
     assert response_one.id == response_two.id == iterator.response_id
+
+
+def test_partial_json_chunk_accumulation():
+    """
+    Test that partial JSON chunks are accumulated correctly.
+
+    This tests the fix for https://github.com/BerriAI/litellm/issues/17473
+    where network fragmentation can cause SSE data to arrive in partial chunks.
+    """
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+
+    # Simulate a complete JSON chunk being split into two parts
+    partial_chunk_1 = '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hel'
+    partial_chunk_2 = 'lo"}}'
+
+    # First partial chunk should return None (still accumulating)
+    result1 = iterator._parse_sse_data(f"data:{partial_chunk_1}")
+    assert result1 is None, "First partial chunk should return None while accumulating"
+    assert iterator.chunk_type == "accumulated_json", "Should switch to accumulated_json mode"
+    assert iterator.accumulated_json == partial_chunk_1, "Should have accumulated first part"
+
+    # Second partial chunk should complete the JSON and return a parsed result
+    result2 = iterator._parse_sse_data(f"data:{partial_chunk_2}")
+    assert result2 is not None, "Second chunk should return parsed result"
+    assert iterator.accumulated_json == "", "Buffer should be cleared after successful parse"
+    assert result2.choices[0].delta.content == "Hello", f"Expected 'Hello', got '{result2.choices[0].delta.content}'"
+
+
+def test_complete_json_chunk_no_accumulation():
+    """
+    Test that complete JSON chunks are parsed immediately without accumulation.
+    """
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+
+    complete_chunk = '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}'
+
+    result = iterator._parse_sse_data(f"data:{complete_chunk}")
+    assert result is not None, "Complete chunk should return parsed result immediately"
+    assert iterator.chunk_type == "valid_json", "Should remain in valid_json mode"
+    assert iterator.accumulated_json == "", "Buffer should remain empty"
+    assert result.choices[0].delta.content == "Hello", f"Expected 'Hello', got '{result.choices[0].delta.content}'"
+
+
+def test_multiple_partial_chunks_accumulation():
+    """
+    Test that multiple partial chunks can be accumulated across several iterations.
+    """
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+
+    # Split a JSON chunk into three parts
+    part1 = '{"type":"content_block_del'
+    part2 = 'ta","index":0,"delta":{"type":"text_del'
+    part3 = 'ta","text":"Hello"}}'
+
+    result1 = iterator._parse_sse_data(f"data:{part1}")
+    assert result1 is None
+    assert iterator.accumulated_json == part1
+
+    result2 = iterator._parse_sse_data(f"data:{part2}")
+    assert result2 is None
+    assert iterator.accumulated_json == part1 + part2
+
+    result3 = iterator._parse_sse_data(f"data:{part3}")
+    assert result3 is not None
+    assert iterator.accumulated_json == ""
+    assert result3.choices[0].delta.content == "Hello"
+
+
+def test_web_search_tool_result_no_extra_tool_calls():
+    """
+    Test that web_search_tool_result blocks don't emit tool call chunks.
+
+    This tests the fix for https://github.com/BerriAI/litellm/issues/17254
+    where streaming with Anthropic web search was adding trailing {} to tool call arguments.
+
+    The issue was that web_search_tool_result blocks have input_json_delta events with {}
+    that were incorrectly being converted to tool calls.
+    """
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+
+    # Simulate the streaming sequence:
+    # 1. server_tool_use block starts (web_search)
+    # 2. input_json_delta with the query
+    # 3. content_block_stop
+    # 4. web_search_tool_result block starts
+    # 5. input_json_delta with {} (this should NOT emit a tool call)
+    # 6. content_block_stop
+
+    chunks = [
+        # 1. server_tool_use block starts
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01ABC123",
+                "name": "web_search",
+            },
+        },
+        # 2. input_json_delta with the query
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"query": "test"}'},
+        },
+        # 3. content_block_stop for server_tool_use
+        {"type": "content_block_stop", "index": 0},
+        # 4. web_search_tool_result block starts
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "web_search_tool_result",
+                "tool_use_id": "srvtoolu_01ABC123",
+                "content": [],
+            },
+        },
+        # 5. input_json_delta with {} - this should NOT emit a tool call
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "input_json_delta", "partial_json": "{}"},
+        },
+        # 6. content_block_stop for web_search_tool_result
+        {"type": "content_block_stop", "index": 1},
+        # 7. Another web_search_tool_result with {} - also should NOT emit
+        {
+            "type": "content_block_start",
+            "index": 2,
+            "content_block": {
+                "type": "web_search_tool_result",
+                "tool_use_id": "srvtoolu_01ABC123",
+                "content": [],
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 2,
+            "delta": {"type": "input_json_delta", "partial_json": "{}"},
+        },
+        {"type": "content_block_stop", "index": 2},
+    ]
+
+    tool_calls_emitted = []
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        if parsed.choices and parsed.choices[0].delta.tool_calls:
+            for tc in parsed.choices[0].delta.tool_calls:
+                tool_calls_emitted.append(tc)
+
+    # Should have exactly 2 tool calls:
+    # 1. From content_block_start (server_tool_use) with id and name
+    # 2. From content_block_delta with the actual query
+    assert len(tool_calls_emitted) == 2, f"Expected 2 tool calls, got {len(tool_calls_emitted)}"
+
+    # First tool call should have the id and name
+    assert tool_calls_emitted[0]["id"] == "srvtoolu_01ABC123"
+    assert tool_calls_emitted[0]["function"]["name"] == "web_search"
+
+    # Second tool call should have the query arguments
+    assert tool_calls_emitted[1]["function"]["arguments"] == '{"query": "test"}'
+
+    # The {} chunks from web_search_tool_result should NOT have been emitted as tool calls
+
+
+def test_current_content_block_type_tracking():
+    """
+    Test that current_content_block_type is properly tracked and reset.
+    """
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+
+    # Initially should be None
+    assert iterator.current_content_block_type is None
+
+    # After server_tool_use block start
+    chunk1 = {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {
+            "type": "server_tool_use",
+            "id": "srvtoolu_01ABC",
+            "name": "web_search",
+        },
+    }
+    iterator.chunk_parser(chunk1)
+    assert iterator.current_content_block_type == "server_tool_use"
+
+    # After content_block_stop
+    chunk2 = {"type": "content_block_stop", "index": 0}
+    iterator.chunk_parser(chunk2)
+    assert iterator.current_content_block_type is None
+
+    # After web_search_tool_result block start
+    chunk3 = {
+        "type": "content_block_start",
+        "index": 1,
+        "content_block": {
+            "type": "web_search_tool_result",
+            "tool_use_id": "srvtoolu_01ABC",
+            "content": [],
+        },
+    }
+    iterator.chunk_parser(chunk3)
+    assert iterator.current_content_block_type == "web_search_tool_result"
+
+    # After content_block_stop
+    chunk4 = {"type": "content_block_stop", "index": 1}
+    iterator.chunk_parser(chunk4)
+    assert iterator.current_content_block_type is None
+
+
+def test_web_search_tool_result_captured_in_provider_specific_fields():
+    """
+    Test that web_search_tool_result content is captured in provider_specific_fields.
+
+    This tests the fix for https://github.com/BerriAI/litellm/issues/17737
+    where streaming with Anthropic web search wasn't capturing web_search_tool_result
+    blocks, causing multi-turn conversations to fail.
+
+    The web_search_tool_result content comes ALL AT ONCE in content_block_start,
+    not in deltas, so we need to capture it there.
+    """
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+
+    # Simulate the streaming sequence with web_search_tool_result
+    chunks = [
+        # 1. message_start
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_123",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            },
+        },
+        # 2. server_tool_use block starts (web_search)
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01ABC123",
+                "name": "web_search",
+            },
+        },
+        # 3. input_json_delta with the query
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"query": "otter facts"}'},
+        },
+        # 4. content_block_stop for server_tool_use
+        {"type": "content_block_stop", "index": 0},
+        # 5. web_search_tool_result block starts - THIS IS WHERE THE RESULTS ARE
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "web_search_tool_result",
+                "tool_use_id": "srvtoolu_01ABC123",
+                "content": [
+                    {
+                        "type": "web_search_result",
+                        "url": "https://example.com/otters",
+                        "title": "Fun Otter Facts",
+                        "encrypted_content": "abc123encrypted",
+                    },
+                    {
+                        "type": "web_search_result",
+                        "url": "https://example.com/otters2",
+                        "title": "More Otter Facts",
+                        "encrypted_content": "def456encrypted",
+                    },
+                ],
+            },
+        },
+        # 6. content_block_stop for web_search_tool_result
+        {"type": "content_block_stop", "index": 1},
+    ]
+
+    web_search_results = None
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        if (
+            parsed.choices
+            and parsed.choices[0].delta.provider_specific_fields
+            and "web_search_results" in parsed.choices[0].delta.provider_specific_fields
+        ):
+            web_search_results = parsed.choices[0].delta.provider_specific_fields[
+                "web_search_results"
+            ]
+
+    # Verify web_search_results was captured
+    assert web_search_results is not None, "web_search_results should be captured"
+    assert len(web_search_results) == 1, "Should have 1 web_search_tool_result block"
+    assert (
+        web_search_results[0]["type"] == "web_search_tool_result"
+    ), "Block type should be web_search_tool_result"
+    assert (
+        web_search_results[0]["tool_use_id"] == "srvtoolu_01ABC123"
+    ), "tool_use_id should match"
+    assert len(web_search_results[0]["content"]) == 2, "Should have 2 search results"
+    assert (
+        web_search_results[0]["content"][0]["title"] == "Fun Otter Facts"
+    ), "First result title should match"

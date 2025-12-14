@@ -1,11 +1,11 @@
 import React from "react";
 import { Radio } from "antd";
-import type { ExportScope } from "./types";
+import type { ExportScope, EntityType } from "./types";
 
 interface ExportTypeSelectorProps {
   value: ExportScope;
   onChange: (value: ExportScope) => void;
-  entityType: "tag" | "team";
+  entityType: EntityType;
 }
 
 const ExportTypeSelector: React.FC<ExportTypeSelectorProps> = ({ value, onChange, entityType }) => {
@@ -36,4 +36,3 @@ const ExportTypeSelector: React.FC<ExportTypeSelectorProps> = ({ value, onChange
 };
 
 export default ExportTypeSelector;
-

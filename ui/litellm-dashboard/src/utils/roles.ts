@@ -11,3 +11,7 @@ export const rolesWithWriteAccess = ["Internal User", "Admin", "proxy_admin"];
 export const isAdminRole = (role: string): boolean => {
   return all_admin_roles.includes(role);
 };
+
+export const isProxyAdminRole = (role: string): boolean => {
+  return role === "proxy_admin" || role === "Admin";
+};

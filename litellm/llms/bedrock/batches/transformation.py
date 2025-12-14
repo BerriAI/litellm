@@ -6,6 +6,7 @@ from httpx import Headers, Response
 
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.bedrock import (
     BedrockCreateBatchRequest,
     BedrockCreateBatchResponse,
@@ -140,10 +141,20 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         }
         
         # Build output data config
+        s3_output_config: BedrockS3OutputDataConfig = BedrockS3OutputDataConfig(
+            s3Uri=f"s3://{output_bucket}/{output_key}"
+        )
+        
+        # Add optional KMS encryption key ID if provided
+        s3_encryption_key_id = (
+            litellm_params.get("s3_encryption_key_id")
+            or get_secret_str("AWS_S3_ENCRYPTION_KEY_ID")
+        )
+        if s3_encryption_key_id:
+            s3_output_config["s3EncryptionKeyId"] = s3_encryption_key_id
+        
         output_data_config: BedrockOutputDataConfig = {
-            "s3OutputDataConfig": BedrockS3OutputDataConfig(
-                s3Uri=f"s3://{output_bucket}/{output_key}"
-            )
+            "s3OutputDataConfig": s3_output_config
         }
         
         # Create Bedrock batch request with proper typing

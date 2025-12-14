@@ -69,7 +69,8 @@ const DashboardTeam: React.FC<DashboardTeamProps> = ({
       <Title>Select Team</Title>
 
       <Text>
-        If you belong to multiple teams, this setting controls which team is used by default when creating new API Keys.
+        If you belong to multiple teams, this setting controls which team is used by default when creating new Virtual
+        Keys.
       </Text>
       <Text className="mt-3 mb-3">
         <b>Default Team:</b> If no team_id is set for a key, it will be grouped under here.

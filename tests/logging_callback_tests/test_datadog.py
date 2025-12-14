@@ -633,11 +633,14 @@ async def test_datadog_message_redaction():
 
 def test_datadog_agent_configuration():
     """
-    Test that DataDog logger correctly configures agent endpoint when DD_AGENT_HOST is set
+    Test that DataDog logger correctly configures agent endpoint when LITELLM_DD_AGENT_HOST is set.
+    
+    Note: We use LITELLM_DD_AGENT_HOST instead of DD_AGENT_HOST to avoid conflicts
+    with ddtrace which automatically sets DD_AGENT_HOST for APM tracing.
     """
     test_env = {
-        "DD_AGENT_HOST": "localhost",
-        "DD_AGENT_PORT": "10518",
+        "LITELLM_DD_AGENT_HOST": "localhost",
+        "LITELLM_DD_AGENT_PORT": "10518",
     }
     
     # Remove DD_SITE and DD_API_KEY to verify they're not required for agent mode
@@ -655,3 +658,39 @@ def test_datadog_agent_configuration():
         
         # Verify DD_API_KEY is optional (can be None)
         assert dd_logger.DD_API_KEY is None or isinstance(dd_logger.DD_API_KEY, str)
+
+
+def test_datadog_ignores_ddtrace_agent_host():
+    """
+    Regression test: Ensure DD_AGENT_HOST set by ddtrace doesn't interfere with LiteLLM logging.
+    
+    When users have ddtrace installed for APM tracing, it automatically sets DD_AGENT_HOST.
+    LiteLLM should ignore DD_AGENT_HOST and only use LITELLM_DD_AGENT_HOST for agent mode.
+    
+    This prevents the 404 error when ddtrace's DD_AGENT_HOST points to an APM endpoint
+    that doesn't support /api/v2/logs.
+    
+    Regression test for: https://github.com/BerriAI/litellm/issues/16379
+    """
+    test_env = {
+        # User's explicit config for LiteLLM logging (direct API)
+        "DD_API_KEY": "fake-api-key",
+        "DD_SITE": "us5.datadoghq.com",
+        # ddtrace automatically sets these for APM tracing
+        "DD_AGENT_HOST": "10.176.100.40",
+        "DD_AGENT_PORT": "8126",
+    }
+    
+    with patch.dict(os.environ, test_env, clear=False):
+        with patch("asyncio.create_task"):
+            dd_logger = DataDogLogger()
+        
+        # Verify direct API endpoint is used (DD_AGENT_HOST should be ignored)
+        expected_url = "https://http-intake.logs.us5.datadoghq.com/api/v2/logs"
+        assert dd_logger.intake_url == expected_url, (
+            f"Expected direct API URL '{expected_url}', got '{dd_logger.intake_url}'. "
+            "DD_AGENT_HOST (set by ddtrace) should be ignored - only LITELLM_DD_AGENT_HOST should trigger agent mode."
+        )
+        
+        # Verify API key is set correctly
+        assert dd_logger.DD_API_KEY == "fake-api-key"

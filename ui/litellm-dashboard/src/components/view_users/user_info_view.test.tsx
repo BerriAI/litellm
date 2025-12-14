@@ -1,4 +1,4 @@
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import UserInfoView from "./user_info_view";
 
@@ -7,6 +7,7 @@ vi.mock("../networking", () => {
     user_id: "user-123",
     user_info: {
       user_email: "test@example.com",
+      user_alias: "Test Alias",
       user_role: "admin",
       teams: [],
       models: [],
@@ -40,12 +41,24 @@ describe("UserInfoView", () => {
     possibleUIRoles: null,
   };
 
-  it("renders loading state and then the user email", async () => {
-    const { getByText, findAllByText } = render(<UserInfoView {...defaultProps} />);
+  it("should render the loading state", () => {
+    render(<UserInfoView {...defaultProps} />);
 
-    expect(getByText("Loading user data...")).toBeInTheDocument();
+    expect(screen.getByText("Loading user data...")).toBeInTheDocument();
+  });
 
-    const emails = await findAllByText("test@example.com");
+  it("should render the user email after loading", async () => {
+    render(<UserInfoView {...defaultProps} />);
+
+    const emails = await screen.findAllByText("test@example.com");
     expect(emails.length).toBeGreaterThan(0);
+    expect(screen.queryByText("Loading user data...")).not.toBeInTheDocument();
+  });
+
+  it("should render the user alias after loading", async () => {
+    render(<UserInfoView {...defaultProps} />);
+
+    const aliases = await screen.findAllByText("Test Alias");
+    expect(aliases.length).toBeGreaterThan(0);
   });
 });

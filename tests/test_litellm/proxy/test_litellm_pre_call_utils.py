@@ -15,6 +15,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     _get_dynamic_logging_metadata,
     _get_enforced_params,
+    _update_model_if_key_alias_exists,
     add_litellm_data_to_request,
     check_if_token_is_service_account,
 )
@@ -1234,3 +1235,65 @@ async def test_request_guardrails_do_not_override_key_guardrails():
     assert "guardrails" not in updated_data_empty
     assert "key-guardrail-1" in requested_guardrails
     assert len(requested_guardrails) == 1
+
+
+def test_update_model_if_key_alias_exists():
+    """
+    Test that _update_model_if_key_alias_exists properly updates the model when a key alias exists.
+    """
+    # Test case 1: Key alias exists and matches model
+    data = {"model": "modelAlias", "messages": [{"role": "user", "content": "Hello"}]}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        aliases={"modelAlias": "xai/grok-4-fast-non-reasoning"},
+    )
+    _update_model_if_key_alias_exists(data=data, user_api_key_dict=user_api_key_dict)
+    assert data["model"] == "xai/grok-4-fast-non-reasoning"
+
+    # Test case 2: Key alias doesn't exist
+    data = {"model": "unknown-model", "messages": [{"role": "user", "content": "Hello"}]}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        aliases={"modelAlias": "xai/grok-4-fast-non-reasoning"},
+    )
+    original_model = data["model"]
+    _update_model_if_key_alias_exists(data=data, user_api_key_dict=user_api_key_dict)
+    assert data["model"] == original_model  # Should remain unchanged
+
+    # Test case 3: Model is None
+    data = {"model": None, "messages": [{"role": "user", "content": "Hello"}]}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        aliases={"modelAlias": "xai/grok-4-fast-non-reasoning"},
+    )
+    _update_model_if_key_alias_exists(data=data, user_api_key_dict=user_api_key_dict)
+    assert data["model"] is None  # Should remain None
+
+    # Test case 4: Model key doesn't exist in data
+    data = {"messages": [{"role": "user", "content": "Hello"}]}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        aliases={"modelAlias": "xai/grok-4-fast-non-reasoning"},
+    )
+    _update_model_if_key_alias_exists(data=data, user_api_key_dict=user_api_key_dict)
+    assert "model" not in data  # Should not add model if it doesn't exist
+
+    # Test case 5: Multiple aliases, matching one
+    data = {"model": "alias1", "messages": [{"role": "user", "content": "Hello"}]}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        aliases={
+            "alias1": "model1",
+            "alias2": "model2",
+            "alias3": "model3",
+        },
+    )
+    _update_model_if_key_alias_exists(data=data, user_api_key_dict=user_api_key_dict)
+    assert data["model"] == "model1"
+
+    # Test case 6: Empty aliases dict
+    data = {"model": "modelAlias", "messages": [{"role": "user", "content": "Hello"}]}
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key", aliases={})
+    original_model = data["model"]
+    _update_model_if_key_alias_exists(data=data, user_api_key_dict=user_api_key_dict)
+    assert data["model"] == original_model  # Should remain unchanged

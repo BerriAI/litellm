@@ -11,7 +11,7 @@ Selecting `openai` as the provider routes your request to an OpenAI-compatible e
 This library **requires** an API key for all requests, either through the `api_key` parameter 
 or the `OPENAI_API_KEY` environment variable.
 
-If you don’t want to provide a fake API key in each request, consider using a provider that directly matches your 
+If you don't want to provide a fake API key in each request, consider using a provider that directly matches your 
 OpenAI-compatible endpoint, such as [`hosted_vllm`](/docs/providers/vllm) or [`llamafile`](/docs/providers/llamafile).
 
 :::

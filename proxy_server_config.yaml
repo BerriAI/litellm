@@ -98,7 +98,17 @@ model_list:
     litellm_params:
       model: openai/*
       api_key: os.environ/OPENAI_API_KEY
-  
+  - model_name: realtime-v1
+    litellm_params:
+      model: azure/gpt-realtime-20250828-standard
+      api_version: "2025-08-28"
+      realtime_protocol: GA # Possible values: "GA"/ "v1", "beta" 
+
+  - model_name: realtime-beta
+    litellm_params:
+      model: azure/gpt-realtime-20250828-standard
+      api_version: 2025-04-01-preview
+
 
   # provider specific wildcard routing
   - model_name: "anthropic/*"

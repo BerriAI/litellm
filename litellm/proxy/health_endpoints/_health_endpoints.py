@@ -397,6 +397,211 @@ async def _save_health_check_to_db(
         # Continue execution - don't let database save failure break health checks
 
 
+def _build_model_param_to_info_mapping(model_list: list) -> dict:
+    """
+    Build a mapping from model parameter to model info (model_name, model_id).
+    
+    Multiple models might share the same model parameter, so we use a list.
+    
+    Args:
+        model_list: List of model configurations
+        
+    Returns:
+        Dictionary mapping model parameter to list of model info dicts
+    """
+    model_param_to_info: dict = {}
+    for model in model_list:
+        model_info = model.get("model_info", {})
+        model_name = model.get("model_name")
+        model_id = model_info.get("id")
+        litellm_params = model.get("litellm_params", {})
+        model_param = litellm_params.get("model")
+        
+        if model_param and model_name:
+            if model_param not in model_param_to_info:
+                model_param_to_info[model_param] = []
+            model_param_to_info[model_param].append({
+                "model_name": model_name,
+                "model_id": model_id,
+            })
+    return model_param_to_info
+
+
+def _aggregate_health_check_results(
+    model_param_to_info: dict,
+    healthy_endpoints: list,
+    unhealthy_endpoints: list,
+) -> dict:
+    """
+    Aggregate health check results per unique model.
+    
+    Uses (model_id, model_name) as key, or (None, model_name) if model_id is None.
+    
+    Args:
+        model_param_to_info: Mapping from model parameter to model info
+        healthy_endpoints: List of healthy endpoint results
+        unhealthy_endpoints: List of unhealthy endpoint results
+        
+    Returns:
+        Dictionary mapping (model_id, model_name) to aggregated health check results
+    """
+    model_results = {}
+    
+    # Process healthy endpoints
+    for endpoint in healthy_endpoints:
+        model_param = endpoint.get("model")
+        if model_param and model_param in model_param_to_info:
+            for model_info in model_param_to_info[model_param]:
+                key = (model_info["model_id"], model_info["model_name"])
+                if key not in model_results:
+                    model_results[key] = {
+                        "model_name": model_info["model_name"],
+                        "model_id": model_info["model_id"],
+                        "healthy_count": 0,
+                        "unhealthy_count": 0,
+                        "error_message": None,
+                    }
+                model_results[key]["healthy_count"] += 1
+    
+    # Process unhealthy endpoints
+    for endpoint in unhealthy_endpoints:
+        model_param = endpoint.get("model")
+        error_message = endpoint.get("error")
+        if model_param and model_param in model_param_to_info:
+            for model_info in model_param_to_info[model_param]:
+                key = (model_info["model_id"], model_info["model_name"])
+                if key not in model_results:
+                    model_results[key] = {
+                        "model_name": model_info["model_name"],
+                        "model_id": model_info["model_id"],
+                        "healthy_count": 0,
+                        "unhealthy_count": 0,
+                        "error_message": None,
+                    }
+                model_results[key]["unhealthy_count"] += 1
+                # Use the first error message encountered
+                if not model_results[key]["error_message"] and error_message:
+                    model_results[key]["error_message"] = str(error_message)[:500]
+    
+    return model_results
+
+
+async def _save_health_check_results_if_changed(
+    prisma_client,
+    model_results: dict,
+    latest_checks_map: dict,
+    start_time: float,
+    checked_by: Optional[str] = None,
+):
+    """
+    Save health check results to database, but only if status changed or >1 hour since last save.
+    
+    OPTIMIZATION: Only saves to database if the status has changed from the last saved check.
+    This dramatically reduces database writes when health status remains stable.
+    
+    - Stable systems: ~1 write/hour per model (instead of 12 writes/hour with 5-min intervals)
+    - Status changes: Immediate write (no delay)
+    - Result: ~92% reduction in DB writes for stable systems, while maintaining real-time updates on changes
+    
+    Args:
+        prisma_client: Database client
+        model_results: Dictionary of aggregated health check results per model
+        latest_checks_map: Dictionary mapping model_id/model_name to latest health check
+        start_time: Start time of health check for calculating response time
+        checked_by: Identifier for who/what performed the check
+    """
+    for result in model_results.values():
+        new_status = "healthy" if result["healthy_count"] > 0 else "unhealthy"
+        
+        # Check if we should save this result
+        should_save = True
+        lookup_key = result["model_id"] if result["model_id"] else result["model_name"]
+        if lookup_key in latest_checks_map:
+            last_check = latest_checks_map[lookup_key]
+            # Only save if status changed or if it's been a while since last check
+            if last_check.status == new_status:
+                # Check if last check was recent (within 1 hour)
+                if last_check.checked_at:
+                    from datetime import datetime, timezone
+                    time_since_last_check = (
+                        datetime.now(timezone.utc) - last_check.checked_at
+                    ).total_seconds()
+                    # Only skip if status unchanged AND checked recently (within 1 hour)
+                    # This ensures we still get periodic updates even if status is stable
+                    if time_since_last_check < 3600:  # 1 hour threshold
+                        should_save = False
+        
+        if should_save:
+            asyncio.create_task(
+                prisma_client.save_health_check_result(
+                    model_name=result["model_name"],
+                    model_id=result["model_id"],
+                    status=new_status,
+                    healthy_count=result["healthy_count"],
+                    unhealthy_count=result["unhealthy_count"],
+                    error_message=result["error_message"],
+                    response_time_ms=(time.time() - start_time) * 1000,
+                    details=None,
+                    checked_by=checked_by,
+                )
+            )
+
+
+async def _save_background_health_checks_to_db(
+    prisma_client,
+    model_list: list,
+    healthy_endpoints: list,
+    unhealthy_endpoints: list,
+    start_time: float,
+    checked_by: Optional[str] = None,
+):
+    """
+    Save background health check results to database for each model.
+    
+    Maps health check endpoints back to their original models to get model_name and model_id.
+    Aggregates results per unique model (by model_id if available, otherwise model_name).
+    
+    OPTIMIZATION: Only saves to database if the status has changed from the last saved check.
+    This dramatically reduces database writes when health status remains stable.
+    """
+    if prisma_client is None:
+        return
+    
+    try:
+        # Step 1: Build mapping from model parameter to model info
+        model_param_to_info = _build_model_param_to_info_mapping(model_list)
+        
+        # Step 2: Aggregate health check results per unique model
+        model_results = _aggregate_health_check_results(
+            model_param_to_info,
+            healthy_endpoints,
+            unhealthy_endpoints,
+        )
+        
+        # Step 3: Get latest health checks for all models in one query to compare status
+        latest_checks = await prisma_client.get_all_latest_health_checks()
+        latest_checks_map = {}
+        for check in latest_checks:
+            # Use model_id as primary key, fallback to model_name
+            key = check.model_id if check.model_id else check.model_name
+            if key not in latest_checks_map:
+                latest_checks_map[key] = check
+        
+        # Step 4: Save aggregated results, but only if status changed
+        await _save_health_check_results_if_changed(
+            prisma_client,
+            model_results,
+            latest_checks_map,
+            start_time,
+            checked_by,
+        )
+    except Exception as db_error:
+        verbose_proxy_logger.warning(
+            f"Failed to save background health checks to database: {db_error}"
+        )
+        # Continue execution - don't let database save failure break health checks
+
+
 async def _perform_health_check_and_save(
     model_list,
     target_model,
@@ -843,28 +1048,6 @@ async def health_readiness():
                     index_info = "index does not exist - error: " + str(e)
                 cache_type = {"type": cache_type, "index_info": index_info}
 
-        # build license metadata
-        try:
-            from litellm.proxy.proxy_server import _license_check  # type: ignore
-
-            license_available: bool = _license_check.is_premium() if _license_check else False
-            license_expiration: Optional[str] = None
-
-            if getattr(_license_check, "airgapped_license_data", None):
-                license_expiration = _license_check.airgapped_license_data.get(  # type: ignore[arg-type]
-                    "expiration_date"
-                )
-
-            license_metadata = {
-                "license": {
-                    "has_license": license_available,
-                    "expiration_date": license_expiration,
-                }
-            }
-        except Exception:
-            # fail closed: don't let license check break readiness
-            license_metadata = {"license": {"has_license": False, "expiration_date": None}}
-
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
             db_health_status = await _db_health_readiness_check()
@@ -875,7 +1058,6 @@ async def health_readiness():
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
                 "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
-                **license_metadata,
                 **db_health_status,
             }
         else:
@@ -886,7 +1068,6 @@ async def health_readiness():
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
                 "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
-                **license_metadata,
             }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Service Unhealthy ({str(e)})")

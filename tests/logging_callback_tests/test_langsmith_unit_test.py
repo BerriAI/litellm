@@ -278,6 +278,7 @@ async def test_langsmith_key_based_logging(mocker):
                                     "role": "assistant",
                                     "tool_calls": None,
                                     "function_call": None,
+                                    "provider_specific_fields": None,
                                 },
                             }
                         ],

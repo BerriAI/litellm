@@ -39,7 +39,10 @@ class TestMCPClient:
         with pytest.raises(
             ValueError, match="stdio_config is required for stdio transport"
         ):
-            await client.connect()
+            async def _noop(session):
+                return None
+
+            await client.run_with_session(_noop)
 
     @pytest.mark.asyncio
     @patch("litellm.experimental_mcp_client.client.stdio_client")
@@ -65,7 +68,10 @@ class TestMCPClient:
 
         client = MCPClient(transport_type=MCPTransport.stdio, stdio_config=stdio_config)
 
-        await client.connect()
+        async def _operation(session):
+            return "ok"
+
+        await client.run_with_session(_operation)
 
         # Verify stdio_client was called with correct parameters
         mock_stdio_client.assert_called_once()
@@ -109,7 +115,10 @@ class TestMCPClient:
                 transport_type=MCPTransport.http,
             )
 
-            await client.connect()
+            async def _operation(session):
+                return "ok"
+
+            await client.run_with_session(_operation)
 
             # Verify streamablehttp_client was called
             mock_streamablehttp_client.assert_called_once()
@@ -157,7 +166,10 @@ class TestMCPClient:
                 ssl_verify=False,
             )
 
-            await client.connect()
+            async def _operation(session):
+                return "ok"
+
+            await client.run_with_session(_operation)
 
             # Verify sse_client was called
             mock_sse_client.assert_called_once()
@@ -208,7 +220,10 @@ class TestMCPClient:
                 ssl_verify=custom_ca_path,
             )
 
-            await client.connect()
+            async def _operation(session):
+                return "ok"
+
+            await client.run_with_session(_operation)
 
             # Verify streamablehttp_client was called
             mock_streamablehttp_client.assert_called_once()

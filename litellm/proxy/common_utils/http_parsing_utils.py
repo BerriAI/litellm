@@ -39,6 +39,8 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
 
         if "form" in content_type:
             parsed_body = dict(await request.form())
+            if "metadata" in parsed_body and isinstance(parsed_body["metadata"], str):
+                parsed_body["metadata"] = json.loads(parsed_body["metadata"])
         else:
             # Read the request body
             body = await request.body()
@@ -232,6 +234,51 @@ async def get_form_data(request: Request) -> Dict[str, Any]:
     return parsed_form_data
 
 
+async def convert_upload_files_to_file_data(
+    form_data: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Convert FastAPI UploadFile objects to file data tuples for litellm.
+    
+    Converts UploadFile objects to tuples of (filename, content, content_type)
+    which is the format expected by httpx and litellm's HTTP handlers.
+    
+    Args:
+        form_data: Dictionary containing form data with potential UploadFile objects
+        
+    Returns:
+        Dictionary with UploadFile objects converted to file data tuples
+        
+    Example:
+        ```python
+        form_data = await get_form_data(request)
+        data = await convert_upload_files_to_file_data(form_data)
+        # data["files"] is now [(filename, content, content_type), ...]
+        ```
+    """
+    data = {}
+    for key, value in form_data.items():
+        if isinstance(value, list):
+            # Check if it's a list of UploadFile objects
+            if value and hasattr(value[0], "read"):
+                files = []
+                for f in value:
+                    file_content = await f.read()
+                    # Create tuple: (filename, content, content_type)
+                    files.append((f.filename, file_content, f.content_type))
+                data[key] = files
+            else:
+                data[key] = value
+        elif hasattr(value, "read"):
+            # Single UploadFile object - read and convert to list for consistency
+            file_content = await value.read()
+            data[key] = [(value.filename, file_content, value.content_type)]
+        else:
+            # Regular form field
+            data[key] = value
+    return data
+
+
 async def get_request_body(request: Request) -> Dict[str, Any]:
     """
     Read the request body and parse it as JSON.
@@ -262,7 +309,7 @@ def get_tags_from_request_body(request_body: dict) -> List[str]:
         List of tag names (strings), empty list if no valid tags found
     """
     metadata_variable_name = get_metadata_variable_name_from_kwargs(request_body)
-    metadata = request_body.get(metadata_variable_name, {})
+    metadata = request_body.get(metadata_variable_name) or {}
     tags_in_metadata: Any = metadata.get("tags", [])
     tags_in_request_body: Any = request_body.get("tags", [])
     combined_tags: List[str] = []
@@ -276,4 +323,79 @@ def get_tags_from_request_body(request_body: dict) -> List[str]:
         combined_tags.extend(tags_in_request_body)
     ######################################
     return [tag for tag in combined_tags if isinstance(tag, str)]
+
+
+def populate_request_with_path_params(
+    request_data: dict, request: Request
+) -> dict:
+    """
+    Copy FastAPI path params into the request payload so downstream checks
+    (e.g. vector store RBAC) see them the same way as body params.
+    
+    Since path_params may not be available during dependency injection,
+    we parse the URL path directly for known patterns.
+    
+    Args:
+        request_data: The request data dictionary to populate
+        request: The FastAPI Request object
+        
+    Returns:
+        dict: Updated request_data with path parameters added
+    """    
+    # Try to get path_params if available (sometimes populated by FastAPI)
+    path_params = getattr(request, "path_params", None)
+    if isinstance(path_params, dict) and path_params:
+        for key, value in path_params.items():
+            if key == "vector_store_id":
+                request_data.setdefault("vector_store_id", value)
+                existing_ids = request_data.get("vector_store_ids")
+                if isinstance(existing_ids, list):
+                    if value not in existing_ids:
+                        existing_ids.append(value)
+                else:
+                    request_data["vector_store_ids"] = [value]
+                continue
+            request_data.setdefault(key, value)
+        verbose_proxy_logger.debug(
+            f"populate_request_with_path_params: Found path_params, vector_store_ids={request_data.get('vector_store_ids')}"
+        )
+        return request_data
+
+    # Fallback: parse the URL path directly to extract vector_store_id
+    _add_vector_store_id_from_path(request_data=request_data, request=request)
+
+    return request_data
+
+
+def _add_vector_store_id_from_path(request_data: dict, request: Request) -> None:
+    """
+    Parse the request path to find /vector_stores/{vector_store_id}/... segments.
+
+    When found, ensure both vector_store_id and vector_store_ids are populated.
+    
+    Args:
+        request_data: The request data dictionary to populate
+        request: The FastAPI Request object
+    """
+    path = request.url.path
+    vector_store_match = re.search(r"/vector_stores/([^/]+)/", path)
+    if vector_store_match:
+        vector_store_id = vector_store_match.group(1)
+        verbose_proxy_logger.debug(
+            f"populate_request_with_path_params: Extracted vector_store_id={vector_store_id} from path={path}"
+        )
+        request_data.setdefault("vector_store_id", vector_store_id)
+        existing_ids = request_data.get("vector_store_ids")
+        if isinstance(existing_ids, list):
+            if vector_store_id not in existing_ids:
+                existing_ids.append(vector_store_id)
+        else:
+            request_data["vector_store_ids"] = [vector_store_id]
+        verbose_proxy_logger.debug(
+            f"populate_request_with_path_params: Updated request_data with vector_store_ids={request_data.get('vector_store_ids')}"
+        )
+    else:
+        verbose_proxy_logger.debug(
+            f"populate_request_with_path_params: No vector_store_id present in path={path}"
+        )
 

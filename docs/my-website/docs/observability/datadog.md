@@ -71,16 +71,18 @@ DD_SOURCE="litellm_dev"       # [OPTIONAL] your datadog source. use to different
 Send logs through a local DataDog agent (useful for containerized environments):
 
 ```shell
-DD_AGENT_HOST="localhost"         # hostname or IP of DataDog agent
-DD_AGENT_PORT="10518"             # [OPTIONAL] port of DataDog agent (default: 10518)
-DD_API_KEY="5f2d0f310***********" # [OPTIONAL] your datadog API Key (agent handles auth)
-DD_SOURCE="litellm_dev"           # [OPTIONAL] your datadog source
+LITELLM_DD_AGENT_HOST="localhost"         # hostname or IP of DataDog agent
+LITELLM_DD_AGENT_PORT="10518"             # [OPTIONAL] port of DataDog agent (default: 10518)
+DD_API_KEY="5f2d0f310***********"         # [OPTIONAL] your datadog API Key (agent handles auth)
+DD_SOURCE="litellm_dev"                   # [OPTIONAL] your datadog source
 ```
 
-When `DD_AGENT_HOST` is set, logs are sent to the agent instead of directly to DataDog API. This is useful for:
+When `LITELLM_DD_AGENT_HOST` is set, logs are sent to the agent instead of directly to DataDog API. This is useful for:
 - Centralized log shipping in containerized environments
 - Reducing direct API calls from multiple services
 - Leveraging agent-side processing and filtering
+
+**Note:** We use `LITELLM_DD_AGENT_HOST` instead of `DD_AGENT_HOST` to avoid conflicts with `ddtrace` which automatically sets `DD_AGENT_HOST` for APM tracing.
 
 **Step 3**: Start the proxy, make a test request
 
@@ -191,8 +193,8 @@ LiteLLM supports customizing the following Datadog environment variables
 |---------------------|-------------|---------------|----------|
 | `DD_API_KEY` | Your Datadog API key for authentication (required for direct API, optional for agent) | None | Conditional* |
 | `DD_SITE` | Your Datadog site (e.g., "us5.datadoghq.com") (required for direct API) | None | Conditional* |
-| `DD_AGENT_HOST` | Hostname or IP of DataDog agent (e.g., "localhost"). When set, logs are sent to agent instead of direct API | None | ❌ No |
-| `DD_AGENT_PORT` | Port of DataDog agent for log intake | "10518" | ❌ No |
+| `LITELLM_DD_AGENT_HOST` | Hostname or IP of DataDog agent (e.g., "localhost"). When set, logs are sent to agent instead of direct API | None | ❌ No |
+| `LITELLM_DD_AGENT_PORT` | Port of DataDog agent for log intake | "10518" | ❌ No |
 | `DD_ENV` | Environment tag for your logs (e.g., "production", "staging") | "unknown" | ❌ No |
 | `DD_SERVICE` | Service name for your logs | "litellm-server" | ❌ No |
 | `DD_SOURCE` | Source name for your logs | "litellm" | ❌ No |
@@ -201,5 +203,5 @@ LiteLLM supports customizing the following Datadog environment variables
 | `POD_NAME` | Pod name tag (useful for Kubernetes deployments) | "unknown" | ❌ No |
 
 \* **Required when using Direct API** (default): `DD_API_KEY` and `DD_SITE` are required  
-\* **Optional when using DataDog Agent**: Set `DD_AGENT_HOST` to use agent mode; `DD_API_KEY` and `DD_SITE` are not required
+\* **Optional when using DataDog Agent**: Set `LITELLM_DD_AGENT_HOST` to use agent mode; `DD_API_KEY` and `DD_SITE` are not required
 

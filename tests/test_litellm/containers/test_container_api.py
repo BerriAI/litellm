@@ -1,26 +1,35 @@
+import asyncio
 import json
 import os
 import sys
 from unittest.mock import MagicMock, patch
-import asyncio
 
-import pytest
 import httpx
+import pytest
 
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
 import litellm
-from litellm.types.containers.main import ContainerObject, ContainerListResponse, DeleteContainerResult
 from litellm.containers.main import (
-    create_container, acreate_container,
-    list_containers, alist_containers,
-    retrieve_container, aretrieve_container,
-    delete_container, adelete_container
+    acreate_container,
+    adelete_container,
+    alist_containers,
+    aretrieve_container,
+    create_container,
+    delete_container,
+    list_containers,
+    retrieve_container,
 )
-from litellm.llms.openai.containers.transformation import OpenAIContainerConfig
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.llms.openai.containers.transformation import OpenAIContainerConfig
+from litellm.router import Router
+from litellm.types.containers.main import (
+    ContainerListResponse,
+    ContainerObject,
+    DeleteContainerResult,
+)
 
 
 class TestContainerAPI:
@@ -361,3 +370,32 @@ class TestContainerAPI:
                 # Verify provider config was requested
                 mock_config_manager.get_provider_container_config.assert_called_once()
                 assert response.name == "Config Test"
+
+    @pytest.mark.asyncio
+    async def test_router_acreate_container_without_model(self):
+        """
+        Test that router.acreate_container works without a model configured.
+        Ensures container operations bypass model deployment lookup.
+        """
+        router = Router(model_list=[])
+
+        mock_response = ContainerObject(
+            id="cntr_test",
+            object="container",
+            created_at=1747857508,
+            status="running",
+            expires_after={"anchor": "last_active_at", "minutes": 20},
+            last_active_at=1747857508,
+            name="Test Container"
+        )
+
+        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
+            mock_handler.container_create_handler.return_value = mock_response
+
+            result = await router.acreate_container(
+                name="Test Container",
+                custom_llm_provider="openai"
+            )
+
+            assert result.id == "cntr_test"
+            assert result.name == "Test Container"
