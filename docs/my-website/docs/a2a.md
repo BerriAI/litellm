@@ -20,6 +20,15 @@ Add A2A Agents on LiteLLM AI Gateway, Invoke agents in A2A Protocol, track reque
 | Load Balancing | ✅ |
 | Streaming | ✅ |
 
+## Supported Agent Providers
+
+| Provider | Supported | Documentation |
+|----------|-----------|---------------|
+| LangGraph | ✅ | [LangGraph Agents](./providers/langgraph) |
+| A2A Agents | ✅ | [A2A Protocol](#adding-your-agent) |
+| Azure AI Foundry Agents | ✅ | [Azure AI Agents](./providers/azure_ai_agents) |
+| Bedrock Agent Core Agents | [Bedrock AgentCore](./providers/bedrock_agentcore) | |
+
 :::tip
 
 LiteLLM follows the [A2A (Agent-to-Agent) Protocol](https://github.com/google/A2A) for invoking agents.
