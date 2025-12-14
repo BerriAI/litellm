@@ -67,19 +67,31 @@ class TestEmbeddingChunkingHelpers:
         # Should create multiple chunks
         assert len(chunks) >= 2
 
-        # Each chunk should be under the limit (512 tokens * 4 chars = 2048 chars)
+        # Each chunk should be under the limit.
+        # Base limit: 512 tokens * 4 chars/token * 0.9 safety margin = 1843 chars
+        # Buffer of 200 chars accounts for word boundary search which looks back
+        # up to 10% of chunk size (max 200 chars) to find a space.
+        max_chunk_chars = int(512 * 4 * 0.9) + 200
         for chunk in chunks:
-            assert len(chunk) <= 512 * 4 + 100  # Allow some buffer for word boundary
+            assert (
+                len(chunk) <= max_chunk_chars
+            ), f"Chunk too large: {len(chunk)} > {max_chunk_chars}"
 
     def test_chunk_text_preserves_content(self):
         """Test that chunking doesn't lose content."""
         text = "word " * 800
         chunks = self.router._chunk_text(text, chunk_size=512)
 
-        # Rejoined chunks should contain all words
-        rejoined = "".join(chunks)
-        # Account for potential whitespace differences
-        assert rejoined.replace(" ", "").replace("\n", "") == text.replace(" ", "")
+        # Verify no words are lost by checking word count
+        original_words = text.split()
+        rejoined_words = "".join(chunks).split()
+        assert len(rejoined_words) == len(
+            original_words
+        ), f"Word count mismatch: original={len(original_words)}, rejoined={len(rejoined_words)}"
+
+        # Also verify the actual content matches (ignoring whitespace normalization)
+        # Chunking may adjust whitespace at boundaries, but words must be identical
+        assert rejoined_words == original_words, "Words in chunks don't match original"
 
     def test_chunk_text_breaks_on_word_boundary(self):
         """Test that chunks break on word boundaries when possible."""
@@ -154,15 +166,20 @@ class TestEmbeddingChunkingIntegration:
 
         mock_fallbacks.side_effect = mock_response
 
-        # Create input that exceeds 100 tokens (~400 chars)
-        # 1000 chars / 4 = 250 tokens, with chunk_size=100, this creates 3 chunks
-        large_input = "test " * 200  # 1000 chars = ~250 tokens
+        # Create input that exceeds 100 tokens
+        # With 1000 chars and the token estimation formula: int((chars/4) * 1.1)
+        # Estimated tokens = int((1000/4) * 1.1) = 275 tokens
+        # With chunk_size=100 and 0.9 safety margin, effective chunk = 90 tokens
+        # Expected chunks = ceil(275/90) = 4 chunks (approximately)
+        large_input = "test " * 200  # 1000 chars
 
         # Execute
         response = router.embedding(model="test-embedding", input=large_input)
 
-        # Verify chunking happened (multiple API calls)
-        assert call_count[0] >= 2, f"Expected at least 2 chunks, got {call_count[0]}"
+        # Verify chunking happened - with 275 estimated tokens and ~90 token chunks,
+        # we expect 3-4 chunks depending on word boundary adjustments
+        assert call_count[0] >= 3, f"Expected at least 3 chunks, got {call_count[0]}"
+        assert call_count[0] <= 5, f"Expected at most 5 chunks, got {call_count[0]}"
 
         # Verify response structure
         assert len(response.data) == 1
