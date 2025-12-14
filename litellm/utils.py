@@ -97,6 +97,10 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.default_encoding import encoding
+from litellm.litellm_core_utils.dot_notation_indexing import (
+    delete_nested_value,
+    is_nested_path,
+)
 from litellm.litellm_core_utils.exception_mapping_utils import (
     _get_response_headers,
     exception_type,
@@ -789,10 +793,8 @@ def function_setup(  # noqa: PLR0915
             or call_type == CallTypes.transcription.value
         ):
             _file_obj: FileTypes = args[1] if len(args) > 1 else kwargs["file"]
-            file_checksum = (
-                litellm.litellm_core_utils.audio_utils.utils.get_audio_file_name(
-                    file_obj=_file_obj
-                )
+            file_checksum = litellm.litellm_core_utils.audio_utils.utils.get_audio_file_content_hash(
+                file_obj=_file_obj
             )
             if "metadata" in kwargs:
                 kwargs["metadata"]["file_checksum"] = file_checksum
@@ -807,7 +809,8 @@ def function_setup(  # noqa: PLR0915
             call_type == CallTypes.aresponses.value
             or call_type == CallTypes.responses.value
         ):
-            messages = args[0] if len(args) > 0 else kwargs["input"]
+            # Handle both 'input' (standard Responses API) and 'messages' (Cursor chat format)
+            messages = args[0] if len(args) > 0 else kwargs.get("input") or kwargs.get("messages", "default-message-value")
         else:
             messages = "default-message-value"
         stream = False
@@ -2886,6 +2889,21 @@ def get_optional_params_embeddings(  # noqa: PLR0915
                 model=model,
                 drop_params=drop_params if drop_params is not None else False,
             )
+        final_params = {**optional_params, **kwargs}
+        return final_params
+    elif custom_llm_provider == "sap":
+        supported_params = get_supported_openai_params(
+            model=model,
+            custom_llm_provider="sap",
+            request_type="embeddings",
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.GenAIHubEmbeddingConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params={},
+            model=model,
+            drop_params=drop_params if drop_params is not None else False,
+        )
     elif custom_llm_provider == "infinity":
         supported_params = get_supported_openai_params(
             model=model,
@@ -2899,6 +2917,10 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             model=model,
             drop_params=drop_params if drop_params is not None else False,
         )
+
+        final_params = {**optional_params, **kwargs}
+        return final_params
+
     elif custom_llm_provider == "fireworks_ai":
         supported_params = get_supported_openai_params(
             model=model,
@@ -4129,6 +4151,13 @@ def get_optional_params(  # noqa: PLR0915
         non_default_params=non_default_params,
         allowed_openai_params=allowed_openai_params,
     )
+
+    # Apply nested drops from additional_drop_params
+    if additional_drop_params:
+        nested_paths = [p for p in additional_drop_params if is_nested_path(p)]
+        for path in nested_paths:
+            optional_params = delete_nested_value(optional_params, path)
+
     return optional_params
 
 
@@ -5033,7 +5062,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                     "output_cost_per_video_per_second", None
                 ),
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
-                output_cost_per_image_token=_model_info.get("output_cost_per_image_token", None),
+                output_cost_per_image_token=_model_info.get(
+                    "output_cost_per_image_token", None
+                ),
                 output_vector_size=_model_info.get("output_vector_size", None),
                 citation_cost_per_token=_model_info.get(
                     "citation_cost_per_token", None
@@ -6689,7 +6720,9 @@ def _get_base_model_from_metadata(model_call_details=None):
             return _base_model
         metadata = litellm_params.get("metadata", {})
 
-        base_model_from_metadata = _get_base_model_from_litellm_call_metadata(metadata=metadata)
+        base_model_from_metadata = _get_base_model_from_litellm_call_metadata(
+            metadata=metadata
+        )
         if base_model_from_metadata is not None:
             return base_model_from_metadata
 
@@ -6778,14 +6811,24 @@ def is_cached_message(message: AllMessageValues) -> bool:
     """
     if "content" not in message:
         return False
-    if message["content"] is None or isinstance(message["content"], str):
+
+    content = message["content"]
+
+    # Handle non-list content types (None, str, etc.)
+    if not isinstance(content, list):
         return False
 
-    for content in message["content"]:
+    for content_item in content:
+        # Ensure content_item is a dictionary before accessing keys
+        if not isinstance(content_item, dict):
+            continue
+
+        cache_control = content_item.get("cache_control")
         if (
-            content["type"] == "text"
-            and content.get("cache_control") is not None
-            and content["cache_control"]["type"] == "ephemeral"  # type: ignore
+            content_item.get("type") == "text"
+            and cache_control is not None
+            and isinstance(cache_control, dict)
+            and cache_control.get("type") == "ephemeral"
         ):
             return True
 
@@ -6961,7 +7004,7 @@ def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
                         for item in user_content:
                             if isinstance(item, dict):
                                 if item.get("type") not in ValidUserMessageContentTypes:
-                                    raise Exception("invalid content type")
+                                    raise Exception(f"invalid content type={item.get('type')}")
         except Exception as e:
             if isinstance(e, KeyError):
                 raise Exception(
@@ -7216,6 +7259,8 @@ class ProviderConfigManager:
             return litellm.TritonConfig()
         elif litellm.LlmProviders.PETALS == provider:
             return litellm.PetalsConfig()
+        elif litellm.LlmProviders.SAP_GENERATIVE_AI_HUB == provider:
+            return litellm.GenAIHubOrchestrationConfig()
         elif litellm.LlmProviders.FEATHERLESS_AI == provider:
             return litellm.FeatherlessAIConfig()
         elif litellm.LlmProviders.NOVITA == provider:
@@ -7256,6 +7301,10 @@ class ProviderConfigManager:
             return litellm.OVHCloudChatConfig()
         elif litellm.LlmProviders.AMAZON_NOVA == provider:
             return litellm.AmazonNovaChatConfig()
+        elif litellm.LlmProviders.LANGGRAPH == provider:
+            from litellm.llms.langgraph.chat.transformation import LangGraphConfig
+
+            return LangGraphConfig()
         return None
 
     @staticmethod
@@ -7276,6 +7325,8 @@ class ProviderConfigManager:
             return litellm.TritonEmbeddingConfig()
         elif litellm.LlmProviders.WATSONX == provider:
             return litellm.IBMWatsonXEmbeddingConfig()
+        elif litellm.LlmProviders.SAP_GENERATIVE_AI_HUB == provider:
+            return litellm.GenAIHubEmbeddingConfig()
         elif litellm.LlmProviders.INFINITY == provider:
             return litellm.InfinityEmbeddingConfig()
         elif litellm.LlmProviders.SAMBANOVA == provider:
@@ -7343,9 +7394,17 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.DEEPINFRA == provider:
             return litellm.DeepinfraRerankConfig()
         elif litellm.LlmProviders.NVIDIA_NIM == provider:
-            return litellm.NvidiaNimRerankConfig()
+            from litellm.llms.nvidia_nim.rerank.common_utils import (
+                get_nvidia_nim_rerank_config,
+            )
+
+            return get_nvidia_nim_rerank_config(model)
         elif litellm.LlmProviders.VERTEX_AI == provider:
             return litellm.VertexAIRerankConfig()
+        elif litellm.LlmProviders.FIREWORKS_AI == provider:
+            return litellm.FireworksAIRerankConfig()
+        elif litellm.LlmProviders.VOYAGE == provider:
+            return litellm.VoyageRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod
@@ -7362,12 +7421,19 @@ class ProviderConfigManager:
 
             return BedrockModelInfo.get_bedrock_provider_config_for_messages_api(model)
         elif litellm.LlmProviders.VERTEX_AI == provider:
-            if "claude" in model:
+            if "claude" in model.lower():
                 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
                     VertexAIPartnerModelsAnthropicMessagesConfig,
                 )
 
                 return VertexAIPartnerModelsAnthropicMessagesConfig()
+        elif litellm.LlmProviders.AZURE_AI == provider:
+            if "claude" in model.lower():
+                from litellm.llms.azure_ai.anthropic.messages_transformation import (
+                    AzureAnthropicMessagesConfig,
+                )
+
+                return AzureAnthropicMessagesConfig()
         return None
 
     @staticmethod
@@ -7422,8 +7488,11 @@ class ProviderConfigManager:
             # Note: GPT models (gpt-3.5, gpt-4, gpt-5, etc.) support temperature parameter
             # O-series models (o1, o3) do not contain "gpt" and have different parameter restrictions
             is_gpt_model = model and "gpt" in model.lower()
-            is_o_series = model and ("o_series" in model.lower() or (supports_reasoning(model) and not is_gpt_model))
-            
+            is_o_series = model and (
+                "o_series" in model.lower()
+                or (supports_reasoning(model) and not is_gpt_model)
+            )
+
             if is_o_series:
                 return litellm.AzureOpenAIOSeriesResponsesAPIConfig()
             else:
@@ -7442,10 +7511,10 @@ class ProviderConfigManager:
     ) -> Optional["BaseSkillsAPIConfig"]:
         """
         Get provider-specific Skills API configuration
-        
+
         Args:
             provider: The LLM provider
-            
+
         Returns:
             Provider-specific Skills API config or None
         """
@@ -7732,6 +7801,12 @@ class ProviderConfigManager:
             )
 
             return get_fal_ai_image_generation_config(model)
+        elif LlmProviders.STABILITY == provider:
+            from litellm.llms.stability.image_generation import (
+                get_stability_image_generation_config,
+            )
+
+            return get_stability_image_generation_config(model)
         elif LlmProviders.RUNWAYML == provider:
             from litellm.llms.runwayml.image_generation import (
                 get_runwayml_image_generation_config,
@@ -8144,7 +8219,9 @@ def get_non_default_transcription_params(kwargs: dict) -> dict:
     return non_default_params
 
 
-def add_openai_metadata(metadata: Optional[Mapping[str, Any]]) -> Optional[Dict[str, str]]:
+def add_openai_metadata(
+    metadata: Optional[Mapping[str, Any]],
+) -> Optional[Dict[str, str]]:
     """
     Add metadata to openai optional parameters, excluding hidden params.
 
@@ -8178,6 +8255,7 @@ def add_openai_metadata(metadata: Optional[Mapping[str, Any]]) -> Optional[Dict[
 
     return visible_metadata.copy()
 
+
 def get_requester_metadata(metadata: dict):
     if not metadata:
         return None
@@ -8193,6 +8271,7 @@ def get_requester_metadata(metadata: dict):
         return cleaned_metadata
 
     return None
+
 
 def return_raw_request(endpoint: CallTypes, kwargs: dict) -> RawRequestTypedDict:
     """

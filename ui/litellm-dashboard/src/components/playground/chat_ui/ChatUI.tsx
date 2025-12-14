@@ -51,6 +51,8 @@ import { fetchAvailableModels, ModelGroup } from "../llm_calls/fetch_models";
 import { makeOpenAIImageEditsRequest } from "../llm_calls/image_edits";
 import { makeOpenAIImageGenerationRequest } from "../llm_calls/image_generation";
 import { makeOpenAIResponsesRequest } from "../llm_calls/responses_api";
+import CodeInterpreterOutput from "./CodeInterpreterOutput";
+import { useCodeInterpreter } from "./useCodeInterpreter";
 import { Agent, fetchAvailableAgents } from "../llm_calls/fetch_agents";
 import { makeA2AStreamMessageRequest } from "../llm_calls/a2a_send_message";
 import A2AMetrics from "./A2AMetrics";
@@ -65,6 +67,7 @@ import { createDisplayMessage, createMultimodalMessage } from "./ResponsesImageU
 import { SearchResultsDisplay } from "./SearchResultsDisplay";
 import SessionManagement from "./SessionManagement";
 import { MessageType } from "./types";
+import CodeInterpreterTool from "./CodeInterpreterTool";
 
 const { TextArea } = Input;
 const { Dragger } = Upload;
@@ -197,6 +200,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [temperature, setTemperature] = useState<number>(1.0);
   const [maxTokens, setMaxTokens] = useState<number>(2048);
   const [useAdvancedParams, setUseAdvancedParams] = useState<boolean>(false);
+  
+  // Code Interpreter state (using custom hook)
+  const codeInterpreter = useCodeInterpreter();
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -295,6 +301,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       sessionStorage.removeItem("responsesSessionId");
     }
     sessionStorage.setItem("useApiSessionManagement", JSON.stringify(useApiSessionManagement));
+    // Note: codeInterpreterEnabled and selectedContainerId are persisted by useCodeInterpreter hook
   }, [
     apiKeySource,
     apiKey,
@@ -736,6 +743,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return;
     }
 
+    // Require model selection for Responses API
+    if (endpointType === EndpointType.RESPONSES && !selectedModel) {
+      NotificationsManager.fromBackend("Please select a model before sending a request");
+      return;
+    }
+
     if (!token || !userRole || !userID) {
       return;
     }
@@ -809,6 +822,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
     setChatHistory([...chatHistory, displayMessage]);
     setMCPEvents([]); // Clear previous MCP events for new conversation turn
+    codeInterpreter.clearResult(); // Clear previous code interpreter results
     setIsLoading(true);
 
     try {
@@ -914,6 +928,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
             useApiSessionManagement ? responsesSessionId : null, // Only pass session ID if API mode is enabled
             handleResponseId, // Pass callback to capture new response ID
             handleMCPEvent, // Pass MCP event handler
+            codeInterpreter.enabled, // Enable Code Interpreter tool
+            codeInterpreter.setResult, // Handle code interpreter output
           );
         } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
           const apiChatHistory = [
@@ -1192,6 +1208,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     placeholder="Select a Model"
                     onChange={onModelChange}
                     options={[
+                      { value: "custom", label: "Enter custom model", key: "custom" },
                       ...Array.from(
                         new Set(
                           modelInfo
@@ -1221,7 +1238,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         label: model_group,
                         key: index,
                       })),
-                      { value: "custom", label: "Enter custom model", key: "custom" },
                     ]}
                     style={{ width: "100%" }}
                     showSearch={true}
@@ -1388,6 +1404,20 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   accessToken={accessToken || ""}
                 />
               </div>
+
+              {/* Code Interpreter Toggle - Only for Responses endpoint */}
+              {endpointType === EndpointType.RESPONSES && (
+                <div>
+                  <CodeInterpreterTool
+                    accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
+                    enabled={codeInterpreter.enabled}
+                    onEnabledChange={codeInterpreter.setEnabled}
+                    selectedContainerId={null}
+                    onContainerChange={() => {}}
+                    selectedModel={selectedModel || ""}
+                  />
+                </div>
+              )}
             </div>
           </div>
 
@@ -1467,6 +1497,19 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       {message.role === "assistant" && message.searchResults && (
                         <SearchResultsDisplay searchResults={message.searchResults} />
                       )}
+
+                      {/* Show Code Interpreter output for the last assistant message */}
+                      {message.role === "assistant" &&
+                        index === chatHistory.length - 1 &&
+                        codeInterpreter.result &&
+                        endpointType === EndpointType.RESPONSES && (
+                          <CodeInterpreterOutput
+                            code={codeInterpreter.result.code}
+                            containerId={codeInterpreter.result.containerId}
+                            annotations={codeInterpreter.result.annotations}
+                            accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
+                          />
+                        )}
 
                       <div
                         className="whitespace-pre-wrap break-words max-w-full message-content"
@@ -1772,10 +1815,74 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 </div>
               )}
 
+              {/* Code Interpreter indicator and sample prompts when enabled */}
+              {endpointType === EndpointType.RESPONSES && codeInterpreter.enabled && (
+                <div className="mb-2 space-y-2">
+                  <div className="px-3 py-2 bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg border border-blue-200 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      {isLoading ? (
+                        <>
+                          <LoadingOutlined className="text-blue-500" spin />
+                          <span className="text-sm text-blue-700 font-medium">Running Python code...</span>
+                        </>
+                      ) : (
+                        <>
+                          <CodeOutlined className="text-blue-500" />
+                          <span className="text-sm text-blue-700 font-medium">Code Interpreter Active</span>
+                        </>
+                      )}
+                    </div>
+                    <button
+                      className="text-xs text-blue-500 hover:text-blue-700"
+                      onClick={() => codeInterpreter.setEnabled(false)}
+                    >
+                      Disable
+                    </button>
+                  </div>
+                  {/* Sample prompts - only show when not loading */}
+                  {!isLoading && (
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        "Generate sample sales data CSV and create a chart",
+                        "Create a PNG bar chart comparing AI gateway providers including LiteLLM",
+                        "Generate a CSV of LLM pricing data and visualize it as a line chart",
+                      ].map((prompt, idx) => (
+                        <button
+                          key={idx}
+                          className="text-xs px-3 py-1.5 bg-white border border-gray-200 rounded-full hover:bg-blue-50 hover:border-blue-300 hover:text-blue-600 transition-colors"
+                          onClick={() => setInputMessage(prompt)}
+                        >
+                          {prompt}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Suggested prompts - show when chat is empty and not loading */}
+              {chatHistory.length === 0 && !isLoading && (
+                <div className="flex items-center gap-2 mb-3 overflow-x-auto">
+                  {(endpointType === EndpointType.A2A_AGENTS
+                    ? ["What can you help me with?", "Tell me about yourself", "What tasks can you perform?"]
+                    : ["Write me a poem", "Explain quantum computing", "Draft a polite email requesting a meeting"]
+                  ).map((prompt) => (
+                    <button
+                      key={prompt}
+                      type="button"
+                      className="shrink-0 rounded-full border border-gray-200 px-3 py-1 text-xs font-medium text-gray-600 transition-colors hover:bg-blue-50 hover:border-blue-300 hover:text-blue-600 cursor-pointer"
+                      onClick={() => setInputMessage(prompt)}
+                    >
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               <div className="flex items-center gap-2">
                 <div className="flex items-center flex-1 bg-white border border-gray-300 rounded-xl px-3 py-1 min-h-[44px]">
-                  {/* Left: paperclip icon */}
-                  <div className="flex-shrink-0 mr-2">
+                  {/* Left: attachment and code interpreter icons */}
+                  <div className="flex-shrink-0 mr-2 flex items-center gap-1">
                     {endpointType === EndpointType.RESPONSES && !responsesUploadedImage && (
                       <ResponsesImageUpload
                         responsesUploadedImage={responsesUploadedImage}
@@ -1791,6 +1898,26 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         onImageUpload={handleChatImageUpload}
                         onRemoveImage={handleRemoveChatImage}
                       />
+                    )}
+                    {/* Quick Code Interpreter toggle for Responses */}
+                    {endpointType === EndpointType.RESPONSES && (
+                      <Tooltip title={codeInterpreter.enabled ? "Code Interpreter enabled (click to disable)" : "Enable Code Interpreter"}>
+                        <button
+                          className={`p-1.5 rounded-md transition-colors ${
+                            codeInterpreter.enabled
+                              ? "bg-blue-100 text-blue-600"
+                              : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                          }`}
+                          onClick={() => {
+                            codeInterpreter.toggle();
+                            if (!codeInterpreter.enabled) {
+                              NotificationsManager.success("Code Interpreter enabled!");
+                            }
+                          }}
+                        >
+                          <CodeOutlined style={{ fontSize: "16px" }} />
+                        </button>
+                      </Tooltip>
                     )}
                   </div>
 

@@ -889,3 +889,180 @@ def test_azure_image_generation_cost_calculator():
 
     cost = response_cost_calculator(**response_cost_calculator_kwargs)
     assert cost > 0.079
+
+
+def test_completion_cost_extracts_service_tier_from_response():
+    """Test that completion_cost extracts service_tier from completion_response object."""
+    from litellm import completion_cost
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    # Test with gpt-5-nano which has flex pricing
+    model = "gpt-5-nano"
+    
+    # Create usage object
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500
+    )
+    
+    # Create ModelResponse with service_tier in the response object
+    response_with_service_tier = ModelResponse(
+        usage=usage,
+        model=model,
+    )
+    # Set service_tier as an attribute on the response
+    setattr(response_with_service_tier, "service_tier", "flex")
+    
+    # Test that flex pricing is used when service_tier is in response
+    flex_cost = completion_cost(
+        completion_response=response_with_service_tier,
+        model=model,
+        custom_llm_provider="openai",
+    )
+    
+    # Create ModelResponse without service_tier (should use standard pricing)
+    response_without_service_tier = ModelResponse(
+        usage=usage,
+        model=model,
+    )
+    
+    # Test that standard pricing is used when service_tier is not in response
+    standard_cost = completion_cost(
+        completion_response=response_without_service_tier,
+        model=model,
+        custom_llm_provider="openai",
+    )
+    
+    # Flex should be approximately 50% of standard
+    assert flex_cost > 0, "Flex cost should be greater than 0"
+    assert standard_cost > 0, "Standard cost should be greater than 0"
+    assert flex_cost < standard_cost, "Flex cost should be less than standard cost"
+    
+    flex_ratio = flex_cost / standard_cost
+    assert 0.45 <= flex_ratio <= 0.55, f"Flex pricing should be ~50% of standard, got {flex_ratio:.2f}"
+
+
+def test_completion_cost_extracts_service_tier_from_usage():
+    """Test that completion_cost extracts service_tier from usage object."""
+    from litellm import completion_cost
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    # Test with gpt-5-nano which has flex pricing
+    model = "gpt-5-nano"
+    
+    # Create usage object with service_tier
+    usage_with_service_tier = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500
+    )
+    # Set service_tier as an attribute on the usage object
+    setattr(usage_with_service_tier, "service_tier", "flex")
+    
+    # Create ModelResponse with usage containing service_tier
+    response = ModelResponse(
+        usage=usage_with_service_tier,
+        model=model,
+    )
+    
+    # Test that flex pricing is used when service_tier is in usage
+    flex_cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="openai",
+    )
+    
+    # Create usage object without service_tier
+    usage_without_service_tier = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500
+    )
+    
+    # Create ModelResponse with usage without service_tier
+    response_standard = ModelResponse(
+        usage=usage_without_service_tier,
+        model=model,
+    )
+    
+    # Test that standard pricing is used when service_tier is not in usage
+    standard_cost = completion_cost(
+        completion_response=response_standard,
+        model=model,
+        custom_llm_provider="openai",
+    )
+    
+    # Flex should be approximately 50% of standard
+    assert flex_cost > 0, "Flex cost should be greater than 0"
+    assert standard_cost > 0, "Standard cost should be greater than 0"
+    assert flex_cost < standard_cost, "Flex cost should be less than standard cost"
+    
+    flex_ratio = flex_cost / standard_cost
+    assert 0.45 <= flex_ratio <= 0.55, f"Flex pricing should be ~50% of standard, got {flex_ratio:.2f}"
+
+
+def test_completion_cost_service_tier_priority():
+    """Test that service_tier extraction follows priority: optional_params > completion_response > usage."""
+    from litellm import completion_cost
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    # Test with gpt-5-nano which has flex pricing
+    model = "gpt-5-nano"
+    
+    # Create usage object with service_tier="flex"
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500
+    )
+    setattr(usage, "service_tier", "flex")
+    
+    # Create response with service_tier="priority"
+    response = ModelResponse(
+        usage=usage,
+        model=model,
+    )
+    setattr(response, "service_tier", "priority")
+    
+    # Test that optional_params takes priority over response and usage
+    cost_from_params = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="openai",
+        optional_params={"service_tier": "flex"},
+    )
+    
+    # Test that response takes priority over usage when optional_params is not provided
+    cost_from_response = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="openai",
+    )
+    
+    # Test that usage is used when neither optional_params nor response have service_tier
+    # Create a new response without service_tier attribute
+    response_no_tier = ModelResponse(
+        usage=usage,
+        model=model,
+    )
+    # Don't set service_tier on response, so it will fall back to usage
+    
+    cost_from_usage = completion_cost(
+        completion_response=response_no_tier,
+        model=model,
+        custom_llm_provider="openai",
+    )
+    
+    # All should use flex pricing (from different sources)
+    assert cost_from_params > 0, "Cost from params should be greater than 0"
+    assert cost_from_usage > 0, "Cost from usage should be greater than 0"
+    
+    # Costs should be similar (all using flex)
+    assert abs(cost_from_params - cost_from_usage) < 1e-6, "Costs from params and usage should be similar (both flex)"

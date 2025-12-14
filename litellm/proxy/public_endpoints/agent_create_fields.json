@@ -1,0 +1,149 @@
+[
+  {
+    "agent_type": "a2a",
+    "agent_type_display_name": "A2A Standard",
+    "description": "Standard A2A protocol",
+    "logo_url": "/ui/assets/logos/a2a_agent.png",
+    "credential_fields": [],
+    "litellm_params_template": {}
+  },
+  {
+    "agent_type": "langgraph",
+    "agent_type_display_name": "LangGraph",
+    "description": "Connect to LangGraph agents via the LangGraph Platform API",
+    "logo_url": "/ui/assets/logos/langgraph.png",
+    "model_template": "langgraph/{assistant_id}",
+    "credential_fields": [
+      {
+        "key": "assistant_id",
+        "label": "Assistant ID",
+        "placeholder": "agent",
+        "tooltip": "The assistant/agent ID from your LangGraph deployment",
+        "required": true,
+        "field_type": "text",
+        "default_value": "agent",
+        "include_in_litellm_params": false
+      },
+      {
+        "key": "api_base",
+        "label": "LangGraph API Base",
+        "placeholder": "http://localhost:2024",
+        "tooltip": "The base URL for your LangGraph server (e.g., http://localhost:2024 or your deployed LangGraph Cloud URL)",
+        "required": true,
+        "field_type": "text",
+        "default_value": "http://localhost:2024",
+        "include_in_litellm_params": true
+      },
+      {
+        "key": "api_key",
+        "label": "LangGraph API Key",
+        "placeholder": null,
+        "tooltip": "API key for authenticating with your LangGraph server (optional for local development)",
+        "required": false,
+        "field_type": "password",
+        "default_value": null,
+        "include_in_litellm_params": true
+      }
+    ],
+    "litellm_params_template": {
+      "custom_llm_provider": "langgraph"
+    }
+  },
+  {
+    "agent_type": "bedrock_agentcore",
+    "agent_type_display_name": "Bedrock AgentCore",
+    "description": "Connect to Amazon Bedrock AgentCore hosted agent runtimes",
+    "logo_url": "/ui/assets/logos/bedrock.svg",
+    "inherit_credentials_from_provider": "Bedrock",
+    "model_template": "bedrock/agentcore/{agent_runtime_arn}",
+    "credential_fields": [
+      {
+        "key": "agent_runtime_arn",
+        "label": "Agent Runtime ARN",
+        "placeholder": "arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/my-agent-runtime",
+        "tooltip": "The ARN of your Bedrock AgentCore runtime. Find this in your AWS Bedrock console under AgentCore.",
+        "required": true,
+        "field_type": "text",
+        "default_value": null,
+        "include_in_litellm_params": false
+      }
+    ],
+    "litellm_params_template": {
+      "custom_llm_provider": "bedrock"
+    }
+  },
+  {
+    "agent_type": "azure_ai_foundry",
+    "agent_type_display_name": "Azure AI Foundry",
+    "description": "Connect to Microsoft Azure AI Foundry agents",
+    "logo_url": "/ui/assets/logos/azure_ai_foundry.png",
+    "inherit_credentials_from_provider": "Azure AI",
+    "model_template": "azure_ai/agents/{agent_id}",
+    "credential_fields": [
+      {
+        "key": "agent_id",
+        "label": "Agent ID",
+        "placeholder": "asst_abc123",
+        "tooltip": "The agent/assistant ID from your Azure AI Foundry project (e.g., asst_abc123)",
+        "required": true,
+        "field_type": "text",
+        "default_value": null,
+        "include_in_litellm_params": false
+      },
+      {
+        "key": "api_base",
+        "label": "Azure AI API Base",
+        "placeholder": "https://your-resource.services.ai.azure.com/api/projects/your-project",
+        "tooltip": "The base URL for your Azure AI Foundry project endpoint (e.g., https://your-resource.services.ai.azure.com/api/projects/your-project)",
+        "required": true,
+        "field_type": "text",
+        "default_value": null,
+        "include_in_litellm_params": true
+      },
+      {
+        "key": "api_key",
+        "label": "Azure AD Token",
+        "placeholder": null,
+        "tooltip": "Azure AD Bearer token for authentication. Optional if using Service Principal credentials below. Get via: az account get-access-token --resource https://ai.azure.com",
+        "required": false,
+        "field_type": "password",
+        "default_value": null,
+        "include_in_litellm_params": true
+      },
+      {
+        "key": "tenant_id",
+        "label": "Azure Tenant ID",
+        "placeholder": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+        "tooltip": "Azure AD Tenant ID for Service Principal authentication. Find in Azure Portal > Azure Active Directory > Overview",
+        "required": false,
+        "field_type": "text",
+        "default_value": null,
+        "include_in_litellm_params": true
+      },
+      {
+        "key": "client_id",
+        "label": "Azure Client ID",
+        "placeholder": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+        "tooltip": "Application (client) ID of your Service Principal. Find in Azure Portal > App registrations > your app",
+        "required": false,
+        "field_type": "text",
+        "default_value": null,
+        "include_in_litellm_params": true
+      },
+      {
+        "key": "client_secret",
+        "label": "Azure Client Secret",
+        "placeholder": null,
+        "tooltip": "Client secret for your Service Principal. Create in Azure Portal > App registrations > your app > Certificates & secrets",
+        "required": false,
+        "field_type": "password",
+        "default_value": null,
+        "include_in_litellm_params": true
+      }
+    ],
+    "litellm_params_template": {
+      "custom_llm_provider": "azure_ai"
+    }
+  }
+]
+

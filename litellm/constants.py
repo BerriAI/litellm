@@ -54,6 +54,9 @@ MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = int(
 SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD = int(
     os.getenv("SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD", 1000)
 )  # Minimum number of requests to consider "reasonable traffic". Used for single-deployment cooldown logic.
+DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS = int(
+    os.getenv("DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS", 5)
+)  # Minimum number of requests before applying error rate cooldown. Prevents cooldown from triggering on first failure.
 
 DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET", 0)
@@ -150,9 +153,10 @@ REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_spend_update_buffer"
 REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_team_spend_update_buffer"
 REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_org_spend_update_buffer"
 REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_end_user_spend_update_buffer"
+REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_agent_spend_update_buffer"
 REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_tag_spend_update_buffer"
 MAX_REDIS_BUFFER_DEQUEUE_COUNT = int(os.getenv("MAX_REDIS_BUFFER_DEQUEUE_COUNT", 100))
-MAX_SIZE_IN_MEMORY_QUEUE = int(os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", 10000))
+MAX_SIZE_IN_MEMORY_QUEUE = int(os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", 2000))
 MAX_IN_MEMORY_QUEUE_FLUSH_COUNT = int(
     os.getenv("MAX_IN_MEMORY_QUEUE_FLUSH_COUNT", 1000)
 )
@@ -345,6 +349,7 @@ LITELLM_CHAT_PROVIDERS = [
     "huggingface",
     "together_ai",
     "datarobot",
+    "helicone",
     "openrouter",
     "cometapi",
     "vertex_ai",
@@ -553,6 +558,7 @@ openai_compatible_endpoints: List = [
     "https://api.morphllm.com/v1",
     "https://api.lambda.ai/v1",
     "https://api.hyperbolic.xyz/v1",
+    "https://ai-gateway.helicone.ai/",
     "https://ai-gateway.vercel.sh/v1",
     "https://api.inference.wandb.ai/v1",
     "https://api.clarifai.com/v2/ext/openai/v1",
@@ -598,6 +604,7 @@ openai_compatible_providers: List = [
     "moonshot",
     "publicai",
     "v0",
+    "helicone",
     "morph",
     "lambda_ai",
     "hyperbolic",
@@ -935,6 +942,8 @@ BEDROCK_CONVERSE_MODELS = [
     "amazon.nova-lite-v1:0",
     "amazon.nova-2-lite-v1:0",
     "amazon.nova-pro-v1:0",
+    "writer.palmyra-x4-v1:0",
+    "writer.palmyra-x5-v1:0",
 ]
 
 
@@ -1107,6 +1116,8 @@ CLOUDZERO_MAX_FETCHED_DATA_RECORDS = int(
 SPEND_LOG_CLEANUP_JOB_NAME = "spend_log_cleanup"
 SPEND_LOG_RUN_LOOPS = int(os.getenv("SPEND_LOG_RUN_LOOPS", 500))
 SPEND_LOG_CLEANUP_BATCH_SIZE = int(os.getenv("SPEND_LOG_CLEANUP_BATCH_SIZE", 1000))
+SPEND_LOG_QUEUE_SIZE_THRESHOLD = int(os.getenv("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100))
+SPEND_LOG_QUEUE_POLL_INTERVAL = float(os.getenv("SPEND_LOG_QUEUE_POLL_INTERVAL", 2.0))
 DEFAULT_CRON_JOB_LOCK_TTL_SECONDS = int(
     os.getenv("DEFAULT_CRON_JOB_LOCK_TTL_SECONDS", 60)
 )  # 1 minute
