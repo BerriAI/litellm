@@ -3220,8 +3220,18 @@ class Router:
 
     def _merge_embeddings(self, embeddings: List[List[float]]) -> List[float]:
         """
-        Fast vector averaging using list comprehensions.
-        Returns averaged embedding vector.
+        Average multiple embedding vectors into a single vector.
+
+        Uses element-wise averaging across all input vectors. This is useful
+        for combining chunk embeddings into a single representation.
+
+        Args:
+            embeddings: List of embedding vectors to merge. Each vector should
+                have the same dimensionality.
+
+        Returns:
+            A single averaged embedding vector. Returns empty list if input is empty,
+            or the single vector unchanged if only one is provided.
         """
         if not embeddings:
             return []
@@ -3251,6 +3261,39 @@ class Router:
             total_tokens = getattr(response.usage, "total_tokens", 0)
         return prompt_tokens, total_tokens
 
+    def _extract_embedding_vector(self, response: EmbeddingResponse) -> List[float]:
+        """
+        Safely extract embedding vector from response with validation.
+
+        Args:
+            response: The embedding response object.
+
+        Returns:
+            The embedding vector from the response.
+
+        Raises:
+            ValueError: If response structure is unexpected or missing embedding data.
+        """
+        try:
+            data = (
+                response.get("data")
+                if isinstance(response, dict)
+                else getattr(response, "data", None)
+            )
+            if not data or not isinstance(data, list) or len(data) == 0:
+                raise ValueError("Response missing 'data' field or empty")
+            first_item = data[0]
+            embedding = (
+                first_item.get("embedding")
+                if isinstance(first_item, dict)
+                else getattr(first_item, "embedding", None)
+            )
+            if embedding is None:
+                raise ValueError("Response data missing 'embedding' field")
+            return embedding
+        except (KeyError, IndexError, TypeError) as e:
+            raise ValueError(f"Unexpected embedding response structure: {e}")
+
     def _process_embedding_responses(
         self, responses: List[EmbeddingResponse]
     ) -> Tuple[List[float], int, int]:
@@ -3271,14 +3314,14 @@ class Router:
         if len(responses) == 1:
             r = responses[0]
             prompt, total = self._extract_embedding_usage(r)
-            return r["data"][0]["embedding"], prompt, total
+            return self._extract_embedding_vector(r), prompt, total
 
         chunk_vectors = []
         total_prompt_tokens = 0
         total_tokens = 0
 
         for response in responses:
-            chunk_vectors.append(response["data"][0]["embedding"])
+            chunk_vectors.append(self._extract_embedding_vector(response))
             prompt_toks, total_toks = self._extract_embedding_usage(response)
             total_prompt_tokens += prompt_toks
             total_tokens += total_toks
