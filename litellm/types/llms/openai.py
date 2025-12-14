@@ -55,7 +55,7 @@ from openai.types.responses.response import (
 
 # Handle OpenAI SDK version compatibility for Text type
 try:
-    from openai.types.responses.response_create_params import ( Text as ResponseText ) # type: ignore[attr-defined] # fmt: skip # isort: skip
+    from openai.types.responses.response_create_params import Text as ResponseText  # type: ignore[attr-defined] # fmt: skip # isort: skip
 except (ImportError, AttributeError):
     # Fall back to the concrete config type available in all SDK versions
     from openai.types.responses.response_text_config_param import (
@@ -351,11 +351,12 @@ CREATE_FILE_REQUESTS_PURPOSE = Literal["assistants", "batch", "fine-tune"]
 class FileExpiresAfter(TypedDict):
     """
     File expiration policy
-    
+
     Properties:
         anchor: Anchor timestamp after which the expiration policy applies. Supported anchors: created_at.
         seconds: The number of seconds after the anchor time that the file will expire. Must be between 3600 (1 hour) and 2592000 (30 days).
     """
+
     anchor: Required[Literal["created_at"]]
     seconds: Required[int]
 
@@ -458,6 +459,7 @@ class ListBatchRequest(TypedDict, total=False):
 # OpenAI Batch Result Types
 class OpenAIErrorBody(TypedDict, total=False):
     """Error body in OpenAI batch response format."""
+
     error: Dict[str, str]
 
 
@@ -942,12 +944,12 @@ class OpenAIChatCompletionChunk(ChatCompletionChunk):
 
 class Hyperparameters(BaseModel):
     batch_size: Optional[Union[str, int]] = None  # "Number of examples in each batch."
-    learning_rate_multiplier: Optional[Union[str, float]] = (
-        None  # Scaling factor for the learning rate
-    )
-    n_epochs: Optional[Union[str, int]] = (
-        None  # "The number of epochs to train the model for"
-    )
+    learning_rate_multiplier: Optional[
+        Union[str, float]
+    ] = None  # Scaling factor for the learning rate
+    n_epochs: Optional[
+        Union[str, int]
+    ] = None  # "The number of epochs to train the model for"
 
 
 class FineTuningJobCreate(BaseModel):
@@ -974,18 +976,18 @@ class FineTuningJobCreate(BaseModel):
 
     model: str  # "The name of the model to fine-tune."
     training_file: str  # "The ID of an uploaded file that contains training data."
-    hyperparameters: Optional[Hyperparameters] = (
-        None  # "The hyperparameters used for the fine-tuning job."
-    )
-    suffix: Optional[str] = (
-        None  # "A string of up to 18 characters that will be added to your fine-tuned model name."
-    )
-    validation_file: Optional[str] = (
-        None  # "The ID of an uploaded file that contains validation data."
-    )
-    integrations: Optional[List[str]] = (
-        None  # "A list of integrations to enable for your fine-tuning job."
-    )
+    hyperparameters: Optional[
+        Hyperparameters
+    ] = None  # "The hyperparameters used for the fine-tuning job."
+    suffix: Optional[
+        str
+    ] = None  # "A string of up to 18 characters that will be added to your fine-tuned model name."
+    validation_file: Optional[
+        str
+    ] = None  # "The ID of an uploaded file that contains validation data."
+    integrations: Optional[
+        List[str]
+    ] = None  # "A list of integrations to enable for your fine-tuning job."
     seed: Optional[int] = None  # "The seed controls the reproducibility of the job."
 
 
@@ -1152,7 +1154,13 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     object: Optional[str] = None
     output: Union[
         List[Union[ResponseOutputItem, Dict]],
-        List[Union[GenericResponseOutputItem, OutputFunctionToolCall, OutputImageGenerationCall]],
+        List[
+            Union[
+                GenericResponseOutputItem,
+                OutputFunctionToolCall,
+                OutputImageGenerationCall,
+            ]
+        ],
     ]
     parallel_tool_calls: Optional[bool] = None
     temperature: Optional[float] = None
@@ -1907,6 +1915,7 @@ class OpenAIChatCompletionResponse(TypedDict, total=False):
 # OpenAI Batch Result Types (defined after OpenAIChatCompletionResponse for forward reference)
 class OpenAIBatchResponse(TypedDict, total=False):
     """Response wrapper in OpenAI batch result format."""
+
     status_code: int
     request_id: str
     body: Union[OpenAIChatCompletionResponse, OpenAIErrorBody]
@@ -1914,6 +1923,7 @@ class OpenAIBatchResponse(TypedDict, total=False):
 
 class OpenAIBatchResult(TypedDict, total=False):
     """OpenAI batch result format."""
+
     custom_id: str
     response: OpenAIBatchResponse
 
@@ -1957,6 +1967,12 @@ class OpenAIMcpServerTool(TypedDict, total=False):
     require_approval: str
     allowed_tools: Optional[List[str]]
     headers: Optional[Dict[str, str]]
+    semantic_filter: Optional["SemanticFilterToolOptions"]
+
+
+class SemanticFilterToolOptions(TypedDict, total=False):
+    top_k: int
+    server_labels: List[str]
 
 
 # Video Generation Types

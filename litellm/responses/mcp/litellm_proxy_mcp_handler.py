@@ -8,6 +8,7 @@ from typing import (
     Tuple,
     Union,
     Literal,
+    TypedDict,
 )
 
 from litellm._logging import verbose_logger
@@ -16,6 +17,9 @@ from litellm.responses.main import aresponses
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import ResponsesAPIResponse, ToolParam
 from litellm.types.utils import Choices, ModelResponse
+from litellm.proxy.mcp_semantic_filter.registry import (
+    semantic_mcp_filter_registry,
+)
 
 if TYPE_CHECKING:
     from mcp.types import Tool as MCPTool
@@ -24,6 +28,12 @@ else:
 
 LITELLM_PROXY_MCP_SERVER_URL = "litellm_proxy"
 LITELLM_PROXY_MCP_SERVER_URL_PREFIX = f"{LITELLM_PROXY_MCP_SERVER_URL}/mcp/"
+
+
+class SemanticFilterContext(TypedDict, total=False):
+    query: str
+    top_k: int
+    server_labels: List[str]
 
 
 class LiteLLM_Proxy_MCP_Handler:
@@ -241,7 +251,10 @@ class LiteLLM_Proxy_MCP_Handler:
 
     @staticmethod
     async def _process_mcp_tools_without_openai_transform(
-        user_api_key_auth: Any, mcp_tools_with_litellm_proxy: List[ToolParam]
+        user_api_key_auth: Any,
+        mcp_tools_with_litellm_proxy: List[ToolParam],
+        *,
+        semantic_filter_context: Optional[SemanticFilterContext] = None,
     ) -> tuple[List[Any], dict[str, str]]:
         """
         Process MCP tools through filtering and deduplication pipeline without OpenAI transformation.
@@ -266,6 +279,12 @@ class LiteLLM_Proxy_MCP_Handler:
             mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
         )
 
+        mcp_tools_fetched = await LiteLLM_Proxy_MCP_Handler._apply_semantic_filter(
+            tools=mcp_tools_fetched,
+            semantic_filter_context=semantic_filter_context,
+            allowed_servers=allowed_mcp_servers,
+        )
+
         # Step 2: Filter tools based on allowed_tools parameter
         filtered_mcp_tools = (
             LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
@@ -283,6 +302,46 @@ class LiteLLM_Proxy_MCP_Handler:
         )
 
         return deduplicated_mcp_tools, tool_server_map
+
+    @staticmethod
+    async def _apply_semantic_filter(
+        tools: List[Any],
+        semantic_filter_context: Optional[SemanticFilterContext],
+        allowed_servers: List[str],
+    ) -> List[Any]:
+        if not semantic_filter_context:
+            return tools
+
+        query = semantic_filter_context.get("query", "")
+        if not query:
+            return tools
+
+        top_k = semantic_filter_context.get("top_k")
+        server_labels = semantic_filter_context.get("server_labels") or allowed_servers
+
+        try:
+            tool_ids = await semantic_mcp_filter_registry.query(
+                prompt=query,
+                allowed_servers=server_labels,
+                top_k=top_k,
+            )
+        except Exception as filter_error:
+            verbose_logger.warning(
+                "semantic MCP filter failed; falling back to full tool set: %s",
+                filter_error,
+            )
+            return tools
+
+        allowed = set(tool_ids)
+        filtered: List[Any] = []
+        for tool in tools:
+            tool_name = getattr(tool, "name", None)
+            if tool_name is None and isinstance(tool, dict):
+                tool_name = tool.get("name")
+            if tool_name and tool_name in allowed:
+                filtered.append(tool)
+
+        return filtered or tools
 
     @staticmethod
     def _transform_mcp_tools_to_openai(

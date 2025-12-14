@@ -792,7 +792,7 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"MCP Server not found, passed server_id={server_id}"},
             )
-        global_mcp_server_manager.remove_server(mcp_server_record_deleted)
+        await global_mcp_server_manager.remove_server(mcp_server_record_deleted)
 
         # Ensure registry is up to date by reloading from database
         await global_mcp_server_manager.reload_servers_from_database()

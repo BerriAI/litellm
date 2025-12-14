@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from litellm.responses.mcp import litellm_proxy_mcp_handler as handler_module
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
@@ -197,6 +198,59 @@ def test_create_follow_up_input_handles_response_function_tool_call():
             "arguments": "{}",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_apply_semantic_filter_respects_server_labels(monkeypatch):
+    captured = {}
+
+    class DummyRegistry:
+        async def query(self, *, prompt, allowed_servers, top_k=None):
+            captured["prompt"] = prompt
+            captured["allowed_servers"] = allowed_servers
+            captured["top_k"] = top_k
+            return ["alpha-tool"]
+
+    monkeypatch.setattr(
+        handler_module,
+        "semantic_mcp_filter_registry",
+        DummyRegistry(),
+    )
+
+    tools = [
+        {"name": "alpha-tool"},
+        {"name": "beta-tool"},
+    ]
+
+    filtered = await LiteLLM_Proxy_MCP_Handler._apply_semantic_filter(
+        tools=tools,
+        semantic_filter_context={
+            "query": "incidents",
+            "top_k": 1,
+            "server_labels": ["alpha"],
+        },
+        allowed_servers=["alpha", "beta"],
+    )
+
+    assert [tool["name"] for tool in filtered] == ["alpha-tool"]
+    assert captured == {
+        "prompt": "incidents",
+        "allowed_servers": ["alpha"],
+        "top_k": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_apply_semantic_filter_returns_original_when_no_query(monkeypatch):
+    # No need to patch registry since it should short-circuit
+    tools = [{"name": "a"}, {"name": "b"}]
+    filtered = await LiteLLM_Proxy_MCP_Handler._apply_semantic_filter(
+        tools=tools,
+        semantic_filter_context={"query": ""},
+        allowed_servers=["alpha"],
+    )
+
+    assert filtered == tools
 
 
 @pytest.mark.asyncio

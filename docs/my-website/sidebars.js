@@ -497,6 +497,7 @@ const sidebars = {
             "mcp_control",
             "mcp_cost",
             "mcp_guardrail",
+            "mcp_semantic_filter",
           ]
         },
         "anthropic_unified",

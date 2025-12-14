@@ -6,6 +6,7 @@ from typing import (
     Callable,
     Dict,
     Iterable,
+    List,
     Optional,
     Union,
     cast,
@@ -13,6 +14,7 @@ from typing import (
 
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
+    SemanticFilterContext,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ToolParam
@@ -65,6 +67,57 @@ _CHAT_COMPLETION_CALL_ARG_KEYS = [
 ]
 
 
+def _extract_user_query(messages: Optional[List[Dict[str, Any]]]) -> str:
+    if not messages:
+        return ""
+    for message in reversed(messages):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content", "")
+        if isinstance(content, str):
+            if content.strip():
+                return content
+        elif isinstance(content, list):
+            parts: List[str] = []
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    text_value = item.get("text")
+                    if text_value:
+                        parts.append(str(text_value))
+            if parts:
+                return "\n".join(parts)
+    return ""
+
+
+def _build_semantic_filter_context(
+    mcp_tools: List[ToolParam], messages: Optional[List[Dict[str, Any]]]
+) -> Optional[SemanticFilterContext]:
+    query = _extract_user_query(messages)
+    semantic_settings: Optional[Dict[str, Any]] = None
+    for tool in mcp_tools:
+        if not isinstance(tool, dict):
+            continue
+        candidate = tool.get("semantic_filter")
+        if isinstance(candidate, dict):
+            semantic_settings = candidate
+            break
+
+    if not query:
+        return None
+
+    context: SemanticFilterContext = {"query": query}
+
+    if isinstance(semantic_settings, dict):
+        top_k = semantic_settings.get("top_k")
+        if isinstance(top_k, int) and top_k > 0:
+            context["top_k"] = top_k
+        server_labels = semantic_settings.get("server_labels")
+        if isinstance(server_labels, list) and server_labels:
+            context["server_labels"] = [str(label) for label in server_labels]
+
+    return context
+
+
 def _build_call_args_from_context(call_context: Dict[str, Any]) -> Dict[str, Any]:
     """Build kwargs for `acompletion` from the `completion` call context."""
 
@@ -113,6 +166,9 @@ async def handle_chat_completion_with_mcp(
         return None
 
     base_call_args = dict(call_args)
+    semantic_filter_context = _build_semantic_filter_context(
+        mcp_tools, call_args.get("messages")
+    )
 
     user_api_key_auth = call_args.get("user_api_key_auth") or (
         (call_args.get("metadata", {}) or {}).get("user_api_key_auth")
@@ -123,6 +179,7 @@ async def handle_chat_completion_with_mcp(
     ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
         user_api_key_auth=user_api_key_auth,
         mcp_tools_with_litellm_proxy=mcp_tools,
+        semantic_filter_context=semantic_filter_context,
     )
 
     openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(

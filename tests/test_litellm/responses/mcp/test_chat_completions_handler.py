@@ -155,7 +155,11 @@ async def test_handle_chat_completion_auto_exec_performs_follow_up(monkeypatch):
         staticmethod(lambda **_: (None, None, None, None)),
     )
 
-    call_context = {"tools": tools, "messages": ["msg"], "stream": True}
+    call_context = {
+        "tools": tools,
+        "messages": [{"role": "user", "content": "Tell me"}],
+        "stream": True,
+    }
     result = await handle_chat_completion_with_mcp(call_context, completion_callable)
 
     assert result is follow_up_response
@@ -165,3 +169,31 @@ async def test_handle_chat_completion_auto_exec_performs_follow_up(monkeypatch):
     assert first_call["stream"] is False
     assert second_call["messages"] == ["follow-up"]
     assert second_call["stream"] is True
+
+
+def test_build_semantic_filter_context_extracts_user_text(monkeypatch):
+    from litellm.responses.mcp import chat_completions_handler as module
+
+    tools = [
+        {
+            "type": "mcp",
+            "semantic_filter": {"top_k": 2, "server_labels": ["alpha"]},
+        }
+    ]
+    messages = [
+        {"role": "assistant", "content": "ignored"},
+        {"role": "user", "content": "Need GitHub updates"},
+    ]
+
+    context = module._build_semantic_filter_context(tools, messages)
+    assert context == {"query": "Need GitHub updates", "top_k": 2, "server_labels": ["alpha"]}
+
+
+def test_build_semantic_filter_context_empty_when_no_user_text():
+    from litellm.responses.mcp import chat_completions_handler as module
+
+    tools = [{"type": "mcp"}]
+    messages = [{"role": "assistant", "content": "status"}]
+
+    context = module._build_semantic_filter_context(tools, messages)
+    assert context is None
