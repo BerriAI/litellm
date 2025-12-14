@@ -5145,6 +5145,28 @@
         "mode": "rerank",
         "output_cost_per_token": 0.0
     },
+    "azure_ai/cohere-rerank-v4.0-pro": {
+        "input_cost_per_query": 0.0025,
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "max_query_tokens": 4096,
+        "max_tokens": 32768,
+        "mode": "rerank",
+        "output_cost_per_token": 0.0
+    },
+    "azure_ai/cohere-rerank-v4.0-fast": {
+        "input_cost_per_query": 0.002,
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "max_query_tokens": 4096,
+        "max_tokens": 32768,
+        "mode": "rerank",
+        "output_cost_per_token": 0.0
+    },
     "azure_ai/deepseek-r1": {
         "input_cost_per_token": 1.35e-06,
         "litellm_provider": "azure_ai",
