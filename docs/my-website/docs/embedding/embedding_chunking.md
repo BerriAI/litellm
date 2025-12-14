@@ -98,7 +98,7 @@ LiteLLM uses a fast approximation for token counting:
 - **Base formula**: `tokens ≈ characters / 4`
 - **Safety factor**: 1.1x multiplier to account for tokenizer variations
 
-This conservative estimate ensures chunks won't exceed the actual token limit.
+This conservative estimate ensures chunks won't exceed the actual token limit (for English language).
 
 ### Chunking Strategy
 
