@@ -45,13 +45,13 @@ pip install litellm==1.80.10
 
 ## Key Highlights
 
-- **Agent (A2A) Gateway with Cost Tracking** - [Track agent costs per query, per token pricing, and view agent usage in the dashboard](../../docs/proxy/agent_usage)
+- **Agent (A2A) Gateway with Cost Tracking** - [Track agent costs per query, per token pricing, and view agent usage in the dashboard](../../docs/a2a_cost_tracking)
 - **New Provider: SAP Gen AI Hub** - [Full support for SAP Generative AI Hub with chat completions](../../docs/providers/sap)
 - **New Provider: LangGraph Agents** - [Add LangGraph agents to Agent Gateway for agentic workflows](../../docs/providers/langgraph)
 - **New Provider: Azure AI Foundry Agents** - [Use Azure AI Foundry Agents via /chat/completions, /responses, and Agent Gateway](../../docs/providers/azure_ai_agents)
 - **OpenAI GPT-5.2 Models** - Full support for GPT-5.2, GPT-5.2-pro, and Azure GPT-5.2 models with reasoning support
 - **227 New Fireworks AI Models** - Comprehensive model coverage for Fireworks AI platform
-- **MCP Support on /chat/completions** - [Use MCP servers directly via chat completions endpoint](../../docs/proxy/mcp)
+- **MCP Support on /chat/completions** - [Use MCP servers directly via chat completions endpoint](../../docs/mcp)
 - **Performance Improvements** - Reduced memory leaks by 50%
 
 ---
@@ -82,15 +82,15 @@ Users can now filter usage statistics by agents, providing the same granular fil
 | [SAP Gen AI Hub](../../docs/providers/sap) | `/chat/completions`, `/messages`, `/responses` | SAP Generative AI Hub integration for enterprise AI |
 | [LangGraph](../../docs/providers/langgraph) | `/chat/completions`, `/messages`, `/responses`, `/a2a` | LangGraph agents for agentic workflows |
 | [Azure AI Foundry Agents](../../docs/providers/azure_ai_agents) | `/chat/completions`, `/messages`, `/responses`, `/a2a` | Azure AI Foundry Agents for enterprise agent deployments |
-| [Helicone](../../docs/observability/helicone) | Observability | Helicone observability integration for LLM monitoring |
+| [Helicone](../../docs/observability/helicone_integration) | Observability | Helicone observability integration for LLM monitoring |
 | [SumoLogic](../../docs/proxy/logging#sumologic) | Logging | Native webhook integration for SumoLogic |
 
 ### New LLM API Endpoints (2 new endpoints)
 
 | Endpoint | Method | Description | Documentation |
 | -------- | ------ | ----------- | ------------- |
-| `/containers` | POST, GET, DELETE | Container file management for code interpreter | [Docs](../../docs/providers/openai#containers-api) |
-| `/containers/{id}/files` | POST, GET, DELETE | Container file operations | [Docs](../../docs/providers/openai#containers-api) |
+| `/containers` | POST, GET, DELETE | Container file management for code interpreter | [Docs](../../docs/containers) |
+| `/containers/{id}/files` | POST, GET, DELETE | Container file operations | [Docs](../../docs/containers) |
 
 
 ---
@@ -125,11 +125,11 @@ Users can now filter usage statistics by agents, providing the same granular fil
 
 - **[OpenAI](../../docs/providers/openai)**
     - Add support for OpenAI GPT-5.2 models with reasoning_effort='xhigh' - [PR #17836](https://github.com/BerriAI/litellm/pull/17836), [PR #17875](https://github.com/BerriAI/litellm/pull/17875)
-    - Add 227 new Fireworks AI models - [PR #17692](https://github.com/BerriAI/litellm/pull/17692)
     - Include 'user' param for responses API models - [PR #17648](https://github.com/BerriAI/litellm/pull/17648)
     - Use optimized async http client for text completions - [PR #17831](https://github.com/BerriAI/litellm/pull/17831)
 - **[Azure](../../docs/providers/azure)**
     - Add Azure GPT-5.2 models support - [PR #17866](https://github.com/BerriAI/litellm/pull/17866)
+- **[Azure AI](../../docs/providers/azure_ai)**
     - Fix Azure AI Anthropic api-key header and passthrough cost calculation - [PR #17656](https://github.com/BerriAI/litellm/pull/17656)
     - Remove unsupported params from Azure AI Anthropic requests - [PR #17822](https://github.com/BerriAI/litellm/pull/17822)
 - **[Anthropic](../../docs/providers/anthropic)**
@@ -159,11 +159,12 @@ Users can now filter usage statistics by agents, providing the same granular fil
     - Fix context window errors not recognized - [PR #17587](https://github.com/BerriAI/litellm/pull/17587)
 - **[DeepSeek](../../docs/providers/deepseek)**
     - Add native support for thinking and reasoning_effort params - [PR #17712](https://github.com/BerriAI/litellm/pull/17712)
-- **[NVIDIA NIM](../../docs/providers/nvidia_nim)**
+- **[NVIDIA NIM Rerank](../../docs/providers/nvidia_nim_rerank)**
     - Add llama-3.2-nv-rerankqa-1b-v2 rerank model - [PR #17670](https://github.com/BerriAI/litellm/pull/17670)
 - **[Voyage](../../docs/providers/voyage)**
     - Add rerank API support - [PR #17744](https://github.com/BerriAI/litellm/pull/17744)
 - **[Fireworks AI](../../docs/providers/fireworks_ai)**
+    - Add 227 new Fireworks AI models - [PR #17692](https://github.com/BerriAI/litellm/pull/17692)
     - Add Fireworks rerank support - [PR #17653](https://github.com/BerriAI/litellm/pull/17653)
 - **[Dashscope](../../docs/providers/dashscope)**
     - Fix default base_url error - [PR #17584](https://github.com/BerriAI/litellm/pull/17584)
@@ -191,18 +192,18 @@ Users can now filter usage statistics by agents, providing the same granular fil
     - Fix streaming tool_calls being dropped when text + tool_calls - [PR #17652](https://github.com/BerriAI/litellm/pull/17652)
     - Transform image content in tool results for Responses API - [PR #17799](https://github.com/BerriAI/litellm/pull/17799)
     - Fix responses api not applying tpm rate limits on api keys - [PR #17707](https://github.com/BerriAI/litellm/pull/17707)
-- **[Containers API](../../docs/providers/openai#containers-api)**
+- **[Containers API](../../docs/containers)**
     - Allow using LIST, Create Containers using custom-llm-provider - [PR #17740](https://github.com/BerriAI/litellm/pull/17740)
     - Add new container API file management + UI Interface - [PR #17745](https://github.com/BerriAI/litellm/pull/17745)
 - **[Rerank API](../../docs/rerank)**
     - Add support for forwarding client headers in /rerank endpoint - [PR #17873](https://github.com/BerriAI/litellm/pull/17873)
-- **[Files API](../../docs/providers/openai#files)**
+- **[Files API](../../docs/files_endpoints)**
     - Add support for expires_after param in Files endpoint - [PR #17860](https://github.com/BerriAI/litellm/pull/17860)
-- **[Video API](../../docs/video_generation)**
+- **[Video API](../../docs/videos)**
     - Use litellm params for all videos APIs - [PR #17732](https://github.com/BerriAI/litellm/pull/17732)
     - Respect videos content db creds - [PR #17771](https://github.com/BerriAI/litellm/pull/17771)
     - Fix error about encoding video id for Azure - [PR #17708](https://github.com/BerriAI/litellm/pull/17708)
-- **[Embeddings API](../../docs/embedding/supported_embedding)**
+- **[Embeddings API](../../docs/proxy/embedding)**
     - Fix handling token array input decoding for embeddings - [PR #17468](https://github.com/BerriAI/litellm/pull/17468)
 - **General**
     - Use audio content for caching - [PR #17651](https://github.com/BerriAI/litellm/pull/17651)
@@ -227,17 +228,19 @@ Users can now filter usage statistics by agents, providing the same granular fil
     - UI Settings page implementation - [PR #17697](https://github.com/BerriAI/litellm/pull/17697)
     - Ensure Model Page honors UI Settings - [PR #17804](https://github.com/BerriAI/litellm/pull/17804)
     - Add All Proxy Models to Default User Settings - [PR #17902](https://github.com/BerriAI/litellm/pull/17902)
-- **Agent Usage UI**
+- **Agent & Usage UI**
     - Daily Agent Usage Backend - [PR #17781](https://github.com/BerriAI/litellm/pull/17781)
     - Agent Usage UI - [PR #17797](https://github.com/BerriAI/litellm/pull/17797)
     - Add agent cost tracking on UI - [PR #17899](https://github.com/BerriAI/litellm/pull/17899)
     - New Badge for Agent Usage - [PR #17883](https://github.com/BerriAI/litellm/pull/17883)
-    - Usage Entity labels - [PR #17896](https://github.com/BerriAI/litellm/pull/17896)
+    - Usage Entity labels for filtering - [PR #17896](https://github.com/BerriAI/litellm/pull/17896)
     - Agent Usage Page minor fixes - [PR #17901](https://github.com/BerriAI/litellm/pull/17901)
+    - Usage Page View Select component - [PR #17854](https://github.com/BerriAI/litellm/pull/17854)
+    - Usage Page Components refactor - [PR #17848](https://github.com/BerriAI/litellm/pull/17848)
 - **Logs & Spend**
-    - Logs Spend Enhancements - [PR #17623](https://github.com/BerriAI/litellm/pull/17623)
-    - User Info Delete Modal - [PR #17625](https://github.com/BerriAI/litellm/pull/17625)
-    - Request and Response in Logs - [PR #17928](https://github.com/BerriAI/litellm/pull/17928)
+    - Enhanced spend analytics in logs view - [PR #17623](https://github.com/BerriAI/litellm/pull/17623)
+    - Add user info delete modal for user management - [PR #17625](https://github.com/BerriAI/litellm/pull/17625)
+    - Show request and response details in logs view - [PR #17928](https://github.com/BerriAI/litellm/pull/17928)
 - **Virtual Keys**
     - Fix x-litellm-key-spend header update - [PR #17864](https://github.com/BerriAI/litellm/pull/17864)
 - **Models & Endpoints**
@@ -256,11 +259,10 @@ Users can now filter usage statistics by agents, providing the same granular fil
 - **Notifications**
     - Show progress and pause on hover for Notifications - [PR #17942](https://github.com/BerriAI/litellm/pull/17942)
 - **General**
-    - Reusable Table Icon Button - [PR #17573](https://github.com/BerriAI/litellm/pull/17573)
     - Allow Root Path to Redirect when Docs not on Root Path - [PR #16843](https://github.com/BerriAI/litellm/pull/16843)
-    - Show UI version on top left near logo - [PR #17891](https://github.com/BerriAI/litellm/pull/17891)
-    - Re-organize leftnav to have correct categories + get agents on root - [PR #17890](https://github.com/BerriAI/litellm/pull/17890)
-    - UI playground - allow custom model name as option[0] - [PR #17892](https://github.com/BerriAI/litellm/pull/17892)
+    - Show UI version number on top left near logo - [PR #17891](https://github.com/BerriAI/litellm/pull/17891)
+    - Re-organize left navigation with correct categories and agents on root - [PR #17890](https://github.com/BerriAI/litellm/pull/17890)
+    - UI Playground - allow custom model names in model selector dropdown - [PR #17892](https://github.com/BerriAI/litellm/pull/17892)
 
 #### Bugs
 
@@ -285,7 +287,7 @@ Users can now filter usage statistics by agents, providing the same granular fil
 
 ### Logging
 
-- **[Helicone](../../docs/observability/helicone)**
+- **[Helicone](../../docs/observability/helicone_integration)**
     - Add Helicone as a provider and update observability documentation - [PR #17663](https://github.com/BerriAI/litellm/pull/17663)
 - **[SumoLogic](../../docs/proxy/logging#sumologic)**
     - Native Webhook Integration for SumoLogic - [PR #17630](https://github.com/BerriAI/litellm/pull/17630)
@@ -299,28 +301,28 @@ Users can now filter usage statistics by agents, providing the same granular fil
 - **[OpenTelemetry](../../docs/proxy/logging#otel)**
     - Add latency metrics (TTFT, TPOT, Total Generation Time) to OTEL payload - [PR #17888](https://github.com/BerriAI/litellm/pull/17888)
 - **General**
-    - Add polling via cache feature - [PR #16862](https://github.com/BerriAI/litellm/pull/16862)
+    - Add polling via cache feature for async logging - [PR #16862](https://github.com/BerriAI/litellm/pull/16862)
 
 ### Guardrails
 
-- **[Onyx](../../docs/proxy/guardrails)**
+- **[Onyx](../../docs/proxy/guardrails/onyx_security)**
     - Add Onyx guardrail hooks integration - [PR #16591](https://github.com/BerriAI/litellm/pull/16591)
-- **[HiddenLayer](../../docs/proxy/guardrails)**
+- **[HiddenLayer](../../docs/proxy/guardrails/hiddenlayer)**
     - Add HiddenLayer Guardrail Hooks - [PR #17728](https://github.com/BerriAI/litellm/pull/17728)
-- **[Pillar Security](../../docs/proxy/guardrails)**
+- **[Pillar Security](../../docs/proxy/guardrails/pillar_security)**
     - Add opt-in evidence results for Pillar Security guardrail during monitoring - [PR #17812](https://github.com/BerriAI/litellm/pull/17812)
-- **[PANW Prisma AIRS](../../docs/proxy/guardrails)**
+- **[PANW Prisma AIRS](../../docs/proxy/guardrails/panw_prisma_airs)**
     - Add configurable fail-open, timeout, and app_user tracking - [PR #17785](https://github.com/BerriAI/litellm/pull/17785)
 - **[Presidio](../../docs/proxy/guardrails/pii_masking_v2)**
     - Add support for configurable confidence score thresholds and scope in Presidio PII masking - [PR #17817](https://github.com/BerriAI/litellm/pull/17817)
-- **[LiteLLM Content Filter](../../docs/proxy/guardrails)**
+- **[LiteLLM Content Filter](../../docs/proxy/guardrails/litellm_content_filter)**
     - Mask all regex pattern matches, not just first - [PR #17727](https://github.com/BerriAI/litellm/pull/17727)
-- **[Regex Guardrails](../../docs/proxy/guardrails)**
-    - Regex guardrails update - [PR #17915](https://github.com/BerriAI/litellm/pull/17915)
+- **[Regex Guardrails](../../docs/proxy/guardrails/secret_detection)**
+    - Add enhanced regex pattern matching for guardrails - [PR #17915](https://github.com/BerriAI/litellm/pull/17915)
 
 ### Prompt Management
 
-- **[Arize Phoenix](../../docs/observability/arize_phoenix)**
+- **[Arize Phoenix](../../docs/proxy/arize_phoenix_prompts)**
     - Arize Phoenix OSS - Prompt Management Integration - [PR #17750](https://github.com/BerriAI/litellm/pull/17750)
 - **General**
     - New API for integrating providers - [PR #17829](https://github.com/BerriAI/litellm/pull/17829)
@@ -406,19 +408,14 @@ Users can now filter usage statistics by agents, providing the same granular fil
 
 ---
 
-## Infrastructure / CI/CD
+## Infrastructure / Deployment
 
 - **Docker** - Use python instead of wget for healthcheck in docker-compose.yml - [PR #17646](https://github.com/BerriAI/litellm/pull/17646)
-- **Helm Chart** - Helm chart extraResources - [PR #17627](https://github.com/BerriAI/litellm/pull/17627)
+- **Helm Chart** - Add extraResources support for Helm chart deployments - [PR #17627](https://github.com/BerriAI/litellm/pull/17627)
 - **Helm Versioning** - Add semver prerelease suffix to helm chart versions - [PR #17678](https://github.com/BerriAI/litellm/pull/17678)
-- **Database Schema** - Add storage_backend and storage_url columns to schema.prisma files - [PR #17936](https://github.com/BerriAI/litellm/pull/17936)
-- **Cleanup** - Cleanup unused scripts and fix misplaced test file - [PR #17611](https://github.com/BerriAI/litellm/pull/17611)
-- **Test Fixes** - Fix flaky tests - [PR #17665](https://github.com/BerriAI/litellm/pull/17665)
-- **Docusaurus** - Bumping docusaurus/theme-mermaid to 3.9.0 - [PR #17907](https://github.com/BerriAI/litellm/pull/17907)
-- **CI/CD Fixes** - Multiple CI/CD fixes - [PR #17838](https://github.com/BerriAI/litellm/pull/17838), [PR #17843](https://github.com/BerriAI/litellm/pull/17843), [PR #17920](https://github.com/BerriAI/litellm/pull/17920), [PR #17924](https://github.com/BerriAI/litellm/pull/17924), [PR #17926](https://github.com/BerriAI/litellm/pull/17926), [PR #17927](https://github.com/BerriAI/litellm/pull/17927), [PR #17930](https://github.com/BerriAI/litellm/pull/17930)
-- **Benchmark Script** - Add benchmark_proxy_vs_provider.py script - [PR #17889](https://github.com/BerriAI/litellm/pull/17889)
-- **Tooling** - Enhance create_litellm_branch tool to be more robust - [PR #17874](https://github.com/BerriAI/litellm/pull/17874)
-- **Watsonx** - Fix Watsonx Audio Transcription - ensure only correct params are sent to API - [PR #17840](https://github.com/BerriAI/litellm/pull/17840)
+- **Database Schema** - Add storage_backend and storage_url columns to schema.prisma for target storage feature - [PR #17936](https://github.com/BerriAI/litellm/pull/17936)
+- **V0 Target Storage** - Add v0 support for target storage - [PR #17758](https://github.com/BerriAI/litellm/pull/17758)
+- **Watsonx** - Fix Watsonx Audio Transcription to only send supported params to API - [PR #17840](https://github.com/BerriAI/litellm/pull/17840)
 
 ---
 
