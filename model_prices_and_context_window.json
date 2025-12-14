@@ -27790,8 +27790,8 @@
         "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "max_tokens": 128000,
-        "input_cost_per_token": 4e-08,
-        "output_cost_per_token": 1.2e-07,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 1e-07,
         "supports_function_calling": false,
         "supports_tool_choice": false
     },
@@ -27799,8 +27799,8 @@
         "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "max_tokens": 128000,
-        "input_cost_per_token": 1e-07,
-        "output_cost_per_token": 3e-07,
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 1.5e-07,
         "supports_function_calling": false,
         "supports_tool_choice": false
     },
@@ -27809,7 +27809,7 @@
         "mode": "chat",
         "max_tokens": 128000,
         "input_cost_per_token": 2e-07,
-        "output_cost_per_token": 6e-07,
+        "output_cost_per_token": 2e-07,
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -27817,8 +27817,8 @@
         "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "max_tokens": 128000,
-        "input_cost_per_token": 1e-07,
-        "output_cost_per_token": 3e-07,
+        "input_cost_per_token": 5e-07,
+        "output_cost_per_token": 1.5e-06,
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -27827,7 +27827,7 @@
         "mode": "chat",
         "max_tokens": 128000,
         "input_cost_per_token": 4e-08,
-        "output_cost_per_token": 1.2e-07,
+        "output_cost_per_token": 4e-08,
         "supports_function_calling": false,
         "supports_tool_choice": false
     },
@@ -27835,8 +27835,8 @@
         "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "max_tokens": 128000,
-        "input_cost_per_token": 2e-07,
-        "output_cost_per_token": 6e-07,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 3e-07,
         "supports_function_calling": false,
         "supports_tool_choice": false
     },
@@ -27862,8 +27862,8 @@
         "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "max_tokens": 256000,
-        "input_cost_per_token": 8e-07,
-        "output_cost_per_token": 2.4e-06,
+        "input_cost_per_token": 5.3e-07,
+        "output_cost_per_token": 2.66e-06,
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -27871,7 +27871,7 @@
         "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "max_tokens": 128000,
-        "input_cost_per_token": 4e-07,
+        "input_cost_per_token": 1.5e-07,
         "output_cost_per_token": 1.2e-06,
         "supports_function_calling": true,
         "supports_tool_choice": true
@@ -27881,7 +27881,7 @@
         "mode": "chat",
         "max_tokens": 128000,
         "input_cost_per_token": 7e-08,
-        "output_cost_per_token": 3e-07,
+        "output_cost_per_token": 2e-07,
         "supports_function_calling": false,
         "supports_tool_choice": false
     },
@@ -27889,8 +27889,8 @@
         "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "max_tokens": 128000,
-        "input_cost_per_token": 4e-07,
-        "output_cost_per_token": 1.2e-06,
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 6e-07,
         "supports_function_calling": true,
         "supports_tool_choice": true
     }
