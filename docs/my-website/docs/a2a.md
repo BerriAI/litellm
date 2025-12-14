@@ -16,7 +16,7 @@ Add A2A Agents on LiteLLM AI Gateway, Invoke agents in A2A Protocol, track reque
 
 | Feature | Supported | 
 |---------|-----------|
-| Support Agent Providers | A2A, LangGraph, Azure AI Foundry, Bedrock AgentCore |
+| Supported Agent Providers | A2A, LangGraph, Azure AI Foundry, Bedrock AgentCore |
 | Logging | ✅ |
 | Load Balancing | ✅ |
 | Streaming | ✅ |
