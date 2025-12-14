@@ -9,6 +9,7 @@ import os
 import tempfile
 
 from litellm import sap_service_key
+from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
 AUTH_ENDPOINT_SUFFIX = "/oauth/token"
@@ -251,10 +252,22 @@ def get_token_creator(
     cert_file_path = credentials.get("cert_file_path")
     key_file_path = credentials.get("key_file_path")
 
-    # Sanity check
+    # Sanity check - provide detailed error if credentials are missing
     if not auth_url or not client_id:
+        # Log debug information to help troubleshoot
+        verbose_logger.debug("SAP AI Core credentials were not found or are incomplete.")
+        verbose_logger.debug(f"After attempting to resolve the credentials, the following credentials fields were found: [{', '.join(credentials.keys())}]")
+        verbose_logger.debug(f"Profile used: {profile or 'default'}")
+        verbose_logger.debug(f"Config file checked: {os.getenv(CONFIG_FILE_ENV_VAR) or os.path.join(_get_home(), 'config.json')}")
+        verbose_logger.debug(f"Individual environment variables checked: AICORE_AUTH_URL, AICORE_CLIENT_ID, etc.")
+        verbose_logger.debug(f"Service key environment variable checked: {SERVICE_KEY_ENV_VAR}")
+        verbose_logger.debug(f"VCAP_SERVICES environment variable checked for service label: {VCAP_AICORE_SERVICE_NAME}")
+        verbose_logger.debug("Credential resolution order: kwargs > env vars > config file > service key/VCAP > defaults")
+        
         raise ValueError(
-            "fetch_credentials did not return valid 'auth_url' or 'client_id'"
+            f"SAP AI Core credentials not found. "
+            f"Please provide credentials by setting appropriate environment variables (e.g. AICORE_CLIENT_ID, AICORE_CLIENT_SECRET, etc.)"
+            f"Please see https://help.sap.com/doc/generative-ai-hub-sdk/CLOUD/en-US/_reference/README_sphynx.html#environment-variables for the exact format that is expected."
         )
 
     modes = [

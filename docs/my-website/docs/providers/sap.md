@@ -61,11 +61,19 @@ Add to your LiteLLM Proxy config:
 
 ```yaml showLineNumbers title="config.yaml"
 model_list:
-  - model_name: sap-gpt4
+  - model_name: "sap/*"
     litellm_params:
-      model: sap/gpt-4
-      api_key: os.environ/AICORE_SERVICE_KEY
+      model: "sap/*"
+
+environment_variables:
+  AICORE_AUTH_URL: "https://<subdomain>.authentication.<region>.hana.ondemand.com/oauth/token"
+  AICORE_CLIENT_ID: "sb-...."
+  AICORE_CLIENT_SECRET: "...."
+  AICORE_RESOURCE_GROUP: "default"
+  AICORE_BASE_URL: "https://api.ai.<aicore-region>.aws.ml.hana.ondemand.com/"
 ```
+
+ℹ️ For more information, please also refer to [this SAP documentation](https://sap-contributions.github.io/litellm-agentic-examples/_notebooks/proxy_set_up.html).
 
 Start the proxy:
 
@@ -81,7 +89,7 @@ curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your-proxy-api-key" \
   -d '{
-    "model": "sap-gpt4",
+    "model": "sap/gpt-4o",
     "messages": [{"role": "user", "content": "Hello"}]
   }'
 ```
@@ -98,7 +106,7 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="sap-gpt4",
+    model="sap/gpt-4",
     messages=[{"role": "user", "content": "Hello"}]
 )
 print(response.choices[0].message.content)
