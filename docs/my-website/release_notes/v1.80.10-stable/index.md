@@ -1,5 +1,5 @@
 ---
-title: "[Preview] v1.80.10.rc.1 - Agent Gateway & A2A Cost Tracking"
+title: "[Preview] v1.80.10.rc.1 - Agent Gateway: Azure Foundry & Bedrock AgentCore"
 slug: "v1-80-10"
 date: 2025-12-13T10:00:00
 authors:
@@ -55,6 +55,25 @@ pip install litellm==1.80.10
 - **Performance Improvements** - Reduced memory leaks by 50%
 
 ---
+
+### Agent Gateway - 4 New Agent Providers
+
+<Image
+img={require('../../img/a2a_gateway2.png')}
+style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+<br/>
+
+This release adds support for agents from the following providers:
+- **LangGraph Agents** - Deploy and manage LangGraph-based agents
+- **Azure AI Foundry Agents** - Enterprise agent deployments on Azure
+- **Bedrock AgentCore** - AWS Bedrock agent integration
+- **A2A Agents** - Agent-to-Agent protocol support
+
+AI Gateway admins can now add agents from any of these providers, and developers can invoke them through a unified interface using the A2A protocol.
+
+For all agent requests running through the AI Gateway, LiteLLM automatically tracks request/response logs, cost, and token usage. 
 
 ### Agent (A2A) Usage UI
 
