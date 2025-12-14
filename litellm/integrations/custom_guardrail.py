@@ -574,6 +574,7 @@ class CustomGuardrail(CustomLogger):
         start_time: Optional[float] = None,
         end_time: Optional[float] = None,
         duration: Optional[float] = None,
+        litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ):
         """
         Add StandardLoggingGuardrailInformation to the request data
@@ -591,6 +592,15 @@ class CustomGuardrail(CustomLogger):
             start_time=start_time,
             end_time=end_time,
         )
+
+        if (
+            litellm_logging_obj
+            and isinstance(response, dict)
+            and response.get("additional_response_headers")
+        ):
+            litellm_logging_obj.model_call_details[
+                "additional_logging_response_headers"
+            ] = response.get("additional_response_headers")
         return response
 
     def _process_error(
@@ -707,6 +717,7 @@ def log_guardrail_information(func):
         start_time = datetime.now()  # Move start_time inside the wrapper
         self: CustomGuardrail = args[0]
         request_data: dict = kwargs.get("data") or kwargs.get("request_data") or {}
+        litellm_logging_obj = kwargs.get("litellm_logging_obj")
         try:
             response = await func(*args, **kwargs)
             return self._process_response(
@@ -715,6 +726,7 @@ def log_guardrail_information(func):
                 start_time=start_time.timestamp(),
                 end_time=datetime.now().timestamp(),
                 duration=(datetime.now() - start_time).total_seconds(),
+                litellm_logging_obj=litellm_logging_obj,
             )
         except Exception as e:
             return self._process_error(
