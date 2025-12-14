@@ -346,6 +346,7 @@ def image_generation(  # noqa: PLR0915
             litellm.LlmProviders.AIML,
             litellm.LlmProviders.GEMINI,
             litellm.LlmProviders.FAL_AI,
+            litellm.LlmProviders.STABILITY,
             litellm.LlmProviders.RUNWAYML,
             litellm.LlmProviders.VERTEX_AI,
         ):
