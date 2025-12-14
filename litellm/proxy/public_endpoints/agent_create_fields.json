@@ -93,8 +93,8 @@
       {
         "key": "api_base",
         "label": "Azure AI API Base",
-        "placeholder": "https://your-project.services.ai.azure.com",
-        "tooltip": "The base URL for your Azure AI Foundry project endpoint",
+        "placeholder": "https://your-resource.services.ai.azure.com/api/projects/your-project",
+        "tooltip": "The base URL for your Azure AI Foundry project endpoint (e.g., https://your-resource.services.ai.azure.com/api/projects/your-project)",
         "required": true,
         "field_type": "text",
         "default_value": null,
@@ -102,10 +102,40 @@
       },
       {
         "key": "api_key",
-        "label": "Azure AI API Key",
+        "label": "Azure AD Token",
         "placeholder": null,
-        "tooltip": "API key for authenticating with your Azure AI Foundry project",
-        "required": true,
+        "tooltip": "Azure AD Bearer token for authentication. Optional if using Service Principal credentials below. Get via: az account get-access-token --resource https://ai.azure.com",
+        "required": false,
+        "field_type": "password",
+        "default_value": null,
+        "include_in_litellm_params": true
+      },
+      {
+        "key": "tenant_id",
+        "label": "Azure Tenant ID",
+        "placeholder": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+        "tooltip": "Azure AD Tenant ID for Service Principal authentication. Find in Azure Portal > Azure Active Directory > Overview",
+        "required": false,
+        "field_type": "text",
+        "default_value": null,
+        "include_in_litellm_params": true
+      },
+      {
+        "key": "client_id",
+        "label": "Azure Client ID",
+        "placeholder": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+        "tooltip": "Application (client) ID of your Service Principal. Find in Azure Portal > App registrations > your app",
+        "required": false,
+        "field_type": "text",
+        "default_value": null,
+        "include_in_litellm_params": true
+      },
+      {
+        "key": "client_secret",
+        "label": "Azure Client Secret",
+        "placeholder": null,
+        "tooltip": "Client secret for your Service Principal. Create in Azure Portal > App registrations > your app > Certificates & secrets",
+        "required": false,
         "field_type": "password",
         "default_value": null,
         "include_in_litellm_params": true
