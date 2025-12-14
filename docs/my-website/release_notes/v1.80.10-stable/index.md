@@ -1,5 +1,5 @@
 ---
-title: "v1.80.10-stable - Agent Gateway & A2A Cost Tracking"
+title: "[Preview] v1.80.10.rc.1 - Agent Gateway & A2A Cost Tracking"
 slug: "v1-80-10"
 date: 2025-12-13T10:00:00
 authors:
@@ -27,7 +27,7 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.80.10-stable
+ghcr.io/berriai/litellm:v1.80.10.rc.1
 ```
 
 </TabItem>
