@@ -332,7 +332,8 @@ class AzureAIAgentsConfig(BaseConfig):
         
         Authentication: Uses Azure AD Bearer tokens.
         - Pass api_key directly as an Azure AD token
-        - Or set up Azure AD credentials via environment variables for automatic token retrieval
+        - Or set up Azure AD credentials via environment variables for automatic token retrieval:
+          - AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET (Service Principal)
         
         See: https://learn.microsoft.com/en-us/azure/ai-foundry/agents/quickstart
         """
@@ -344,15 +345,17 @@ class AzureAIAgentsConfig(BaseConfig):
         if api_key is None:
             # Try to get Azure AD token using the existing Azure auth mechanisms
             # This uses the scope for Azure AI (ai.azure.com) instead of cognitive services
-            azure_litellm_params = GenericLiteLLMParams(**litellm_params)
-            # Override scope for Azure Foundry Agents
-            azure_litellm_params["azure_scope"] = "https://ai.azure.com/.default"
-            api_key = get_azure_ad_token(azure_litellm_params)
+            # Create a GenericLiteLLMParams with the scope override for Azure Foundry Agents
+            azure_auth_params = dict(litellm_params) if litellm_params else {}
+            azure_auth_params["azure_scope"] = "https://ai.azure.com/.default"
+            api_key = get_azure_ad_token(GenericLiteLLMParams(**azure_auth_params))
             
         if api_key is None:
             raise ValueError(
                 "api_key (Azure AD token) is required for Azure Foundry Agents. "
-                "Get a token via: az account get-access-token --resource 'https://ai.azure.com'"
+                "Either pass api_key directly, or set AZURE_TENANT_ID, AZURE_CLIENT_ID, "
+                "and AZURE_CLIENT_SECRET environment variables for Service Principal auth. "
+                "Manual token: az account get-access-token --resource 'https://ai.azure.com'"
             )
         if acompletion:
             if stream:
