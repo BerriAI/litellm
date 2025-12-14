@@ -5,12 +5,11 @@ Follows the pattern used in responses/utils.py for consistency.
 Format: vid_{base64_encoded_string}
 """
 import base64
-from typing import Tuple, Optional
-from litellm.types.utils import SpecialEnums
-from litellm.types.videos.main import DecodedVideoId    
+from typing import Optional, Tuple
+
 from litellm._logging import verbose_logger
-
-
+from litellm.types.utils import SpecialEnums
+from litellm.types.videos.main import DecodedVideoId
 
 VIDEO_ID_PREFIX = "video_"
 
@@ -24,9 +23,15 @@ def encode_video_id_with_provider(
     if not provider or not video_id:
         return video_id
     
-    if video_id.startswith(VIDEO_ID_PREFIX):
+    # Try to decode the ID first to check if it's already encoded
+    # This handles the case where Azure/OpenAI return IDs that start with "video_"
+    # but are not yet encoded with provider information
+    decoded = decode_video_id_with_provider(video_id)
+    if decoded.get("custom_llm_provider") is not None:
+        # ID is already encoded, return as-is
         return video_id
     
+    # ID is not encoded (even if it starts with video_), so encode it
     assembled_id = str(
         SpecialEnums.LITELLM_MANAGED_VIDEO_COMPLETE_STR.value
     ).format(provider, model_id or "", video_id)

@@ -391,7 +391,7 @@ export default function ModelInfoView({
             icon={TrashIcon}
             variant="secondary"
             onClick={() => setIsDeleteModalOpen(true)}
-            className="flex items-center text-red-500 border-red-500"
+            className="flex items-center text-red-500 border-red-500 hover:text-red-700"
             disabled={!canEditModel}
             data-testid="delete-model-button"
           >
@@ -419,15 +419,20 @@ export default function ModelInfoView({
                       alt={`${modelData.provider} logo`}
                       className="w-4 h-4"
                       onError={(e) => {
-                        // Create a div with provider initial as fallback
-                        const target = e.target as HTMLImageElement;
+                        const target = e.currentTarget as HTMLImageElement;
                         const parent = target.parentElement;
-                        if (parent) {
+                        if (!parent || !parent.contains(target)) {
+                          return;
+                        }
+
+                        try {
                           const fallbackDiv = document.createElement("div");
                           fallbackDiv.className =
                             "w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs";
                           fallbackDiv.textContent = modelData.provider?.charAt(0) || "-";
                           parent.replaceChild(fallbackDiv, target);
+                        } catch (error) {
+                          console.error("Failed to replace provider logo fallback:", error);
                         }
                       }}
                     />
@@ -961,6 +966,7 @@ export default function ModelInfoView({
                             setIsDirty(false);
                             setIsEditing(false);
                           }}
+                          disabled={isSaving}
                         >
                           Cancel
                         </TremorButton>

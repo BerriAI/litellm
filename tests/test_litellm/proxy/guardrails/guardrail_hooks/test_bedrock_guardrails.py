@@ -1049,3 +1049,55 @@ async def test_bedrock_guardrail_parameter_takes_precedence_over_env(monkeypatch
         ), f"Expected parameter endpoint to take precedence. Got: {prepped_request.url}"
 
         print(f"Parameter precedence test passed. URL: {prepped_request.url}")
+
+
+@pytest.mark.asyncio
+async def test_bedrock_apply_guardrail_with_only_tool_calls_response():
+    """Test that apply_guardrail handles response with tool_calls (no text content) without calling Bedrock API"""
+    # Create a BedrockGuardrail instance
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+    )
+
+    # Mock the make_bedrock_api_request method
+    with patch.object(
+        guardrail, "make_bedrock_api_request", new_callable=AsyncMock
+    ) as mock_api_request:
+        # Test the apply_guardrail method with tool_calls in response
+        inputs = {
+            "texts": [],
+            "tool_calls": [
+                {
+                    "id": "call_eFSCWFsyL7MclHYnzKrcQnMK",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location":"São Paulo"}',
+                    },
+                }
+            ],
+        }
+
+        guardrailed_inputs = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={},
+            input_type="response",
+            logging_obj=None,
+        )
+
+        # Verify the result - should succeed without errors
+        assert guardrailed_inputs is not None
+        assert "tool_calls" in guardrailed_inputs
+        assert len(guardrailed_inputs["tool_calls"]) == 1
+        assert (
+            guardrailed_inputs["tool_calls"][0]["id"]
+            == "call_eFSCWFsyL7MclHYnzKrcQnMK"
+        )
+        assert guardrailed_inputs["tool_calls"][0]["function"]["name"] == "get_weather"
+        assert (
+            guardrailed_inputs["tool_calls"][0]["function"]["arguments"]
+            == '{"location":"São Paulo"}'
+        )
+        # Verify that the Bedrock API was NOT called since there's no text to process
+        mock_api_request.assert_not_called()
+        print("✅ apply_guardrail with tool_calls test passed - no API call made")

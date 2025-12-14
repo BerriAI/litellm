@@ -54,6 +54,22 @@ MCPAuthType = Optional[
 ]
 
 
+class MCPPublicServer(BaseModel):
+    """
+    Safe params for public MCP servers
+    """
+
+    server_id: str
+    name: str
+    alias: Optional[str] = None
+    server_name: Optional[str] = None
+    url: Optional[str] = None
+    transport: MCPTransportType
+    spec_path: Optional[str] = None
+    auth_type: Optional[MCPAuthType] = None
+    mcp_info: Optional[Dict[str, Any]] = None
+
+
 class MCPCredentials(TypedDict, total=False):
     auth_value: Optional[str]
     """

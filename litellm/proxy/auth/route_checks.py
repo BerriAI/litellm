@@ -92,8 +92,9 @@ class RouteChecks:
             ):
                 return True
 
-        raise Exception(
-            f"Virtual key is not allowed to call this route. Only allowed to call routes: {valid_token.allowed_routes}. Tried to call route: {route}"
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Virtual key is not allowed to call this route. Only allowed to call routes: {valid_token.allowed_routes}. Tried to call route: {route}"
         )
 
     @staticmethod
@@ -241,6 +242,12 @@ class RouteChecks:
                     route_allowed = True
                     break
 
+                if RouteChecks._route_matches_wildcard_pattern(
+                    route=route, pattern=allowed_route
+                ):
+                    route_allowed = True
+                    break
+
             if not route_allowed:
                 RouteChecks._raise_admin_only_route_exception(
                     user_obj=user_obj, route=route
@@ -289,6 +296,11 @@ class RouteChecks:
 
         if RouteChecks.check_route_access(
             route=route, allowed_routes=LiteLLMRoutes.mcp_routes.value
+        ):
+            return True
+        
+        if RouteChecks.check_route_access(
+            route=route, allowed_routes=LiteLLMRoutes.agent_routes.value
         ):
             return True
 
@@ -601,6 +613,12 @@ class RouteChecks:
             route=route, allowed_routes=LiteLLMRoutes.admin_viewer_routes.value
         ):
             # Allow access to admin viewer routes (read-only admin endpoints)
+            return
+        elif RouteChecks.check_route_access(
+            route=route, allowed_routes=LiteLLMRoutes.global_spend_tracking_routes.value
+        ):
+            # Allow access to global spend tracking routes (read-only spend endpoints)
+            # proxy_admin_viewer role description: "view all keys, view all spend"
             return
         else:
             # For other routes, block access

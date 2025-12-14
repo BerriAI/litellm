@@ -29,6 +29,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import get_model_rate_limit_from_metadata
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
+from litellm.types.utils import ModelResponse, Usage
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -65,6 +66,12 @@ for i = 1, #KEYS, 2 do
         table.insert(results, increment_value) -- counter
     else
         local counter = redis.call('INCR', counter_key)
+        -- This happens when window_key exists but counter_key doesn't (e.g., tokens key
+        -- created after requests key when both share the same window_key)
+        local current_ttl = redis.call('TTL', counter_key)
+        if current_ttl == -1 then
+            redis.call('EXPIRE', counter_key, window_size)
+        end
         table.insert(results, window_start) -- window_start
         table.insert(results, counter) -- counter
     end
@@ -1226,6 +1233,28 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         return pipeline_operations
 
+    def _get_total_tokens_from_usage(self, usage: Any | None, rate_limit_type: Literal["output", "input", "total"]) -> int:
+        # Get total tokens from response
+        total_tokens = 0
+        # spot fix for /responses api
+        if usage:
+            if isinstance(usage, Usage):
+                if rate_limit_type == "output":
+                    total_tokens = usage.completion_tokens
+                elif rate_limit_type == "input":
+                    total_tokens = usage.prompt_tokens
+                elif rate_limit_type == "total":
+                    total_tokens = usage.total_tokens
+            elif isinstance(usage, dict):
+                # Responses API usage comes as a dict in ResponsesAPIResponse
+                if rate_limit_type == "output":
+                    total_tokens = usage.get("completion_tokens", 0)
+                elif rate_limit_type == "input":
+                    total_tokens = usage.get("prompt_tokens", 0)
+                elif rate_limit_type == "total":
+                    total_tokens = usage.get("total_tokens", 0)
+        return total_tokens
+
     async def _execute_token_increment_script(
         self,
         pipeline_operations: List["RedisPipelineIncrementOperation"],
@@ -1307,11 +1336,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     def get_rate_limit_type(self) -> Literal["output", "input", "total"]:
         from litellm.proxy.proxy_server import general_settings
-
         specified_rate_limit_type = general_settings.get(
-            "token_rate_limit_type", "output"
+            "token_rate_limit_type", "total"
         )
-        if not specified_rate_limit_type or specified_rate_limit_type not in [
+        if specified_rate_limit_type not in [
             "output",
             "input",
             "total",
@@ -1327,11 +1355,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             _get_parent_otel_span_from_kwargs,
         )
         from litellm.proxy.common_utils.callback_utils import (
-            get_metadata_variable_name_from_kwargs,
             get_model_group_from_litellm_kwargs,
         )
         from litellm.types.caching import RedisPipelineIncrementOperation
-        from litellm.types.utils import ModelResponse, Usage
 
         rate_limit_type = self.get_rate_limit_type()
 
@@ -1343,19 +1369,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 "INSIDE parallel request limiter ASYNC SUCCESS LOGGING"
             )
 
-            # Get metadata from kwargs
-            litellm_metadata = kwargs["litellm_params"].get(
-                get_metadata_variable_name_from_kwargs(kwargs), {}
+            # Get metadata from standard_logging_object - this correctly handles both
+            # 'metadata' and 'litellm_metadata' fields from litellm_params
+            standard_logging_object = kwargs.get("standard_logging_object") or {}
+            standard_logging_metadata = standard_logging_object.get("metadata") or {}
+
+            # user_api_key_hash is the same as user_api_key (it's the hash)
+            user_api_key = standard_logging_metadata.get("user_api_key_hash")
+            user_api_key_user_id = standard_logging_metadata.get("user_api_key_user_id")
+            user_api_key_team_id = standard_logging_metadata.get("user_api_key_team_id")
+            user_api_key_organization_id = standard_logging_metadata.get(
+                "user_api_key_org_id"
             )
-            if litellm_metadata is None:
-                return
-            user_api_key = litellm_metadata.get("user_api_key")
-            user_api_key_user_id = litellm_metadata.get("user_api_key_user_id")
-            user_api_key_team_id = litellm_metadata.get("user_api_key_team_id")
-            user_api_key_organization_id = litellm_metadata.get(
-                "user_api_key_organization_id"
-            )
-            user_api_key_end_user_id = kwargs.get("user") or litellm_metadata.get(
+            user_api_key_end_user_id = kwargs.get("user") or standard_logging_metadata.get(
                 "user_api_key_end_user_id"
             )
             model_group = get_model_group_from_litellm_kwargs(kwargs)
@@ -1367,13 +1393,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 response_obj, BaseLiteLLMOpenAIResponseObject
             ):
                 _usage = getattr(response_obj, "usage", None)
-                if _usage and isinstance(_usage, Usage):
-                    if rate_limit_type == "output":
-                        total_tokens = _usage.completion_tokens
-                    elif rate_limit_type == "input":
-                        total_tokens = _usage.prompt_tokens
-                    elif rate_limit_type == "total":
-                        total_tokens = _usage.total_tokens
+                total_tokens = self._get_total_tokens_from_usage(usage=_usage, rate_limit_type=rate_limit_type)
 
             # Create pipeline operations for TPM increments
             pipeline_operations: List[RedisPipelineIncrementOperation] = []
@@ -1501,10 +1521,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             litellm_parent_otel_span: Union[
                 Span, None
             ] = _get_parent_otel_span_from_kwargs(kwargs)
-            litellm_metadata = kwargs["litellm_params"]["metadata"]
-            user_api_key = (
-                litellm_metadata.get("user_api_key") if litellm_metadata else None
-            )
+            # Get metadata from standard_logging_object - this correctly handles both
+            # 'metadata' and 'litellm_metadata' fields from litellm_params
+            standard_logging_object = kwargs.get("standard_logging_object") or {}
+            standard_logging_metadata = standard_logging_object.get("metadata") or {}
+            user_api_key = standard_logging_metadata.get("user_api_key_hash")
+
             pipeline_operations: List[RedisPipelineIncrementOperation] = []
 
             if user_api_key:

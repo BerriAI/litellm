@@ -5,7 +5,8 @@ from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, get_ty
 import httpx
 
 import litellm
-from litellm import supports_response_schema, supports_system_messages, verbose_logger
+from litellm.utils import supports_response_schema, supports_system_messages
+from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
@@ -34,6 +35,7 @@ class VertexAIModelRoute(str, Enum):
     BGE = "bge"
     MODEL_GARDEN = "model_garden"
     NON_GEMINI = "non_gemini"
+    OPENAI_COMPATIBLE = "openai"
 
 VERTEX_AI_MODEL_ROUTES = [f"{route.value}/" for route in VertexAIModelRoute]
 
@@ -179,8 +181,6 @@ def get_vertex_base_model_name(model: str) -> str:
     """
     # Derive routing prefixes from VertexAIModelRoute enum
     # Map specific routes to their prefixes (some routes like PARTNER_MODELS, GEMINI don't have prefixes)
-    
-    
     for route in VERTEX_AI_MODEL_ROUTES:
         if model.startswith(route):
             return model.replace(route, "", 1)
@@ -280,18 +280,24 @@ def _get_gemini_url(
     stream: Optional[bool],
     gemini_api_key: Optional[str],
 ) -> Tuple[str, str]:
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+    
     _gemini_model_name = "models/{}".format(model)
+    api_version = "v1alpha" if VertexGeminiConfig._is_gemini_3_or_newer(model) else "v1beta"
+    
     if mode == "chat":
         endpoint = "generateContent"
         if stream is True:
             endpoint = "streamGenerateContent"
-            url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}&alt=sse".format(
-                _gemini_model_name, endpoint, gemini_api_key
+            url = "https://generativelanguage.googleapis.com/{}/{}:{}?key={}&alt=sse".format(
+                api_version, _gemini_model_name, endpoint, gemini_api_key
             )
         else:
             url = (
-                "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
-                    _gemini_model_name, endpoint, gemini_api_key
+                "https://generativelanguage.googleapis.com/{}/{}:{}?key={}".format(
+                    api_version, _gemini_model_name, endpoint, gemini_api_key
                 )
             )
     elif mode == "embedding":
@@ -355,6 +361,57 @@ def _fix_enum_empty_strings(schema, depth=0):
         _fix_enum_empty_strings(items, depth=depth + 1)
 
 
+def _fix_enum_types(schema, depth=0):
+    """Remove `enum` fields when the schema type is not string.
+
+    Gemini / Vertex APIs only allow enums for string-typed fields. When an enum
+    is present on a non-string typed property (or when `anyOf` types do not
+    include a string type), remove the enum to avoid provider validation errors.
+    """
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(
+            f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema."
+        )
+
+    if not isinstance(schema, dict):
+        return
+
+    # If enum exists but type is not string (and anyOf doesn't include string), drop enum
+    if "enum" in schema and isinstance(schema["enum"], list):
+        schema_type = schema.get("type")
+        keep_enum = False
+        if isinstance(schema_type, str) and schema_type.lower() == "string":
+            keep_enum = True
+        else:
+            anyof = schema.get("anyOf")
+            if isinstance(anyof, list):
+                for item in anyof:
+                    if isinstance(item, dict):
+                        item_type = item.get("type")
+                        if isinstance(item_type, str) and item_type.lower() == "string":
+                            keep_enum = True
+                            break
+
+        if not keep_enum:
+            schema.pop("enum", None)
+
+    # Recurse into nested structures
+    properties = schema.get("properties", None)
+    if properties is not None:
+        for _, value in properties.items():
+            _fix_enum_types(value, depth=depth + 1)
+
+    items = schema.get("items", None)
+    if items is not None:
+        _fix_enum_types(items, depth=depth + 1)
+
+    anyof = schema.get("anyOf", None)
+    if anyof is not None and isinstance(anyof, list):
+        for item in anyof:
+            if isinstance(item, dict):
+                _fix_enum_types(item, depth=depth + 1)
+
+
 def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     """
     This is a modified version of https://github.com/google-gemini/generative-ai-python/blob/8f77cc6ac99937cd3a81299ecf79608b91b06bbb/google/generativeai/types/content_types.py#L419
@@ -387,6 +444,9 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
 
     # Handle empty strings in enum values - Gemini doesn't accept empty strings in enums
     _fix_enum_empty_strings(parameters)
+
+    # Remove enums for non-string typed fields (Gemini requires enum only on strings)
+    _fix_enum_types(parameters)
 
     # Handle empty items objects
     process_items(parameters)

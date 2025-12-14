@@ -247,6 +247,26 @@ OIDC Auth for API: [**See Walkthrough**](https://www.loom.com/share/00fe2deab59a
 - Validate if any group has model access
 - If all checks pass, allow the request
 
+### Select Team via Request Header
+
+When a JWT token contains multiple teams (via `team_ids_jwt_field`), you can explicitly select which team to use for a request by passing the `x-litellm-team-id` header.
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer <your-jwt-token>' \
+-H 'x-litellm-team-id: team_id_2' \
+-d '{
+  "model": "gpt-4",
+  "messages": [{"role": "user", "content": "Hello"}]
+}'
+```
+
+**Validation:**
+- The team ID in the header must exist in the JWT's `team_ids_jwt_field` list or match `team_id_jwt_field`
+- If an invalid team is specified, a 403 error is returned
+- If no header is provided, LiteLLM auto-selects the first team with access to the requested model
+
 
 ### Custom JWT Validate
 
@@ -338,6 +358,58 @@ general_settings:
     team_allowed_routes: ["/v1/chat/completions"] # 👈 Set accepted routes
 ```
 
+### Allowing other provider routes for Teams
+
+To enable team JWT tokens to access Anthropic-style endpoints such as `/v1/messages`, update `team_allowed_routes` in your `litellm_jwtauth` configuration. `team_allowed_routes` supports the following values:
+
+- Named route groups from `LiteLLMRoutes` (e.g., `openai_routes`, `anthropic_routes`, `info_routes`, `mapped_pass_through_routes`).
+
+Below is a quick reference for the route groups you can use and example representative routes from each group. If you need the exhaustive list, see the `LiteLLMRoutes` enum in `litellm/proxy/_types.py` for the authoritative list.
+
+| Route Group | What it contains | Representative routes |
+|-------------|------------------|-----------------------|
+| `openai_routes` | OpenAI-compatible REST endpoints (chat, completion, embeddings, images, responses, models, etc.) | `/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`, `/v1/images/generations`, `/v1/models` |
+| `anthropic_routes` | Anthropic-style endpoints (`/v1/messages` and related) | `/v1/messages`, `/v1/messages/count_tokens`, `/v1/skills` |
+| `mapped_pass_through_routes` | Provider-specific pass-through route prefixes (e.g., Anthropic when proxied via `/anthropic`). Use with `mapped_pass_through_routes` for provider wildcard mapping | `/anthropic/*`, `/vertex-ai/*`, `/bedrock/*` |
+| `passthrough_routes_wildcard` | Wildcard mapping for providers (e.g., `/anthropic/*`) - precomputed wildcard list used by the proxy | `/anthropic/*`, `/vllm/*` |
+| `google_routes` | Google-specific (e.g., Vertex / Batching endpoints) | `/v1beta/models/{model_name}:generateContent` |
+| `mcp_routes` | Internal MCP management endpoints | `/mcp/tools`, `/mcp/tools/call` |
+| `info_routes` | Read-only & info endpoints used by the UI | `/key/info`, `/team/info`, `/v1/models` |
+| `management_routes` | Admin-only management endpoints (create/update/delete user/team/model) | `/team/new`, `/key/generate`, `/model/new` |
+| `spend_tracking_routes` | Budget/spend related endpoints | `/spend/logs`, `/spend/keys` |
+| `public_routes` | Public and unauthenticated endpoints | `/`, `/routes`, `/.well-known/litellm-ui-config` |
+
+Note: `llm_api_routes` is the union of OpenAI, Anthropic, Google, pass-through and other LLM routes (`openai_routes + anthropic_routes + google_routes + mapped_pass_through_routes + passthrough_routes_wildcard + apply_guardrail_routes + mcp_routes + litellm_native_routes`).
+
+Defaults (what the proxy uses if you don't override them in `litellm_jwtauth`):
+
+- `admin_jwt_scope`: `litellm_proxy_admin`
+- `admin_allowed_routes` (default): `management_routes`, `spend_tracking_routes`, `global_spend_tracking_routes`, `info_routes` 
+- `team_allowed_routes` (default): `openai_routes`, `info_routes` 
+- `public_allowed_routes` (default): `public_routes`
+
+
+Example: Allow team JWTs to call Anthropic `/v1/messages` (either by route group or by explicit route string):
+
+```yaml
+general_settings:
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    team_ids_jwt_field: "team_ids"
+    team_allowed_routes: ["openai_routes", "info_routes", "anthropic_routes"]
+```
+
+Or selectively allow the exact Anthropic message endpoint only:
+
+```yaml
+general_settings:
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    team_ids_jwt_field: "team_ids"
+    team_allowed_routes: ["/v1/messages", "info_routes"]
+```
+
+
 ### Caching Public Keys 
 
 Control how long public keys are cached for (in seconds).
@@ -394,6 +466,8 @@ curl --location 'http://0.0.0.0:4000/team/unblock' \
 ### Upsert Users + Allowed Email Domains 
 
 Allow users who belong to a specific email domain, automatic access to the proxy.
+
+**Note:** `user_allowed_email_domain` is optional. If not specified, all users will be allowed regardless of their email domain.
  
 ```yaml
 general_settings:
@@ -401,8 +475,74 @@ general_settings:
   enable_jwt_auth: True
   litellm_jwtauth:
     user_email_jwt_field: "email" # 👈 checks 'email' field in jwt payload
-    user_allowed_email_domain: "my-co.com" # allows user@my-co.com to call proxy
+    user_allowed_email_domain: "my-co.com" # 👈 OPTIONAL - allows user@my-co.com to call proxy
     user_id_upsert: true # 👈 upserts the user to db, if valid email but not in db
+```
+
+## OIDC UserInfo Endpoint
+
+Use this when your JWT/access token doesn't contain user-identifying information. LiteLLM will call your identity provider's UserInfo endpoint to fetch user details.
+
+### When to Use
+
+- Your JWT is opaque (not self-contained) or lacks user claims
+- You need to fetch fresh user information from your identity provider
+- Your access tokens don't include email, roles, or other identifying data
+
+### Configuration
+
+```yaml title="config.yaml" showLineNumbers
+general_settings:
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    # Enable OIDC UserInfo endpoint
+    oidc_userinfo_enabled: true
+    oidc_userinfo_endpoint: "https://your-idp.com/oauth2/userinfo"
+    oidc_userinfo_cache_ttl: 300  # Cache for 5 minutes (default: 300)
+    
+    # Map fields from UserInfo response
+    user_id_jwt_field: "sub"
+    user_email_jwt_field: "email"
+    user_roles_jwt_field: "roles"
+```
+
+### Flow Diagram
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant LiteLLM
+    participant IdP as Identity Provider
+
+    Client->>LiteLLM: Request with Bearer token
+    Note over LiteLLM: Check cache for UserInfo
+    
+    LiteLLM->>IdP: GET /userinfo (if not cached)<br/>Authorization: Bearer {token}
+    IdP-->>LiteLLM: User data (sub, email, roles)
+    
+    Note over LiteLLM: Cache response (TTL: 5min)<br/>Extract user_id, email, roles<br/>Perform RBAC checks
+    
+    LiteLLM-->>Client: Authorized/Denied
+```
+
+### Example: Azure AD
+
+```yaml title="config.yaml" showLineNumbers
+litellm_jwtauth:
+  oidc_userinfo_enabled: true
+  oidc_userinfo_endpoint: "https://graph.microsoft.com/oidc/userinfo"
+  user_id_jwt_field: "sub"
+  user_email_jwt_field: "email"
+```
+
+### Example: Keycloak
+
+```yaml title="config.yaml" showLineNumbers
+litellm_jwtauth:
+  oidc_userinfo_enabled: true
+  oidc_userinfo_endpoint: "https://keycloak.example.com/realms/your-realm/protocol/openid-connect/userinfo"
+  user_id_jwt_field: "sub"
+  user_roles_jwt_field: "resource_access.your-client.roles"
 ```
 
 ## [BETA] Control Access with OIDC Roles

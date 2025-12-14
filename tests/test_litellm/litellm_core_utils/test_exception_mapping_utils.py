@@ -36,8 +36,32 @@ context_window_test_cases = [
         "Input tokens exceed the configured limit of 272000 tokens. Your messages resulted in 509178 tokens. Please reduce the length of the messages.",
         True,
     ),
+    (
+        "`inputs` tokens + `max_new_tokens` must be <= 4096",
+        True,
+    ),
+    # Gemini context window error format
+    # See: https://github.com/BerriAI/litellm/issues/XXXX
+    (
+        "The input token count exceeds the maximum number of tokens allowed 1048576.",
+        True,
+    ),
+    (
+        "GeminiException BadRequestError - {\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"The input token count exceeds the maximum number of tokens allowed 1048576.\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }\n}\n",
+        True,
+    ),
     # Test case insensitivity
     ("ERROR: THIS MODEL'S MAXIMUM CONTEXT LENGTH IS 1024.", True),
+    # Cerebras context window error format
+    # See: https://github.com/BerriAI/litellm/issues/XXXX
+    (
+        "Current length is 132784 while limit is 131000",
+        True,
+    ),
+    (
+        "CerebrasException - Please reduce the length of the messages or completion. Current length is 50000 while limit is 40000",
+        True,
+    ),
     # Negative cases (should return False)
     ("A generic API error occurred.", False),
     ("Invalid API Key provided.", False),

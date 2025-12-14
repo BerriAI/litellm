@@ -6,8 +6,10 @@
 # +-------------------------------------------------------------+
 
 # Standard library imports
+import json
 import os
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple, Type, Union
+from urllib.parse import quote
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Type, Union
 
 # Third-party imports
 from fastapi import HTTPException
@@ -28,12 +30,116 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
+    get_metadata_variable_name_from_kwargs,
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import LLMResponseTypes
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+
+MAX_PILLAR_HEADER_VALUE_BYTES = 8 * 1024
+
+
+def _encode_json_for_header(data: Any) -> str:
+    """
+    JSON-serialize and URL-encode data for safe header transmission.
+    """
+    json_payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    return quote(json_payload, safe="")
+
+
+def _truncate_evidence_payload(
+    evidence: Any, max_bytes: int = MAX_PILLAR_HEADER_VALUE_BYTES
+) -> Tuple[Any, str, bool]:
+    """
+    Truncate evidence payload so the encoded header value stays within max_bytes.
+
+    Returns:
+        truncated_evidence: Evidence list/value after truncation
+        encoded_value: URL-encoded JSON string for header
+        was_truncated: Whether truncation occurred
+    """
+    if not isinstance(evidence, list):
+        encoded = _encode_json_for_header(evidence)
+        if len(encoded.encode("utf-8")) <= max_bytes:
+            return evidence, encoded, False
+        truncated_value = "[truncated]"
+        return truncated_value, _encode_json_for_header(truncated_value), True
+
+    truncated: List[Any] = []
+    encoded = _encode_json_for_header(truncated)
+    truncated_flag = False
+
+    for entry in evidence:
+        working_entry: Any
+        if isinstance(entry, dict):
+            working_entry = dict(entry)
+        else:
+            working_entry = entry
+
+        truncated.append(working_entry)
+        encoded = _encode_json_for_header(truncated)
+
+        if len(encoded.encode("utf-8")) <= max_bytes:
+            continue
+
+        truncated_flag = True
+        if isinstance(working_entry, dict):
+            evidence_text = str(working_entry.get("evidence", ""))
+            if evidence_text:
+                step = max(1, len(evidence_text) // 2)
+                while len(encoded.encode("utf-8")) > max_bytes and evidence_text:
+                    evidence_text = (
+                        evidence_text[:-step] if len(evidence_text) > step else evidence_text[:-1]
+                    )
+                    step = max(1, step // 2)
+                    truncated_text = (
+                        f"{evidence_text}...[truncated]" if evidence_text else "[truncated]"
+                    )
+                    working_entry["evidence"] = truncated_text
+                    working_entry["evidence_truncated"] = True
+                    encoded = _encode_json_for_header(truncated)
+
+                if len(encoded.encode("utf-8")) <= max_bytes:
+                    continue
+
+        truncated.pop()
+        encoded = _encode_json_for_header(truncated)
+
+    return truncated, encoded, truncated_flag
+
+
+def build_pillar_response_headers(metadata_store: Dict[str, Any]) -> Dict[str, str]:
+    """
+    Create URL-safe Pillar response headers and apply truncation metadata.
+    """
+    headers: Dict[str, str] = {}
+
+    if "pillar_flagged" in metadata_store:
+        headers["x-pillar-flagged"] = str(metadata_store["pillar_flagged"]).lower()
+
+    if "pillar_scanners" in metadata_store:
+        headers["x-pillar-scanners"] = _encode_json_for_header(metadata_store["pillar_scanners"])
+
+    if "pillar_evidence" in metadata_store:
+        truncated_evidence, encoded_value, truncated_flag = _truncate_evidence_payload(
+            metadata_store["pillar_evidence"]
+        )
+        metadata_store["pillar_evidence"] = truncated_evidence
+        if truncated_flag:
+            metadata_store["pillar_evidence_truncated"] = True
+        headers["x-pillar-evidence"] = encoded_value
+
+    if "pillar_session_id_response" in metadata_store:
+        headers["x-pillar-session-id"] = quote(
+            str(metadata_store["pillar_session_id_response"]), safe=""
+        )
+
+    if headers:
+        metadata_store["pillar_response_headers"] = headers
+
+    return headers
 
 
 # Exception classes
@@ -90,6 +196,10 @@ class PillarGuardrail(CustomGuardrail):
             fallback_on_error: Action when API errors occur ('allow' or 'block')
             timeout: Timeout for API calls in seconds
             **kwargs: Additional arguments passed to parent class
+
+        Note:
+            LiteLLM virtual key context (user_id, team_id, key_alias, etc.) is always
+            automatically passed as X-LiteLLM-* headers to enable application/user tracking.
         """
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         self.api_key = api_key or os.environ.get("PILLAR_API_KEY")
@@ -222,7 +332,7 @@ class PillarGuardrail(CustomGuardrail):
             return data
 
         verbose_proxy_logger.debug("Pillar Guardrail: Pre-call hook")
-        result = await self.run_pillar_guardrail(data)
+        result = await self.run_pillar_guardrail(data, user_api_key_dict)
 
         # Add guardrail name to response headers
         add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
@@ -265,7 +375,7 @@ class PillarGuardrail(CustomGuardrail):
             return data
 
         verbose_proxy_logger.debug("Pillar Guardrail: During-call moderation hook")
-        result = await self.run_pillar_guardrail(data)
+        result = await self.run_pillar_guardrail(data, user_api_key_dict)
 
         # Add guardrail name to response headers
         add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
@@ -315,7 +425,7 @@ class PillarGuardrail(CustomGuardrail):
         post_call_data["messages"] = data.get("messages", []) + response_messages
 
         # Reuse the existing guardrail logic - zero duplication!
-        await self.run_pillar_guardrail(post_call_data)
+        await self.run_pillar_guardrail(post_call_data, user_api_key_dict)
 
         # Add guardrail name to response headers
         add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
@@ -326,12 +436,13 @@ class PillarGuardrail(CustomGuardrail):
     # CORE LOGIC METHOD
     # =========================================================================
 
-    async def run_pillar_guardrail(self, data: dict) -> dict:
+    async def run_pillar_guardrail(self, data: dict, user_api_key_dict: UserAPIKeyAuth) -> dict:
         """
         Core method to run the Pillar guardrail scan.
 
         Args:
             data: Request data containing messages and metadata
+            user_api_key_dict: User API key authentication info containing key context
 
         Returns:
             Original data if safe or in monitor mode
@@ -345,7 +456,7 @@ class PillarGuardrail(CustomGuardrail):
             return data
 
         try:
-            headers = self._prepare_headers()
+            headers = self._prepare_headers(user_api_key_dict)
             payload = self._prepare_payload(data)
 
             response = await self._call_pillar_api(
@@ -403,8 +514,16 @@ class PillarGuardrail(CustomGuardrail):
                 },
             )
 
-    def _prepare_headers(self) -> Dict[str, str]:
-        """Prepare headers for the Pillar API request."""
+    def _prepare_headers(self, user_api_key_dict: UserAPIKeyAuth) -> Dict[str, str]:
+        """
+        Prepare headers for the Pillar API request.
+
+        Args:
+            user_api_key_dict: User API key authentication info containing key context
+
+        Returns:
+            Dictionary of headers to send to Pillar API
+        """
         if not self.api_key:
             msg = (
                 "Couldn't get Pillar API key, either set the `PILLAR_API_KEY` in the environment or "
@@ -415,13 +534,27 @@ class PillarGuardrail(CustomGuardrail):
         headers: Dict[str, str] = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-        }
+        }    
 
         # Add Pillar-specific headers based on configuration
         self._set_bool_header(headers, "plr_scanners", self.include_scanners)
         self._set_bool_header(headers, "plr_evidence", self.include_evidence)
         self._set_bool_header(headers, "plr_async", self.async_mode)
         self._set_bool_header(headers, "plr_persist", self.persist_session)
+
+        # Always add LiteLLM virtual key context headers (metadata excluded for security)
+        context_mapping = {
+            "X-LiteLLM-Key-Name": user_api_key_dict.key_name,
+            "X-LiteLLM-Key-Alias": user_api_key_dict.key_alias,
+            "X-LiteLLM-User-Id": user_api_key_dict.user_id,
+            "X-LiteLLM-User-Email": user_api_key_dict.user_email,
+            "X-LiteLLM-Team-Id": user_api_key_dict.team_id,
+            "X-LiteLLM-Team-Name": user_api_key_dict.team_alias,
+            "X-LiteLLM-Org-Id": user_api_key_dict.org_id,
+        }
+        for header_name, value in context_mapping.items():
+            if value:
+                headers[header_name] = str(value)
 
         return headers
 
@@ -517,6 +650,14 @@ class PillarGuardrail(CustomGuardrail):
         """
         Prepare the payload for the Pillar API request following the /api/v1/protect contract.
 
+        This method supports multi-modal content (images, files, audio, video, etc.) as messages
+        are passed through without modification. The messages array can contain any OpenAI-compatible
+        message structure including:
+        - Text content (string)
+        - Multi-modal content blocks (image_url, image_file, audio, video, document, file)
+        - Attachments
+        - Tool calls
+
         Args:
             data: Request data
 
@@ -602,15 +743,31 @@ class PillarGuardrail(CustomGuardrail):
 
         flagged = pillar_response.get("flagged", False)
 
+        metadata_field = get_metadata_variable_name_from_kwargs(original_data)
+        if metadata_field not in original_data or not isinstance(original_data.get(metadata_field), dict):
+            original_data[metadata_field] = {}
+        metadata_store = original_data[metadata_field]
+
+        # Backwards compatibility - ensure metadata alias exists when different key used
+        if metadata_field != "metadata":
+            if "metadata" not in original_data or not isinstance(original_data.get("metadata"), dict):
+                original_data["metadata"] = metadata_store
+
         # Store session_id from Pillar response for potential reuse
         pillar_session_id = pillar_response.get("session_id")
         if pillar_session_id:
             verbose_proxy_logger.debug(f"Pillar Guardrail: Received session_id from server: {pillar_session_id}")
             # Store in request metadata for use in subsequent hooks
-            if "metadata" not in original_data:
-                original_data["metadata"] = {}
-            if "pillar_session_id" not in original_data["metadata"]:
-                original_data["metadata"]["pillar_session_id"] = pillar_session_id
+            if "pillar_session_id" not in metadata_store:
+                metadata_store["pillar_session_id"] = pillar_session_id
+            metadata_store["pillar_session_id_response"] = pillar_session_id
+
+        # Always set flagged status and scanner/evidence data for monitor mode
+        metadata_store["pillar_flagged"] = flagged
+        if self.include_scanners:
+            metadata_store["pillar_scanners"] = pillar_response.get("scanners", {})
+        if self.include_evidence:
+            metadata_store["pillar_evidence"] = pillar_response.get("evidence", [])
 
         if flagged:
             verbose_proxy_logger.warning("Pillar Guardrail: Threat detected")
@@ -618,6 +775,8 @@ class PillarGuardrail(CustomGuardrail):
                 self._raise_pillar_detection_exception(pillar_response)
             elif self.on_flagged_action == "monitor":
                 verbose_proxy_logger.info("Pillar Guardrail: Monitoring mode - allowing flagged content to proceed")
+
+        build_pillar_response_headers(metadata_store)
 
     def _raise_pillar_detection_exception(self, pillar_response: Dict[str, Any]) -> None:
         """
