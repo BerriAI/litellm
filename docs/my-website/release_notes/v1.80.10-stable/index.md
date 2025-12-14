@@ -85,16 +85,14 @@ Users can now filter usage statistics by agents, providing the same granular fil
 | [Voyage AI Rerank](../../docs/providers/voyage) | `/rerank` | Voyage AI rerank models support |
 | [Fireworks AI Rerank](../../docs/providers/fireworks_ai) | `/rerank` | Fireworks AI rerank endpoint support |
 
-### New LLM API Endpoints (6 new endpoints)
+### New LLM API Endpoints (4 new endpoints)
 
 | Endpoint | Method | Description | Documentation |
 | -------- | ------ | ----------- | ------------- |
-| `/containers` | POST | Create a new container for code interpreter | [Docs](../../docs/containers) |
-| `/containers` | GET | List all containers | [Docs](../../docs/containers) |
-| `/containers/{id}` | DELETE | Delete a container | [Docs](../../docs/containers) |
-| `/containers/{id}/files` | POST | Upload files to a container | [Docs](../../docs/containers) |
-| `/containers/{id}/files` | GET | List files in a container | [Docs](../../docs/containers) |
-| `/containers/{id}/files/{file_id}` | DELETE | Delete a file from a container | [Docs](../../docs/containers) |
+| `/containers/{id}/files` | GET | List files in a container | [Docs](../../docs/container_files) |
+| `/containers/{id}/files/{file_id}` | GET | Retrieve container file metadata | [Docs](../../docs/container_files) |
+| `/containers/{id}/files/{file_id}` | DELETE | Delete a file from a container | [Docs](../../docs/container_files) |
+| `/containers/{id}/files/{file_id}/content` | GET | Retrieve container file content | [Docs](../../docs/container_files) |
 
 ---
 
