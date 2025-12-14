@@ -1,6 +1,6 @@
 general_settings:
   user_header_mappings:
-  - header_name: X-OpenWebUI-User-Id
+  - header_name: X-OpenWebUI-User-Email
     litellm_user_role: customer
   - header_name: X-OpenWebUI-User-Email
     litellm_user_role: internal_user
