@@ -46,9 +46,9 @@ pip install litellm==1.80.10
 ## Key Highlights
 
 - **Agent (A2A) Gateway with Cost Tracking** - [Track agent costs per query, per token pricing, and view agent usage in the dashboard](../../docs/a2a_cost_tracking)
+- **2 New Agent Providers** - [LangGraph Agents](../../docs/providers/langgraph) and [Azure AI Foundry Agents](../../docs/providers/azure_ai_agents) for agentic workflows
 - **New Provider: SAP Gen AI Hub** - [Full support for SAP Generative AI Hub with chat completions](../../docs/providers/sap)
-- **New Provider: LangGraph Agents** - [Add LangGraph agents to Agent Gateway for agentic workflows](../../docs/providers/langgraph)
-- **New Provider: Azure AI Foundry Agents** - [Use Azure AI Foundry Agents via /chat/completions, /responses, and Agent Gateway](../../docs/providers/azure_ai_agents)
+- **New Bedrock Writer Models** - Add Palmyra-X4 and Palmyra-X5 models on Bedrock
 - **OpenAI GPT-5.2 Models** - Full support for GPT-5.2, GPT-5.2-pro, and Azure GPT-5.2 models with reasoning support
 - **227 New Fireworks AI Models** - Comprehensive model coverage for Fireworks AI platform
 - **MCP Support on /chat/completions** - [Use MCP servers directly via chat completions endpoint](../../docs/mcp)
@@ -82,16 +82,19 @@ Users can now filter usage statistics by agents, providing the same granular fil
 | [SAP Gen AI Hub](../../docs/providers/sap) | `/chat/completions`, `/messages`, `/responses` | SAP Generative AI Hub integration for enterprise AI |
 | [LangGraph](../../docs/providers/langgraph) | `/chat/completions`, `/messages`, `/responses`, `/a2a` | LangGraph agents for agentic workflows |
 | [Azure AI Foundry Agents](../../docs/providers/azure_ai_agents) | `/chat/completions`, `/messages`, `/responses`, `/a2a` | Azure AI Foundry Agents for enterprise agent deployments |
-| [Helicone](../../docs/observability/helicone_integration) | Observability | Helicone observability integration for LLM monitoring |
-| [SumoLogic](../../docs/proxy/logging#sumologic) | Logging | Native webhook integration for SumoLogic |
+| [Voyage AI Rerank](../../docs/providers/voyage) | `/rerank` | Voyage AI rerank models support |
+| [Fireworks AI Rerank](../../docs/providers/fireworks_ai) | `/rerank` | Fireworks AI rerank endpoint support |
 
-### New LLM API Endpoints (2 new endpoints)
+### New LLM API Endpoints (6 new endpoints)
 
 | Endpoint | Method | Description | Documentation |
 | -------- | ------ | ----------- | ------------- |
-| `/containers` | POST, GET, DELETE | Container file management for code interpreter | [Docs](../../docs/containers) |
-| `/containers/{id}/files` | POST, GET, DELETE | Container file operations | [Docs](../../docs/containers) |
-
+| `/containers` | POST | Create a new container for code interpreter | [Docs](../../docs/containers) |
+| `/containers` | GET | List all containers | [Docs](../../docs/containers) |
+| `/containers/{id}` | DELETE | Delete a container | [Docs](../../docs/containers) |
+| `/containers/{id}/files` | POST | Upload files to a container | [Docs](../../docs/containers) |
+| `/containers/{id}/files` | GET | List files in a container | [Docs](../../docs/containers) |
+| `/containers/{id}/files/{file_id}` | DELETE | Delete a file from a container | [Docs](../../docs/containers) |
 
 ---
 
@@ -140,13 +143,12 @@ Users can now filter usage statistics by agents, providing the same granular fil
     - Add retrieve batches and retrieve file content support - [PR #17700](https://github.com/BerriAI/litellm/pull/17700)
 - **[Bedrock](../../docs/providers/bedrock)**
     - Add new Bedrock OSS models to model list - [PR #17638](https://github.com/BerriAI/litellm/pull/17638)
-    - Add Bedrock Writer models - [PR #17685](https://github.com/BerriAI/litellm/pull/17685)
+    - Add Bedrock Writer models (Palmyra-X4, Palmyra-X5) - [PR #17685](https://github.com/BerriAI/litellm/pull/17685)
     - Add EU Claude Opus 4.5 model - [PR #17897](https://github.com/BerriAI/litellm/pull/17897)
     - Add serviceTier support for Converse API - [PR #17810](https://github.com/BerriAI/litellm/pull/17810)
-    - Fix header forwarding with custom API - [PR #17872](https://github.com/BerriAI/litellm/pull/17872)
+    - Fix header forwarding with custom API for Bedrock embeddings - [PR #17872](https://github.com/BerriAI/litellm/pull/17872)
 - **[Gemini](../../docs/providers/gemini)**
     - Add support for computer use for Gemini - [PR #17756](https://github.com/BerriAI/litellm/pull/17756)
-    - Support model names with slashes on Gemini endpoints - [PR #17743](https://github.com/BerriAI/litellm/pull/17743)
     - Handle context window errors - [PR #17751](https://github.com/BerriAI/litellm/pull/17751)
     - Add speechConfig to GenerationConfig for Gemini TTS - [PR #17851](https://github.com/BerriAI/litellm/pull/17851)
 - **[Vertex AI](../../docs/providers/vertex)**
@@ -161,11 +163,8 @@ Users can now filter usage statistics by agents, providing the same granular fil
     - Add native support for thinking and reasoning_effort params - [PR #17712](https://github.com/BerriAI/litellm/pull/17712)
 - **[NVIDIA NIM Rerank](../../docs/providers/nvidia_nim_rerank)**
     - Add llama-3.2-nv-rerankqa-1b-v2 rerank model - [PR #17670](https://github.com/BerriAI/litellm/pull/17670)
-- **[Voyage](../../docs/providers/voyage)**
-    - Add rerank API support - [PR #17744](https://github.com/BerriAI/litellm/pull/17744)
 - **[Fireworks AI](../../docs/providers/fireworks_ai)**
     - Add 227 new Fireworks AI models - [PR #17692](https://github.com/BerriAI/litellm/pull/17692)
-    - Add Fireworks rerank support - [PR #17653](https://github.com/BerriAI/litellm/pull/17653)
 - **[Dashscope](../../docs/providers/dashscope)**
     - Fix default base_url error - [PR #17584](https://github.com/BerriAI/litellm/pull/17584)
 
@@ -174,8 +173,12 @@ Users can now filter usage statistics by agents, providing the same granular fil
 - **[Anthropic](../../docs/providers/anthropic)**
     - Fix missing content in Anthropic to OpenAI conversion - [PR #17693](https://github.com/BerriAI/litellm/pull/17693)
     - Avoid error when we have just the tool_calls in input - [PR #17753](https://github.com/BerriAI/litellm/pull/17753)
+- **[Azure](../../docs/providers/azure)**
+    - Fix error about encoding video id for Azure - [PR #17708](https://github.com/BerriAI/litellm/pull/17708)
 - **[Azure AI](../../docs/providers/azure_ai)**
     - Fix LLM provider for azure_ai in model map - [PR #17805](https://github.com/BerriAI/litellm/pull/17805)
+- **[Watsonx](../../docs/providers/watsonx)**
+    - Fix Watsonx Audio Transcription to only send supported params to API - [PR #17840](https://github.com/BerriAI/litellm/pull/17840)
 - **[Router](../../docs/routing)**
     - Handle tools=None in completion requests - [PR #17684](https://github.com/BerriAI/litellm/pull/17684)
     - Add minimum request threshold for error rate cooldown - [PR #17464](https://github.com/BerriAI/litellm/pull/17464)
@@ -202,13 +205,15 @@ Users can now filter usage statistics by agents, providing the same granular fil
 - **[Video API](../../docs/videos)**
     - Use litellm params for all videos APIs - [PR #17732](https://github.com/BerriAI/litellm/pull/17732)
     - Respect videos content db creds - [PR #17771](https://github.com/BerriAI/litellm/pull/17771)
-    - Fix error about encoding video id for Azure - [PR #17708](https://github.com/BerriAI/litellm/pull/17708)
 - **[Embeddings API](../../docs/proxy/embedding)**
     - Fix handling token array input decoding for embeddings - [PR #17468](https://github.com/BerriAI/litellm/pull/17468)
+- **[Chat Completions API](../../docs/completion/input)**
+    - Add v0 target storage support - store files in Azure AI storage and use with chat completions API - [PR #17758](https://github.com/BerriAI/litellm/pull/17758)
+- **[generateContent API](../../docs/providers/gemini)**
+    - Support model names with slashes on Gemini generateContent endpoints - [PR #17743](https://github.com/BerriAI/litellm/pull/17743)
 - **General**
     - Use audio content for caching - [PR #17651](https://github.com/BerriAI/litellm/pull/17651)
     - Return 403 exception when calling GET responses API - [PR #17629](https://github.com/BerriAI/litellm/pull/17629)
-    - Add passthrough in response - [PR #17102](https://github.com/BerriAI/litellm/pull/17102)
     - Add nested field removal support to additional_drop_params - [PR #17711](https://github.com/BerriAI/litellm/pull/17711)
     - Async post_call_streaming_iterator_hook now properly iterates async generators - [PR #17626](https://github.com/BerriAI/litellm/pull/17626)
 
@@ -275,7 +280,6 @@ Users can now filter usage statistics by agents, providing the same granular fil
     - Add User Writable Directory to Non Root Docker for Logo - [PR #17180](https://github.com/BerriAI/litellm/pull/17180)
     - Swap URL Input and Display Name inputs - [PR #17682](https://github.com/BerriAI/litellm/pull/17682)
     - Change deprecation banner to only show on /sso/key/generate - [PR #17681](https://github.com/BerriAI/litellm/pull/17681)
-    - Resolve UI session MCP permissions across real teams - [PR #17620](https://github.com/BerriAI/litellm/pull/17620)
     - Change credential encryption to only affect db credentials - [PR #17741](https://github.com/BerriAI/litellm/pull/17741)
 - **Auth & Routes**
     - Return 403 instead of 503 for unauthorized routes - [PR #17723](https://github.com/BerriAI/litellm/pull/17723)
@@ -285,12 +289,17 @@ Users can now filter usage statistics by agents, providing the same granular fil
 
 ## AI Integrations
 
+### New Integrations (4 new integrations)
+
+| Integration | Type | Description |
+| ----------- | ---- | ----------- |
+| [SumoLogic](../../docs/proxy/logging#sumologic) | Logging | Native webhook integration for SumoLogic - [PR #17630](https://github.com/BerriAI/litellm/pull/17630) |
+| [Arize Phoenix](../../docs/proxy/arize_phoenix_prompts) | Prompt Management | Arize Phoenix OSS prompt management integration - [PR #17750](https://github.com/BerriAI/litellm/pull/17750) |
+| [Sendgrid](../../docs/proxy/email) | Email | Sendgrid email notifications integration - [PR #17775](https://github.com/BerriAI/litellm/pull/17775) |
+| [Onyx](../../docs/proxy/guardrails/onyx_security) | Guardrails | Onyx guardrail hooks integration - [PR #16591](https://github.com/BerriAI/litellm/pull/16591) |
+
 ### Logging
 
-- **[Helicone](../../docs/observability/helicone_integration)**
-    - Add Helicone as a provider and update observability documentation - [PR #17663](https://github.com/BerriAI/litellm/pull/17663)
-- **[SumoLogic](../../docs/proxy/logging#sumologic)**
-    - Native Webhook Integration for SumoLogic - [PR #17630](https://github.com/BerriAI/litellm/pull/17630)
 - **[Langfuse](../../docs/proxy/logging#langfuse)**
     - Propagate Langfuse trace_id - [PR #17669](https://github.com/BerriAI/litellm/pull/17669)
     - Prefer standard trace id for Langfuse logging - [PR #17791](https://github.com/BerriAI/litellm/pull/17791)
@@ -305,8 +314,6 @@ Users can now filter usage statistics by agents, providing the same granular fil
 
 ### Guardrails
 
-- **[Onyx](../../docs/proxy/guardrails/onyx_security)**
-    - Add Onyx guardrail hooks integration - [PR #16591](https://github.com/BerriAI/litellm/pull/16591)
 - **[HiddenLayer](../../docs/proxy/guardrails/hiddenlayer)**
     - Add HiddenLayer Guardrail Hooks - [PR #17728](https://github.com/BerriAI/litellm/pull/17728)
 - **[Pillar Security](../../docs/proxy/guardrails/pillar_security)**
@@ -319,18 +326,13 @@ Users can now filter usage statistics by agents, providing the same granular fil
     - Mask all regex pattern matches, not just first - [PR #17727](https://github.com/BerriAI/litellm/pull/17727)
 - **[Regex Guardrails](../../docs/proxy/guardrails/secret_detection)**
     - Add enhanced regex pattern matching for guardrails - [PR #17915](https://github.com/BerriAI/litellm/pull/17915)
+- **[Gray Swan Guardrail](../../docs/proxy/guardrails/grayswan)**
+    - Add passthrough mode for model response - [PR #17102](https://github.com/BerriAI/litellm/pull/17102)
 
 ### Prompt Management
 
-- **[Arize Phoenix](../../docs/proxy/arize_phoenix_prompts)**
-    - Arize Phoenix OSS - Prompt Management Integration - [PR #17750](https://github.com/BerriAI/litellm/pull/17750)
 - **General**
-    - New API for integrating providers - [PR #17829](https://github.com/BerriAI/litellm/pull/17829)
-
-### Email Integration
-
-- **[Sendgrid](../../docs/proxy/email)**
-    - Sendgrid integration - [PR #17775](https://github.com/BerriAI/litellm/pull/17775)
+    - New API for integrating prompt management providers - [PR #17829](https://github.com/BerriAI/litellm/pull/17829)
 
 ---
 
@@ -338,7 +340,6 @@ Users can now filter usage statistics by agents, providing the same granular fil
 
 - **Service Tier Pricing** - Extract service_tier from response/usage for OpenAI flex pricing - [PR #17748](https://github.com/BerriAI/litellm/pull/17748)
 - **Agent Cost Tracking** - Track agent_id in SpendLogs - [PR #17795](https://github.com/BerriAI/litellm/pull/17795)
-- **Memory Optimization** - Reduce memory accumulation of spend_logs - [PR #17742](https://github.com/BerriAI/litellm/pull/17742)
 - **Tag Activity** - Deduplicate /tag/daily/activity metadata - [PR #16764](https://github.com/BerriAI/litellm/pull/16764)
 - **Rate Limiting** - Dynamic Rate Limiter - allow specifying ttl for in memory cache - [PR #17679](https://github.com/BerriAI/litellm/pull/17679)
 
@@ -347,6 +348,7 @@ Users can now filter usage statistics by agents, providing the same granular fil
 ## MCP Gateway
 
 - **Chat Completions Integration** - Add support for using MCPs on /chat/completions - [PR #17747](https://github.com/BerriAI/litellm/pull/17747)
+- **UI Session Permissions** - Fix UI session MCP permissions across real teams - [PR #17620](https://github.com/BerriAI/litellm/pull/17620)
 - **OAuth Callback** - Fix MCP OAuth callback routing and URL handling - [PR #17789](https://github.com/BerriAI/litellm/pull/17789)
 - **Tool Name Prefix** - Fix MCP tool name prefix - [PR #17908](https://github.com/BerriAI/litellm/pull/17908)
 
@@ -369,6 +371,7 @@ Users can now filter usage statistics by agents, providing the same granular fil
 ## Performance / Loadbalancing / Reliability improvements
 
 - **Memory Leak Fix** - Cut memory leak in half - [PR #17784](https://github.com/BerriAI/litellm/pull/17784)
+- **Spend Logs Memory** - Reduce memory accumulation of spend_logs - [PR #17742](https://github.com/BerriAI/litellm/pull/17742)
 - **Router Optimization** - Replace time.perf_counter() with time.time() - [PR #17881](https://github.com/BerriAI/litellm/pull/17881)
 - **Filter Internal Params** - Filter internal params in fallback code - [PR #17941](https://github.com/BerriAI/litellm/pull/17941)
 - **Gunicorn Suggestion** - Suggest Gunicorn instead of uvicorn when using max_requests_before_restart - [PR #17788](https://github.com/BerriAI/litellm/pull/17788)
@@ -414,8 +417,6 @@ Users can now filter usage statistics by agents, providing the same granular fil
 - **Helm Chart** - Add extraResources support for Helm chart deployments - [PR #17627](https://github.com/BerriAI/litellm/pull/17627)
 - **Helm Versioning** - Add semver prerelease suffix to helm chart versions - [PR #17678](https://github.com/BerriAI/litellm/pull/17678)
 - **Database Schema** - Add storage_backend and storage_url columns to schema.prisma for target storage feature - [PR #17936](https://github.com/BerriAI/litellm/pull/17936)
-- **V0 Target Storage** - Add v0 support for target storage - [PR #17758](https://github.com/BerriAI/litellm/pull/17758)
-- **Watsonx** - Fix Watsonx Audio Transcription to only send supported params to API - [PR #17840](https://github.com/BerriAI/litellm/pull/17840)
 
 ---
 
