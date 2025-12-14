@@ -11,7 +11,7 @@ import datetime
 import hashlib
 import json
 import re
-from typing import Any, Dict, List, Optional, Set, Tuple, Union, cast
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union, cast
 from urllib.parse import urlparse
 
 from fastapi import HTTPException
@@ -416,7 +416,9 @@ class MCPServerManager:
             )
             raise e
 
-    def remove_server(self, mcp_server: LiteLLM_MCPServerTable):
+    async def remove_server(
+        self, mcp_server: LiteLLM_MCPServerTable, *, notify_filter: bool = True
+    ):
         """
         Remove a server from the registry
         """
@@ -430,6 +432,19 @@ class MCPServerManager:
             verbose_logger.warning(
                 f"Server ID {mcp_server.server_id} not found in registry"
             )
+
+        if notify_filter:
+            from litellm.proxy.mcp_semantic_filter.registry import (
+                semantic_mcp_filter_registry,
+            )
+
+            try:
+                await semantic_mcp_filter_registry.handle_server_refresh(self)
+            except Exception as sync_error:
+                verbose_logger.warning(
+                    "semantic_mcp_filter refresh failed after removal: %s",
+                    sync_error,
+                )
 
     async def build_mcp_server_from_table(
         self,
@@ -546,12 +561,27 @@ class MCPServerManager:
         )
         return new_server
 
-    async def add_update_server(self, mcp_server: LiteLLM_MCPServerTable):
+    async def add_update_server(
+        self, mcp_server: LiteLLM_MCPServerTable, *, notify_filter: bool = True
+    ):
         try:
             if mcp_server.server_id not in self.registry:
                 new_server = await self.build_mcp_server_from_table(mcp_server)
                 self.registry[mcp_server.server_id] = new_server
                 verbose_logger.debug(f"Added MCP Server: {new_server.name}")
+
+            if notify_filter:
+                from litellm.proxy.mcp_semantic_filter.registry import (
+                    semantic_mcp_filter_registry,
+                )
+
+                try:
+                    await semantic_mcp_filter_registry.handle_server_refresh(self)
+                except Exception as sync_error:
+                    verbose_logger.warning(
+                        "semantic_mcp_filter refresh failed after server update: %s",
+                        sync_error,
+                    )
 
         except Exception as e:
             verbose_logger.debug(f"Failed to add MCP server: {str(e)}")
@@ -615,23 +645,56 @@ class MCPServerManager:
         mcp_server_auth_headers: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
     ) -> List[MCPTool]:
         """
-        List all tools available across all MCP Servers.
+        List all tools available across MCP Servers that the user can access.
 
         Args:
             user_api_key_auth: User authentication
             mcp_auth_header: MCP auth header (deprecated)
             mcp_server_auth_headers: Optional dict of server-specific auth headers {server_alias: auth_value}
-            mcp_protocol_version: Optional MCP protocol version from request header
 
         Returns:
-            List[MCPTool]: Combined list of tools from all servers
+            List[MCPTool]: Combined list of tools from allowed servers
         """
         allowed_mcp_servers = await self.get_allowed_mcp_servers(user_api_key_auth)
+        return await self._list_tools_from_server_ids(
+            server_ids=allowed_mcp_servers,
+            mcp_auth_header=mcp_auth_header,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+        )
 
+    async def list_all_registered_tools(
+        self,
+        *,
+        mcp_auth_header: Optional[str] = None,
+        mcp_server_auth_headers: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
+    ) -> List[MCPTool]:
+        """
+        List tools from every MCP server in the registry.
+
+        Intended for system operations (e.g., semantic indexing) that must
+        consider every configured server regardless of user permissions.
+        """
+
+        all_server_ids = list(self.get_all_mcp_server_ids())
+        return await self._list_tools_from_server_ids(
+            server_ids=all_server_ids,
+            mcp_auth_header=mcp_auth_header,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+        )
+
+    async def _list_tools_from_server_ids(
+        self,
+        *,
+        server_ids: Iterable[str],
+        mcp_auth_header: Optional[str] = None,
+        mcp_server_auth_headers: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
+    ) -> List[MCPTool]:
         list_tools_result: List[MCPTool] = []
         verbose_logger.debug("SERVER MANAGER LISTING TOOLS")
 
-        for server_id in allowed_mcp_servers:
+        for server_id in server_ids:
+            if not server_id:
+                continue
             server = self.get_mcp_server_by_id(server_id)
             if server is None:
                 verbose_logger.warning(f"MCP Server {server_id} not found")
@@ -1980,7 +2043,7 @@ class MCPServerManager:
             verbose_logger.debug(
                 f"Adding server to registry: {server.server_id} ({server.server_name})"
             )
-            await self.add_update_server(server)
+            await self.add_update_server(server, notify_filter=False)
 
         verbose_logger.debug(
             f"Registry now contains {len(self.get_registry())} servers"
@@ -2274,7 +2337,7 @@ class MCPServerManager:
                 server.status = "unhealthy"
                 ## try adding server to registry to get error
                 try:
-                    await self.add_update_server(server)
+                    await self.add_update_server(server, notify_filter=False)
                 except Exception as e:
                     server.health_check_error = str(e)
                 server.health_check_error = "Server is not in in memory registry yet. This could be a temporary sync issue."

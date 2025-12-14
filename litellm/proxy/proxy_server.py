@@ -538,9 +538,9 @@ except ImportError:
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
-premium_user_data: Optional["EnterpriseLicenseData"] = (
-    _license_check.airgapped_license_data
-)
+premium_user_data: Optional[
+    "EnterpriseLicenseData"
+] = _license_check.airgapped_license_data
 global_max_parallel_request_retries_env: Optional[str] = os.getenv(
     "LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES"
 )
@@ -564,9 +564,7 @@ else:
 ui_link = f"{server_root_path}/ui"
 fallback_login_link = f"{server_root_path}/fallback/login"
 model_hub_link = f"{server_root_path}/ui/model_hub_table"
-ui_message = (
-    f"👉 [```LiteLLM Admin Panel on /ui```]({ui_link}). Create, Edit Keys with SSO. Having issues? Try [```Fallback Login```]({fallback_login_link})"
-)
+ui_message = f"👉 [```LiteLLM Admin Panel on /ui```]({ui_link}). Create, Edit Keys with SSO. Having issues? Try [```Fallback Login```]({fallback_login_link})"
 ui_message += "\n\n💸 [```LiteLLM Model Cost Map```](https://models.litellm.ai/)."
 
 ui_message += f"\n\n🔎 [```LiteLLM Model Hub```]({model_hub_link}). See available models on the proxy. [**Docs**](https://docs.litellm.ai/docs/proxy/ai_hub)"
@@ -648,10 +646,10 @@ async def _initialize_shared_aiohttp_session():
             connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
         if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
             connector_kwargs["limit_per_host"] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
-        
+
         connector = TCPConnector(**connector_kwargs)
         session = ClientSession(connector=connector)
-        
+
         verbose_proxy_logger.info(
             f"SESSION REUSE: Created shared aiohttp session for connection pooling (ID: {id(session)}, "
             f"limit={AIOHTTP_CONNECTOR_LIMIT}, limit_per_host={AIOHTTP_CONNECTOR_LIMIT_PER_HOST})"
@@ -1104,6 +1102,7 @@ if docs_url != "/" and root_redirect_url is not None:
     async def root_redirect():
         return RedirectResponse(url=root_redirect_url)  # type: ignore[arg-type]
 
+
 from typing import Dict
 
 user_api_base = None
@@ -1129,9 +1128,9 @@ master_key: Optional[str] = None
 config_agents: Optional[List[AgentConfig]] = None
 otel_logging = False
 prisma_client: Optional[PrismaClient] = None
-shared_aiohttp_session: Optional["ClientSession"] = (
-    None  # Global shared session for connection reuse
-)
+shared_aiohttp_session: Optional[
+    "ClientSession"
+] = None  # Global shared session for connection reuse
 user_api_key_cache = DualCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
@@ -1139,9 +1138,9 @@ model_max_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(
     dual_cache=user_api_key_cache
 )
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
-redis_usage_cache: Optional[RedisCache] = (
-    None  # redis cache used for tracking spend, tpm/rpm limits
-)
+redis_usage_cache: Optional[
+    RedisCache
+] = None  # redis cache used for tracking spend, tpm/rpm limits
 polling_via_cache_enabled: Union[Literal["all"], List[str], bool] = False
 polling_cache_ttl: int = 3600  # Default 1 hour TTL for polling cache
 user_custom_auth = None
@@ -1480,9 +1479,9 @@ async def update_cache(  # noqa: PLR0915
         _id = "team_id:{}".format(team_id)
         try:
             # Fetch the existing cost for the given user
-            existing_spend_obj: Optional[LiteLLM_TeamTable] = (
-                await user_api_key_cache.async_get_cache(key=_id)
-            )
+            existing_spend_obj: Optional[
+                LiteLLM_TeamTable
+            ] = await user_api_key_cache.async_get_cache(key=_id)
             if existing_spend_obj is None:
                 # do nothing if team not in api key cache
                 return
@@ -1687,7 +1686,7 @@ async def _run_background_health_check():
             else:
                 # Use a system identifier for background health checks
                 checked_by = "background_health_check"
-            
+
             start_time = time_module.time()
             asyncio.create_task(
                 _save_background_health_checks_to_db(
@@ -1834,7 +1833,6 @@ class ProxyConfig:
                 "environment_variables" in config_to_save
                 and config_to_save["environment_variables"]
             ):
-
                 # decrypt the environment_variables - in case a caller function has already encrypted the environment_variables
                 decrypted_env_vars = self._decrypt_and_set_db_env_variables(
                     environment_variables=config_to_save["environment_variables"],
@@ -2378,7 +2376,9 @@ class ProxyConfig:
                     # Initialize global polling via cache settings
                     global polling_via_cache_enabled, polling_cache_ttl
                     background_mode = value.get("background_mode", {})
-                    polling_via_cache_enabled = background_mode.get("polling_via_cache", False)
+                    polling_via_cache_enabled = background_mode.get(
+                        "polling_via_cache", False
+                    )
                     polling_cache_ttl = background_mode.get("ttl", 3600)
                     verbose_proxy_logger.debug(
                         f"{blue_color_code} Initialized polling via cache: enabled={polling_via_cache_enabled}, ttl={polling_cache_ttl}{reset_color_code}"
@@ -2721,6 +2721,22 @@ class ProxyConfig:
             await global_mcp_server_manager.load_servers_from_config(
                 mcp_servers_config, mcp_aliases
             )
+
+        ## SEMANTIC MCP FILTER
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy.mcp_semantic_filter import configure_semantic_filter
+
+        litellm_settings = config.get("litellm_settings", {}) or {}
+        semantic_filter_section = None
+        if isinstance(litellm_settings, dict):
+            semantic_filter_section = litellm_settings.get("semantic_mcp_filter")
+
+        await configure_semantic_filter(
+            semantic_filter_section,
+            mcp_server_manager=global_mcp_server_manager,
+        )
 
         ## VECTOR STORES
         vector_store_registry_config = config.get("vector_store_registry", None)
@@ -3536,7 +3552,6 @@ class ProxyConfig:
             await self._init_vector_stores_in_db(prisma_client=prisma_client)
 
         if self._should_load_db_object(object_type="vector_store_indexes"):
-
             await self._init_vector_store_indexes_in_db(prisma_client=prisma_client)
 
         if self._should_load_db_object(object_type="mcp"):
@@ -3734,10 +3749,10 @@ class ProxyConfig:
         )
 
         try:
-            guardrails_in_db: List[Guardrail] = (
-                await GuardrailRegistry.get_all_guardrails_from_db(
-                    prisma_client=prisma_client
-                )
+            guardrails_in_db: List[
+                Guardrail
+            ] = await GuardrailRegistry.get_all_guardrails_from_db(
+                prisma_client=prisma_client
             )
             verbose_proxy_logger.debug(
                 "guardrails from the DB %s", str(guardrails_in_db)
@@ -3825,6 +3840,13 @@ class ProxyConfig:
 
         try:
             await global_mcp_server_manager._add_mcp_servers_from_db_to_in_memory_registry()
+            from litellm.proxy.mcp_semantic_filter.registry import (
+                semantic_mcp_filter_registry,
+            )
+
+            await semantic_mcp_filter_registry.handle_server_refresh(
+                global_mcp_server_manager
+            )
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_mcp_servers_in_db - {}".format(
@@ -4064,9 +4086,9 @@ async def initialize(  # noqa: PLR0915
         user_api_base = api_base
         dynamic_config[user_model]["api_base"] = api_base
     if api_version:
-        os.environ["AZURE_API_VERSION"] = (
-            api_version  # set this for azure - litellm can read this from the env
-        )
+        os.environ[
+            "AZURE_API_VERSION"
+        ] = api_version  # set this for azure - litellm can read this from the env
     if max_tokens:  # model-specific param
         dynamic_config[user_model]["max_tokens"] = max_tokens
     if temperature:  # model-specific param
@@ -4452,7 +4474,7 @@ class ProxyStartupEvent:
         ### MONITOR SPEND LOGS QUEUE (queue-size-based job) ###
         if general_settings.get("disable_spend_logs", False) is False:
             from litellm.proxy.utils import _monitor_spend_logs_queue
-            
+
             # Start background task to monitor spend logs queue size
             asyncio.create_task(
                 _monitor_spend_logs_queue(
@@ -5313,7 +5335,9 @@ async def embeddings(  # noqa: PLR0915
             # check if provider accept list of tokens as input - e.g. for langchain integration
             if llm_router is not None and data.get("model") in router_model_names:
                 # Use router's O(1) lookup instead of O(N) iteration through llm_model_list
-                deployment = llm_router.get_deployment_by_model_group_name(model_group_name=data["model"])
+                deployment = llm_router.get_deployment_by_model_group_name(
+                    model_group_name=data["model"]
+                )
                 if deployment is not None:
                     litellm_params = deployment.get("litellm_params", {}) or {}
                     litellm_model = litellm_params.get("model", "")
@@ -5593,10 +5617,12 @@ async def audio_speech(
             if "gemini" in request_model_lower and (
                 "tts" in request_model_lower or "preview-tts" in request_model_lower
             ):
-                media_type = "audio/wav"  # Gemini TTS returns WAV format after conversion
+                media_type = (
+                    "audio/wav"  # Gemini TTS returns WAV format after conversion
+                )
 
         return StreamingResponse(
-            _audio_speech_chunk_generator(response), # type: ignore[arg-type]
+            _audio_speech_chunk_generator(response),  # type: ignore[arg-type]
             media_type=media_type,
             headers=custom_headers,  # type: ignore
         )
@@ -5832,7 +5858,6 @@ async def realtime_websocket_endpoint(
     ),
     user_api_key_dict=Depends(user_api_key_auth_websocket),
 ):
-
     await websocket.accept()
 
     # Only use explicit parameters, not all query params
@@ -8544,6 +8569,7 @@ async def login_v2(request: Request):  # noqa: PLR0915
     json_response.set_cookie(key="token", value=jwt_token)
     return json_response
 
+
 @app.get("/onboarding/get_token", include_in_schema=False)
 async def onboarding(invite_link: str, request: Request):
     """
@@ -9404,9 +9430,9 @@ async def get_config_list(
                             hasattr(sub_field_info, "description")
                             and sub_field_info.description is not None
                         ):
-                            nested_fields[idx].field_description = (
-                                sub_field_info.description
-                            )
+                            nested_fields[
+                                idx
+                            ].field_description = sub_field_info.description
                         idx += 1
 
                     _stored_in_db = None
@@ -9636,11 +9662,11 @@ async def get_config():  # noqa: PLR0915
         _litellm_settings = config_data.get("litellm_settings", {})
         _general_settings = config_data.get("general_settings", {})
         environment_variables = config_data.get("environment_variables", {})
-        
+
         _success_callbacks = _litellm_settings.get("success_callback", [])
         _failure_callbacks = _litellm_settings.get("failure_callback", [])
         _success_and_failure_callbacks = _litellm_settings.get("callbacks", [])
-        
+
         _data_to_return = []
         """
         [
@@ -9656,15 +9682,23 @@ async def get_config():  # noqa: PLR0915
         ]
 
         """
-        
+
         for _callback in _success_callbacks:
-            _data_to_return.append(process_callback(_callback, "success", environment_variables))
-        
+            _data_to_return.append(
+                process_callback(_callback, "success", environment_variables)
+            )
+
         for _callback in _failure_callbacks:
-            _data_to_return.append(process_callback(_callback, "failure", environment_variables))
-        
+            _data_to_return.append(
+                process_callback(_callback, "failure", environment_variables)
+            )
+
         for _callback in _success_and_failure_callbacks:
-            _data_to_return.append(process_callback(_callback, "success_and_failure", environment_variables))
+            _data_to_return.append(
+                process_callback(
+                    _callback, "success_and_failure", environment_variables
+                )
+            )
 
         # Check if slack alerting is on
         _alerting = _general_settings.get("alerting", [])
