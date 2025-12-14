@@ -56,7 +56,7 @@ pip install litellm==1.80.10
 
 ---
 
-## Agent Gateway - 4 New Agent Providers
+### Agent Gateway - 4 New Agent Providers
 
 <Image
 img={require('../../img/a2a_gateway2.png')}
