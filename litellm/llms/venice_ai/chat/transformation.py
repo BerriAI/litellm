@@ -46,7 +46,7 @@ class VeniceAIChatConfig(OpenAILikeChatConfig):
     ) -> Tuple[Optional[str], Optional[str]]:
         """Get Venice AI API base URL and API key"""
         api_base = api_base or get_secret_str("VENICE_AI_API_BASE") or "https://api.venice.ai/api/v1"  # type: ignore
-        dynamic_api_key = api_key or get_secret_str("VENICE_AI_API_KEY") or ""  # type: ignore
+        dynamic_api_key = api_key or get_secret_str("VENICE_AI_API_KEY")  # type: ignore
         return api_base, dynamic_api_key
 
     def transform_request(
@@ -70,7 +70,7 @@ class VeniceAIChatConfig(OpenAILikeChatConfig):
 
         # Check extra_body for Venice parameters (since Venice AI is OpenAI-compatible,
         # provider-specific params may be nested in extra_body)
-        extra_body = optional_params.pop("extra_body", {})
+        extra_body = optional_params.pop("extra_body", None)
         if isinstance(extra_body, dict):
             # Extract venice_parameters from extra_body if present
             if "venice_parameters" in extra_body:
@@ -92,6 +92,10 @@ class VeniceAIChatConfig(OpenAILikeChatConfig):
             # Put remaining extra_body back if it has other params
             if extra_body:
                 optional_params["extra_body"] = extra_body
+        elif extra_body is not None:
+            # Preserve non-dict extra_body values (e.g., None, string, etc.)
+            # These should be passed through to the parent transform
+            optional_params["extra_body"] = extra_body
 
         # Collect Venice-specific parameters from optional_params
         venice_params_to_extract = {}

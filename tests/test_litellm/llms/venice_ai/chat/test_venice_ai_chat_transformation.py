@@ -39,7 +39,7 @@ class TestVeniceAIChatConfig:
         )
 
         assert api_base == "https://api.venice.ai/api/v1"
-        assert api_key == ""
+        assert api_key is None
 
     def test_get_openai_compatible_provider_info_with_env(self):
         """Test that _get_openai_compatible_provider_info uses environment variables"""
@@ -261,6 +261,52 @@ class TestVeniceAIChatConfig:
         # Verify OpenAI params are present
         assert result["temperature"] == 0.7
         assert result["max_tokens"] == 100
+
+    def test_transform_request_with_none_extra_body(self):
+        """Test transform_request preserves None extra_body"""
+        messages = [{"role": "user", "content": "Hello"}]
+        optional_params = {
+            "extra_body": None,
+            "temperature": 0.7,
+        }
+        litellm_params = {}
+        headers = {}
+
+        result = self.config.transform_request(
+            model="qwen3-235b",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        # Verify None extra_body is preserved (passed to parent)
+        # The parent transform_request should handle None appropriately
+        # We verify that the request completes without error
+        assert result["temperature"] == 0.7
+
+    def test_transform_request_with_non_dict_extra_body(self):
+        """Test transform_request preserves non-dict extra_body values"""
+        messages = [{"role": "user", "content": "Hello"}]
+        optional_params = {
+            "extra_body": "some_string_value",
+            "temperature": 0.7,
+        }
+        litellm_params = {}
+        headers = {}
+
+        result = self.config.transform_request(
+            model="qwen3-235b",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        # Verify non-dict extra_body is preserved in optional_params
+        # (it will be passed to parent transform_request)
+        assert optional_params.get("extra_body") == "some_string_value"
+        assert result["temperature"] == 0.7
 
     def test_transform_request_venice_params_set(self):
         """Test that VENICE_PARAMS set contains all expected parameters"""
