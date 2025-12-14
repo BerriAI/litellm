@@ -762,7 +762,14 @@ const sidebars = {
         "providers/triton-inference-server",
         "providers/v0",
         "providers/vercel_ai_gateway",
-        "providers/vllm",
+        {
+          type: "category",
+          label: "vLLM",
+          items: [
+            "providers/vllm",
+            "providers/vllm_batches",
+          ]
+        },
         "providers/volcano",
         "providers/voyage",
         "providers/wandb_inference",
