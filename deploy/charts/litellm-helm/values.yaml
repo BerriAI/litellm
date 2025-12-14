@@ -261,6 +261,15 @@ args: {}
 
 # - name: EXTRA_ENV_VAR
 #   value: EXTRA_ENV_VAR_VALUE
+# Additional Kubernetes resources to deploy with litellm
+extraResources: []
+
+# - apiVersion: v1
+#   kind: ConfigMap
+#   metadata:
+#     name: my-extra-config
+#   data:
+#     foo: bar
 # Pod Disruption Budget
 pdb:
   enabled: false

@@ -1403,19 +1403,113 @@ async def test_async_log_success_event_increments_by_actual_tokens():
             end_time=None,
         )
     
-    # Verify increments happened with actual token count (50 completion tokens)
+    # Verify increments happened with actual token count (60 total tokens)
     assert len(increment_calls) == 2, f"Expected 2 increment calls, got {len(increment_calls)}"
     
-    # Both should increment by 50 (completion_tokens, since rate_limit_type defaults to 'output')
+    # Both should increment by 50 (total_tokens, since rate_limit_type defaults to 'total')
     for call in increment_calls:
-        assert call["increment_value"] == 50, (
-            f"Expected increment of 50 tokens, got {call['increment_value']} for key {call['key']}"
+        assert call["increment_value"] == 60, (
+            f"Expected increment of 60 tokens, got {call['increment_value']} for key {call['key']}"
         )
     
     # Verify correct keys were used
     keys = [call["key"] for call in increment_calls]
     assert any("model_saturation_check" in k for k in keys), "Should increment model_saturation_check"
     assert any("priority_model" in k and "dev" in k for k in keys), "Should increment priority_model with 'dev' priority"
+
+
+@pytest.mark.asyncio
+async def test_saturation_check_cache_ttl_configuration():
+    """
+    Test that saturation_check_cache_ttl controls how long saturation values are cached locally.
+    
+    This validates the configurable TTL for multi-node consistency:
+    - When saturation_check_cache_ttl is set, local cache should expire after that duration
+    - After expiration, fresh values should be fetched from Redis
+    - This prevents nodes from having stale saturation data in multi-node deployments
+    """
+    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    
+    # Set a short TTL for testing (5 seconds)
+    original_ttl = litellm.priority_reservation_settings.saturation_check_cache_ttl
+    litellm.priority_reservation_settings.saturation_check_cache_ttl = 5
+    
+    try:
+        dual_cache = DualCache()
+        handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+        
+        model = "test-saturation-ttl"
+        llm_router = Router(
+            model_list=[
+                {
+                    "model_name": model,
+                    "litellm_params": {
+                        "model": "gpt-3.5-turbo",
+                        "api_key": "test-key",
+                        "api_base": "test-base",
+                        "rpm": 100,
+                        "tpm": 1000,
+                    },
+                }
+            ]
+        )
+        handler.update_variables(llm_router=llm_router)
+        
+        # Verify the TTL getter returns configured value
+        assert handler._get_saturation_check_cache_ttl() == 5, (
+            "TTL should be configurable via priority_reservation_settings"
+        )
+        
+        # Track async_get_cache calls to verify TTL is passed
+        get_cache_calls = []
+        original_get_cache = handler.internal_usage_cache.async_get_cache
+        
+        async def mock_get_cache(key, litellm_parent_otel_span=None, local_only=False, **kwargs):
+            get_cache_calls.append({
+                "key": key,
+                "ttl": kwargs.get("ttl"),
+                "local_only": local_only,
+            })
+            return None  # Simulate cache miss
+        
+        handler.internal_usage_cache.async_get_cache = mock_get_cache
+        
+        # Call _get_saturation_value_from_cache
+        counter_key = handler.v3_limiter.create_rate_limit_keys(
+            key="model_saturation_check",
+            value=model,
+            rate_limit_type="requests",
+        )
+        
+        await handler._get_saturation_value_from_cache(counter_key=counter_key)
+        
+        # Verify async_get_cache was called with the configured TTL
+        assert len(get_cache_calls) == 1, "Expected 1 cache call"
+        assert get_cache_calls[0]["ttl"] == 5, (
+            f"Expected TTL of 5 seconds, got {get_cache_calls[0]['ttl']}"
+        )
+        assert get_cache_calls[0]["local_only"] is False, (
+            "Should check Redis (local_only=False) for multi-node consistency"
+        )
+        
+        # Test with different TTL value
+        get_cache_calls.clear()
+        litellm.priority_reservation_settings.saturation_check_cache_ttl = 30
+        
+        await handler._get_saturation_value_from_cache(counter_key=counter_key)
+        
+        assert get_cache_calls[0]["ttl"] == 30, (
+            f"TTL should update to 30 seconds, got {get_cache_calls[0]['ttl']}"
+        )
+        
+        print("Saturation check cache TTL test passed:")
+        print("   - TTL is configurable via priority_reservation_settings.saturation_check_cache_ttl")
+        print("   - TTL is passed to async_get_cache for local cache expiration control")
+        print("   - local_only=False ensures Redis is checked for multi-node consistency")
+        
+    finally:
+        # Restore original TTL
+        litellm.priority_reservation_settings.saturation_check_cache_ttl = original_ttl
 
 
 @pytest.mark.asyncio

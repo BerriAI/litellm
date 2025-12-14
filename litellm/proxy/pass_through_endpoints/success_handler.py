@@ -46,7 +46,7 @@ class PassThroughEndpointLogging:
         ]
 
         # Anthropic
-        self.TRACKED_ANTHROPIC_ROUTES = ["/messages"]
+        self.TRACKED_ANTHROPIC_ROUTES = ["/messages", "/v1/messages/batches"]
 
         # Cohere
         self.TRACKED_COHERE_ROUTES = ["/v2/chat", "/v1/embed"]
@@ -169,6 +169,7 @@ class PassThroughEndpointLogging:
                     start_time=start_time,
                     end_time=end_time,
                     cache_hit=cache_hit,
+                    request_body=request_body,
                     **kwargs,
                 )
             )

@@ -5,6 +5,7 @@ import os
 import socket
 import subprocess
 import sys
+from pathlib import Path
 from datetime import datetime
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
@@ -121,6 +122,77 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
         {"user_id": "test-user"},
         "test-master-key",
         algorithm="HS256",
+    )
+
+
+def test_fallback_login_has_no_deprecation_banner(client_no_auth):
+    response = client_no_auth.get("/fallback/login")
+
+    assert response.status_code == 200
+    html = response.text
+    assert '<div class="deprecation-banner">' not in html
+    assert "Deprecated:" not in html
+    assert "<form" in html
+
+
+def test_sso_key_generate_shows_deprecation_banner(client_no_auth, monkeypatch):
+    # Ensure the route returns the HTML form instead of redirecting
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.ui_sso.show_missing_vars_in_env",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.get_redirect_url_for_sso",
+        lambda *args, **kwargs: "http://test/redirect",
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler._get_cli_state",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.should_use_sso_handler",
+        lambda *args, **kwargs: False,
+    )
+    monkeypatch.setenv("UI_USERNAME", "admin")
+
+    response = client_no_auth.get("/sso/key/generate")
+
+    assert response.status_code == 200
+    html = response.text
+    assert '<div class="deprecation-banner">' in html
+    assert "Deprecated:" in html
+
+
+def test_restructure_ui_html_files_handles_nested_routes(tmp_path):
+    from litellm.proxy import proxy_server
+
+    ui_root = tmp_path / "ui"
+    ui_root.mkdir()
+
+    def write_file(path: Path, content: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+
+    write_file(ui_root / "home.html", "home")
+    write_file(ui_root / "mcp" / "oauth" / "callback.html", "callback")
+    write_file(ui_root / "existing" / "index.html", "keep")
+    write_file(ui_root / "_next" / "ignore.html", "asset")
+    write_file(ui_root / "litellm-asset-prefix" / "ignore.html", "asset")
+
+    proxy_server._restructure_ui_html_files(str(ui_root))
+
+    assert not (ui_root / "home.html").exists()
+    assert (ui_root / "home" / "index.html").read_text() == "home"
+    assert not (ui_root / "mcp" / "oauth" / "callback.html").exists()
+    assert (
+        (ui_root / "mcp" / "oauth" / "callback" / "index.html").read_text()
+        == "callback"
+    )
+    assert (ui_root / "existing" / "index.html").read_text() == "keep"
+    assert (ui_root / "_next" / "ignore.html").read_text() == "asset"
+    assert (
+        (ui_root / "litellm-asset-prefix" / "ignore.html").read_text()
+        == "asset"
     )
 
 
@@ -2581,6 +2653,49 @@ def test_get_prompt_spec_for_db_prompt_with_versions():
     assert prompt_spec_v2.prompt_id == "chat_prompt.v2"
 
 
+def test_root_redirect_when_docs_url_not_root_and_redirect_url_set(monkeypatch):
+    from litellm.proxy.proxy_server import cleanup_router_config_variables
+    from litellm.proxy.utils import _get_docs_url
+    from fastapi.responses import RedirectResponse
+
+    cleanup_router_config_variables()
+    filepath = os.path.dirname(os.path.abspath(__file__))
+    config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
+    # Ensure docs are mounted on a non-root path to trigger redirect logic
+    monkeypatch.setenv("DOCS_URL", "/docs")
+    
+    test_redirect_url = "/ui"
+    monkeypatch.setenv("ROOT_REDIRECT_URL", test_redirect_url)
+    
+    asyncio.run(initialize(config=config_fp, debug=True))
+    
+    docs_url = _get_docs_url()
+    root_redirect_url = os.getenv("ROOT_REDIRECT_URL")
+    
+    # Remove any existing "/" route that might interfere
+    routes_to_remove = []
+    for route in app.routes:
+        if hasattr(route, "path") and route.path == "/":
+            if hasattr(route, "methods") and "GET" in route.methods:
+                routes_to_remove.append(route)
+            elif not hasattr(route, "methods"):  # Catch-all routes
+                routes_to_remove.append(route)
+    
+    for route in routes_to_remove:
+        app.routes.remove(route)
+    
+    # Add the redirect route if conditions are met (matching the actual implementation)
+    if docs_url != "/" and root_redirect_url:
+        @app.get("/", include_in_schema=False)
+        async def root_redirect():
+            return RedirectResponse(url=root_redirect_url)
+    
+    client = TestClient(app)
+    response = client.get("/", follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"] == test_redirect_url
+
+
 def test_get_image_non_root_uses_tmp_assets_dir(monkeypatch):
     """
     Test that get_image uses /tmp/litellm_assets when LITELLM_NON_ROOT is true.
@@ -2710,4 +2825,3 @@ def test_get_image_root_case_uses_current_dir(monkeypatch):
 
         # Verify FileResponse was called
         assert mock_file_response.called, "FileResponse should be called"
-

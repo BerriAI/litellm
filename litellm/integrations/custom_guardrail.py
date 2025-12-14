@@ -35,6 +35,45 @@ if TYPE_CHECKING:
 dc = DualCache()
 
 
+class ModifyResponseException(Exception):
+    """
+    Exception raised when a guardrail wants to modify the response.
+
+    This exception carries the synthetic response that should be returned
+    to the user instead of calling the LLM or instead of the LLM's response.
+    It should be caught by the proxy and returned with a 200 status code.
+
+    This is a base exception that all guardrails can use to replace responses,
+    allowing violation messages to be returned as successful responses
+    rather than errors.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        model: str,
+        request_data: Dict[str, Any],
+        guardrail_name: Optional[str] = None,
+        detection_info: Optional[Dict[str, Any]] = None,
+    ):
+        """
+        Initialize the modify response exception.
+
+        Args:
+            message: The violation message to return to the user
+            model: The model that was being called
+            request_data: The original request data
+            guardrail_name: Name of the guardrail that raised this exception
+            detection_info: Additional detection metadata (scores, rules, etc.)
+        """
+        self.message = message
+        self.model = model
+        self.request_data = request_data
+        self.guardrail_name = guardrail_name
+        self.detection_info = detection_info or {}
+        super().__init__(message)
+
+
 class CustomGuardrail(CustomLogger):
     def __init__(
         self,
@@ -95,6 +134,50 @@ class CustomGuardrail(CustomLogger):
                 e,
             )
             return default
+
+    def raise_passthrough_exception(
+        self,
+        violation_message: str,
+        request_data: Dict[str, Any],
+        detection_info: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Raise a passthrough exception for guardrail violations.
+
+        This helper method should be used by guardrails when they detect a violation
+        in passthrough mode.
+
+        The exception will be caught by the proxy endpoints and converted to a 200 response
+        with the violation message, preventing the LLM call from being made (pre_call/during_call)
+        or replacing the LLM response (post_call).
+
+        Args:
+            violation_message: The formatted violation message to return to the user
+            request_data: The original request data dictionary
+            detection_info: Optional dictionary with detection metadata (scores, rules, etc.)
+
+        Raises:
+            ModifyResponseException: Always raises this exception to short-circuit
+                                     the LLM call and return the violation message
+
+        Example:
+            if violation_detected and self.on_flagged_action == "passthrough":
+                message = self._format_violation_message(detection_info)
+                self.raise_passthrough_exception(
+                    violation_message=message,
+                    request_data=data,
+                    detection_info=detection_info
+                )
+        """
+        model = request_data.get("model", "unknown")
+
+        raise ModifyResponseException(
+            message=violation_message,
+            model=model,
+            request_data=request_data,
+            guardrail_name=self.guardrail_name,
+            detection_info=detection_info,
+        )
 
     @staticmethod
     def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:

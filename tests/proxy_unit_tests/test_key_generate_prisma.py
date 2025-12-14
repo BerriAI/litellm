@@ -665,7 +665,8 @@ def test_call_with_end_user_over_budget(prisma_client):
         asyncio.run(test())
     except Exception as e:
         print(f"raised error: {e}, traceback: {traceback.format_exc()}")
-        error_detail = e.message
+        # Handle DataError and other exceptions that don't have .message attribute
+        error_detail = getattr(e, 'message', str(e))
         assert "ExceededBudget: End User=" in error_detail
         assert "over budget" in error_detail
         assert isinstance(e, ProxyException)
@@ -2081,7 +2082,8 @@ async def test_call_with_key_over_budget_stream(prisma_client):
 
     except Exception as e:
         print("Got Exception", e)
-        error_detail = e.message
+        # Handle DataError and other exceptions that don't have .message attribute
+        error_detail = getattr(e, 'message', str(e))
         assert "Budget has been exceeded" in error_detail
 
         print(vars(e))

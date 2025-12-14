@@ -7,17 +7,24 @@ Users can define
 """
 
 import copy
-from typing import Dict, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
+from litellm.integrations.prompt_management_base import PromptManagementClient
 from litellm.types.integrations.anthropic_cache_control_hook import (
     CacheControlInjectionPoint,
     CacheControlMessageInjectionPoint,
 )
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionCachedContent
+from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import StandardCallbackDynamicParams
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = Any
 
 
 class AnthropicCacheControlHook(CustomPromptManagement):
@@ -29,8 +36,11 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_spec: Optional[PromptSpec] = None,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Apply cache control directives based on specified injection points.
@@ -138,6 +148,83 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     def integration_name(self) -> str:
         """Return the integration name for this hook."""
         return "anthropic_cache_control_hook"
+
+    def should_run_prompt_management(
+        self,
+        prompt_id: Optional[str],
+        prompt_spec: Optional[PromptSpec],
+        dynamic_callback_params: StandardCallbackDynamicParams,
+    ) -> bool:
+        """Always return False since this is not a true prompt management system."""
+        return False
+
+    def _compile_prompt_helper(
+        self,
+        prompt_id: Optional[str],
+        prompt_spec: Optional[PromptSpec],
+        prompt_variables: Optional[dict],
+        dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
+    ) -> PromptManagementClient:
+        """Not used - this hook only modifies messages, doesn't fetch prompts."""
+        return PromptManagementClient(
+            prompt_id=prompt_id,
+            prompt_template=[],
+            prompt_template_model=None,
+            prompt_template_optional_params=None,
+            completed_messages=None,
+        )
+
+    async def async_compile_prompt_helper(
+        self,
+        prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
+        dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_spec: Optional[PromptSpec] = None,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
+    ) -> PromptManagementClient:
+        """Not used - this hook only modifies messages, doesn't fetch prompts."""
+        return self._compile_prompt_helper(
+            prompt_id=prompt_id,
+            prompt_spec=prompt_spec,
+            prompt_variables=prompt_variables,
+            dynamic_callback_params=dynamic_callback_params,
+            prompt_label=prompt_label,
+            prompt_version=prompt_version,
+        )
+
+    async def async_get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        non_default_params: dict,
+        prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
+        dynamic_callback_params: StandardCallbackDynamicParams,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        prompt_spec: Optional[PromptSpec] = None,
+        tools: Optional[List[Dict]] = None,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
+    ) -> Tuple[str, List[AllMessageValues], dict]:
+        """Async version - delegates to sync since no async operations needed."""
+        return self.get_chat_completion_prompt(
+            model=model,
+            messages=messages,
+            non_default_params=non_default_params,
+            prompt_id=prompt_id,
+            prompt_variables=prompt_variables,
+            dynamic_callback_params=dynamic_callback_params,
+            prompt_spec=prompt_spec,
+            prompt_label=prompt_label,
+            prompt_version=prompt_version,
+            ignore_prompt_manager_model=ignore_prompt_manager_model,
+            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
+        )
 
     @staticmethod
     def should_use_anthropic_cache_control_hook(non_default_params: Dict) -> bool:

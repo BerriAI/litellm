@@ -165,11 +165,24 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     )
             elif role == "tool":
                 # Convert tool message to function call output format
+                # Transform content to responses format (handles str, list, and other types)
+                # _convert_content_to_responses_format always returns List[Dict[str, Any]]
+                if content is None:
+                    transformed_output: list[dict[str, Any]] = []
+                elif isinstance(content, (str, list)):
+                    transformed_output = self._convert_content_to_responses_format(
+                        content, "tool"
+                    )
+                else:
+                    # Fallback: convert unexpected types to string first
+                    transformed_output = self._convert_content_to_responses_format(
+                        str(content), "tool"
+                    )
                 input_items.append(
                     {
                         "type": "function_call_output",
                         "call_id": tool_call_id,
-                        "output": content,
+                        "output": transformed_output,
                     }
                 )
             elif role == "assistant" and tool_calls and isinstance(tool_calls, list):
@@ -873,8 +886,10 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                     usage=None,
                 )
             elif output_item.get("type") == "message":
+                # Don't emit is_finished=True here - there may be more output items
+                # (e.g., tool_calls) coming after the message. Wait for response.completed.
                 return GenericStreamingChunk(
-                    finish_reason="stop", is_finished=True, usage=None, text=""
+                    finish_reason="", is_finished=False, usage=None, text=""
                 )
 
         elif event_type == "response.output_text.delta":
@@ -907,6 +922,12 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         )
                     ]
                 )
+        elif event_type == "response.completed":
+            # Response is fully complete - now we can signal is_finished=True
+            # This ensures we don't prematurely end the stream before tool_calls arrive
+            return GenericStreamingChunk(
+                text="", tool_use=None, is_finished=True, finish_reason="stop", usage=None
+            )
         else:
             pass
         # For any unhandled event types, create a minimal valid chunk or skip

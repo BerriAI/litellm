@@ -222,6 +222,8 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         # Construct the URL
         if api_base:
             base_url = api_base.rstrip("/")
+        elif vertex_location == "global":
+            base_url = "https://aiplatform.googleapis.com"
         else:
             base_url = f"https://{vertex_location}-aiplatform.googleapis.com"
 

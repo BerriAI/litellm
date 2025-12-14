@@ -1050,8 +1050,22 @@ def test_deployment_state_management(prometheus_logger):
 
 
 def test_increment_deployment_cooled_down(prometheus_logger):
+    import inspect
+
+    method_sig = inspect.signature(prometheus_logger.increment_deployment_cooled_down)
+    expected_label_count = len([p for p in method_sig.parameters.keys() if p != 'self'])
+
+    mock_chain = MagicMock()
+
+    def validating_labels(*label_values, **label_kwargs):
+        """Validate label count matches metric definition"""
+        total = len(label_values) + len(label_kwargs)
+        if total != expected_label_count:
+            raise ValueError(f"Incorrect label count: expected {expected_label_count}, got {total}")
+        return mock_chain
 
     prometheus_logger.litellm_deployment_cooled_down = MagicMock()
+    prometheus_logger.litellm_deployment_cooled_down.labels = MagicMock(side_effect=validating_labels)
 
     prometheus_logger.increment_deployment_cooled_down(
         litellm_model_name="gpt-3.5-turbo",
@@ -1064,7 +1078,7 @@ def test_increment_deployment_cooled_down(prometheus_logger):
     prometheus_logger.litellm_deployment_cooled_down.labels.assert_called_once_with(
         "gpt-3.5-turbo", "model-123", "https://api.openai.com", "openai", "429"
     )
-    prometheus_logger.litellm_deployment_cooled_down.labels().inc.assert_called_once()
+    mock_chain.inc.assert_called_once()
 
 
 @pytest.mark.parametrize("enable_end_user_cost_tracking_prometheus_only", [True, False])

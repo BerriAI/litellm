@@ -248,6 +248,11 @@ class TestFilterWebSearchDeployments:
         result = filter_web_search_deployments(sample_deployments, {"tools": []})
         assert result == sample_deployments
 
+    def test_none_tools_returns_all(self, sample_deployments):
+        """When tools is explicitly None, return all deployments (regression test for #17672)"""
+        result = filter_web_search_deployments(sample_deployments, {"tools": None})
+        assert result == sample_deployments
+
     def test_non_web_search_tools_returns_all(self, sample_deployments):
         """When tools don't include web_search, return all deployments"""
         request_kwargs = {"tools": [{"type": "function", "function": {}}]}

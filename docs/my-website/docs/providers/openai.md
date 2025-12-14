@@ -188,6 +188,11 @@ os.environ["OPENAI_BASE_URL"] = "https://your_host/v1"     # OPTIONAL
 | gpt-5-mini-2025-08-07 | `response = completion(model="gpt-5-mini-2025-08-07", messages=messages)` |
 | gpt-5-nano-2025-08-07 | `response = completion(model="gpt-5-nano-2025-08-07", messages=messages)` |
 | gpt-5-pro | `response = completion(model="gpt-5-pro", messages=messages)` |
+| gpt-5.2 | `response = completion(model="gpt-5.2", messages=messages)` |
+| gpt-5.2-2025-12-11 | `response = completion(model="gpt-5.2-2025-12-11", messages=messages)` |
+| gpt-5.2-chat-latest | `response = completion(model="gpt-5.2-chat-latest", messages=messages)` |
+| gpt-5.2-pro | `response = completion(model="gpt-5.2-pro", messages=messages)` |
+| gpt-5.2-pro-2025-12-11 | `response = completion(model="gpt-5.2-pro-2025-12-11", messages=messages)` |
 | gpt-5.1 | `response = completion(model="gpt-5.1", messages=messages)` |
 | gpt-5.1-codex | `response = completion(model="gpt-5.1-codex", messages=messages)` |
 | gpt-5.1-codex-mini | `response = completion(model="gpt-5.1-codex-mini", messages=messages)` |
@@ -428,7 +433,7 @@ Expected Response:
 
 ### Advanced: Using `reasoning_effort` with `summary` field
 
-By default, `reasoning_effort` accepts a string value (`"none"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`—`"xhigh"` is only supported on `gpt-5.1-codex-max`) and only sets the effort level without including a reasoning summary.
+By default, `reasoning_effort` accepts a string value (`"none"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`—`"xhigh"` is only supported on `gpt-5.1-codex-max` and `gpt-5.2` models) and only sets the effort level without including a reasoning summary.
 
 To opt-in to the `summary` feature, you can pass `reasoning_effort` as a dictionary. **Note:** The `summary` field requires your OpenAI organization to have verification status. Using `summary` without verification will result in a 400 error from OpenAI.
 
@@ -496,11 +501,13 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 | `gpt-5.1-codex` | `adaptive` | `low`, `medium`, `high` (no `minimal`) |
 | `gpt-5.1-codex-mini` | `adaptive` | `low`, `medium`, `high` (no `minimal`) |
 | `gpt-5.1-codex-max` | `adaptive` | `low`, `medium`, `high`, `xhigh` (no `minimal`) |
+| `gpt-5.2` | `medium` | `none`, `low`, `medium`, `high`, `xhigh` |
+| `gpt-5.2-pro` | `high` | `low`, `medium`, `high`, `xhigh` |
 | `gpt-5-pro` | `high` | `high` only |
 
 **Note:**
 - GPT-5.1 introduced a new `reasoning_effort="none"` setting for faster, lower-latency responses. This replaces the `"minimal"` setting from GPT-5.
-- `gpt-5.1-codex-max` is the only model that supports `reasoning_effort="xhigh"`. All other models will reject this value.
+- `gpt-5.1-codex-max` and `gpt-5.2` models support `reasoning_effort="xhigh"`. All other models will reject this value.
 - `gpt-5-pro` only accepts `reasoning_effort="high"`. Other values will return an error.
 - When `reasoning_effort` is not set (None), OpenAI defaults to the value shown in the "Default" column.
 
