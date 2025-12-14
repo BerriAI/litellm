@@ -6875,6 +6875,34 @@ def has_tool_call_blocks(messages: List[AllMessageValues]) -> bool:
     return False
 
 
+def last_assistant_with_tool_calls_has_no_thinking_blocks(
+    messages: List[AllMessageValues],
+) -> bool:
+    """
+    Returns true if the last assistant message with tool_calls has no thinking_blocks.
+
+    This is used to detect when thinking param should be dropped to avoid
+    Anthropic error: "Expected thinking or redacted_thinking, but found tool_use"
+
+    When thinking is enabled, assistant messages with tool_calls must include thinking_blocks.
+    If the client didn't preserve thinking_blocks, we need to drop the thinking param.
+
+    Related issues: https://github.com/BerriAI/litellm/issues/14194, https://github.com/BerriAI/litellm/issues/9020
+    """
+    # Find the last assistant message with tool_calls
+    last_assistant_with_tools = None
+    for message in messages:
+        if message.get("role") == "assistant" and message.get("tool_calls") is not None:
+            last_assistant_with_tools = message
+
+    if last_assistant_with_tools is None:
+        return False
+
+    # Check if it has thinking_blocks
+    thinking_blocks = last_assistant_with_tools.get("thinking_blocks")
+    return thinking_blocks is None or len(thinking_blocks) == 0
+
+
 def add_dummy_tool(custom_llm_provider: str) -> List[ChatCompletionToolParam]:
     """
     Prevent Anthropic from raising error when tool_use block exists but no tools are provided.
