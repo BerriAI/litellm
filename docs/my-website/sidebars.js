@@ -761,6 +761,7 @@ const sidebars = {
         "providers/topaz",
         "providers/triton-inference-server",
         "providers/v0",
+        "providers/venice_ai",
         "providers/vercel_ai_gateway",
         "providers/vllm",
         "providers/volcano",
