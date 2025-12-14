@@ -1856,8 +1856,8 @@ class Router:
                         _async_completion_no_exceptions_return_idx(
                             model=model,
                             idx=idx,
-                            messages=message,
-                            **kwargs,  # type: ignore
+                            messages=message,  # type: ignore[arg-type]
+                            **kwargs,
                         )
                     )
             responses = await asyncio.gather(*_tasks)
