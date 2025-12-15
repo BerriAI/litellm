@@ -320,56 +320,56 @@
     },
     {
       "name": "br_cpf",
-      "display_name": "CPF (Brazilian Social Security Number)",
+      "display_name": "CPF - Brazilian Tax ID / Social Security (Formatted)",
       "pattern": "\\b\\d{3}\\.\\d{3}\\.\\d{3}-\\d{2}\\b",
       "category": "Brazilian PII Patterns",
       "description": "Detects Brazilian CPF numbers (XXX.XXX.XXX-XX format)"
     },
     {
       "name": "br_cpf_no_format",
-      "display_name": "CPF (No Formatting)",
+      "display_name": "CPF - Brazilian Tax ID / Social Security (Unformatted)",
       "pattern": "\\b\\d{11}\\b",
       "category": "Brazilian PII Patterns",
       "description": "Detects Brazilian CPF numbers without formatting (11 digits)"
     },
     {
       "name": "br_phone",
-      "display_name": "Phone Number (Brazil)",
+      "display_name": "Brazilian Phone Number (Landline & Mobile)",
       "pattern": "\\b(?:\\+?55[\\s.-]?)?\\(?([1-9]{2})\\)?[\\s.-]?(?:[2-9]\\d{3,4})[\\s.-]?(\\d{4})\\b",
       "category": "Brazilian PII Patterns",
       "description": "Detects Brazilian phone numbers with various area codes (landline and mobile)"
     },
     {
       "name": "br_phone_mobile",
-      "display_name": "Mobile Phone Number (Brazil)",
+      "display_name": "Brazilian Mobile Phone Number",
       "pattern": "\\b(?:\\+?55[\\s.-]?)?\\(?([1-9]{2})\\)?[\\s.-]?9[\\s.-]?\\d{4}[\\s.-]?\\d{4}\\b",
       "category": "Brazilian PII Patterns",
       "description": "Detects Brazilian mobile phone numbers (9 prefix for mobile)"
     },
     {
       "name": "br_cep",
-      "display_name": "CEP (Brazilian Postal Code)",
+      "display_name": "CEP - Brazilian Zip / Postal Code",
       "pattern": "\\b\\d{5}-\\d{3}\\b",
       "category": "Brazilian PII Patterns",
       "description": "Detects Brazilian CEP postal codes (XXXXX-XXX format)"
     },
     {
       "name": "br_address",
-      "display_name": "Address (Brazil)",
+      "display_name": "Brazilian Street Address",
       "pattern": "\\b(?:Rua|Avenida|Av\\.|R\\.|Travessa|Alameda|Praça|Rodovia)\\s+[A-Za-zÀ-ÿ\\s]+,?\\s*(?:n[°º]?|número)?\\s*\\d+",
       "category": "Brazilian PII Patterns",
       "description": "Detects Brazilian street addresses with common prefixes"
     },
     {
       "name": "br_cnpj",
-      "display_name": "CNPJ (Brazilian Company Registration)",
+      "display_name": "CNPJ - Brazilian Company Tax ID",
       "pattern": "\\b\\d{2}\\.\\d{3}\\.\\d{3}/\\d{4}-\\d{2}\\b",
       "category": "Brazilian PII Patterns",
       "description": "Detects Brazilian CNPJ company registration numbers (XX.XXX.XXX/XXXX-XX format)"
     },
     {
       "name": "br_rg",
-      "display_name": "RG (Brazilian Identity Card)",
+      "display_name": "RG - Brazilian National Identity Card",
       "pattern": "\\b\\d{1,2}\\.?\\d{3}\\.?\\d{3}-?[0-9Xx]\\b",
       "category": "Brazilian PII Patterns",
       "description": "Detects Brazilian RG identity card numbers"
