@@ -388,36 +388,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         # Step 1: Combine all streaming chunks into complete text per choice
         # For streaming, we need to concatenate all delta.content across all chunks
         # Key: (choice_idx, content_idx), Value: combined text
-        combined_texts: Dict[Tuple[int, Optional[int]], str] = {}
-
-        for response_idx, response in enumerate(responses_so_far):
-            for choice_idx, choice in enumerate(response.choices):
-                if isinstance(choice, litellm.StreamingChoices):
-                    content = choice.delta.content
-                elif isinstance(choice, litellm.Choices):
-                    content = choice.message.content
-                else:
-                    continue
-
-                if content is None:
-                    continue
-
-                if isinstance(content, str):
-                    # String content - accumulate for this choice
-                    str_key: Tuple[int, Optional[int]] = (choice_idx, None)
-                    if str_key not in combined_texts:
-                        combined_texts[str_key] = ""
-                    combined_texts[str_key] += content
-
-                elif isinstance(content, list):
-                    # List content - accumulate for each content item
-                    for content_idx, content_item in enumerate(content):
-                        text_str = content_item.get("text")
-                        if text_str:
-                            list_key: Tuple[int, Optional[int]] = (choice_idx, content_idx)
-                            if list_key not in combined_texts:
-                                combined_texts[list_key] = ""
-                            combined_texts[list_key] += text_str
+        combined_texts = self._combine_streaming_texts(responses_so_far)
 
         # Step 2: Create lists for guardrail processing
         texts_to_check: List[str] = []
@@ -467,6 +438,56 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         )
 
         return responses_so_far
+
+    def _combine_streaming_texts(
+        self, responses_so_far: List["ModelResponseStream"]
+    ) -> Dict[Tuple[int, Optional[int]], str]:
+        """
+        Combine all streaming chunks into complete text per choice.
+
+        For streaming, we need to concatenate all delta.content across all chunks.
+
+        Args:
+            responses_so_far: List of LiteLLM ModelResponseStream objects
+
+        Returns:
+            Dict mapping (choice_idx, content_idx) to combined text string
+        """
+        combined_texts: Dict[Tuple[int, Optional[int]], str] = {}
+
+        for response_idx, response in enumerate(responses_so_far):
+            for choice_idx, choice in enumerate(response.choices):
+                if isinstance(choice, litellm.StreamingChoices):
+                    content = choice.delta.content
+                elif isinstance(choice, litellm.Choices):
+                    content = choice.message.content
+                else:
+                    continue
+
+                if content is None:
+                    continue
+
+                if isinstance(content, str):
+                    # String content - accumulate for this choice
+                    str_key: Tuple[int, Optional[int]] = (choice_idx, None)
+                    if str_key not in combined_texts:
+                        combined_texts[str_key] = ""
+                    combined_texts[str_key] += content
+
+                elif isinstance(content, list):
+                    # List content - accumulate for each content item
+                    for content_idx, content_item in enumerate(content):
+                        text_str = content_item.get("text")
+                        if text_str:
+                            list_key: Tuple[int, Optional[int]] = (
+                                choice_idx,
+                                content_idx,
+                            )
+                            if list_key not in combined_texts:
+                                combined_texts[list_key] = ""
+                            combined_texts[list_key] += text_str
+
+        return combined_texts
 
     def _has_text_content(
         self, response: Union["ModelResponse", "ModelResponseStream"]
@@ -730,7 +751,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     # List content - handle each content item
                     for content_idx, content_item in enumerate(content):
                         if "text" in content_item:
-                            list_key: Tuple[int, Optional[int]] = (choice_idx_in_response, content_idx)
+                            list_key: Tuple[int, Optional[int]] = (
+                                choice_idx_in_response,
+                                content_idx,
+                            )
                             if list_key in guardrail_map:
                                 if list_key not in already_set:
                                     # First chunk - set the complete guardrailed text
