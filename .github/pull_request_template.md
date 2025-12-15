@@ -24,8 +24,8 @@
 >
 > **CI status guideline:**
 >
-> - >= 50 passing tests: main is stable
-> - >= 45-49 passing tests: acceptable but needs attention
+> - 50-55 passing tests: main is stable with minor issues.
+> - 45-49 passing tests: acceptable but needs attention
 > - <= 40 passing tests: unstable; be careful with your merges and assess the risk.
 
 - [ ] **Branch creation CI run**  
