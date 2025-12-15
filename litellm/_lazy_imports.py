@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, cast
 import sys
 
 def _get_litellm_globals() -> dict:
@@ -292,12 +292,17 @@ def _lazy_import_http_handlers(name: str) -> Any:
     _globals = _get_litellm_globals()
 
     if name == "module_level_aclient":
-        # Import handler type locally to avoid heavy imports at module load time
-        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+        # Use shared async client factory instead of directly instantiating AsyncHTTPHandler
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 
         timeout = _globals.get("request_timeout")
-        async_client = AsyncHTTPHandler(
-            timeout=timeout, client_alias="module level aclient"
+        params = {"timeout": timeout, "client_alias": "module level aclient"}
+        # llm_provider is only used for cache keying; use a string identifier but
+        # cast to Any so static type checkers don't complain about the literal.
+        provider_id = cast(Any, "litellm_module_level_client")
+        async_client = get_async_httpx_client(
+            llm_provider=provider_id,
+            params=params,
         )
         _globals["module_level_aclient"] = async_client
         return async_client
