@@ -195,7 +195,7 @@ async def common_checks(
         # Skip budget check for free models
         if _model and FREE_MODELS and _model in FREE_MODELS:
             user_email = user_object.user_email if user_object.user_email else user_object.user_id
-            print(f"[FREE_MODELS] Budget check BYPASSED - Route: {route}, User: {user_email}, Model: {_model}, UserSpend: ${user_object.spend:.4f}, Budget: ${user_object.max_budget:.4f}")
+            # print(f"[FREE_MODELS] Budget check BYPASSED - Route: {route}, User: {user_email}, Model: {_model}, UserSpend: ${user_object.spend:.4f}, Budget: ${user_object.max_budget:.4f}")
             verbose_proxy_logger.info(f"Free model usage - User: {user_email}, Model: {_model}")
         else:
             user_budget = user_object.max_budget
