@@ -3424,6 +3424,172 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "azure/gpt-5.2": {
+        "cache_read_input_token_cost": 1.75e-07,
+        "input_cost_per_token": 1.75e-06,
+        "litellm_provider": "azure",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.4e-05,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "image"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "azure/gpt-5.2-2025-12-11": {
+        "cache_read_input_token_cost": 1.75e-07,
+        "cache_read_input_token_cost_priority": 3.5e-07,
+        "input_cost_per_token": 1.75e-06,
+        "input_cost_per_token_priority": 3.5e-06,
+        "litellm_provider": "azure",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.4e-05,
+        "output_cost_per_token_priority": 2.8e-05,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "image"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_service_tier": true,
+        "supports_vision": true
+    },
+    "azure/gpt-5.2-chat-2025-12-11": {
+        "cache_read_input_token_cost": 1.75e-07,
+        "cache_read_input_token_cost_priority": 3.5e-07,
+        "input_cost_per_token": 1.75e-06,
+        "input_cost_per_token_priority": 3.5e-06,
+        "litellm_provider": "azure",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 1.4e-05,
+        "output_cost_per_token_priority": 2.8e-05,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "azure/gpt-5.2-pro": {
+        "input_cost_per_token": 2.1e-05,
+        "litellm_provider": "azure",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "output_cost_per_token": 1.68e-04,
+        "supported_endpoints": [
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true
+    },
+    "azure/gpt-5.2-pro-2025-12-11": {
+        "input_cost_per_token": 2.1e-05,
+        "litellm_provider": "azure",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "output_cost_per_token": 1.68e-04,
+        "supported_endpoints": [
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true
+    },
     "azure/gpt-image-1": {
         "input_cost_per_pixel": 4.0054321e-08,
         "litellm_provider": "azure",
@@ -4976,6 +5142,28 @@
         "max_output_tokens": 4096,
         "max_query_tokens": 2048,
         "max_tokens": 4096,
+        "mode": "rerank",
+        "output_cost_per_token": 0.0
+    },
+    "azure_ai/cohere-rerank-v4.0-pro": {
+        "input_cost_per_query": 0.0025,
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "max_query_tokens": 4096,
+        "max_tokens": 32768,
+        "mode": "rerank",
+        "output_cost_per_token": 0.0
+    },
+    "azure_ai/cohere-rerank-v4.0-fast": {
+        "input_cost_per_query": 0.002,
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "max_query_tokens": 4096,
+        "max_tokens": 32768,
         "mode": "rerank",
         "output_cost_per_token": 0.0
     },
@@ -23592,6 +23780,60 @@
         "max_tokens": 8000,
         "mode": "chat"
     },
+    "stability/sd3": {
+        "litellm_provider": "stability",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.065,
+        "supported_endpoints": ["/v1/images/generations"]
+    },
+    "stability/sd3-large": {
+        "litellm_provider": "stability",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.065,
+        "supported_endpoints": ["/v1/images/generations"]
+    },
+    "stability/sd3-large-turbo": {
+        "litellm_provider": "stability",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "supported_endpoints": ["/v1/images/generations"]
+    },
+    "stability/sd3-medium": {
+        "litellm_provider": "stability",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.035,
+        "supported_endpoints": ["/v1/images/generations"]
+    },
+    "stability/sd3.5-large": {
+        "litellm_provider": "stability",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.065,
+        "supported_endpoints": ["/v1/images/generations"]
+    },
+    "stability/sd3.5-large-turbo": {
+        "litellm_provider": "stability",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "supported_endpoints": ["/v1/images/generations"]
+    },
+    "stability/sd3.5-medium": {
+        "litellm_provider": "stability",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.035,
+        "supported_endpoints": ["/v1/images/generations"]
+    },
+    "stability/stable-image-ultra": {
+        "litellm_provider": "stability",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "supported_endpoints": ["/v1/images/generations"]
+    },
+    "stability/stable-image-core": {
+        "litellm_provider": "stability",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "supported_endpoints": ["/v1/images/generations"]
+    },
     "stability.sd3-5-large-v1:0": {
         "litellm_provider": "bedrock",
         "max_input_tokens": 77,
@@ -24643,6 +24885,32 @@
         "tool_use_system_prompt_tokens": 159
     },
     "global.anthropic.claude-opus-4-5-20251101-v1:0": {
+        "cache_creation_input_token_cost": 6.25e-06,
+        "cache_read_input_token_cost": 5e-07,
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "supports_assistant_prefill": true,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "tool_use_system_prompt_tokens": 159
+    },
+    "eu.anthropic.claude-opus-4-5-20251101-v1:0": {
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 5e-06,
@@ -30478,5 +30746,4 @@
         "litellm_provider": "fireworks_ai",
         "mode": "chat"
     }
-
 }

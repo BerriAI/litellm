@@ -134,7 +134,7 @@ export function RequestResponsePanel({
         <div className="p-4 overflow-auto max-h-96 w-full max-w-full box-border">
           {hasResponse ? (
             <div className="[&_[role='tree']]:bg-white [&_[role='tree']]:text-slate-900">
-              <JsonView data={getRawRequest()} style={defaultStyles} clickToExpandNode />
+              <JsonView data={formattedResponse()} style={defaultStyles} clickToExpandNode />
             </div>
           ) : (
             <div className="text-gray-500 text-sm italic text-center py-4">Response data not available</div>

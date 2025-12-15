@@ -2997,6 +2997,7 @@ class LlmProviders(str, Enum):
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
     FAL_AI = "fal_ai"
+    STABILITY = "stability"
     HEROKU = "heroku"
     AIML = "aiml"
     COMETAPI = "cometapi"

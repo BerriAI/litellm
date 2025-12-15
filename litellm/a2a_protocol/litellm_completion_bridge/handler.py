@@ -67,13 +67,22 @@ class A2ACompletionBridgeHandler:
             f"A2A completion bridge: model={full_model}, api_base={api_base}"
         )
 
+        # Build completion params dict
+        completion_params = {
+            "model": full_model,
+            "messages": openai_messages,
+            "api_base": api_base,
+            "stream": False,
+        }
+        # Add litellm_params (contains api_key, client_id, client_secret, tenant_id, etc.)
+        litellm_params_to_add = {
+            k: v for k, v in litellm_params.items()
+            if k not in ("model", "custom_llm_provider")
+        }
+        completion_params.update(litellm_params_to_add)
+
         # Call litellm.acompletion
-        response = await litellm.acompletion(
-            model=full_model,
-            messages=openai_messages,
-            api_base=api_base,
-            stream=False,
-        )
+        response = await litellm.acompletion(**completion_params)
 
         # Transform response to A2A format
         a2a_response = A2ACompletionBridgeTransformation.openai_response_to_a2a_response(
@@ -139,6 +148,20 @@ class A2ACompletionBridgeHandler:
             f"A2A completion bridge streaming: model={full_model}, api_base={api_base}"
         )
 
+        # Build completion params dict
+        completion_params = {
+            "model": full_model,
+            "messages": openai_messages,
+            "api_base": api_base,
+            "stream": True,
+        }
+        # Add litellm_params (contains api_key, client_id, client_secret, tenant_id, etc.)
+        litellm_params_to_add = {
+            k: v for k, v in litellm_params.items()
+            if k not in ("model", "custom_llm_provider")
+        }
+        completion_params.update(litellm_params_to_add)
+
         # 1. Emit initial task event (kind: "task", status: "submitted")
         task_event = A2ACompletionBridgeTransformation.create_task_event(ctx)
         yield task_event
@@ -153,12 +176,7 @@ class A2ACompletionBridgeHandler:
         yield working_event
 
         # Call litellm.acompletion with streaming
-        response = await litellm.acompletion(
-            model=full_model,
-            messages=openai_messages,
-            api_base=api_base,
-            stream=True,
-        )
+        response = await litellm.acompletion(**completion_params)
 
         # 3. Accumulate content and emit artifact update
         accumulated_text = ""

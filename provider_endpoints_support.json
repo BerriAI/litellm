@@ -694,7 +694,7 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false,
+        "rerank": true,
         "a2a": true
       }
     },
@@ -892,13 +892,14 @@
         "chat_completions": true,
         "messages": true,
         "responses": true,
-        "embeddings": false,
+        "embeddings": true,
         "image_generations": false,
         "audio_transcriptions": false,
         "audio_speech": false,
         "moderations": false,
-        "batches": false,
-        "rerank": false,
+        "batches": true,
+        "files": true,
+        "rerank": true,
         "a2a": true
       }
     },
@@ -1766,13 +1767,14 @@
         "chat_completions": true,
         "messages": true,
         "responses": true,
-        "embeddings": false,
+        "embeddings": true,
         "image_generations": false,
         "audio_transcriptions": false,
         "audio_speech": false,
         "moderations": false,
-        "batches": false,
-        "rerank": false,
+        "batches": true,
+        "files": true,
+        "rerank": true,
         "a2a": true
       }
     },
@@ -1806,7 +1808,7 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": true
       }
     },
     "wandb": {
