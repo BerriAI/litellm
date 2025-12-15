@@ -33,6 +33,7 @@ from litellm.main import (
     base_llm_aiohttp_handler,
     base_llm_http_handler,
     bedrock_image_generation,
+    bedrock_image_edit,
     openai_chat_completions,
     openai_image_variations,
 )
@@ -811,6 +812,25 @@ def image_edit(
             },
             custom_llm_provider=custom_llm_provider,
         )
+
+        # Route bedrock to its specific handler (AWS signing required)
+        if custom_llm_provider == "bedrock":
+            if model is None:
+                raise Exception("Model needs to be set for bedrock")
+            return bedrock_image_edit.image_edit(  # type: ignore
+                model=model,
+                image=images,
+                prompt=prompt,
+                timeout=timeout,
+                logging_obj=litellm_logging_obj,
+                optional_params=image_edit_request_params,
+                model_response=ImageResponse(),
+                aimage_edit=_is_async,
+                client=kwargs.get("client"),
+                api_base=kwargs.get("api_base"),
+                extra_headers=extra_headers,
+                api_key=kwargs.get("api_key"),
+            )
 
         # Call the handler with _is_async flag instead of directly calling the async handler
         return base_llm_http_handler.image_edit_handler(
