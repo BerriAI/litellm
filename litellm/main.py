@@ -5460,11 +5460,9 @@ def text_completion(  # noqa: PLR0915
         )
         and isinstance(prompt, list)
         and len(prompt) > 0
-        and isinstance(prompt[0], list)
+        and (isinstance(prompt[0], list) or isinstance(prompt[0], int))
     ):
-        verbose_logger.warning(
-            msg="List of lists being passed. If this is for tokens, then it might not work across all models."
-        )
+        # Support for token IDs as prompt (list of integers or list of lists of integers)
         messages = [{"role": "user", "content": prompt}]  # type: ignore
     else:
         raise Exception(

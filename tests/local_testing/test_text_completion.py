@@ -3917,6 +3917,28 @@ def test_completion_text_003_prompt_array():
 # test_completion_text_003_prompt_array()
 
 
+def test_completion_prompt_token_ids():
+    """
+    Test text_completion with a list of token IDs (integers).
+    This tests the fix for https://github.com/BerriAI/litellm/issues/17118
+    """
+    try:
+        # Token IDs for "Hello world" in GPT tokenizer
+        token_ids = [15496, 995]
+        response = text_completion(
+            model="gpt-3.5-turbo-instruct",
+            prompt=token_ids,
+            max_tokens=5,
+        )
+        print("\n\n response for token IDs prompt")
+        print(response)
+        assert response is not None
+        assert response.choices[0].text is not None
+        assert response.usage.prompt_tokens == 2
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 # not including this in our ci cd pipeline, since we don't want to fail tests due to an unstable replit
 # def test_text_completion_with_proxy():
 #     try:
