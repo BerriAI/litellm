@@ -296,19 +296,19 @@ def _lazy_import_http_handlers(name: str) -> Any:
         from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
         timeout = _globals.get("request_timeout")
-        client = AsyncHTTPHandler(
+        async_client = AsyncHTTPHandler(
             timeout=timeout, client_alias="module level aclient"
         )
-        _globals["module_level_aclient"] = client
-        return client
+        _globals["module_level_aclient"] = async_client
+        return async_client
 
     if name == "module_level_client":
         # Import handler type locally to avoid heavy imports at module load time
         from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
         timeout = _globals.get("request_timeout")
-        client = HTTPHandler(timeout=timeout)
-        _globals["module_level_client"] = client
-        return client
+        sync_client = HTTPHandler(timeout=timeout)
+        _globals["module_level_client"] = sync_client
+        return sync_client
 
     raise AttributeError(f"HTTP handlers lazy import: unknown attribute {name!r}")
