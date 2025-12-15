@@ -30,7 +30,7 @@ Output: response.output is List[GenericResponseOutputItem] where each has:
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
-from openai import BaseModel
+from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -424,6 +424,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         Override this method to customize text/image/tool extraction logic.
         """
+
         # Check if this is a tool call (OutputFunctionToolCall)
         if isinstance(output_item, OutputFunctionToolCall):
             if tool_calls_to_check is not None:
