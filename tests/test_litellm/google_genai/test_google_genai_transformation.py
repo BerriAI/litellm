@@ -12,6 +12,9 @@ sys.path.insert(
 import pytest
 
 from litellm.llms.gemini.google_genai.transformation import GoogleGenAIConfig
+from litellm.responses.litellm_completion_transformation.transformation import (
+    LiteLLMCompletionResponsesConfig,
+)
 
 
 def test_map_generate_content_optional_params_response_json_schema_camelcase():
@@ -30,7 +33,7 @@ def test_map_generate_content_optional_params_response_json_schema_camelcase():
     
     result = config.map_generate_content_optional_params(
         generate_content_config_dict=generate_content_config_dict,
-        model="gemini/skyhawk"
+        model="gemini/fiercefalcon"
     )
     
     # responseJsonSchema should be in the result (camelCase format for Google GenAI API)
@@ -56,7 +59,7 @@ def test_map_generate_content_optional_params_response_schema_snakecase():
     
     result = config.map_generate_content_optional_params(
         generate_content_config_dict=generate_content_config_dict,
-        model="gemini/skyhawk"
+        model="gemini/fiercefalcon"
     )
     
     # response_schema should be converted to responseJsonSchema (camelCase)
@@ -79,7 +82,7 @@ def test_map_generate_content_optional_params_thinking_config_camelcase():
     
     result = config.map_generate_content_optional_params(
         generate_content_config_dict=generate_content_config_dict,
-        model="gemini/skyhawk"
+        model="gemini/fiercefalcon"
     )
     
     # thinkingConfig should be in the result (camelCase format for Google GenAI API)
@@ -103,7 +106,7 @@ def test_map_generate_content_optional_params_thinking_config_snakecase():
     
     result = config.map_generate_content_optional_params(
         generate_content_config_dict=generate_content_config_dict,
-        model="gemini/skyhawk"
+        model="gemini/fiercefalcon"
     )
     
     # thinking_config should be converted to thinkingConfig (camelCase)
@@ -135,7 +138,7 @@ def test_map_generate_content_optional_params_mixed_formats():
     
     result = config.map_generate_content_optional_params(
         generate_content_config_dict=generate_content_config_dict,
-        model="gemini/skyhawk"
+        model="gemini/fiercefalcon"
     )
     
     # All parameters should be converted to camelCase
@@ -162,10 +165,85 @@ def test_map_generate_content_optional_params_response_mime_type():
     
     result = config.map_generate_content_optional_params(
         generate_content_config_dict=generate_content_config_dict,
-        model="gemini/skyhawk"
+        model="gemini/fiercefalcon"
     )
     
     # responseMimeType should be passed through (it's already camelCase)
     assert "responseMimeType" in result or "response_mime_type" in result
     assert "responseJsonSchema" in result
 
+
+def test_responses_api_reasoning_dict_format():
+    """Test that reasoning parameter with dict format is mapped to reasoning_effort"""
+    from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+    
+    responses_api_request: ResponsesAPIOptionalRequestParams = {
+        "reasoning": {"effort": "high"},
+        "temperature": 1.0,
+    }
+    
+    result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="gemini/2.5-pro",
+        input="Hello, what is the capital of France?",
+        responses_api_request=responses_api_request,
+    )
+    
+    # reasoning_effort should be extracted from reasoning dict
+    assert "reasoning_effort" in result
+    assert result["reasoning_effort"] == "high"
+
+
+def test_responses_api_reasoning_string_format():
+    """Test that reasoning parameter with string format is mapped to reasoning_effort"""
+    from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+    
+    responses_api_request: ResponsesAPIOptionalRequestParams = {
+        "reasoning": "medium",  # Could be a string directly
+        "temperature": 1.0,
+    }
+    
+    result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="gemini/2.5-pro",
+        input="Hello, what is the capital of France?",
+        responses_api_request=responses_api_request,
+    )
+    
+    # reasoning_effort should be extracted from reasoning string
+    assert "reasoning_effort" in result
+    assert result["reasoning_effort"] == "medium"
+
+
+def test_responses_api_reasoning_low_effort():
+    """Test that low reasoning effort is correctly mapped"""
+    from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+    
+    responses_api_request: ResponsesAPIOptionalRequestParams = {
+        "reasoning": {"effort": "low"},
+    }
+    
+    result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="gemini/2.5-pro",
+        input="Test",
+        responses_api_request=responses_api_request,
+    )
+    
+    assert "reasoning_effort" in result
+    assert result["reasoning_effort"] == "low"
+
+
+def test_responses_api_no_reasoning():
+    """Test that no reasoning_effort is included when reasoning is not provided"""
+    from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+    
+    responses_api_request: ResponsesAPIOptionalRequestParams = {
+        "temperature": 1.0,
+    }
+    
+    result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="gemini/2.5-pro",
+        input="Test",
+        responses_api_request=responses_api_request,
+    )
+    
+    # reasoning_effort should not be in result if not provided (filtered out as None)
+    assert "reasoning_effort" not in result or result.get("reasoning_effort") is None
