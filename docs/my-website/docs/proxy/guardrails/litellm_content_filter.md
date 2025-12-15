@@ -449,13 +449,46 @@ LiteLLM Content Filter includes **prebuilt content categories** for detecting ha
 
 ### Available Categories
 
+#### Harmful Content Categories
+
 | Category | Description | Detection Methods |
 |----------|-------------|-------------------|
 | `harmful_self_harm` | Self-harm, suicide, eating disorders | Keywords + phrases (exact, fuzzy, proximity) |
 | `harmful_violence` | Violence, criminal planning, attacks | Keywords + phrases (exact, fuzzy, proximity) |
 | `harmful_illegal_weapons` | Illegal weapons, explosives, dangerous materials | Keywords + phrases (exact, fuzzy, proximity) |
 
+#### Bias Detection Categories
+
+| Category | Description | Detection Methods |
+|----------|-------------|-------------------|
+| `bias_gender` | Gender-based discrimination, stereotypes | Keywords + phrases (exact, fuzzy, proximity) |
+| `bias_sexual_orientation` | LGBTQ+ discrimination, homophobia, transphobia | Keywords + phrases (exact, fuzzy, proximity) |
+| `bias_racial` | Racial/ethnic discrimination, stereotypes | Keywords + phrases (exact, fuzzy, proximity) |
+| `bias_religious` | Religious discrimination, stereotypes | Keywords + phrases (exact, fuzzy, proximity) |
+
+:::info Important: Bias Detection Considerations
+
+Bias detection is **complex and context-dependent**. Rule-based systems (like this one) can catch explicit discriminatory language but may:
+- Generate false positives on legitimate discussions about diversity, identity, and social issues
+- Miss subtle, context-dependent biased content
+- Vary in effectiveness across languages and cultures
+
+**Recommendations:**
+- Start with **high severity thresholds** to minimize false positives
+- **Test thoroughly** with your specific use cases
+- **Monitor and adjust** based on real-world performance
+- **Customize with domain-specific exceptions** for your context
+- Consider combining with AI-based guardrails for more nuanced detection
+
+For mission-critical bias detection, consider using AI-based guardrails (e.g., HiddenLayer, Lakera) in addition to these rule-based filters.
+
+:::
+
+
 ### Using Categories
+
+<Tabs>
+<TabItem label="Harmful Content" value="harmful">
 
 ```yaml showLineNumbers title="config.yaml"
 guardrails:
@@ -481,6 +514,83 @@ guardrails:
           action: "BLOCK"
           severity_threshold: "medium"
 ```
+
+</TabItem>
+
+<TabItem label="Bias Detection" value="bias">
+
+```yaml showLineNumbers title="config.yaml"
+guardrails:
+  - guardrail_name: "bias-detection-filter"
+    litellm_params:
+      guardrail: litellm_content_filter
+      mode: "pre_call"
+      
+      # Enable bias detection categories
+      categories:
+        - category: "bias_gender"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "medium"
+        
+        - category: "bias_sexual_orientation"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "medium"
+        
+        - category: "bias_racial"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "high"  # Only block explicit racism
+        
+        - category: "bias_religious"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "medium"
+```
+
+</TabItem>
+
+<TabItem label="Combined" value="combined">
+
+```yaml showLineNumbers title="config.yaml"
+guardrails:
+  - guardrail_name: "comprehensive-content-filter"
+    litellm_params:
+      guardrail: litellm_content_filter
+      mode: "pre_call"
+      
+      # Harmful content
+      categories:
+        - category: "harmful_self_harm"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "medium"
+        
+        - category: "harmful_violence"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "medium"
+        
+        # Bias detection
+        - category: "bias_gender"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "high"
+        
+        - category: "bias_sexual_orientation"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "high"
+        
+        - category: "bias_racial"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "high"
+```
+
+</TabItem>
+</Tabs>
 
 ### Severity Levels
 
@@ -529,7 +639,10 @@ This configuration:
 - Blocks all weapons-related content (strictest - includes even borderline terms)
 - Only blocks high-severity violence content (most lenient - only explicit harmful intent)
 
-### Test Example
+### Test Examples
+
+<Tabs>
+<TabItem label="Harmful Content" value="harmful-test">
 
 ```shell
 curl -i http://localhost:4000/v1/chat/completions \
@@ -558,6 +671,41 @@ curl -i http://localhost:4000/v1/chat/completions \
   }
 }
 ```
+
+</TabItem>
+
+<TabItem label="Bias Detection" value="bias-test">
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+      {"role": "user", "content": "Women are too emotional to be leaders"}
+    ],
+    "guardrails": ["bias-detection-filter"]
+  }'
+```
+
+**Response: HTTP 400 Error**
+```json
+{
+  "error": {
+    "message": {
+      "error": "Content blocked: bias_gender category phrase 'women are too emotional to lead' detected (severity: high)",
+      "category": "bias_gender",
+      "phrase": "women are too emotional to lead",
+      "severity": "high"
+    },
+    "code": "400"
+  }
+}
+```
+
+</TabItem>
+</Tabs>
 
 ### Custom Category Files
 
@@ -703,7 +851,91 @@ categories:
 - No external API calls - runs locally and fast
 - Configurable severity thresholds to balance false positives
 
-### 2. PII Protection
+### 2. Bias and Discrimination Detection
+
+Detect and block biased, discriminatory, or hateful content across multiple dimensions:
+
+```yaml
+categories:
+  # Gender-based discrimination
+  - category: "bias_gender"
+    enabled: true
+    action: "BLOCK"
+    severity_threshold: "medium"
+  
+  # LGBTQ+ discrimination
+  - category: "bias_sexual_orientation"
+    enabled: true
+    action: "BLOCK"
+    severity_threshold: "medium"
+  
+  # Racial/ethnic discrimination
+  - category: "bias_racial"
+    enabled: true
+    action: "BLOCK"
+    severity_threshold: "high"  # Only explicit to reduce false positives
+  
+  # Religious discrimination
+  - category: "bias_religious"
+    enabled: true
+    action: "BLOCK"
+    severity_threshold: "medium"
+```
+
+**What It Detects:**
+
+- **Gender Bias**: Stereotypes (e.g., "women belong in the kitchen"), discriminatory language, gender-based generalizations
+- **Sexual Orientation Bias**: Homophobia, transphobia, discriminatory statements about LGBTQ+ individuals
+- **Racial Bias**: Racial stereotypes, discriminatory generalizations, racial supremacy language
+- **Religious Bias**: Religious discrimination, stereotypes, hate speech targeting religious groups
+
+**Benefits:**
+- Creates safer, more inclusive AI interactions
+- Helps meet diversity and inclusion requirements
+- Detects both explicit slurs and subtle stereotyping patterns
+- Includes exceptions for legitimate educational and anti-discrimination discussions
+
+**Sensitivity Tuning:**
+
+For bias detection, severity thresholds are critical to balance safety and legitimate discourse:
+
+```yaml
+# Conservative (low false positives, may miss subtle bias)
+categories:
+  - category: "bias_racial"
+    severity_threshold: "high"  # Only blocks explicit discriminatory language
+
+# Balanced (recommended)
+categories:
+  - category: "bias_gender"
+    severity_threshold: "medium"  # Blocks stereotypes and explicit discrimination
+
+# Strict (high safety, may have more false positives)
+categories:
+  - category: "bias_sexual_orientation"
+    severity_threshold: "low"  # Blocks all potentially problematic content
+```
+
+**Exceptions for Legitimate Use:**
+
+Bias categories include exceptions for legitimate discussions:
+- Research and education (e.g., "study shows gender gap in STEM")
+- Anti-discrimination advocacy (e.g., "combat racism", "fight homophobia")
+- Diversity and inclusion initiatives
+- Historical context and documentation
+
+You can add custom exceptions:
+
+```yaml
+# custom_bias_gender.yaml
+exceptions:
+  - "gender diversity program"
+  - "addressing gender bias"
+  - "research study"
+  - "workplace equality"
+```
+
+### 3. PII Protection
 Block or mask personally identifiable information before sending to LLMs:
 
 ```yaml
@@ -747,7 +979,54 @@ For large lists of sensitive terms, use a file:
 blocked_words_file: "/path/to/sensitive_terms.yaml"
 ```
 
-### 4. Compliance
+### 4. Safe AI for Consumer Applications
+
+Combining harmful content and bias detection for consumer-facing AI:
+
+```yaml
+guardrails:
+  - guardrail_name: "safe-consumer-ai"
+    litellm_params:
+      guardrail: litellm_content_filter
+      mode: "pre_call"
+      
+      categories:
+        # Harmful content - strict
+        - category: "harmful_self_harm"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "medium"
+        
+        - category: "harmful_violence"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "medium"
+        
+        # Bias detection - balanced
+        - category: "bias_gender"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "high"  # Avoid blocking legitimate gender discussions
+        
+        - category: "bias_sexual_orientation"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "medium"
+        
+        - category: "bias_racial"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "high"  # Education and news may discuss race
+```
+
+**Perfect for:**
+- Chatbots and virtual assistants
+- Educational AI tools
+- Customer service AI
+- Content generation platforms
+- Public-facing AI applications
+
+### 5. Compliance
 Ensure regulatory compliance by filtering sensitive data types:
 
 ```yaml
@@ -760,7 +1039,103 @@ patterns:
     action: "BLOCK"
 ```
 
+## Best Practices for Bias Detection
+
+### Choosing the Right Severity Threshold
+
+Bias detection requires careful tuning to avoid blocking legitimate content:
+
+**High Threshold (Recommended for most use cases)**
+- Blocks only explicit discriminatory language
+- Lower false positives
+- Allows nuanced discussions about identity, diversity, and social issues
+- Good for: Public-facing applications, education, research
+
+**Medium Threshold**
+- Blocks stereotypes and generalizations
+- Balanced approach
+- May catch some edge cases in legitimate discourse
+- Good for: Consumer applications, internal tools, moderated environments
+
+**Low Threshold**
+- Strictest filtering
+- Blocks even borderline language
+- Higher false positives but maximum safety
+- Good for: Youth-focused applications, highly controlled environments
+
+### Testing Your Bias Filters
+
+Always test with realistic use cases:
+
+```yaml
+# Test legitimate discussions (should NOT be blocked)
+- "Our company has a gender diversity initiative"
+- "Research shows racial disparities in healthcare"
+- "We support LGBTQ+ rights and equality"
+- "Religious freedom is a fundamental right"
+
+# Test discriminatory content (SHOULD be blocked)
+- "Women are too emotional to lead"
+- "All [group] are [negative stereotype]"
+- "Being gay is unnatural"
+- "[Religious group] are all extremists"
+```
+
+### Monitoring and Iteration
+
+1. **Log blocked requests** to review false positives
+2. **Add exceptions** for legitimate terms in your domain
+3. **Adjust severity thresholds** based on your audience
+4. **Use custom category files** for domain-specific bias patterns
+
+### Cultural and Linguistic Considerations
+
+The prebuilt categories focus on English and common patterns. For other languages or cultural contexts:
+
+1. Create custom category files with region-specific terms
+2. Consult with native speakers and cultural experts
+3. Include local slurs and stereotypes
+4. Adjust severity based on regional norms
+
 ## Troubleshooting
+
+### False Positives with Bias Detection
+
+**Issue:** Legitimate discussions about diversity, identity, or social issues are being blocked
+
+**Solutions:**
+
+1. **Raise severity threshold:**
+```yaml
+categories:
+  - category: "bias_racial"
+    severity_threshold: "high"  # Only explicit discrimination
+```
+
+2. **Add domain-specific exceptions:**
+```yaml
+# my_custom_bias_gender.yaml
+exceptions:
+  - "gender pay gap"
+  - "gender diversity"
+  - "women in tech"
+  - "gender equality"
+  - "dei initiative"
+  - "inclusion program"
+```
+
+3. **Review what was blocked:**
+Check error details to understand what triggered the block:
+```json
+{
+  "error": "Content blocked: bias_gender category phrase 'women in leadership' detected",
+  "category": "bias_gender",
+  "phrase": "women in leadership",
+  "severity": "medium"
+}
+```
+
+If this is a false positive, add "women in leadership" to exceptions.
 
 ### False Positives with Categories
 

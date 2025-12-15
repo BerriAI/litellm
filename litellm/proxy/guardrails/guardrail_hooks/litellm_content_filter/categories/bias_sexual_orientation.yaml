@@ -1,0 +1,126 @@
+# Sexual orientation bias and discrimination detection
+category_name: "bias_sexual_orientation"
+description: "Detects discriminatory language targeting LGBTQ+ individuals and communities"
+default_action: "BLOCK"
+
+# Keywords with severity levels
+keywords:
+  # HIGH SEVERITY - Explicit slurs (always block regardless of context)
+  - keyword: "faggot"
+    severity: "high"
+  - keyword: "fag"
+    severity: "high"
+  - keyword: "dyke"
+    severity: "high"
+  - keyword: "tranny"
+    severity: "high"
+  - keyword: "shemale"
+    severity: "high"
+  - keyword: "sodomite"
+    severity: "high"
+  
+  # HIGH SEVERITY - Always discriminatory phrases
+  - keyword: "gay agenda"
+    severity: "high"
+  - keyword: "homosexual agenda"
+    severity: "high"
+  - keyword: "conversion therapy"
+    severity: "high"
+  - keyword: "reparative therapy"
+    severity: "high"
+  - keyword: "groomer"
+    severity: "high"
+  - keyword: "lifestyle choice"
+    severity: "high"
+
+# IDENTITY KEYWORDS - LGBTQ+ terms that are neutral by themselves
+# These are checked in proximity to negative modifiers and harmful actions
+identity_keywords:
+  - "gay"
+  - "lesbian"
+  - "bisexual"
+  - "transgender"
+  - "trans"
+  - "queer"
+  - "lgbtq"
+  - "lgbt"
+  - "homosexual"
+  - "same-sex"
+  - "gender identity"
+  - "nonbinary"
+  - "genderqueer"
+
+# NEGATIVE MODIFIERS - Words that indicate discrimination when near identity keywords
+negative_modifiers:
+  - "unnatural"
+  - "wrong"
+  - "sin"
+  - "sinful"
+  - "disease"
+  - "illness"
+  - "disorder"
+  - "abnormal"
+  - "deviant"
+  - "perverted"
+  - "pervert"
+  - "degenerate"
+  - "abomination"
+  - "disgusting"
+  - "immoral"
+  - "evil"
+  - "sick"
+  - "twisted"
+  - "corrupt"
+  - "broken"
+  - "damaged"
+  - "inferior"
+  - "choice"
+  - "fake"
+  - "confused"
+  - "delusion"
+  - "mental"
+  - "hell"
+  - "demonic"
+
+# HARMFUL ACTIONS - Action verbs that indicate harm when near identity keywords
+harmful_actions:
+  - "cure"
+  - "fix"
+  - "change"
+  - "convert"
+  - "stop"
+  - "prevent"
+  - "eliminate"
+  - "eradicate"
+  - "ban"
+  - "punish"
+
+# Proximity detection configuration
+# If identity keyword appears within max_distance of negative modifier → BLOCK
+proximity_detection:
+  identity_plus_negative:
+    max_distance: 5  # tokens
+    severity: "high"
+  
+  action_plus_identity:
+    max_distance: 4  # tokens
+    severity: "high"
+
+# Exceptions - legitimate discussions
+exceptions:
+  - "lgbtq rights"
+  - "lgbtq equality"
+  - "lgbtq community"
+  - "lgbtq support"
+  - "lgbtq advocacy"
+  - "sexual orientation"
+  - "coming out"
+  - "pride"
+  - "marriage equality"
+  - "anti-lgbtq"
+  - "discrimination against"
+  - "protect lgbtq"
+  - "lgbtq history"
+  - "gender identity"
+  - "conversion therapy ban"
+  - "harmful practice"

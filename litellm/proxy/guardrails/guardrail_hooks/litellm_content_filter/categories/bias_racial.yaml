@@ -1,0 +1,149 @@
+# Racial and ethnic bias detection
+category_name: "bias_racial"
+description: "Detects racial and ethnic discrimination, stereotypes, and biased content"
+default_action: "BLOCK"
+
+# Keywords with severity levels
+keywords:
+  # High severity - explicit discriminatory language
+  # Note: Actual racial slurs are NOT listed here by design for sensitivity
+  # Organizations should add their own comprehensive lists based on their context
+  - keyword: "inferior race"
+    severity: "high"
+  - keyword: "superior race"
+    severity: "high"
+  - keyword: "racial purity"
+    severity: "high"
+  - keyword: "master race"
+    severity: "high"
+  - keyword: "go back to your country"
+    severity: "high"
+  - keyword: "you people"
+    severity: "medium"
+  - keyword: "those people"
+    severity: "medium"
+  - keyword: "race traitor"
+    severity: "high"
+  - keyword: "race mixing"
+    severity: "high"
+  - keyword: "white genocide"
+    severity: "high"
+  - keyword: "great replacement"
+    severity: "high"
+  - keyword: "white supremacy"
+    severity: "high"
+  - keyword: "all lives matter"
+    severity: "medium"
+  - keyword: "blue lives matter"
+    severity: "low"
+  - keyword: "model minority"
+    severity: "medium"
+  - keyword: "ghetto culture"
+    severity: "high"
+  - keyword: "thug culture"
+    severity: "high"
+
+# Multi-word phrases for context-aware detection
+phrases:
+  # Exact match phrases - explicit racism
+  - phrase: "some races are inferior"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "certain races are smarter"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "go back to your country"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "you don't belong here"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "white people are superior"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "racial differences in intelligence"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "diversity hire"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "hired for diversity not merit"
+    severity: "high"
+    match_type: "exact"
+  
+  # Fuzzy match phrases - stereotyping patterns
+  - phrase: "all blacks are"
+    severity: "high"
+    match_type: "fuzzy"
+  
+  - phrase: "all asians are"
+    severity: "high"
+    match_type: "fuzzy"
+  
+  - phrase: "all hispanics are"
+    severity: "high"
+    match_type: "fuzzy"
+  
+  - phrase: "all whites are"
+    severity: "high"
+    match_type: "fuzzy"
+  
+  - phrase: "all muslims are"
+    severity: "high"
+    match_type: "fuzzy"
+  
+  - phrase: "all jews are"
+    severity: "high"
+    match_type: "fuzzy"
+  
+  # Proximity-based detection - connecting protected groups to negative traits
+  - phrase: "black crime"
+    severity: "high"
+    match_type: "proximity"
+    max_distance: 3
+  
+  - phrase: "immigrant crime"
+    severity: "high"
+    match_type: "proximity"
+    max_distance: 3
+  
+  - phrase: "minority lazy"
+    severity: "high"
+    match_type: "proximity"
+    max_distance: 3
+  
+  - phrase: "immigrant stealing jobs"
+    severity: "high"
+    match_type: "proximity"
+    max_distance: 4
+
+# Exceptions - legitimate discussions about race, diversity, anti-racism
+exceptions:
+  - "racial equality"
+  - "racial justice"
+  - "racial discrimination"
+  - "anti-racism"
+  - "combat racism"
+  - "racial bias"
+  - "systemic racism"
+  - "structural racism"
+  - "racial equity"
+  - "diversity and inclusion"
+  - "black lives matter"
+  - "civil rights"
+  - "fight racism"
+  - "address racism"
+  - "racial disparities"
+  - "racism is"
+  - "racist"
+  - "study shows"
+  - "research indicates"
+  - "historical"
+

@@ -1,0 +1,160 @@
+# Religious bias and discrimination detection
+category_name: "bias_religious"
+description: "Detects religious discrimination, stereotypes, and biased content"
+default_action: "BLOCK"
+
+# Keywords with severity levels
+keywords:
+  # High severity - explicit religious discrimination
+  - keyword: "religious war"
+    severity: "high"
+  - keyword: "holy war"
+    severity: "high"
+  - keyword: "kill the infidels"
+    severity: "high"
+  - keyword: "crusade against"
+    severity: "high"
+  - keyword: "jihad against"
+    severity: "high"
+  - keyword: "all muslims are terrorists"
+    severity: "high"
+  - keyword: "all jews are greedy"
+    severity: "high"
+  - keyword: "jews control the world"
+    severity: "high"
+  - keyword: "jewish conspiracy"
+    severity: "high"
+  - keyword: "zionist conspiracy"
+    severity: "high"
+  - keyword: "islamophobia is justified"
+    severity: "high"
+  - keyword: "christians are stupid"
+    severity: "high"
+  - keyword: "atheists are immoral"
+    severity: "high"
+  - keyword: "muslims are barbaric"
+    severity: "high"
+  - keyword: "islam is evil"
+    severity: "high"
+  - keyword: "christianity is a cult"
+    severity: "high"
+  
+  # Medium severity - context-dependent
+  - keyword: "religious extremist"
+    severity: "medium"
+  - keyword: "religious fanatic"
+    severity: "medium"
+  - keyword: "infidel"
+    severity: "medium"
+
+# Multi-word phrases for context-aware detection
+phrases:
+  # Exact match phrases
+  - phrase: "all muslims are terrorists"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "islam promotes violence"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "jews control the media"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "jews control the banks"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "christians are intolerant"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "religion is poison"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "muslims want sharia law"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "ban all muslims"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "atheists have no morals"
+    severity: "high"
+    match_type: "exact"
+  
+  # Fuzzy match phrases
+  - phrase: "all muslims are"
+    severity: "high"
+    match_type: "fuzzy"
+  
+  - phrase: "all jews are"
+    severity: "high"
+    match_type: "fuzzy"
+  
+  - phrase: "all christians are"
+    severity: "high"
+    match_type: "fuzzy"
+  
+  - phrase: "all atheists are"
+    severity: "high"
+    match_type: "fuzzy"
+  
+  - phrase: "all hindus are"
+    severity: "high"
+    match_type: "fuzzy"
+  
+  - phrase: "all buddhists are"
+    severity: "high"
+    match_type: "fuzzy"
+  
+  # Proximity-based detection
+  - phrase: "muslim terrorist"
+    severity: "high"
+    match_type: "proximity"
+    max_distance: 2
+  
+  - phrase: "jewish conspiracy"
+    severity: "high"
+    match_type: "proximity"
+    max_distance: 3
+  
+  - phrase: "christian extremist"
+    severity: "high"
+    match_type: "proximity"
+    max_distance: 2
+  
+  - phrase: "islam violence"
+    severity: "high"
+    match_type: "proximity"
+    max_distance: 3
+  
+  - phrase: "jews money"
+    severity: "high"
+    match_type: "proximity"
+    max_distance: 3
+
+# Exceptions - legitimate religious discussion, education, interfaith work
+exceptions:
+  - "religious freedom"
+  - "religious tolerance"
+  - "religious discrimination"
+  - "religious persecution"
+  - "interfaith"
+  - "religious studies"
+  - "religious history"
+  - "combat islamophobia"
+  - "fight antisemitism"
+  - "religious diversity"
+  - "freedom of religion"
+  - "religious equality"
+  - "anti-muslim bias"
+  - "anti-semitism"
+  - "religious bigotry"
+  - "theological"
+  - "scripture"
+  - "comparative religion"
+
