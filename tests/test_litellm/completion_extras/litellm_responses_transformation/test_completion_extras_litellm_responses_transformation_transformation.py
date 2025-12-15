@@ -119,7 +119,9 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_imag
             function_call_output = item
             break
 
-    assert function_call_output is not None, "function_call_output not found in response"
+    assert (
+        function_call_output is not None
+    ), "function_call_output not found in response"
     assert function_call_output["call_id"] == "call_abc123"
 
     # Check that the output is correctly transformed
@@ -129,8 +131,12 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_imag
 
     image_item = output[0]
     # Should be transformed to Responses API format
-    assert image_item["type"] == "input_image", f"Expected type 'input_image', got '{image_item.get('type')}'"
-    assert image_item["image_url"] == test_image_base64, "image_url should be a flat string, not a nested object"
+    assert (
+        image_item["type"] == "input_image"
+    ), f"Expected type 'input_image', got '{image_item.get('type')}'"
+    assert (
+        image_item["image_url"] == test_image_base64
+    ), "image_url should be a flat string, not a nested object"
     assert "detail" in image_item, "detail field should be present"
 
     print("✓ Tool result with image correctly transformed to Responses API format")
@@ -537,7 +543,9 @@ def test_transform_request_single_char_keys_not_matched():
     assert result_correct.get("metadata") == {"user_id": "123"}
     assert result_correct.get("previous_response_id") == "resp_abc"
 
-    print("✓ Single-character keys are not incorrectly matched to metadata/previous_response_id")
+    print(
+        "✓ Single-character keys are not incorrectly matched to metadata/previous_response_id"
+    )
 
 
 # =============================================================================
@@ -563,14 +571,17 @@ def test_message_done_does_not_emit_is_finished():
 
     chunk = {
         "type": "response.output_item.done",
-        "item": {"type": "message", "content": []}
+        "item": {"type": "message", "content": []},
     }
 
     result = iterator.chunk_parser(chunk)
 
-    # After the fix, message completion should NOT set is_finished=True
-    assert result["is_finished"] == False, "message completion should not emit is_finished=True"
-    assert result["finish_reason"] == "", "message completion should not emit finish_reason"
+    # After the fix, message completion should NOT set finish_reason
+    # ModelResponseStream doesn't have is_finished - check finish_reason instead
+    assert len(result.choices) > 0, "result should have choices"
+    assert (
+        result.choices[0].finish_reason is None or result.choices[0].finish_reason == ""
+    ), "message completion should not emit finish_reason"
 
 
 def test_response_completed_emits_is_finished():
@@ -590,8 +601,11 @@ def test_response_completed_emits_is_finished():
 
     result = iterator.chunk_parser(chunk)
 
-    assert result["is_finished"] == True, "response.completed should emit is_finished=True"
-    assert result["finish_reason"] == "stop", "response.completed should emit finish_reason='stop'"
+    # response.completed should emit finish_reason='stop'
+    assert len(result.choices) > 0, "result should have choices"
+    assert (
+        result.choices[0].finish_reason == "stop"
+    ), "response.completed should emit finish_reason='stop'"
 
 
 def test_function_call_done_emits_is_finished():
@@ -613,15 +627,21 @@ def test_function_call_done_emits_is_finished():
             "type": "function_call",
             "name": "get_weather",
             "call_id": "call_123",
-            "arguments": '{"location": "Tokyo"}'
-        }
+            "arguments": '{"location": "Tokyo"}',
+        },
     }
 
     result = iterator.chunk_parser(chunk)
 
-    assert result["is_finished"] == True, "function_call completion should emit is_finished=True"
-    assert result["finish_reason"] == "tool_calls", "function_call should emit finish_reason='tool_calls'"
-    assert result["tool_use"] is not None, "function_call should include tool_use"
+    # function_call completion should emit finish_reason='tool_calls'
+    assert len(result.choices) > 0, "result should have choices"
+    assert (
+        result.choices[0].finish_reason == "tool_calls"
+    ), "function_call should emit finish_reason='tool_calls'"
+    assert (
+        result.choices[0].delta.tool_calls is not None
+        and len(result.choices[0].delta.tool_calls) > 0
+    ), "function_call should include tool_calls"
 
 
 def test_text_plus_tool_calls_sequence():
@@ -644,24 +664,56 @@ def test_text_plus_tool_calls_sequence():
     chunks = [
         {"type": "response.output_text.delta", "delta": "Hello"},
         {"type": "response.output_text.delta", "delta": "!"},
-        {"type": "response.output_item.done", "item": {"type": "message", "content": []}},  # message done
-        {"type": "response.output_item.added", "item": {"type": "function_call", "name": "get_weather", "call_id": "call_123"}},
-        {"type": "response.function_call_arguments.delta", "delta": '{"location":"Tokyo"}'},
-        {"type": "response.output_item.done", "item": {"type": "function_call", "name": "get_weather", "call_id": "call_123", "arguments": '{"location":"Tokyo"}'}},
+        {
+            "type": "response.output_item.done",
+            "item": {"type": "message", "content": []},
+        },  # message done
+        {
+            "type": "response.output_item.added",
+            "item": {
+                "type": "function_call",
+                "name": "get_weather",
+                "call_id": "call_123",
+            },
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "delta": '{"location":"Tokyo"}',
+        },
+        {
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call",
+                "name": "get_weather",
+                "call_id": "call_123",
+                "arguments": '{"location":"Tokyo"}',
+            },
+        },
         {"type": "response.completed"},
     ]
 
     results = [iterator.chunk_parser(chunk) for chunk in chunks]
 
-    # Check message done (index 2) does NOT have is_finished=True
+    # Check message done (index 2) does NOT have finish_reason set
     message_done_result = results[2]
-    assert message_done_result["is_finished"] == False, "message done should not have is_finished=True"
+    assert len(message_done_result.choices) > 0, "message done should have choices"
+    assert (
+        message_done_result.choices[0].finish_reason is None
+        or message_done_result.choices[0].finish_reason == ""
+    ), "message done should not have finish_reason"
 
-    # Check function_call done (index 5) DOES have is_finished=True
+    # Check function_call done (index 5) DOES have finish_reason='tool_calls'
     function_done_result = results[5]
-    assert function_done_result["is_finished"] == True, "function_call done should have is_finished=True"
-    assert function_done_result["finish_reason"] == "tool_calls"
+    assert (
+        len(function_done_result.choices) > 0
+    ), "function_call done should have choices"
+    assert (
+        function_done_result.choices[0].finish_reason == "tool_calls"
+    ), "function_call done should have finish_reason='tool_calls'"
 
-    # Check response.completed (index 6) also has is_finished=True
+    # Check response.completed (index 6) has finish_reason='stop'
     completed_result = results[6]
-    assert completed_result["is_finished"] == True, "response.completed should have is_finished=True"
+    assert len(completed_result.choices) > 0, "response.completed should have choices"
+    assert (
+        completed_result.choices[0].finish_reason == "stop"
+    ), "response.completed should have finish_reason='stop'"

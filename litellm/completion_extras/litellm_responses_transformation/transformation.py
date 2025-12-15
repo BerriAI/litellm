@@ -936,12 +936,14 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                     ]
                 )
             elif output_item.get("type") == "message":
+                # Message completion should NOT emit finish_reason
+                # This is the fix for issue #17246 - don't end stream prematurely
                 return ModelResponseStream(
                     choices=[
                         StreamingChoices(
                             index=0,
                             delta=Delta(content=""),
-                            finish_reason="stop",
+                            finish_reason=None,
                         )
                     ]
                 )
@@ -975,8 +977,14 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         elif event_type == "response.completed":
             # Response is fully complete - now we can signal is_finished=True
             # This ensures we don't prematurely end the stream before tool_calls arrive
-            return GenericStreamingChunk(
-                text="", tool_use=None, is_finished=True, finish_reason="stop", usage=None
+            return ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(content=""),
+                        finish_reason="stop",
+                    )
+                ]
             )
         else:
             pass
