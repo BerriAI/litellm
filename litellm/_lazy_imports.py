@@ -5,6 +5,22 @@ def _get_litellm_globals() -> dict:
     """Helper to get the globals dictionary of the litellm module."""
     return sys.modules["litellm"].__dict__
 
+# Utils names that support lazy loading via _lazy_import_utils
+UTILS_NAMES = (
+    "exception_type", "get_optional_params", "get_response_string", "token_counter",
+    "create_pretrained_tokenizer", "create_tokenizer", "supports_function_calling",
+    "supports_web_search", "supports_url_context", "supports_response_schema",
+    "supports_parallel_function_calling", "supports_vision", "supports_audio_input",
+    "supports_audio_output", "supports_system_messages", "supports_reasoning",
+    "get_litellm_params", "acreate", "get_max_tokens", "get_model_info",
+    "register_prompt_template", "validate_environment", "check_valid_key",
+    "register_model", "encode", "decode", "_calculate_retry_after", "_should_retry",
+    "get_supported_openai_params", "get_api_base", "get_first_chars_messages",
+    "ModelResponse", "ModelResponseStream", "EmbeddingResponse", "ImageResponse",
+    "TranscriptionResponse", "TextCompletionResponse", "get_provider_fields",
+    "ModelResponseListIterator", "get_valid_models",
+)
+
 # Lazy import for utils module - imports only the requested item by name.
 # Note: PLR0915 (too many statements) is suppressed because the many if statements
 # are intentional - each attribute is imported individually only when requested,
