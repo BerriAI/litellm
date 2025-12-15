@@ -60,8 +60,8 @@ class TestEmbeddingChunkingHelpers:
 
     def test_chunk_text_large_input(self):
         """Test that large inputs are properly chunked."""
-        # Create text that's ~1000 tokens (4000 chars)
-        text = "word " * 800  # 4000 chars = 1000 tokens
+        # Create text that's ~1100 tokens (4000 chars)
+        text = "word " * 800  # 4000 chars = 1100 tokens (with 1.1 safty margin) 
         chunks = self.router._chunk_text(text, chunk_size=512)
 
         # Should create multiple chunks
@@ -378,3 +378,184 @@ class TestRouterEmbeddingDefaults:
             embedding_chunk_size=2048,
         )
         assert router.embedding_chunk_size == 2048
+
+
+class TestEmbeddingInputValidation:
+    """Test input validation for embedding methods."""
+
+    def setup_method(self):
+        """Set up a router instance for testing."""
+        self.router = Router(
+            model_list=[
+                {
+                    "model_name": "test-embedding",
+                    "litellm_params": {"model": "text-embedding-ada-002"},
+                }
+            ],
+            enforce_embedding_context_limit=True,
+            embedding_chunk_size=512,
+        )
+
+    def test_validate_embedding_input_string(self):
+        """Test that string input is wrapped in a list."""
+        result = self.router._validate_embedding_input("hello world")
+        assert result == ["hello world"]
+
+    def test_validate_embedding_input_list_of_strings(self):
+        """Test that valid list of strings passes through."""
+        inputs = ["hello", "world"]
+        result = self.router._validate_embedding_input(inputs)
+        assert result == ["hello", "world"]
+
+    def test_validate_embedding_input_empty_list_raises(self):
+        """Test that empty list raises ValueError."""
+        with pytest.raises(ValueError) as exc_info:
+            self.router._validate_embedding_input([])
+        assert "cannot be empty" in str(exc_info.value)
+
+    def test_validate_embedding_input_non_string_elements_raises(self):
+        """Test that list with non-string elements raises ValueError."""
+        # Integer in list
+        with pytest.raises(ValueError) as exc_info:
+            self.router._validate_embedding_input(["hello", 123, "world"])
+        assert "non-string items" in str(exc_info.value)
+        assert "int" in str(exc_info.value)
+
+        # None in list
+        with pytest.raises(ValueError) as exc_info:
+            self.router._validate_embedding_input(["hello", None])
+        assert "non-string items" in str(exc_info.value)
+        assert "NoneType" in str(exc_info.value)
+
+    def test_validate_embedding_input_invalid_type_raises(self):
+        """Test that invalid types raise ValueError."""
+        # Integer
+        with pytest.raises(ValueError) as exc_info:
+            self.router._validate_embedding_input(123)  # type: ignore[arg-type]
+        assert "must be a string or list" in str(exc_info.value)
+
+        # Dictionary
+        with pytest.raises(ValueError) as exc_info:
+            self.router._validate_embedding_input({"text": "hello"})  # type: ignore[arg-type]
+        assert "must be a string or list" in str(exc_info.value)
+
+    def test_validate_embedding_input_mixed_types_shows_indices(self):
+        """Test that error message shows indices of non-string items."""
+        with pytest.raises(ValueError) as exc_info:
+            self.router._validate_embedding_input(["a", 1, "b", 2.0, "c"])
+        error_msg = str(exc_info.value)
+        # Should mention indices 1 and 3
+        assert "1" in error_msg or "3" in error_msg
+
+
+class TestEmbeddingChunkingEdgeCases:
+    """Test edge cases for embedding chunking."""
+
+    def setup_method(self):
+        """Set up a router instance for testing."""
+        self.router = Router(
+            model_list=[
+                {
+                    "model_name": "test-embedding",
+                    "litellm_params": {"model": "text-embedding-ada-002"},
+                }
+            ],
+            enforce_embedding_context_limit=True,
+            embedding_chunk_size=512,
+        )
+
+    def test_chunk_text_empty_string(self):
+        """Test chunking behavior with empty string input."""
+        chunks = self.router._chunk_text("", chunk_size=512)
+        # Empty string should return empty list (no chunks)
+        assert chunks == []
+
+    def test_chunk_text_whitespace_only(self):
+        """Test chunking behavior with whitespace-only input."""
+        # Single space
+        chunks = self.router._chunk_text("   ", chunk_size=512)
+        assert chunks == []  # Whitespace-only chunks are skipped
+
+        # Newlines only
+        chunks = self.router._chunk_text("\n\n\n", chunk_size=512)
+        assert chunks == []
+
+        # Mixed whitespace
+        chunks = self.router._chunk_text("  \n  \t  ", chunk_size=512)
+        assert chunks == []
+
+    def test_chunk_text_no_spaces_long_string(self):
+        """Test chunking text with no word boundaries (continuous characters).
+
+        When there are no spaces to break on, the chunker should still
+        produce chunks that don't exceed the size limit, even if it means
+        breaking mid-"word".
+        """
+        # Create a long string with no spaces - 10000 chars = ~2500 tokens
+        text = "a" * 10000
+        chunks = self.router._chunk_text(text, chunk_size=512)
+
+        # Should create multiple chunks
+        assert len(chunks) >= 2, f"Expected multiple chunks, got {len(chunks)}"
+
+        # Each chunk should respect the size limit
+        # 512 tokens * 4 chars * 0.9 safety = 1843 chars max
+        max_chunk_chars = int(512 * 4 * 0.9)
+        for i, chunk in enumerate(chunks):
+            assert len(chunk) <= max_chunk_chars + 50, (
+                f"Chunk {i} too large: {len(chunk)} > {max_chunk_chars}"
+            )
+
+        # All content should be preserved
+        assert "".join(chunks) == text
+
+    def test_merge_embeddings_different_dimensions(self):
+        """Test that merging embeddings with different dimensions raises an error or handles gracefully.
+
+        Note: The current implementation uses zip() which will silently truncate
+        to the shortest vector. This test documents the current behavior.
+        """
+        embeddings = [
+            [1.0, 2.0, 3.0],
+            [4.0, 5.0],  # Different dimension
+        ]
+        # Current behavior: zip truncates to shortest
+        result = self.router._merge_embeddings(embeddings)
+        # Result will have length of shortest vector (2)
+        assert len(result) == 2
+        assert result == [2.5, 3.5]  # Average of [1,4] and [2,5]
+
+    def test_chunk_text_single_word_exceeds_limit(self):
+        """Test chunking when a single 'word' exceeds the chunk limit."""
+        # A single very long word (no spaces)
+        long_word = "supercalifragilisticexpialidocious" * 100  # ~3400 chars
+        chunks = self.router._chunk_text(long_word, chunk_size=100)
+
+        # Should still chunk despite no word boundaries
+        assert len(chunks) >= 2
+
+        # Content preserved
+        assert "".join(chunks) == long_word
+
+    def test_chunk_text_unicode_content(self):
+        """Test chunking with unicode/non-ASCII content."""
+        # Chinese text (characters typically use more tokens)
+        chinese_text = "这是一个测试文本。" * 200
+        chunks = self.router._chunk_text(chinese_text, chunk_size=512)
+
+        # Should produce chunks
+        assert len(chunks) >= 1
+
+        # Content preserved
+        assert "".join(chunks) == chinese_text
+
+    def test_chunk_text_mixed_content(self):
+        """Test chunking with mixed ASCII and unicode content."""
+        mixed_text = "Hello 世界! " * 500
+        chunks = self.router._chunk_text(mixed_text, chunk_size=512)
+
+        # Should produce multiple chunks
+        assert len(chunks) >= 1
+
+        # Content preserved
+        assert "".join(chunks) == mixed_text

@@ -3153,6 +3153,45 @@ class Router:
             raise e
 
     # Helper methods for embedding chunking
+    def _validate_embedding_input(self, input: Union[str, List]) -> List[str]:
+        """
+        Validate and normalize embedding input.
+
+        Args:
+            input: Either a string or a list of strings to embed.
+
+        Returns:
+            List of strings to embed.
+
+        Raises:
+            ValueError: If input is empty, not a string/list, or contains non-strings.
+        """
+        if isinstance(input, str):
+            return [input]
+
+        if not isinstance(input, list):
+            raise ValueError(
+                f"Embedding input must be a string or list of strings, got {type(input).__name__}"
+            )
+
+        if len(input) == 0:
+            raise ValueError("Embedding input list cannot be empty")
+
+        non_strings = [
+            (i, type(item).__name__)
+            for i, item in enumerate(input)
+            if not isinstance(item, str)
+        ]
+        if non_strings:
+            examples = non_strings[:3]  # Show first 3 problematic items
+            raise ValueError(
+                f"All embedding input items must be strings. "
+                f"Found non-string items at indices: {[idx for idx, _ in examples]} "
+                f"with types: {[t for _, t in examples]}"
+            )
+
+        return input
+
     def _approx_token_count(self, text: str) -> int:
         """
         Fast, conservative estimate of token count.
@@ -3188,6 +3227,10 @@ class Router:
         Returns:
             List of text chunks, each approximately within chunk_size tokens.
         """
+        # Handle empty or whitespace-only input
+        if not text or not text.strip():
+            return []
+
         # Apply 0.9 safety margin to create smaller chunks, accounting for
         # tokenizer variations (especially with non-English text)
         safety_margin = 0.9
@@ -3382,6 +3425,9 @@ class Router:
             A new kwargs dict ready for fallback function call.
         """
         prepared_kwargs = kwargs.copy()
+        # Deep copy metadata to avoid mutating the original kwargs
+        if "metadata" in prepared_kwargs:
+            prepared_kwargs["metadata"] = prepared_kwargs["metadata"].copy()
         prepared_kwargs.update(
             {
                 "model": model,
@@ -3464,7 +3510,6 @@ class Router:
         Returns:
             Tuple of (embedding_vector, prompt_tokens, total_tokens).
         """
-        import asyncio
 
         chunks = self._chunk_text(text, self.embedding_chunk_size)
         responses = await asyncio.gather(
@@ -3488,7 +3533,7 @@ class Router:
     ) -> EmbeddingResponse:
         try:
             if self.enforce_embedding_context_limit:
-                inputs = [input] if isinstance(input, str) else input
+                inputs = self._validate_embedding_input(input)
                 results = [
                     self._embed_text_sync(text, model, kwargs) for text in inputs
                 ]
@@ -3575,9 +3620,7 @@ class Router:
     ) -> EmbeddingResponse:
         try:
             if self.enforce_embedding_context_limit:
-                import asyncio
-
-                inputs = [input] if isinstance(input, str) else input
+                inputs = self._validate_embedding_input(input)
                 results = await asyncio.gather(
                     *[self._embed_text_async(text, model, kwargs) for text in inputs]
                 )
@@ -3597,7 +3640,6 @@ class Router:
             prepared_kwargs["input"] = input  # Preserve original format
             return await self.async_function_with_fallbacks(**prepared_kwargs)
         except Exception as e:
-            import asyncio
 
             asyncio.create_task(
                 send_llm_exception_alert(
