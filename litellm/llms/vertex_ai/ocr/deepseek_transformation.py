@@ -109,7 +109,7 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
 
         # Get API base URL
         if api_base is None:
-            api_base = f"https://aiplatform.googleapis.com"
+            api_base = "https://aiplatform.googleapis.com"
 
         # Ensure no trailing slash
         api_base = api_base.rstrip("/")
@@ -195,7 +195,7 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
         
         data.update(chat_completion_params)
         
-        verbose_logger.debug(f"Vertex AI DeepSeek OCR: Transformed request to chat completion format")
+        verbose_logger.debug("Vertex AI DeepSeek OCR: Transformed request to chat completion format")
         
         return OCRRequestData(data=data, files=None)
 
