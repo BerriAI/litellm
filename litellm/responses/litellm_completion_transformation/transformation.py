@@ -695,6 +695,8 @@ class LiteLLMCompletionResponsesConfig:
                 )
             elif len(tool) == 1 and next(iter(tool)) in {e.value for e in VertexToolName}:
                 chat_completion_tools.append(tool)
+            elif tool.get("type") == "computer_use":
+                chat_completion_tools.append(tool)
             else:
                 typed_tool = cast(FunctionToolParam, tool)
                 # Ensure parameters has "type": "object" as required by providers like Anthropic
