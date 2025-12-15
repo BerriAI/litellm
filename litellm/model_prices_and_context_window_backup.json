@@ -23960,6 +23960,84 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.14
     },
+    "stability.stable-conservative-upscale-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "mode": "image_edit",
+        "output_cost_per_image": 0.40
+    },
+    "stability.stable-creative-upscale-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "mode": "image_edit",
+        "output_cost_per_image": 0.60
+    },
+    "stability.stable-fast-upscale-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "mode": "image_edit",
+        "output_cost_per_image": 0.03
+    },
+    "stability.stable-outpaint-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "mode": "image_edit",
+        "output_cost_per_image": 0.06
+    },
+    "stability.stable-image-control-sketch-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "mode": "image_edit",
+        "output_cost_per_image": 0.07
+    },
+    "stability.stable-image-control-structure-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "mode": "image_edit",
+        "output_cost_per_image": 0.07
+    },
+    "stability.stable-image-erase-object-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "mode": "image_edit",
+        "output_cost_per_image": 0.07
+    },
+    "stability.stable-image-inpaint-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "mode": "image_edit",
+        "output_cost_per_image": 0.07
+    },
+    "stability.stable-image-remove-background-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "mode": "image_edit",
+        "output_cost_per_image": 0.07
+    },
+    "stability.stable-image-search-recolor-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "mode": "image_edit",
+        "output_cost_per_image": 0.07
+    },
+    "stability.stable-image-search-replace-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "mode": "image_edit",
+        "output_cost_per_image": 0.07
+    },
+    "stability.stable-image-style-guide-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "mode": "image_edit",
+        "output_cost_per_image": 0.07
+    },
+    "stability.stable-style-transfer-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "mode": "image_edit",
+        "output_cost_per_image": 0.08
+    },
     "standard/1024-x-1024/dall-e-3": {
         "input_cost_per_pixel": 3.81469e-08,
         "litellm_provider": "openai",

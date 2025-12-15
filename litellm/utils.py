@@ -7920,6 +7920,12 @@ class ProviderConfigManager:
             )
 
             return get_stability_image_edit_config(model)
+        elif LlmProviders.BEDROCK == provider:
+            from litellm.llms.bedrock.image_edit.stability_transformation import (
+                BedrockStabilityImageEditConfig,
+            )
+
+            return BedrockStabilityImageEditConfig()
         return None
 
     @staticmethod
