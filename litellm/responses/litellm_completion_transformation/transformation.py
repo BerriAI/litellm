@@ -55,6 +55,8 @@ from litellm.types.utils import (
     ModelResponse,
     Usage,
 )
+from litellm.types.llms.vertex_ai import VertexToolName
+
 
 ########### Initialize Classes used for Responses API  ###########
 TOOL_CALLS_CACHE = InMemoryCache()
@@ -691,6 +693,8 @@ class LiteLLMCompletionResponsesConfig:
                     search_context_size=_search_context_size,
                     user_location=_user_location,
                 )
+            elif len(tool) == 1 and next(iter(tool)) in {e.value for e in VertexToolName}:
+                chat_completion_tools.append(tool)
             else:
                 typed_tool = cast(FunctionToolParam, tool)
                 # Ensure parameters has "type": "object" as required by providers like Anthropic
