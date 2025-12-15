@@ -7,8 +7,6 @@ based on the model name.
 
 from typing import TYPE_CHECKING, Optional
 
-from litellm._logging import verbose_logger
-
 if TYPE_CHECKING:
     from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
 
