@@ -61,6 +61,7 @@ from litellm.utils import (
     add_dummy_tool,
     get_max_tokens,
     has_tool_call_blocks,
+    last_assistant_with_tool_calls_has_no_thinking_blocks,
     supports_reasoning,
     token_counter,
 )
@@ -997,6 +998,20 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     message="Anthropic doesn't support tool calling without `tools=` param specified. Pass `tools=` param OR set `litellm.modify_params = True` // `litellm_settings::modify_params: True` to add dummy tool to the request.",
                     model="",
                     llm_provider="anthropic",
+                )
+
+        # Drop thinking param if thinking is enabled but thinking_blocks are missing
+        # This prevents the error: "Expected thinking or redacted_thinking, but found tool_use"
+        if (
+            optional_params.get("thinking") is not None
+            and messages is not None
+            and last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
+        ):
+            if litellm.modify_params:
+                optional_params.pop("thinking", None)
+                litellm.verbose_logger.warning(
+                    "Dropping 'thinking' param because the last assistant message with tool_calls "
+                    "has no thinking_blocks. The model won't use extended thinking for this turn."
                 )
 
         headers = self.update_headers_with_optional_anthropic_beta(
