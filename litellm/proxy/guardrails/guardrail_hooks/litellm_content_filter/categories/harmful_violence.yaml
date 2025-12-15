@@ -1,0 +1,153 @@
+# Violence and criminal planning content detection
+category_name: "harmful_violence"
+description: "Detects content related to violence, criminal planning, and attacks"
+default_action: "BLOCK"
+
+# Simple keywords with severity levels
+keywords:
+  # High severity - explicit violence/criminal intent
+  - keyword: "how to kill someone"
+    severity: "high"
+  - keyword: "plan attack"
+    severity: "high"
+  - keyword: "commit murder"
+    severity: "high"
+  - keyword: "school shooting"
+    severity: "high"
+  - keyword: "mass shooting"
+    severity: "high"
+  - keyword: "serial killer"
+    severity: "high"
+  - keyword: "hired hitman"
+    severity: "high"
+  - keyword: "assassinate"
+    severity: "high"
+  - keyword: "terrorism"
+    severity: "high"
+  - keyword: "terrorist attack"
+    severity: "high"
+  - keyword: "kidnapping plan"
+    severity: "high"
+  - keyword: "human trafficking"
+    severity: "high"
+  - keyword: "rape"
+    severity: "high"
+  - keyword: "sexual assault"
+    severity: "high"
+  - keyword: "torture method"
+    severity: "high"
+  
+  # Medium severity - context-dependent
+  - keyword: "murder"
+    severity: "medium"
+  - keyword: "kill"
+    severity: "medium"
+  - keyword: "assassin"
+    severity: "medium"
+  - keyword: "hitman"
+    severity: "medium"
+  - keyword: "kidnap"
+    severity: "medium"
+  - keyword: "attack"
+    severity: "medium"
+  - keyword: "violence"
+    severity: "medium"
+  - keyword: "weapon"
+    severity: "medium"
+
+# Multi-word phrases for better context detection
+phrases:
+  # Exact match phrases
+  - phrase: "how to kill someone"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "ways to murder"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "plan a shooting"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "plan an attack"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "commit murder"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "kill my"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "murder someone"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "hire a hitman"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "get away with murder"
+    severity: "high"
+    match_type: "exact"
+  
+  # Fuzzy match phrases
+  - phrase: "plan attack"
+    severity: "high"
+    match_type: "fuzzy"
+  
+  - phrase: "commit crime"
+    severity: "high"
+    match_type: "fuzzy"
+  
+  - phrase: "organize shooting"
+    severity: "high"
+    match_type: "fuzzy"
+  
+  - phrase: "coordinate attack"
+    severity: "high"
+    match_type: "fuzzy"
+  
+  # Proximity-based (words appearing near each other)
+  - phrase: "gun school"
+    severity: "high"
+    match_type: "proximity"
+    max_distance: 5
+  
+  - phrase: "shooting school"
+    severity: "high"
+    match_type: "proximity"
+    max_distance: 5
+  
+  - phrase: "weapon attack"
+    severity: "high"
+    match_type: "proximity"
+    max_distance: 3
+  
+  - phrase: "kill wife"
+    severity: "high"
+    match_type: "proximity"
+    max_distance: 2
+  
+  - phrase: "kill husband"
+    severity: "high"
+    match_type: "proximity"
+    max_distance: 2
+  
+  - phrase: "murder plan"
+    severity: "high"
+    match_type: "proximity"
+    max_distance: 3
+
+# Exception patterns (legitimate uses that should NOT be blocked)
+exceptions:
+  - "violence prevention"
+  - "crime statistics"
+  - "true crime"
+  - "documentary"
+  - "news report"
+  - "historical"
+

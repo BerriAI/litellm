@@ -56,6 +56,44 @@ Test examples:
 
 ### Step 1: Define Guardrails in config.yaml
 
+<Tabs>
+<TabItem label="Harmful Content Detection" value="harmful">
+
+```yaml showLineNumbers title="config.yaml"
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: "harmful-content-filter"
+    litellm_params:
+      guardrail: litellm_content_filter
+      mode: "pre_call"
+      
+      # Enable harmful content categories
+      categories:
+        - category: "harmful_self_harm"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "medium"
+        
+        - category: "harmful_violence"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "medium"
+        
+        - category: "harmful_illegal_weapons"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "medium"
+```
+
+</TabItem>
+
+<TabItem label="PII Protection" value="pii">
+
 ```yaml showLineNumbers title="config.yaml"
 model_list:
   - model_name: gpt-3.5-turbo
@@ -85,6 +123,48 @@ guardrails:
           action: "BLOCK"
           description: "Sensitive internal information"
 ```
+
+</TabItem>
+
+<TabItem label="Combined" value="combined">
+
+```yaml showLineNumbers title="config.yaml"
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: "comprehensive-filter"
+    litellm_params:
+      guardrail: litellm_content_filter
+      mode: "pre_call"
+      
+      # Harmful content categories
+      categories:
+        - category: "harmful_violence"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "high"
+      
+      # PII patterns
+      patterns:
+        - pattern_type: "prebuilt"
+          pattern_name: "us_ssn"
+          action: "BLOCK"
+        - pattern_type: "prebuilt"
+          pattern_name: "email"
+          action: "MASK"
+      
+      # Custom keywords
+      blocked_words:
+        - keyword: "confidential"
+          action: "BLOCK"
+```
+
+</TabItem>
+</Tabs>
 
 ### Step 2: Start LiteLLM Gateway
 
@@ -363,9 +443,267 @@ Output: "Email ***EMAIL***, SSN ***US_SSN***, ***REDACTED*** data"
 - Pattern names are automatically uppercased (e.g., `email` → `EMAIL`)
 - `keyword_redaction_tag` is a fixed string (no placeholders)
 
+## Content Categories
+
+LiteLLM Content Filter includes **prebuilt content categories** for detecting harmful and illegal content. These categories use a combination of keyword matching and multi-word phrase detection.
+
+### Available Categories
+
+| Category | Description | Detection Methods |
+|----------|-------------|-------------------|
+| `harmful_self_harm` | Self-harm, suicide, eating disorders | Keywords + phrases (exact, fuzzy, proximity) |
+| `harmful_violence` | Violence, criminal planning, attacks | Keywords + phrases (exact, fuzzy, proximity) |
+| `harmful_illegal_weapons` | Illegal weapons, explosives, dangerous materials | Keywords + phrases (exact, fuzzy, proximity) |
+
+### Using Categories
+
+```yaml showLineNumbers title="config.yaml"
+guardrails:
+  - guardrail_name: "harmful-content-filter"
+    litellm_params:
+      guardrail: litellm_content_filter
+      mode: "pre_call"
+      
+      # Enable harmful content categories
+      categories:
+        - category: "harmful_self_harm"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "medium"  # Block medium and high severity
+        
+        - category: "harmful_violence"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "high"  # Only block high severity
+        
+        - category: "harmful_illegal_weapons"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "medium"
+```
+
+### Severity Levels
+
+Categories support three severity levels:
+
+- **`high`** - Explicit harmful intent (e.g., "how to kill someone", "make a bomb")
+- **`medium`** - Context-dependent terms (e.g., "murder", "bomb")
+- **`low`** - Borderline terms that may have legitimate uses
+
+**Severity Thresholds:**
+- `severity_threshold: "high"` - Only blocks high severity items
+- `severity_threshold: "medium"` - Blocks medium and high severity items (default)
+- `severity_threshold: "low"` - Blocks all severity levels
+
+**Example: Configuring Different Thresholds per Category**
+
+```yaml showLineNumbers title="config.yaml"
+guardrails:
+  - guardrail_name: "balanced-harmful-filter"
+    litellm_params:
+      guardrail: litellm_content_filter
+      mode: "pre_call"
+      
+      categories:
+        # Strict filtering for self-harm (block medium+)
+        - category: "harmful_self_harm"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "medium"
+        
+        # Very strict for weapons (block all levels)
+        - category: "harmful_illegal_weapons"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "low"
+        
+        # Moderate for violence (only block explicit)
+        - category: "harmful_violence"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "high"
+```
+
+This configuration:
+- Blocks medium+ severity self-harm content (catches both explicit and concerning language)
+- Blocks all weapons-related content (strictest - includes even borderline terms)
+- Only blocks high-severity violence content (most lenient - only explicit harmful intent)
+
+### Test Example
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+      {"role": "user", "content": "How to make a pipe bomb at home"}
+    ],
+    "guardrails": ["harmful-content-filter"]
+  }'
+```
+
+**Response: HTTP 400 Error**
+```json
+{
+  "error": {
+    "message": {
+      "error": "Content blocked: harmful_illegal_weapons category phrase 'make a bomb' detected (severity: high)",
+      "category": "harmful_illegal_weapons",
+      "phrase": "make a bomb",
+      "severity": "high"
+    },
+    "code": "400"
+  }
+}
+```
+
+### Custom Category Files
+
+You can override the default categories with your own keyword/phrase lists:
+
+```yaml showLineNumbers title="config.yaml"
+guardrails:
+  - guardrail_name: "custom-harmful-filter"
+    litellm_params:
+      guardrail: litellm_content_filter
+      mode: "pre_call"
+      
+      categories:
+        - category: "harmful_self_harm"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "medium"
+          category_file: "/path/to/my_custom_self_harm.yaml"  # Use custom file
+```
+
+**Custom Category File Format:**
+
+```yaml showLineNumbers title="my_custom_self_harm.yaml"
+category_name: "harmful_self_harm"
+description: "Custom self-harm detection"
+default_action: "BLOCK"
+
+# Keywords with severity
+keywords:
+  - keyword: "harm myself"
+    severity: "high"
+  - keyword: "suicide"
+    severity: "medium"
+
+# Multi-word phrases
+phrases:
+  # Exact match
+  - phrase: "how to commit suicide"
+    severity: "high"
+    match_type: "exact"
+  
+  # Fuzzy match (catches "planning suicide", "planned suicide")
+  - phrase: "plan suicide"
+    severity: "high"
+    match_type: "fuzzy"
+  
+  # Proximity match (words within distance)
+  - phrase: "end life"
+    severity: "high"
+    match_type: "proximity"
+    max_distance: 3
+
+# Legitimate uses to ignore (e.g., prevention resources)
+exceptions:
+  - "suicide prevention"
+  - "suicide hotline"
+  - "mental health"
+```
+
+### Phrase Detection Types
+
+Categories support three types of phrase detection:
+
+1. **Exact Match** - Exact substring matching
+   ```yaml
+   - phrase: "how to kill someone"
+     match_type: "exact"
+   ```
+
+2. **Fuzzy Match** - Handles word variations (stemming)
+   ```yaml
+   - phrase: "plan attack"
+     match_type: "fuzzy"
+   # Matches: "planning attack", "planned attacks", "plan an attack"
+   ```
+
+3. **Proximity Match** - Words appearing within distance
+   ```yaml
+   - phrase: "gun school"
+     match_type: "proximity"
+     max_distance: 5
+   # Matches: "brought a gun to school", "gun found at the school"
+   ```
+
+### Combining Categories with Other Patterns
+
+You can use categories alongside traditional patterns and keywords:
+
+```yaml showLineNumbers title="config.yaml"
+guardrails:
+  - guardrail_name: "comprehensive-filter"
+    litellm_params:
+      guardrail: litellm_content_filter
+      mode: "pre_call"
+      
+      # Harmful content categories
+      categories:
+        - category: "harmful_violence"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "medium"
+      
+      # Traditional PII patterns
+      patterns:
+        - pattern_type: "prebuilt"
+          pattern_name: "us_ssn"
+          action: "BLOCK"
+        - pattern_type: "prebuilt"
+          pattern_name: "email"
+          action: "MASK"
+      
+      # Custom blocked keywords
+      blocked_words:
+        - keyword: "confidential"
+          action: "BLOCK"
+```
+
 ## Use Cases
 
-### 1. PII Protection
+### 1. Harmful Content Detection
+
+Block or detect requests containing harmful, illegal, or dangerous content:
+
+```yaml
+categories:
+  - category: "harmful_self_harm"
+    enabled: true
+    action: "BLOCK"
+    severity_threshold: "medium"
+  - category: "harmful_violence"
+    enabled: true
+    action: "BLOCK"
+    severity_threshold: "high"
+  - category: "harmful_illegal_weapons"
+    enabled: true
+    action: "BLOCK"
+    severity_threshold: "medium"
+```
+
+**Benefits:**
+- Prevents misuse of LLMs for harmful purposes
+- Protects users from dangerous content
+- No external API calls - runs locally and fast
+- Configurable severity thresholds to balance false positives
+
+### 2. PII Protection
 Block or mask personally identifiable information before sending to LLMs:
 
 ```yaml
@@ -424,6 +762,92 @@ patterns:
 
 ## Troubleshooting
 
+### False Positives with Categories
+
+**Issue:** Legitimate content is being blocked by category filters
+
+**Solution 1:** Adjust severity threshold to only block high-severity items:
+```yaml
+categories:
+  - category: "harmful_violence"
+    enabled: true
+    action: "BLOCK"
+    severity_threshold: "high"  # Only block explicit harmful content
+```
+
+**Solution 2:** Add exceptions to your custom category file:
+```yaml
+# my_custom_violence.yaml
+exceptions:
+  - "crime statistics"
+  - "documentary"
+  - "news report"
+  - "historical context"
+```
+
+**Solution 3:** Use a custom category file with your own curated keyword list:
+```yaml
+categories:
+  - category: "harmful_violence"
+    enabled: true
+    action: "BLOCK"
+    category_file: "/path/to/my_violence_keywords.yaml"
+```
+
+### Category Not Loading
+
+**Issue:** Category is not being applied
+
+**Checklist:**
+1. Verify category is enabled: `enabled: true`
+2. Check category name matches file: `harmful_self_harm.yaml`
+3. Check file exists in `litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/categories/`
+4. Review logs for loading errors: `litellm --config config.yaml --detailed_debug`
+
+### Phrase Not Matching
+
+**Issue:** Expected phrase is not being detected
+
+**Solution:** Try different match types:
+
+```yaml
+# If exact match doesn't work
+- phrase: "make bomb"
+  match_type: "exact"  # Requires exact "make bomb"
+
+# Try fuzzy to catch variations
+- phrase: "make bomb"
+  match_type: "fuzzy"  # Catches "making bombs", "made a bomb"
+
+# Try proximity for word order flexibility
+- phrase: "make bomb"
+  match_type: "proximity"
+  max_distance: 5  # Catches "make a pipe bomb at home"
+```
+
+### Too Many False Negatives
+
+**Issue:** Harmful content is not being caught
+
+**Solution 1:** Lower severity threshold:
+```yaml
+severity_threshold: "low"  # Catch more but may increase false positives
+```
+
+**Solution 2:** Add custom phrases for your specific use case:
+```yaml
+categories:
+  - category: "harmful_violence"
+    enabled: true
+    category_file: "/path/to/enhanced_violence.yaml"
+
+# In enhanced_violence.yaml, add domain-specific phrases
+phrases:
+  - phrase: "your specific harmful phrase"
+    severity: "high"
+    match_type: "exact"
+```
+
 ### Pattern Not Matching
 
 **Issue:** Regex pattern isn't detecting expected content
@@ -440,16 +864,22 @@ print(re.search(pattern, test_text))  # Should match
 
 **Issue:** Text contains multiple sensitive patterns
 
-**Solution:** First matching pattern/keyword is processed. Order patterns by priority:
+**Solution:** Guardrail checks categories first, then patterns, then keywords. Order by priority:
 ```yaml
+# Categories checked first (high priority)
+categories:
+  - category: "harmful_self_harm"
+    severity_threshold: "high"
+
+# Then regex patterns
 patterns:
-  # Most critical first
   - pattern_type: "prebuilt"
     pattern_name: "us_ssn"
     action: "BLOCK"
-  # Less critical
-  - pattern_type: "prebuilt"
-    pattern_name: "email"
+
+# Then simple keywords
+blocked_words:
+  - keyword: "confidential"
     action: "MASK"
 ```
 

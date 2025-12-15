@@ -1,0 +1,107 @@
+# Self-harm and suicide-related content detection
+category_name: "harmful_self_harm"
+description: "Detects content related to self-harm, suicide, and eating disorders"
+default_action: "BLOCK"
+
+# Simple keywords with severity levels
+keywords:
+  # High severity - explicit self-harm intent
+  - keyword: "kill myself"
+    severity: "high"
+  - keyword: "end my life"
+    severity: "high"
+  - keyword: "commit suicide"
+    severity: "high"
+  - keyword: "want to die"
+    severity: "high"
+  - keyword: "how to die"
+    severity: "high"
+  - keyword: "suicide method"
+    severity: "high"
+  - keyword: "painless death"
+    severity: "high"
+  - keyword: "overdose on"
+    severity: "high"
+  - keyword: "hang myself"
+    severity: "high"
+  - keyword: "cut myself"
+    severity: "high"
+  - keyword: "self harm"
+    severity: "high"
+  - keyword: "hurt myself"
+    severity: "high"
+  
+  # Medium severity - may have legitimate context (news, education, prevention)
+  - keyword: "suicide"
+    severity: "medium"
+  - keyword: "self-harm"
+    severity: "medium"
+  - keyword: "cutting"
+    severity: "medium"
+  - keyword: "anorexia"
+    severity: "medium"
+  - keyword: "bulimia"
+    severity: "medium"
+
+# Multi-word phrases for better context detection
+phrases:
+  # Exact match phrases
+  - phrase: "how to commit suicide"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "ways to kill myself"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "easiest way to die"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "suicide instructions"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "how to end my life"
+    severity: "high"
+    match_type: "exact"
+  
+  # Fuzzy match phrases (catches variations like "planning suicide", "planned suicide")
+  - phrase: "plan suicide"
+    severity: "high"
+    match_type: "fuzzy"
+  
+  - phrase: "attempt suicide"
+    severity: "high"
+    match_type: "fuzzy"
+  
+  - phrase: "self harm method"
+    severity: "high"
+    match_type: "fuzzy"
+  
+  # Proximity-based (words appearing near each other)
+  - phrase: "suicide note"
+    severity: "high"
+    match_type: "proximity"
+    max_distance: 2
+  
+  - phrase: "end life"
+    severity: "high"
+    match_type: "proximity"
+    max_distance: 3
+  
+  - phrase: "hurt myself"
+    severity: "high"
+    match_type: "proximity"
+    max_distance: 2
+
+# Exception patterns (legitimate uses that should NOT be blocked)
+exceptions:
+  - "suicide prevention"
+  - "suicide hotline"
+  - "prevent suicide"
+  - "suicide awareness"
+  - "suicide crisis"
+  - "suicide support"
+  - "mental health"
+

@@ -5,6 +5,7 @@ This guardrail provides regex pattern matching and keyword filtering
 to detect and block/mask sensitive content.
 """
 
+import os
 import re
 from typing import (
     TYPE_CHECKING,
@@ -41,6 +42,57 @@ from litellm.types.utils import ModelResponseStream
 from .patterns import get_compiled_pattern
 
 
+# Helper data structures for category-based detection
+class PhraseMatch:
+    """Represents a phrase to match with its configuration."""
+
+    def __init__(
+        self,
+        phrase: str,
+        severity: str,
+        match_type: str,
+        max_distance: Optional[int] = None,
+    ):
+        self.phrase = phrase
+        self.severity = severity
+        self.match_type = match_type  # exact, fuzzy, proximity
+        self.max_distance = max_distance
+        self.tokens = phrase.lower().split()
+        self.stemmed_tokens = self._stem_tokens(self.tokens)
+
+    def _stem_tokens(self, tokens: List[str]) -> List[str]:
+        """Simple stemming by removing common suffixes."""
+        stemmed = []
+        for token in tokens:
+            # Simple suffix removal (not perfect but good enough)
+            for suffix in ["ing", "ed", "s", "es", "er", "ly"]:
+                if token.endswith(suffix) and len(token) > len(suffix) + 2:
+                    token = token[: -len(suffix)]
+                    break
+            stemmed.append(token)
+        return stemmed
+
+
+class CategoryConfig:
+    """Configuration for a content category."""
+
+    def __init__(
+        self,
+        category_name: str,
+        description: str,
+        default_action: ContentFilterAction,
+        keywords: List[Dict[str, str]],
+        phrases: List[Dict[str, Any]],
+        exceptions: List[str],
+    ):
+        self.category_name = category_name
+        self.description = description
+        self.default_action = default_action
+        self.keywords = keywords
+        self.phrases = [PhraseMatch(**p) for p in phrases]
+        self.exceptions = [e.lower() for e in exceptions]
+
+
 class ContentFilterGuardrail(CustomGuardrail):
     """
     Content filter guardrail that detects sensitive information using:
@@ -69,6 +121,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         default_on: bool = False,
         pattern_redaction_format: Optional[str] = None,
         keyword_redaction_tag: Optional[str] = None,
+        categories: Optional[List[Dict[str, Any]]] = None,
+        severity_threshold: str = "medium",
         **kwargs,
     ):
         """
@@ -83,6 +137,8 @@ class ContentFilterGuardrail(CustomGuardrail):
             default_on: If True, runs on all requests by default
             pattern_redaction_format: Format string for pattern redaction (use {pattern_name} placeholder)
             keyword_redaction_tag: Tag to use for keyword redaction
+            categories: List of category configurations with enabled/action/severity settings
+            severity_threshold: Minimum severity to block ("high", "medium", "low")
         """
         super().__init__(
             guardrail_name=guardrail_name,
@@ -101,6 +157,20 @@ class ContentFilterGuardrail(CustomGuardrail):
             pattern_redaction_format or self.PATTERN_REDACTION_FORMAT
         )
         self.keyword_redaction_tag = keyword_redaction_tag or self.KEYWORD_REDACTION_STR
+        self.severity_threshold = severity_threshold
+
+        # Store loaded categories
+        self.loaded_categories: Dict[str, CategoryConfig] = {}
+        self.category_keywords: Dict[str, Tuple[str, str, ContentFilterAction]] = (
+            {}
+        )  # keyword -> (category, severity, action)
+        self.category_phrases: List[Tuple[PhraseMatch, str, ContentFilterAction]] = (
+            []
+        )  # (phrase_match, category, action)
+
+        # Load categories if provided
+        if categories:
+            self._load_categories(categories)
 
         # Normalize inputs: convert dicts to Pydantic models for consistent handling
         normalized_patterns: List[ContentFilterPattern] = []
@@ -144,6 +214,135 @@ class ContentFilterGuardrail(CustomGuardrail):
             f"ContentFilterGuardrail initialized with {len(self.compiled_patterns)} patterns "
             f"and {len(self.blocked_words)} blocked words"
         )
+        verbose_proxy_logger.debug(
+            f"Loaded {len(self.loaded_categories)} categories with "
+            f"{len(self.category_keywords)} keywords and {len(self.category_phrases)} phrases"
+        )
+
+    def _load_categories(self, categories: List[Dict[str, Any]]) -> None:
+        """
+        Load content categories from configuration.
+
+        Args:
+            categories: List of category configurations with format:
+                - category: "harmful_self_harm"
+                  enabled: true
+                  action: "BLOCK"
+                  severity_threshold: "medium"
+                  category_file: "/path/to/custom_file.yaml"  # optional override
+        """
+        categories_dir = os.path.join(os.path.dirname(__file__), "categories")
+
+        for cat_config in categories:
+            category_name = cat_config.get("category")
+            if not category_name or not isinstance(category_name, str):
+                verbose_proxy_logger.warning(
+                    "Category name missing or invalid in config, skipping"
+                )
+                continue
+
+            enabled = cat_config.get("enabled", True)
+            action = cat_config.get("action")
+            severity_threshold = cat_config.get(
+                "severity_threshold", self.severity_threshold
+            )
+            custom_file = cat_config.get("category_file")
+
+            if not enabled:
+                verbose_proxy_logger.debug(
+                    f"Category {category_name} is disabled, skipping"
+                )
+                continue
+
+            # Load category file (custom or default)
+            if custom_file:
+                category_file_path = custom_file
+            else:
+                category_file_path = os.path.join(
+                    categories_dir, f"{category_name}.yaml"
+                )
+
+            if not os.path.exists(category_file_path):
+                verbose_proxy_logger.warning(
+                    f"Category file not found: {category_file_path}, skipping"
+                )
+                continue
+
+            try:
+                category = self._load_category_file(category_file_path)
+                self.loaded_categories[category_name] = category
+
+                # Use action from config, or default from category file
+                category_action = ContentFilterAction(
+                    action if action else category.default_action
+                )
+
+                # Add keywords from this category
+                for keyword_data in category.keywords:
+                    keyword = keyword_data["keyword"].lower()
+                    severity = keyword_data["severity"]
+
+                    # Check if keyword meets severity threshold
+                    if self._should_apply_severity(severity, severity_threshold):
+                        self.category_keywords[keyword] = (
+                            category_name,
+                            severity,
+                            category_action,
+                        )
+
+                # Add phrases from this category
+                for phrase_match in category.phrases:
+                    if self._should_apply_severity(
+                        phrase_match.severity, severity_threshold
+                    ):
+                        self.category_phrases.append(
+                            (phrase_match, category_name, category_action)
+                        )
+
+                verbose_proxy_logger.info(
+                    f"Loaded category {category_name}: "
+                    f"{len(category.keywords)} keywords, {len(category.phrases)} phrases"
+                )
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    f"Error loading category {category_name}: {e}"
+                )
+
+    def _load_category_file(self, file_path: str) -> CategoryConfig:
+        """
+        Load a category definition from a YAML file.
+
+        Args:
+            file_path: Path to category YAML file
+
+        Returns:
+            CategoryConfig object
+        """
+        with open(file_path, "r") as f:
+            data = yaml.safe_load(f)
+
+        return CategoryConfig(
+            category_name=data.get("category_name", "unknown"),
+            description=data.get("description", ""),
+            default_action=ContentFilterAction(data.get("default_action", "BLOCK")),
+            keywords=data.get("keywords", []),
+            phrases=data.get("phrases", []),
+            exceptions=data.get("exceptions", []),
+        )
+
+    def _should_apply_severity(self, severity: str, threshold: str) -> bool:
+        """
+        Check if a given severity meets the threshold.
+
+        Args:
+            severity: The severity level of the item ("high", "medium", "low")
+            threshold: The minimum severity threshold
+
+        Returns:
+            True if severity meets or exceeds threshold
+        """
+        severity_order = {"low": 0, "medium": 1, "high": 2}
+        return severity_order.get(severity, 0) >= severity_order.get(threshold, 1)
 
     def _add_pattern(self, pattern_config: ContentFilterPattern) -> None:
         """
@@ -247,6 +446,191 @@ class ContentFilterGuardrail(CustomGuardrail):
                 return (matched_text, pattern_name, action)
         return None
 
+    def _check_category_keywords(
+        self, text: str, exceptions: List[str]
+    ) -> Optional[Tuple[str, str, str, ContentFilterAction]]:
+        """
+        Check text for category keywords.
+
+        Args:
+            text: Text to check
+            exceptions: List of exception phrases to ignore
+
+        Returns:
+            Tuple of (keyword, category, severity, action) if match found, None otherwise
+        """
+        text_lower = text.lower()
+
+        # First check if any exception applies
+        for exception in exceptions:
+            if exception in text_lower:
+                verbose_proxy_logger.debug(
+                    f"Exception phrase '{exception}' found, skipping category keyword check"
+                )
+                return None
+
+        # Check category keywords
+        for keyword, (category, severity, action) in self.category_keywords.items():
+            if keyword in text_lower:
+                # Check if this keyword has exceptions
+                category_obj = self.loaded_categories.get(category)
+                if category_obj:
+                    # Check category-specific exceptions
+                    exception_found = False
+                    for exception in category_obj.exceptions:
+                        if exception in text_lower:
+                            verbose_proxy_logger.debug(
+                                f"Category exception '{exception}' found for keyword '{keyword}', skipping"
+                            )
+                            exception_found = True
+                            break
+                    if exception_found:
+                        continue
+
+                verbose_proxy_logger.debug(
+                    f"Category keyword '{keyword}' found in category '{category}' with severity {severity}"
+                )
+                return (keyword, category, severity, action)
+        return None
+
+    def _check_category_phrases(
+        self, text: str
+    ) -> Optional[Tuple[str, str, str, ContentFilterAction]]:
+        """
+        Check text for category phrases using exact, fuzzy, or proximity matching.
+
+        Args:
+            text: Text to check
+
+        Returns:
+            Tuple of (phrase, category, severity, action) if match found, None otherwise
+        """
+        text_lower = text.lower()
+        text_tokens = text_lower.split()
+
+        for phrase_match, category, action in self.category_phrases:
+            # Check category-specific exceptions
+            category_obj = self.loaded_categories.get(category)
+            if category_obj:
+                exception_found = False
+                for exception in category_obj.exceptions:
+                    if exception in text_lower:
+                        verbose_proxy_logger.debug(
+                            f"Category exception '{exception}' found, skipping phrase check"
+                        )
+                        exception_found = True
+                        break
+                if exception_found:
+                    continue
+
+            match_found = False
+
+            if phrase_match.match_type == "exact":
+                # Exact substring match
+                if phrase_match.phrase in text_lower:
+                    match_found = True
+
+            elif phrase_match.match_type == "fuzzy":
+                # Fuzzy match using stemmed tokens
+                match_found = self._fuzzy_phrase_match(
+                    text_tokens, phrase_match.stemmed_tokens
+                )
+
+            elif phrase_match.match_type == "proximity":
+                # Proximity match - words within max_distance
+                match_found = self._proximity_phrase_match(
+                    text_tokens, phrase_match.tokens, phrase_match.max_distance or 5
+                )
+
+            if match_found:
+                verbose_proxy_logger.debug(
+                    f"Category phrase '{phrase_match.phrase}' matched in category '{category}' "
+                    f"with severity {phrase_match.severity} (match_type: {phrase_match.match_type})"
+                )
+                return (phrase_match.phrase, category, phrase_match.severity, action)
+
+        return None
+
+    def _fuzzy_phrase_match(
+        self, text_tokens: List[str], phrase_stemmed_tokens: List[str]
+    ) -> bool:
+        """
+        Check if phrase tokens match text tokens using simple stemming.
+
+        Args:
+            text_tokens: Tokenized text
+            phrase_stemmed_tokens: Stemmed phrase tokens to find
+
+        Returns:
+            True if fuzzy match found
+        """
+        # Stem the text tokens
+        stemmed_text = []
+        for token in text_tokens:
+            stemmed_token = token
+            for suffix in ["ing", "ed", "s", "es", "er", "ly"]:
+                if (
+                    stemmed_token.endswith(suffix)
+                    and len(stemmed_token) > len(suffix) + 2
+                ):
+                    stemmed_token = stemmed_token[: -len(suffix)]
+                    break
+            stemmed_text.append(stemmed_token)
+
+        # Check if all phrase tokens appear in order (with gaps allowed)
+        phrase_idx = 0
+        for text_idx in range(len(stemmed_text)):
+            if phrase_idx >= len(phrase_stemmed_tokens):
+                return True
+            if stemmed_text[text_idx] == phrase_stemmed_tokens[phrase_idx]:
+                phrase_idx += 1
+
+        return phrase_idx >= len(phrase_stemmed_tokens)
+
+    def _proximity_phrase_match(
+        self, text_tokens: List[str], phrase_tokens: List[str], max_distance: int
+    ) -> bool:
+        """
+        Check if phrase tokens appear within max_distance of each other.
+
+        Args:
+            text_tokens: Tokenized text
+            phrase_tokens: Phrase tokens to find
+            max_distance: Maximum distance between tokens
+
+        Returns:
+            True if all phrase tokens found within max_distance
+        """
+        if not phrase_tokens:
+            return False
+
+        # Find positions of first phrase token
+        first_token = phrase_tokens[0]
+        first_positions = [
+            i for i, token in enumerate(text_tokens) if token == first_token
+        ]
+
+        # For each occurrence of the first token, check if remaining tokens are nearby
+        for start_pos in first_positions:
+            all_found = True
+            for phrase_token in phrase_tokens[1:]:
+                # Look for this token within max_distance
+                found = False
+                for check_pos in range(
+                    start_pos + 1, min(start_pos + max_distance + 1, len(text_tokens))
+                ):
+                    if text_tokens[check_pos] == phrase_token:
+                        found = True
+                        break
+                if not found:
+                    all_found = False
+                    break
+
+            if all_found:
+                return True
+
+        return False
+
     def _check_blocked_words(
         self, text: str
     ) -> Optional[Tuple[str, ContentFilterAction, Optional[str]]]:
@@ -337,6 +721,73 @@ class ContentFilterGuardrail(CustomGuardrail):
         processed_texts = []
 
         for text in texts:
+            # Collect all exceptions from loaded categories
+            all_exceptions = []
+            for category in self.loaded_categories.values():
+                all_exceptions.extend(category.exceptions)
+
+            # Check category keywords first
+            category_keyword_match = self._check_category_keywords(text, all_exceptions)
+            if category_keyword_match:
+                keyword, category, severity, action = category_keyword_match
+                if action == ContentFilterAction.BLOCK:
+                    error_msg = (
+                        f"Content blocked: {category} category keyword '{keyword}' detected "
+                        f"(severity: {severity})"
+                    )
+                    verbose_proxy_logger.warning(error_msg)
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": error_msg,
+                            "category": category,
+                            "keyword": keyword,
+                            "severity": severity,
+                        },
+                    )
+                elif action == ContentFilterAction.MASK:
+                    # Replace keyword with redaction tag
+                    text = re.sub(
+                        re.escape(keyword),
+                        self.keyword_redaction_tag,
+                        text,
+                        flags=re.IGNORECASE,
+                    )
+                    verbose_proxy_logger.info(
+                        f"Masked category keyword '{keyword}' from {category} (severity: {severity})"
+                    )
+
+            # Check category phrases
+            category_phrase_match = self._check_category_phrases(text)
+            if category_phrase_match:
+                phrase, category, severity, action = category_phrase_match
+                if action == ContentFilterAction.BLOCK:
+                    error_msg = (
+                        f"Content blocked: {category} category phrase '{phrase}' detected "
+                        f"(severity: {severity})"
+                    )
+                    verbose_proxy_logger.warning(error_msg)
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": error_msg,
+                            "category": category,
+                            "phrase": phrase,
+                            "severity": severity,
+                        },
+                    )
+                elif action == ContentFilterAction.MASK:
+                    # Replace phrase with redaction tag
+                    text = re.sub(
+                        re.escape(phrase),
+                        self.keyword_redaction_tag,
+                        text,
+                        flags=re.IGNORECASE,
+                    )
+                    verbose_proxy_logger.info(
+                        f"Masked category phrase '{phrase}' from {category} (severity: {severity})"
+                    )
+
             # Check regex patterns - process ALL patterns, not just first match
             for compiled_pattern, pattern_name, action in self.compiled_patterns:
                 match = compiled_pattern.search(text)
@@ -356,7 +807,9 @@ class ContentFilterGuardrail(CustomGuardrail):
                         pattern_name=pattern_name.upper()
                     )
                     text = compiled_pattern.sub(redaction_tag, text)
-                    verbose_proxy_logger.info(f"Masked all {pattern_name} matches in content")
+                    verbose_proxy_logger.info(
+                        f"Masked all {pattern_name} matches in content"
+                    )
 
             # Check blocked words - iterate through ALL blocked words
             # to ensure all matching keywords are processed, not just the first one

@@ -1,0 +1,186 @@
+# Illegal weapons and explosives content detection
+category_name: "harmful_illegal_weapons"
+description: "Detects content related to illegal weapons, explosives, and dangerous materials"
+default_action: "BLOCK"
+
+# Simple keywords with severity levels
+keywords:
+  # High severity - explicit illegal weapons/explosives instructions
+  - keyword: "make a bomb"
+    severity: "high"
+  - keyword: "build a bomb"
+    severity: "high"
+  - keyword: "create explosive"
+    severity: "high"
+  - keyword: "homemade bomb"
+    severity: "high"
+  - keyword: "pipe bomb"
+    severity: "high"
+  - keyword: "pressure cooker bomb"
+    severity: "high"
+  - keyword: "fertilizer bomb"
+    severity: "high"
+  - keyword: "car bomb"
+    severity: "high"
+  - keyword: "suicide bomb"
+    severity: "high"
+  - keyword: "explosive device"
+    severity: "high"
+  - keyword: "bomb instructions"
+    severity: "high"
+  - keyword: "bomb recipe"
+    severity: "high"
+  - keyword: "bomb tutorial"
+    severity: "high"
+  - keyword: "homemade explosive"
+    severity: "high"
+  - keyword: "illegal firearm"
+    severity: "high"
+  - keyword: "unregistered gun"
+    severity: "high"
+  - keyword: "make poison"
+    severity: "high"
+  - keyword: "create poison"
+    severity: "high"
+  - keyword: "homemade poison"
+    severity: "high"
+  - keyword: "lethal poison"
+    severity: "high"
+  - keyword: "chemical weapon"
+    severity: "high"
+  - keyword: "biological weapon"
+    severity: "high"
+  - keyword: "ricin"
+    severity: "high"
+  - keyword: "cyanide poison"
+    severity: "high"
+  
+  # Medium severity - context-dependent
+  - keyword: "bomb"
+    severity: "medium"
+  - keyword: "explosive"
+    severity: "medium"
+  - keyword: "grenade"
+    severity: "medium"
+  - keyword: "landmine"
+    severity: "medium"
+  - keyword: "ammunition"
+    severity: "medium"
+  - keyword: "firearm"
+    severity: "medium"
+  - keyword: "gun"
+    severity: "medium"
+  - keyword: "rifle"
+    severity: "medium"
+  - keyword: "poison"
+    severity: "medium"
+
+# Multi-word phrases for better context detection
+phrases:
+  # Exact match phrases
+  - phrase: "how to make a bomb"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "how to build a bomb"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "how to create explosive"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "bomb making instructions"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "bomb making tutorial"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "homemade explosive recipe"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "how to make poison"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "how to create poison"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "undetectable poison"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "untraceable weapon"
+    severity: "high"
+    match_type: "exact"
+  
+  - phrase: "3d print gun"
+    severity: "high"
+    match_type: "exact"
+  
+  # Fuzzy match phrases
+  - phrase: "make bomb"
+    severity: "high"
+    match_type: "fuzzy"
+  
+  - phrase: "build explosive"
+    severity: "high"
+    match_type: "fuzzy"
+  
+  - phrase: "create weapon"
+    severity: "high"
+    match_type: "fuzzy"
+  
+  - phrase: "manufacture explosive"
+    severity: "high"
+    match_type: "fuzzy"
+  
+  - phrase: "construct bomb"
+    severity: "high"
+    match_type: "fuzzy"
+  
+  # Proximity-based (words appearing near each other)
+  - phrase: "fertilizer explosive"
+    severity: "high"
+    match_type: "proximity"
+    max_distance: 5
+  
+  - phrase: "pressure cooker bomb"
+    severity: "high"
+    match_type: "proximity"
+    max_distance: 3
+  
+  - phrase: "pipe explosive"
+    severity: "high"
+    match_type: "proximity"
+    max_distance: 3
+  
+  - phrase: "homemade weapon"
+    severity: "high"
+    match_type: "proximity"
+    max_distance: 2
+  
+  - phrase: "ingredients bomb"
+    severity: "high"
+    match_type: "proximity"
+    max_distance: 5
+  
+  - phrase: "instructions explosive"
+    severity: "high"
+    match_type: "proximity"
+    max_distance: 5
+
+# Exception patterns (legitimate uses that should NOT be blocked)
+exceptions:
+  - "bomb disposal"
+  - "bomb squad"
+  - "explosive ordnance disposal"
+  - "eod"
+  - "historical"
+  - "educational"
+  - "safety training"
+
