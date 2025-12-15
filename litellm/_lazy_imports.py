@@ -34,6 +34,11 @@ UTILS_NAMES = (
     "ModelResponseListIterator", "get_valid_models",
 )
 
+# Token counter names that support lazy loading via _lazy_import_token_counter
+TOKEN_COUNTER_NAMES = (
+    "get_modified_max_tokens",
+)
+
 # Caching / cache classes that support lazy loading via _lazy_import_caching
 CACHING_NAMES = (
     "Cache",
@@ -277,6 +282,21 @@ def _lazy_import_cost_calculator(name: str) -> Any:
         return _response_cost_calculator
     
     raise AttributeError(f"Cost calculator lazy import: unknown attribute {name!r}")
+
+
+def _lazy_import_token_counter(name: str) -> Any:
+    """Lazy import for token_counter utilities."""
+    _globals = _get_litellm_globals()
+
+    if name == "get_modified_max_tokens":
+        from litellm.litellm_core_utils.token_counter import (
+            get_modified_max_tokens as _get_modified_max_tokens,
+        )
+
+        _globals["get_modified_max_tokens"] = _get_modified_max_tokens
+        return _get_modified_max_tokens
+
+    raise AttributeError(f"Token counter lazy import: unknown attribute {name!r}")
 
 
 def _lazy_import_caching(name: str) -> Any:
