@@ -14732,7 +14732,7 @@
         "supports_web_search": true,
         "tpm": 800000
     },
-    "gemini/skyhawk": {
+    "gemini/fiercefalcon": {
         "cache_read_input_token_cost": 3e-08,
         "input_cost_per_audio_token": 1e-06,
         "input_cost_per_token": 3e-07,
@@ -14779,7 +14779,7 @@
         "supports_web_search": true,
         "tpm": 800000
     },
-    "skyhawk": {
+    "fiercefalcon": {
         "cache_read_input_token_cost": 3e-08,
         "input_cost_per_audio_token": 1e-06,
         "input_cost_per_token": 3e-07,

@@ -229,15 +229,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         Gemini 3 models include:
         - gemini-3-pro-preview
         - gemini-3-flash
-        - skyhawk (Gemini 3 Flash checkpoint)
+        - fiercefalcon (Gemini 3 Flash checkpoint)
         - Any future Gemini 3.x models
         """
         # Check for Gemini 3 models
         if "gemini-3" in model:
             return True
         
-        # Check for skyhawk (Gemini 3 Flash checkpoint)
-        if "skyhawk" in model.lower():
+        # Check for fiercefalcon (Gemini 3 Flash checkpoint) # TODO: remove
+        if "fiercefalcon" in model.lower():  # TODO : Remove this once we have the official name of the model
             return True
 
         return False
@@ -691,20 +691,20 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         Returns:
             GeminiThinkingConfig with thinkingLevel and includeThoughts
         """
-        # Check if this is skyhawk/gemini-3-flash which supports MINIMAL thinking level
-        is_skyhawk = model and (
-            "skyhawk" in model.lower() or "gemini-3-flash" in model.lower()
+        # Check if this is gemini-3-flash which supports MINIMAL thinking level
+        is_fiercefalcon= model and (
+            "fiercefalcon" in model.lower() or "gemini-3-flash" in model.lower()
         )
         if reasoning_effort == "minimal":
-            if is_skyhawk:
+            if is_fiercefalcon:
                 return {"thinkingLevel": "minimal", "includeThoughts": True}
             else:
                 return {"thinkingLevel": "low", "includeThoughts": True}
         elif reasoning_effort == "low":
             return {"thinkingLevel": "low", "includeThoughts": True}
         elif reasoning_effort == "medium":
-            # For skyhawk, medium maps to "medium", otherwise "high"
-            if is_skyhawk:
+            # For fiercefalcon, medium maps to "medium", otherwise "high"
+            if is_fiercefalcon:
                 return {"thinkingLevel": "medium", "includeThoughts": True}
             else:
                 return {
@@ -714,14 +714,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         elif reasoning_effort == "high":
             return {"thinkingLevel": "high", "includeThoughts": True}
         elif reasoning_effort == "disable":
-            # Gemini 3 cannot fully disable thinking, so we use "minimal" for skyhawk, "low" for others
-            if is_skyhawk:
+            # Gemini 3 cannot fully disable thinking, so we use "minimal" for fiercefalcon, "low" for others
+            if is_fiercefalcon:
                 return {"thinkingLevel": "minimal", "includeThoughts": False}
             else:
                 return {"thinkingLevel": "low", "includeThoughts": False}
         elif reasoning_effort == "none":
-            # For skyhawk, use "minimal" instead of "low"
-            if is_skyhawk:
+            # For fiercefalcon, use "minimal" instead of "low"
+            if is_fiercefalcon:
                 return {"thinkingLevel": "minimal", "includeThoughts": False}
             else:
                 return {"thinkingLevel": "low", "includeThoughts": False}
@@ -994,10 +994,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     "thinkingLevel" not in thinking_config
                     and "thinkingBudget" not in thinking_config
                 ):
-                    # For skyhawk, default to "minimal" to match Gemini 2.5 Flash behavior
+                    # For fiercefalcon, default to "minimal" to match Gemini 2.5 Flash behavior
                     # For other Gemini 3 models, default to "low"
-                    is_skyhawk = "skyhawk" in model.lower() or "gemini-3-flash" in model.lower()
-                    thinking_config["thinkingLevel"] = "minimal" if is_skyhawk else "low"
+                    is_fiercefalcon = "fiercefalcon" in model.lower() or "gemini-3-flash" in model.lower()
+                    thinking_config["thinkingLevel"] = "minimal" if is_fiercefalcon else "low"
                     optional_params["thinkingConfig"] = thinking_config
 
         return optional_params
