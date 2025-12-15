@@ -85,7 +85,7 @@ class TestVertexAIDeepSeekOCR(BaseOCRTest):
         """
         load_vertex_ai_credentials()
         return {
-            "model": "vertex_ai/deepseek-ai/deepseek-ocr-maas",
+            "model": "vertex_ai/deepseek-ocr-maas",
             "vertex_location": "us-central1",
         }
 
@@ -99,7 +99,7 @@ def test_vertex_ai_ocr_routing():
     from litellm.llms.vertex_ai.ocr.transformation import VertexAIOCRConfig
     
     # Test DeepSeek OCR routing
-    deepseek_config = get_vertex_ai_ocr_config("vertex_ai/deepseek-ai/deepseek-ocr-maas")
+    deepseek_config = get_vertex_ai_ocr_config("vertex_ai/deepseek-ocr-maas")
     assert isinstance(deepseek_config, VertexAIDeepSeekOCRConfig), \
         "DeepSeek model should route to VertexAIDeepSeekOCRConfig"
     
