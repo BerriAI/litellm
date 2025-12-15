@@ -26,7 +26,6 @@ from typing import (
 )
 from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
 from litellm.types.integrations.datadog import DatadogInitParams
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.caching.caching import Cache, DualCache, RedisCache, InMemoryCache
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
@@ -422,10 +421,6 @@ disable_aiohttp_trust_env: bool = (
 force_ipv4: bool = (
     False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 )
-module_level_aclient = AsyncHTTPHandler(
-    timeout=request_timeout, client_alias="module level aclient"
-)
-module_level_client = HTTPHandler(timeout=request_timeout)
 
 #### RETRIES ####
 num_retries: Optional[int] = None  # per model endpoint
@@ -1520,6 +1515,7 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
 
 if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo as _ModelInfoType
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
     # Cost calculator functions
     cost_per_token: Callable[..., Tuple[float, float]]
@@ -1560,13 +1556,18 @@ if TYPE_CHECKING:
     # Response types - truly lazy loaded only (not in main.py or elsewhere)
     ModelResponseListIterator: Type[Any]
 
+    # HTTP handler singletons (created lazily via __getattr__ at runtime)
+    module_level_aclient: AsyncHTTPHandler
+    module_level_client: HTTPHandler
+
 
 def __getattr__(name: str) -> Any:
-    """Lazy import handler for cost_calculator and litellm_logging functions."""
+    """Lazy import handler"""
     from ._lazy_imports import (
         COST_CALCULATOR_NAMES,
         LITELLM_LOGGING_NAMES,
         UTILS_NAMES,
+        HTTP_HANDLER_NAMES,
     )
     
     # Lazy load cost_calculator functions
@@ -1584,6 +1585,12 @@ def __getattr__(name: str) -> Any:
         from ._lazy_imports import _lazy_import_utils
         return _lazy_import_utils(name)
     
+    # Lazy-load HTTP handler singletons used across the codebase
+    if name in HTTP_HANDLER_NAMES:
+        from ._lazy_imports import _lazy_import_http_handlers
+
+        return _lazy_import_http_handlers(name)
+
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

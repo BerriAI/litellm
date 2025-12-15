@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, cast
 import sys
 
 def _get_litellm_globals() -> dict:
@@ -32,6 +32,12 @@ UTILS_NAMES = (
     "ModelResponse", "ModelResponseStream", "EmbeddingResponse", "ImageResponse",
     "TranscriptionResponse", "TextCompletionResponse", "get_provider_fields",
     "ModelResponseListIterator", "get_valid_models",
+)
+
+# HTTP handler names that support lazy loading via _lazy_import_http_handlers
+HTTP_HANDLER_NAMES = (
+    "module_level_aclient",
+    "module_level_client",
 )
 
 # Lazy import for utils module - imports only the requested item by name.
@@ -279,3 +285,35 @@ def _lazy_import_litellm_logging(name: str) -> Any:
         return _modify_integration
     
     raise AttributeError(f"Litellm logging lazy import: unknown attribute {name!r}")
+
+
+def _lazy_import_http_handlers(name: str) -> Any:
+    """Lazy import and instantiate module-level HTTP handlers."""
+    _globals = _get_litellm_globals()
+
+    if name == "module_level_aclient":
+        # Use shared async client factory instead of directly instantiating AsyncHTTPHandler
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+
+        timeout = _globals.get("request_timeout")
+        params = {"timeout": timeout, "client_alias": "module level aclient"}
+        # llm_provider is only used for cache keying; use a string identifier but
+        # cast to Any so static type checkers don't complain about the literal.
+        provider_id = cast(Any, "litellm_module_level_client")
+        async_client = get_async_httpx_client(
+            llm_provider=provider_id,
+            params=params,
+        )
+        _globals["module_level_aclient"] = async_client
+        return async_client
+
+    if name == "module_level_client":
+        # Import handler type locally to avoid heavy imports at module load time
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        timeout = _globals.get("request_timeout")
+        sync_client = HTTPHandler(timeout=timeout)
+        _globals["module_level_client"] = sync_client
+        return sync_client
+
+    raise AttributeError(f"HTTP handlers lazy import: unknown attribute {name!r}")
