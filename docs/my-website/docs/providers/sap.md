@@ -86,7 +86,6 @@ model_list:
 
 general_settings: 
   master_key: your-proxy-api-key 
-  store_model_in_db: False
 
 environment_variables:
   AICORE_SERVICE_KEY: '{"clientid": "...", "clientsecret": "...", ...}'
