@@ -30,8 +30,8 @@ Output: response.output is List[GenericResponseOutputItem] where each has:
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
-from openai import BaseModel
 from openai.types.responses import ResponseFunctionToolCall
+from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -485,8 +485,9 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         Override this method to customize text/image/tool extraction logic.
         """
-        # Check if this is a tool call (ResponseFunctionToolCall)
-        if isinstance(output_item, ResponseFunctionToolCall):
+
+        # Check if this is a tool call (OutputFunctionToolCall)
+        if isinstance(output_item, OutputFunctionToolCall):
             if tool_calls_to_check is not None:
                 tool_call_dict = LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
                     tool_call_item=output_item,
