@@ -26,7 +26,6 @@ from typing import (
 )
 from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
 from litellm.types.integrations.datadog import DatadogInitParams
-from litellm.caching.caching import Cache, DualCache, RedisCache, InMemoryCache
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
 from litellm.types.utils import (
@@ -332,7 +331,7 @@ caching: bool = (
 caching_with_models: bool = (
     False  # # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 )
-cache: Optional[Cache] = (
+cache: Optional["Cache"] = (
     None  # cache object <- use this - https://docs.litellm.ai/docs/caching
 )
 default_in_memory_ttl: Optional[float] = None
@@ -1516,6 +1515,7 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
 if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo as _ModelInfoType
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+    from litellm.caching.caching import Cache
 
     # Cost calculator functions
     cost_per_token: Callable[..., Tuple[float, float]]
@@ -1567,6 +1567,7 @@ def __getattr__(name: str) -> Any:
         COST_CALCULATOR_NAMES,
         LITELLM_LOGGING_NAMES,
         UTILS_NAMES,
+        CACHING_NAMES,
         HTTP_HANDLER_NAMES,
     )
     
@@ -1584,6 +1585,11 @@ def __getattr__(name: str) -> Any:
     if name in UTILS_NAMES:
         from ._lazy_imports import _lazy_import_utils
         return _lazy_import_utils(name)
+    
+    # Lazy load caching classes
+    if name in CACHING_NAMES:
+        from ._lazy_imports import _lazy_import_caching
+        return _lazy_import_caching(name)
     
     # Lazy-load HTTP handler singletons used across the codebase
     if name in HTTP_HANDLER_NAMES:
