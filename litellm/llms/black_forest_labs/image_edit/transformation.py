@@ -9,7 +9,7 @@ API Reference: https://docs.bfl.ai/
 
 import base64
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import httpx
 from httpx._types import RequestFiles
