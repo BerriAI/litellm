@@ -5,7 +5,7 @@ Pydantic AI provider configuration.
 from typing import Any, AsyncIterator, Dict
 
 from litellm.a2a_protocol.providers.base import BaseA2AProviderConfig
-from litellm.a2a_protocol.providers.pydantic_ai.handler import PydanticAIHandler
+from litellm.a2a_protocol.providers.pydantic_ai_agents.handler import PydanticAIHandler
 
 
 class PydanticAIProviderConfig(BaseA2AProviderConfig):

@@ -8,7 +8,7 @@ This handler provides fake streaming by converting non-streaming responses into 
 from typing import Any, AsyncIterator, Dict
 
 from litellm._logging import verbose_logger
-from litellm.a2a_protocol.providers.pydantic_ai.transformation import (
+from litellm.a2a_protocol.providers.pydantic_ai_agents.transformation import (
     PydanticAITransformation,
 )
 

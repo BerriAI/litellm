@@ -33,7 +33,7 @@ class A2AProviderConfigManager:
             return None
             
         if custom_llm_provider == "pydantic_ai_agents":
-            from litellm.a2a_protocol.providers.pydantic_ai.config import (
+            from litellm.a2a_protocol.providers.pydantic_ai_agents.config import (
                 PydanticAIProviderConfig,
             )
 

@@ -406,36 +406,61 @@ class PydanticAITransformation:
         full_text, message_id, parts = PydanticAITransformation._extract_response_text(
             response_data
         )
+        
+        # Extract input message from raw response for history
+        result = response_data.get("result", {})
+        history = result.get("history", [])
+        input_message = {}
+        for msg in history:
+            if msg.get("role") == "user":
+                input_message = msg
+                break
 
-        # Generate task ID for streaming events
+        # Generate IDs for streaming events
         task_id = str(uuid4())
+        context_id = str(uuid4())
+        artifact_id = str(uuid4())
+        input_message_id = input_message.get("messageId", str(uuid4()))
 
         # 1. Emit initial task event (kind: "task", status: "submitted")
+        # Format matches A2ACompletionBridgeTransformation.create_task_event
         task_event = {
             "jsonrpc": "2.0",
             "id": request_id,
             "result": {
+                "contextId": context_id,
+                "history": [
+                    {
+                        "contextId": context_id,
+                        "kind": "message",
+                        "messageId": input_message_id,
+                        "parts": input_message.get("parts", [{"kind": "text", "text": ""}]),
+                        "role": "user",
+                        "taskId": task_id,
+                    }
+                ],
+                "id": task_id,
                 "kind": "task",
-                "task": {
-                    "taskId": task_id,
-                    "status": {
-                        "state": "submitted",
-                    },
+                "status": {
+                    "state": "submitted",
                 },
             },
         }
         yield task_event
 
         # 2. Emit status update (kind: "status-update", status: "working")
+        # Format matches A2ACompletionBridgeTransformation.create_status_update_event
         working_event = {
             "jsonrpc": "2.0",
             "id": request_id,
             "result": {
+                "contextId": context_id,
+                "final": False,
                 "kind": "status-update",
-                "taskId": task_id,
                 "status": {
                     "state": "working",
                 },
+                "taskId": task_id,
             },
         }
         yield working_event
@@ -444,6 +469,7 @@ class PydanticAITransformation:
         await asyncio.sleep(delay_ms / 1000.0)
 
         # 3. Emit artifact update chunks (kind: "artifact-update")
+        # Format matches A2ACompletionBridgeTransformation.create_artifact_update_event
         if full_text:
             # Split text into chunks
             for i in range(0, len(full_text), chunk_size):
@@ -454,16 +480,17 @@ class PydanticAITransformation:
                     "jsonrpc": "2.0",
                     "id": request_id,
                     "result": {
+                        "contextId": context_id,
                         "kind": "artifact-update",
                         "taskId": task_id,
                         "artifact": {
+                            "artifactId": artifact_id,
                             "parts": [
                                 {
                                     "kind": "text",
                                     "text": chunk_text,
                                 }
                             ],
-                            "index": 0,
                         },
                     },
                 }
@@ -478,17 +505,13 @@ class PydanticAITransformation:
             "jsonrpc": "2.0",
             "id": request_id,
             "result": {
+                "contextId": context_id,
+                "final": True,
                 "kind": "status-update",
-                "taskId": task_id,
                 "status": {
                     "state": "completed",
                 },
-                "message": {
-                    "role": "agent",
-                    "parts": parts if parts else [{"kind": "text", "text": full_text}],
-                    "messageId": message_id,
-                },
-                "final": True,
+                "taskId": task_id,
             },
         }
         yield completed_event
