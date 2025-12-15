@@ -105,7 +105,7 @@ curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your-proxy-api-key" \
   -d '{
-    "model": "sap-gpt4",
+    "model": "sap/gpt-4",
     "messages": [{"role": "user", "content": "Hello"}]
   }'
 ```
@@ -122,7 +122,7 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="sap-gpt4",
+    model="sap/gpt-4",
     messages=[{"role": "user", "content": "Hello"}]
 )
 print(response.choices[0].message.content)
