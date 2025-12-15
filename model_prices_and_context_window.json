@@ -12574,8 +12574,7 @@
         "output_cost_per_token": 2e-06,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
-            "/v1/chat/completions",
-            "/v1/completions"
+            "/vertex_ai/live"
         ],
         "supported_modalities": [
             "text",
@@ -12620,8 +12619,7 @@
         "rpm": 100000,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
-            "/v1/chat/completions",
-            "/v1/completions"
+            "/vertex_ai/live"
         ],
         "supported_modalities": [
             "text",
