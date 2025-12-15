@@ -174,6 +174,7 @@ def test_chunk_parser_string_output_text_delta_produces_text():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,
     )
+    from litellm.types.utils import ModelResponseStream
 
     iterator = OpenAiResponsesToChatCompletionStreamIterator(
         streaming_response=None, sync_stream=True
@@ -183,10 +184,12 @@ def test_chunk_parser_string_output_text_delta_produces_text():
 
     result = iterator.chunk_parser(chunk)
 
-    assert result["text"] == "literal text"
-    assert result.get("tool_use") is None
-    assert result.get("finish_reason") == ""
-    assert not result.get("is_finished")
+    assert isinstance(result, ModelResponseStream)
+    assert len(result.choices) == 1
+    choice = result.choices[0]
+    assert choice.delta.content == "literal text"
+    assert choice.delta.tool_calls is None
+    assert choice.finish_reason is None
 
 
 def test_chunk_parser_enum_output_text_delta_produces_text():
@@ -194,6 +197,7 @@ def test_chunk_parser_enum_output_text_delta_produces_text():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
     from litellm.types.llms.openai import ResponsesAPIStreamEvents
+    from litellm.types.utils import ModelResponseStream
 
     iterator = OpenAiResponsesToChatCompletionStreamIterator(
         streaming_response=None, sync_stream=True
@@ -203,10 +207,12 @@ def test_chunk_parser_enum_output_text_delta_produces_text():
 
     result = iterator.chunk_parser(chunk)
 
-    assert result["text"] == "enum text"
-    assert result.get("tool_use") is None
-    assert result.get("finish_reason") == ""
-    assert not result.get("is_finished")
+    assert isinstance(result, ModelResponseStream)
+    assert len(result.choices) == 1
+    choice = result.choices[0]
+    assert choice.delta.content == "enum text"
+    assert choice.delta.tool_calls is None
+    assert choice.finish_reason is None
 
 
 def test_chunk_parser_function_call_added_produces_tool_use():
@@ -214,6 +220,7 @@ def test_chunk_parser_function_call_added_produces_tool_use():
         OpenAiResponsesToChatCompletionStreamIterator,
     )
     from litellm.types.llms.openai import ResponsesAPIStreamEvents
+    from litellm.types.utils import ModelResponseStream
 
     iterator = OpenAiResponsesToChatCompletionStreamIterator(
         streaming_response=None, sync_stream=True
@@ -227,14 +234,17 @@ def test_chunk_parser_function_call_added_produces_tool_use():
 
     result = iterator.chunk_parser(chunk)
 
-    tool_use = result["tool_use"]
-    assert tool_use is not None
-    assert tool_use["id"] == "call-42"
-    assert tool_use["type"] == "function"
-    assert tool_use["function"]["name"] == "fn"
-    assert tool_use["function"]["arguments"] == '{"key": "value"}'
-    assert result.get("finish_reason") == ""
-    assert not result.get("is_finished")
+    assert isinstance(result, ModelResponseStream)
+    assert len(result.choices) == 1
+    choice = result.choices[0]
+    assert choice.delta.tool_calls is not None
+    assert len(choice.delta.tool_calls) == 1
+    tool_call = choice.delta.tool_calls[0]
+    assert tool_call.id == "call-42"
+    assert tool_call.type == "function"
+    assert tool_call.function.name == "fn"
+    assert tool_call.function.arguments == '{"key": "value"}'
+    assert choice.finish_reason is None
 
 
 def test_transform_response_with_reasoning_and_output():
