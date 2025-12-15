@@ -1,5 +1,5 @@
 """
-Base class for sending emails to user after creating keys or invite links.
+Base class for sending emails to user after creating keys or invite links
 
 """
 
