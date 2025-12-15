@@ -12,10 +12,12 @@ from litellm._lazy_imports import (
     COST_CALCULATOR_NAMES,
     LITELLM_LOGGING_NAMES,
     UTILS_NAMES,
+    CACHING_NAMES,
     HTTP_HANDLER_NAMES,
     _lazy_import_cost_calculator,
     _lazy_import_litellm_logging,
     _lazy_import_utils,
+    _lazy_import_caching,
     _lazy_import_http_handlers,
 )
 
@@ -80,6 +82,21 @@ def test_utils_lazy_imports():
         _verify_only_requested_name_imported(name, UTILS_NAMES)
 
 
+def test_caching_lazy_imports():
+    """Test that all caching classes can be lazy imported."""
+    # Test each name individually - only that name should be imported
+    for name in CACHING_NAMES:
+        # Clear all names before importing just one
+        _clear_names_from_globals(CACHING_NAMES)
+        
+        cls = _lazy_import_caching(name)
+        assert cls is not None
+        assert name in litellm.__dict__
+        
+        # Verify only the requested name is in globals, not the others
+        _verify_only_requested_name_imported(name, CACHING_NAMES)
+
+
 def test_http_handler_lazy_imports():
     """Test that HTTP handler singletons can be lazy imported."""
     for name in HTTP_HANDLER_NAMES:
@@ -102,4 +119,7 @@ def test_unknown_attribute_raises_error():
     
     with pytest.raises(AttributeError):
         _lazy_import_utils("unknown")
+
+    with pytest.raises(AttributeError):
+        _lazy_import_caching("unknown")
 
