@@ -6900,7 +6900,7 @@ def last_assistant_with_tool_calls_has_no_thinking_blocks(
 
     # Check if it has thinking_blocks
     thinking_blocks = last_assistant_with_tools.get("thinking_blocks")
-    return thinking_blocks is None or len(thinking_blocks) == 0
+    return thinking_blocks is None or (hasattr(thinking_blocks, "__len__") and len(thinking_blocks) == 0)
 
 
 def add_dummy_tool(custom_llm_provider: str) -> List[ChatCompletionToolParam]:
@@ -7867,9 +7867,7 @@ class ProviderConfigManager:
 
             return GeminiVideoConfig()
         elif LlmProviders.VERTEX_AI == provider:
-            from litellm.llms.vertex_ai.videos.transformation import (
-                VertexAIVideoConfig,
-            )
+            from litellm.llms.vertex_ai.videos.transformation import VertexAIVideoConfig
 
             return VertexAIVideoConfig()
         elif LlmProviders.RUNWAYML == provider:
