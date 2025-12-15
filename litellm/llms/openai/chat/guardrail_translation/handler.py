@@ -365,12 +365,14 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 ModelResponse, stream_chunk_builder(chunks=responses_so_far)
             )
             # run process_output_response
-            return await self.process_output_response(
+            await self.process_output_response(
                 response=model_response,
                 guardrail_to_apply=guardrail_to_apply,
                 litellm_logging_obj=litellm_logging_obj,
                 user_api_key_dict=user_api_key_dict,
             )
+
+            return responses_so_far
 
         # Step 0: Check if any response has text content to process
         has_any_text_content = False
