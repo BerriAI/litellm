@@ -16,6 +16,27 @@
 - [ ] My PR's scope is as isolated as possible, it only solves 1 specific problem
 
 
+## CI (LiteLLM team)
+
+> 1. Don't merge if CI has insufficient funds issues; ping @AlexsanderHamir until they’re resolved.
+> 2. Split your work into small, logical commits and push each one to trigger CI, making it easier **for you** to identify where something broke by comparing against your branch-creation and previous CI runs.
+> 3. When merging your PR, choose `Merge & Squash` for convenience.
+>
+> **CI status guideline:**
+>
+> - >= 50 passing tests: main is stable
+> - >= 45-49 passing tests: acceptable but needs attention
+> - <= 40 passing tests: unstable; be careful with your merges and assess the risk.
+
+- [ ] **Branch creation CI run**  
+       Link:
+
+- [ ] **CI run for the last commit**  
+       Link:
+
+- [ ] **Merges / cherry-picks into this branch**  
+       Links:
+
 ## Type
 
 <!-- Select the type of Pull Request -->
