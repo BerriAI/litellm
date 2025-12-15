@@ -7932,9 +7932,13 @@ class ProviderConfigManager:
 
             return get_azure_ai_ocr_config(model=model)
 
+        if provider == litellm.LlmProviders.VERTEX_AI:
+            from litellm.llms.vertex_ai.ocr.common_utils import get_vertex_ai_ocr_config
+
+            return get_vertex_ai_ocr_config(model=model)
+        
         PROVIDER_TO_CONFIG_MAP = {
             litellm.LlmProviders.MISTRAL: MistralOCRConfig,
-            litellm.LlmProviders.VERTEX_AI: VertexAIOCRConfig,
         }
         config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:
