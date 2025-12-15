@@ -5,6 +5,7 @@ import os
 import socket
 import subprocess
 import sys
+from pathlib import Path
 from datetime import datetime
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
@@ -91,6 +92,7 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.utils.get_server_root_path", lambda: "")
 
     client = TestClient(app)
     response = client.post(
@@ -120,6 +122,77 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
         {"user_id": "test-user"},
         "test-master-key",
         algorithm="HS256",
+    )
+
+
+def test_fallback_login_has_no_deprecation_banner(client_no_auth):
+    response = client_no_auth.get("/fallback/login")
+
+    assert response.status_code == 200
+    html = response.text
+    assert '<div class="deprecation-banner">' not in html
+    assert "Deprecated:" not in html
+    assert "<form" in html
+
+
+def test_sso_key_generate_shows_deprecation_banner(client_no_auth, monkeypatch):
+    # Ensure the route returns the HTML form instead of redirecting
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.ui_sso.show_missing_vars_in_env",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.get_redirect_url_for_sso",
+        lambda *args, **kwargs: "http://test/redirect",
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler._get_cli_state",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.should_use_sso_handler",
+        lambda *args, **kwargs: False,
+    )
+    monkeypatch.setenv("UI_USERNAME", "admin")
+
+    response = client_no_auth.get("/sso/key/generate")
+
+    assert response.status_code == 200
+    html = response.text
+    assert '<div class="deprecation-banner">' in html
+    assert "Deprecated:" in html
+
+
+def test_restructure_ui_html_files_handles_nested_routes(tmp_path):
+    from litellm.proxy import proxy_server
+
+    ui_root = tmp_path / "ui"
+    ui_root.mkdir()
+
+    def write_file(path: Path, content: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+
+    write_file(ui_root / "home.html", "home")
+    write_file(ui_root / "mcp" / "oauth" / "callback.html", "callback")
+    write_file(ui_root / "existing" / "index.html", "keep")
+    write_file(ui_root / "_next" / "ignore.html", "asset")
+    write_file(ui_root / "litellm-asset-prefix" / "ignore.html", "asset")
+
+    proxy_server._restructure_ui_html_files(str(ui_root))
+
+    assert not (ui_root / "home.html").exists()
+    assert (ui_root / "home" / "index.html").read_text() == "home"
+    assert not (ui_root / "mcp" / "oauth" / "callback.html").exists()
+    assert (
+        (ui_root / "mcp" / "oauth" / "callback" / "index.html").read_text()
+        == "callback"
+    )
+    assert (ui_root / "existing" / "index.html").read_text() == "keep"
+    assert (ui_root / "_next" / "ignore.html").read_text() == "asset"
+    assert (
+        (ui_root / "litellm-asset-prefix" / "ignore.html").read_text()
+        == "asset"
     )
 
 
@@ -244,6 +317,53 @@ def test_update_config_fields_deep_merge_db_wins():
 
     # Unrelated router_settings keys are preserved
     assert rs["routing_mode"] == "cost_optimized"
+
+
+def test_get_config_custom_callback_api_env_vars(monkeypatch):
+    """
+    Ensure /get/config/callbacks returns custom callback env vars when both custom values are provided.
+    """
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    # Mock config with custom_callback_api enabled and generic logger env vars present
+    config_data = {
+        "litellm_settings": {"success_callback": ["custom_callback_api"]},
+        "general_settings": {},
+        "environment_variables": {
+            "GENERIC_LOGGER_ENDPOINT": "https://callback.example.com",
+            "GENERIC_LOGGER_HEADERS": "Auth: token",
+        },
+    }
+
+    # Mock proxy_config.get_config and router settings
+    mock_router = MagicMock()
+    mock_router.get_settings.return_value = {}
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr(
+        proxy_config, "get_config", AsyncMock(return_value=config_data)
+    )
+
+    # Bypass auth dependency
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+
+    client = TestClient(app)
+    try:
+        response = client.get("/get/config/callbacks")
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200
+    callbacks = response.json()["callbacks"]
+    custom_cb = next(
+        (cb for cb in callbacks if cb["name"] == "custom_callback_api"), None
+    )
+
+    assert custom_cb is not None
+    assert custom_cb["variables"] == {
+        "GENERIC_LOGGER_ENDPOINT": "https://callback.example.com",
+        "GENERIC_LOGGER_HEADERS": "Auth: token",
+    }
 
 
 # Mock Prisma
@@ -1390,30 +1510,16 @@ class TestPriceDataReloadAPI:
         assert "Access denied" in data["detail"]
         assert "Admin role required" in data["detail"]
 
-    def test_get_model_cost_map_admin_access(self, client_with_auth):
-        """Test that admin users can access the get model cost map endpoint"""
+    def test_get_model_cost_map_public_access(self, client_no_auth):
+        """Test that the model cost map endpoint is publicly accessible"""
         with patch(
             "litellm.model_cost", {"gpt-3.5-turbo": {"input_cost_per_token": 0.001}}
         ):
-            response = client_with_auth.get("/get/litellm_model_cost_map")
+            response = client_no_auth.get("/public/litellm_model_cost_map")
 
             assert response.status_code == 200
             data = response.json()
             assert "gpt-3.5-turbo" in data
-
-    def test_get_model_cost_map_non_admin_access(self, client_with_auth):
-        """Test that non-admin users cannot access the get model cost map endpoint"""
-        # Mock non-admin user
-        mock_auth = MagicMock()
-        mock_auth.user_role = "user"  # Non-admin role
-        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
-
-        response = client_with_auth.get("/get/litellm_model_cost_map")
-
-        assert response.status_code == 403
-        data = response.json()
-        assert "Access denied" in data["detail"]
-        assert "Admin role required" in data["detail"]
 
     def test_reload_model_cost_map_error_handling(self, client_with_auth):
         """Test error handling in the reload endpoint"""
@@ -1624,7 +1730,7 @@ class TestPriceDataReloadIntegration:
                 assert response.status_code == 200
 
                 # Test get endpoint
-                response = client_with_auth.get("/get/litellm_model_cost_map")
+                response = client_with_auth.get("/public/litellm_model_cost_map")
                 assert response.status_code == 200
 
     def test_distributed_reload_check_function(self):
@@ -2546,3 +2652,176 @@ def test_get_prompt_spec_for_db_prompt_with_versions():
     prompt_spec_v2 = proxy_config._get_prompt_spec_for_db_prompt(db_prompt=mock_prompt_v2)
     assert prompt_spec_v2.prompt_id == "chat_prompt.v2"
 
+
+def test_root_redirect_when_docs_url_not_root_and_redirect_url_set(monkeypatch):
+    from litellm.proxy.proxy_server import cleanup_router_config_variables
+    from litellm.proxy.utils import _get_docs_url
+    from fastapi.responses import RedirectResponse
+
+    cleanup_router_config_variables()
+    filepath = os.path.dirname(os.path.abspath(__file__))
+    config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
+    # Ensure docs are mounted on a non-root path to trigger redirect logic
+    monkeypatch.setenv("DOCS_URL", "/docs")
+    
+    test_redirect_url = "/ui"
+    monkeypatch.setenv("ROOT_REDIRECT_URL", test_redirect_url)
+    
+    asyncio.run(initialize(config=config_fp, debug=True))
+    
+    docs_url = _get_docs_url()
+    root_redirect_url = os.getenv("ROOT_REDIRECT_URL")
+    
+    # Remove any existing "/" route that might interfere
+    routes_to_remove = []
+    for route in app.routes:
+        if hasattr(route, "path") and route.path == "/":
+            if hasattr(route, "methods") and "GET" in route.methods:
+                routes_to_remove.append(route)
+            elif not hasattr(route, "methods"):  # Catch-all routes
+                routes_to_remove.append(route)
+    
+    for route in routes_to_remove:
+        app.routes.remove(route)
+    
+    # Add the redirect route if conditions are met (matching the actual implementation)
+    if docs_url != "/" and root_redirect_url:
+        @app.get("/", include_in_schema=False)
+        async def root_redirect():
+            return RedirectResponse(url=root_redirect_url)
+    
+    client = TestClient(app)
+    response = client.get("/", follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"] == test_redirect_url
+
+
+def test_get_image_non_root_uses_tmp_assets_dir(monkeypatch):
+    """
+    Test that get_image uses /tmp/litellm_assets when LITELLM_NON_ROOT is true.
+    """
+    from unittest.mock import patch
+
+    from litellm.proxy.proxy_server import get_image
+
+    # Set LITELLM_NON_ROOT to true
+    monkeypatch.setenv("LITELLM_NON_ROOT", "true")
+    monkeypatch.delenv("UI_LOGO_PATH", raising=False)
+
+    # Mock os.path operations
+    with patch("litellm.proxy.proxy_server.os.makedirs") as mock_makedirs, \
+         patch("litellm.proxy.proxy_server.os.path.exists", return_value=True), \
+         patch("litellm.proxy.proxy_server.os.getenv") as mock_getenv, \
+         patch("litellm.proxy.proxy_server.FileResponse") as mock_file_response:
+
+        # Setup mock_getenv to return empty string for UI_LOGO_PATH
+        def getenv_side_effect(key, default=""):
+            if key == "UI_LOGO_PATH":
+                return ""
+            elif key == "LITELLM_NON_ROOT":
+                return "true"
+            return default
+
+        mock_getenv.side_effect = getenv_side_effect
+
+        # Call the function
+        get_image()
+
+        # Verify makedirs was called with /tmp/litellm_assets
+        mock_makedirs.assert_called_once_with("/tmp/litellm_assets", exist_ok=True)
+
+
+def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
+    """
+    Test that get_image falls back to default_site_logo when logo doesn't exist
+    in /tmp/litellm_assets for non-root case.
+    """
+    from unittest.mock import patch
+
+    from litellm.proxy.proxy_server import get_image
+
+    # Set LITELLM_NON_ROOT to true
+    monkeypatch.setenv("LITELLM_NON_ROOT", "true")
+    monkeypatch.delenv("UI_LOGO_PATH", raising=False)
+
+    # Track path.exists calls to verify it checks /tmp/litellm_assets/logo.jpg
+    exists_calls = []
+
+    def exists_side_effect(path):
+        exists_calls.append(path)
+        # Return False for /tmp/litellm_assets/logo.jpg to trigger fallback
+        if "/tmp/litellm_assets/logo.jpg" in path:
+            return False
+        return True
+
+    # Mock os.path operations
+    with patch("litellm.proxy.proxy_server.os.makedirs") as mock_makedirs, \
+         patch("litellm.proxy.proxy_server.os.path.exists", side_effect=exists_side_effect), \
+         patch("litellm.proxy.proxy_server.os.getenv") as mock_getenv, \
+         patch("litellm.proxy.proxy_server.FileResponse") as mock_file_response:
+
+        # Setup mock_getenv
+        def getenv_side_effect(key, default=""):
+            if key == "UI_LOGO_PATH":
+                return ""
+            elif key == "LITELLM_NON_ROOT":
+                return "true"
+            return default
+
+        mock_getenv.side_effect = getenv_side_effect
+
+        # Call the function
+        get_image()
+
+        # Verify makedirs was called with /tmp/litellm_assets
+        mock_makedirs.assert_called_once_with("/tmp/litellm_assets", exist_ok=True)
+
+        # Verify that exists was called to check /tmp/litellm_assets/logo.jpg
+        tmp_logo_path = "/tmp/litellm_assets/logo.jpg"
+        assert any(tmp_logo_path in str(call) for call in exists_calls), \
+            f"Should check if {tmp_logo_path} exists"
+
+        # Verify FileResponse was called (with fallback logo)
+        assert mock_file_response.called, "FileResponse should be called"
+
+
+def test_get_image_root_case_uses_current_dir(monkeypatch):
+    """
+    Test that get_image uses current_dir when LITELLM_NON_ROOT is not true.
+    """
+    from unittest.mock import patch
+
+    from litellm.proxy.proxy_server import get_image
+
+    # Don't set LITELLM_NON_ROOT (or set it to false)
+    monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
+    monkeypatch.delenv("UI_LOGO_PATH", raising=False)
+
+    # Mock os.path operations
+    with patch("litellm.proxy.proxy_server.os.makedirs") as mock_makedirs, \
+         patch("litellm.proxy.proxy_server.os.path.exists", return_value=True), \
+         patch("litellm.proxy.proxy_server.os.getenv") as mock_getenv, \
+         patch("litellm.proxy.proxy_server.FileResponse") as mock_file_response:
+
+        # Setup mock_getenv
+        def getenv_side_effect(key, default=""):
+            if key == "UI_LOGO_PATH":
+                return ""
+            elif key == "LITELLM_NON_ROOT":
+                return ""  # Not set or empty
+            return default
+
+        mock_getenv.side_effect = getenv_side_effect
+
+        # Call the function
+        get_image()
+
+        # Verify makedirs was NOT called with /tmp/litellm_assets (should not create it for root case)
+        tmp_assets_calls = [
+            call for call in mock_makedirs.call_args_list
+            if "/tmp/litellm_assets" in str(call)
+        ]
+        assert len(tmp_assets_calls) == 0, "Should not create /tmp/litellm_assets for root case"
+
+        # Verify FileResponse was called
+        assert mock_file_response.called, "FileResponse should be called"

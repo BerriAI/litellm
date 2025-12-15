@@ -224,6 +224,61 @@ async def test_update_daily_spend_sorting():
 
 
 @pytest.mark.asyncio
+async def test_update_daily_spend_tag_with_request_id():
+    """
+    Test that request_id is included in update_data when updating tag transactions.
+    """
+    # Setup
+    mock_prisma_client = MagicMock()
+    mock_batcher = MagicMock()
+    mock_table = MagicMock()
+    mock_prisma_client.db.batch_.return_value.__aenter__.return_value = mock_batcher
+    mock_batcher.litellm_dailytagspend = mock_table
+
+    # Create a transaction with request_id
+    daily_spend_transactions = {
+        "test_key": {
+            "tag": "prod-tag",
+            "date": "2024-01-01",
+            "api_key": "test-api-key",
+            "model": "gpt-4",
+            "custom_llm_provider": "openai",
+            "mcp_namespaced_tool_name": "",
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "spend": 0.1,
+            "api_requests": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+            "request_id": "test-request-id-123",
+        }
+    }
+
+    # Call the method
+    await DBSpendUpdateWriter._update_daily_spend(
+        n_retry_times=1,
+        prisma_client=mock_prisma_client,
+        proxy_logging_obj=MagicMock(),
+        daily_spend_transactions=daily_spend_transactions,
+        entity_type="tag",
+        entity_id_field="tag",
+        table_name="litellm_dailytagspend",
+        unique_constraint_name="tag_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name",
+    )
+
+    # Verify that table.upsert was called
+    mock_table.upsert.assert_called_once()
+    
+    # Verify request_id is in update_data
+    call_args = mock_table.upsert.call_args[1]
+    update_data = call_args["data"]["update"]
+    assert "request_id" in update_data
+    assert update_data["request_id"] == "test-request-id-123"
+
+
+
+
+@pytest.mark.asyncio
 async def test_update_daily_spend_with_none_values_in_sorting_fields():
     """
     Test that _update_daily_spend handles None values in sorting fields correctly.
@@ -573,3 +628,156 @@ async def test_add_spend_log_transaction_to_daily_org_transaction_skips_when_org
     )
 
     writer.daily_org_spend_update_queue.add_update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_add_spend_log_transaction_to_daily_end_user_transaction_injects_end_user_id_and_queues_update():
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+
+    end_user_id = "end-user-xyz"
+    payload = {
+        "request_id": "req-1",
+        "user": "test-user",
+        "end_user": end_user_id,
+        "startTime": "2024-01-01T12:00:00",
+        "api_key": "test-key",
+        "model": "gpt-4",
+        "custom_llm_provider": "openai",
+        "model_group": "gpt-4-group",
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "spend": 0.2,
+        "metadata": '{"usage_object": {}}',
+    }
+
+    writer.daily_end_user_spend_update_queue.add_update = AsyncMock()
+
+    await writer.add_spend_log_transaction_to_daily_end_user_transaction(
+        payload=payload,
+        prisma_client=mock_prisma,
+    )
+
+    writer.daily_end_user_spend_update_queue.add_update.assert_called_once()
+
+    call_args = writer.daily_end_user_spend_update_queue.add_update.call_args[1]
+    update_dict = call_args["update"]
+    assert len(update_dict) == 1
+    for key, transaction in update_dict.items():
+        assert key == f"{end_user_id}_2024-01-01_test-key_gpt-4_openai"
+        assert transaction["end_user_id"] == end_user_id
+        assert transaction["date"] == "2024-01-01"
+        assert transaction["api_key"] == "test-key"
+        assert transaction["model"] == "gpt-4"
+        assert transaction["custom_llm_provider"] == "openai"
+
+
+@pytest.mark.asyncio
+async def test_add_spend_log_transaction_to_daily_end_user_transaction_skips_when_end_user_id_missing():
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+
+    payload = {
+        "request_id": "req-2",
+        "user": "test-user",
+        "startTime": "2024-01-01T12:00:00",
+        "api_key": "test-key",
+        "model": "gpt-4",
+        "custom_llm_provider": "openai",
+        "model_group": "gpt-4-group",
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "spend": 0.2,
+        "metadata": '{"usage_object": {}}',
+    }
+
+    writer.daily_end_user_spend_update_queue.add_update = AsyncMock()
+
+    await writer.add_spend_log_transaction_to_daily_end_user_transaction(
+        payload=payload,
+        prisma_client=mock_prisma,
+    )
+
+    writer.daily_end_user_spend_update_queue.add_update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_add_spend_log_transaction_to_daily_agent_transaction_injects_agent_id_and_queues_update():
+    """
+    Ensure agent_id is injected and queued for daily aggregation.
+    """
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+
+    agent_id = "agent-123"
+    payload = {
+        "request_id": "req-123",
+        "agent_id": agent_id,
+        "user": "test-user",
+        "startTime": "2024-01-01T12:00:00",
+        "api_key": "test-key",
+        "model": "gpt-4",
+        "custom_llm_provider": "openai",
+        "model_group": "gpt-4-group",
+        "prompt_tokens": 20,
+        "completion_tokens": 10,
+        "spend": 0.3,
+        "metadata": '{"usage_object": {}}',
+    }
+
+    writer.daily_agent_spend_update_queue.add_update = AsyncMock()
+
+    await writer.add_spend_log_transaction_to_daily_agent_transaction(
+        payload=payload,
+        prisma_client=mock_prisma,
+    )
+
+    writer.daily_agent_spend_update_queue.add_update.assert_called_once()
+
+    call_args = writer.daily_agent_spend_update_queue.add_update.call_args[1]
+    update_dict = call_args["update"]
+    assert len(update_dict) == 1
+    for key, transaction in update_dict.items():
+        assert key == f"{agent_id}_2024-01-01_test-key_gpt-4_openai"
+        assert transaction["agent_id"] == agent_id
+        assert transaction["date"] == "2024-01-01"
+        assert transaction["api_key"] == "test-key"
+        assert transaction["model"] == "gpt-4"
+        assert transaction["custom_llm_provider"] == "openai"
+
+
+@pytest.mark.asyncio
+async def test_add_spend_log_transaction_to_daily_agent_transaction_skips_when_agent_id_missing():
+    """
+    Do not queue agent spend updates when agent_id is None.
+    """
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+
+    payload = {
+        "request_id": "req-456",
+        "agent_id": None,
+        "user": "test-user",
+        "startTime": "2024-01-01T12:00:00",
+        "api_key": "test-key",
+        "model": "gpt-4",
+        "custom_llm_provider": "openai",
+        "model_group": "gpt-4-group",
+        "prompt_tokens": 15,
+        "completion_tokens": 5,
+        "spend": 0.1,
+        "metadata": '{"usage_object": {}}',
+    }
+
+    writer.daily_agent_spend_update_queue.add_update = AsyncMock()
+
+    await writer.add_spend_log_transaction_to_daily_agent_transaction(
+        payload=payload,
+        prisma_client=mock_prisma,
+    )
+
+    writer.daily_agent_spend_update_queue.add_update.assert_not_called()

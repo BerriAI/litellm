@@ -167,11 +167,24 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     )
             elif role == "tool":
                 # Convert tool message to function call output format
+                # Transform content to responses format (handles str, list, and other types)
+                # _convert_content_to_responses_format always returns List[Dict[str, Any]]
+                if content is None:
+                    transformed_output: list[dict[str, Any]] = []
+                elif isinstance(content, (str, list)):
+                    transformed_output = self._convert_content_to_responses_format(
+                        content, "tool"
+                    )
+                else:
+                    # Fallback: convert unexpected types to string first
+                    transformed_output = self._convert_content_to_responses_format(
+                        str(content), "tool"
+                    )
                 input_items.append(
                     {
                         "type": "function_call_output",
                         "call_id": tool_call_id,
-                        "output": content,
+                        "output": transformed_output,
                     }
                 )
             elif role == "assistant" and tool_calls and isinstance(tool_calls, list):
@@ -655,6 +668,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             return Reasoning(effort="none")  # type: ignore
         elif reasoning_effort == "high":
             return Reasoning(effort="high")
+        elif reasoning_effort == "xhigh":
+            return Reasoning(effort="xhigh")  # type: ignore[typeddict-item]
         elif reasoning_effort == "medium":
             return Reasoning(effort="medium")
         elif reasoning_effort == "low":
@@ -957,6 +972,12 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         )
                     ]
                 )
+        elif event_type == "response.completed":
+            # Response is fully complete - now we can signal is_finished=True
+            # This ensures we don't prematurely end the stream before tool_calls arrive
+            return GenericStreamingChunk(
+                text="", tool_use=None, is_finished=True, finish_reason="stop", usage=None
+            )
         else:
             pass
         # For any unhandled event types, create a minimal valid chunk or skip

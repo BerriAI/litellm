@@ -1,6 +1,7 @@
 import time
 import types
 from typing import (
+    TYPE_CHECKING,
     Any,
     AsyncIterator,
     Callable,
@@ -10,7 +11,6 @@ from typing import (
     List,
     Literal,
     Optional,
-    TYPE_CHECKING,
     Union,
     cast,
 )
@@ -20,6 +20,7 @@ import httpx
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
+
 import openai
 from openai import AsyncOpenAI, OpenAI
 from openai.types.beta.assistant_deleted import AssistantDeleted
@@ -1549,7 +1550,7 @@ class OpenAIFilesAPI(BaseLLM):
         create_file_data: CreateFileRequest,
         openai_client: AsyncOpenAI,
     ) -> OpenAIFileObject:
-        response = await openai_client.files.create(**create_file_data)
+        response = await openai_client.files.create(**create_file_data)  # type: ignore[arg-type]
         return OpenAIFileObject(**response.model_dump())
 
     def create_file(
@@ -1585,7 +1586,7 @@ class OpenAIFilesAPI(BaseLLM):
             return self.acreate_file(  # type: ignore
                 create_file_data=create_file_data, openai_client=openai_client
             )
-        response = cast(OpenAI, openai_client).files.create(**create_file_data)
+        response = cast(OpenAI, openai_client).files.create(**create_file_data)  # type: ignore[arg-type]
         return OpenAIFileObject(**response.model_dump())
 
     async def afile_content(

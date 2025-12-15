@@ -337,10 +337,11 @@ class ContentFilterGuardrail(CustomGuardrail):
         processed_texts = []
 
         for text in texts:
-            # Check regex patterns
-            pattern_match = self._check_patterns(text)
-            if pattern_match:
-                matched_text, pattern_name, action = pattern_match
+            # Check regex patterns - process ALL patterns, not just first match
+            for compiled_pattern, pattern_name, action in self.compiled_patterns:
+                match = compiled_pattern.search(text)
+                if not match:
+                    continue
 
                 if action == ContentFilterAction.BLOCK:
                     error_msg = f"Content blocked: {pattern_name} pattern detected"
@@ -350,10 +351,12 @@ class ContentFilterGuardrail(CustomGuardrail):
                         detail={"error": error_msg, "pattern": pattern_name},
                     )
                 elif action == ContentFilterAction.MASK:
-                    # Replace the matched text with redaction tag
-                    redaction_tag = self._mask_content(matched_text, pattern_name)
-                    text = text.replace(matched_text, redaction_tag)
-                    verbose_proxy_logger.info(f"Masked {pattern_name} in content")
+                    # Replace ALL matches of this pattern with redaction tag
+                    redaction_tag = self.pattern_redaction_format.format(
+                        pattern_name=pattern_name.upper()
+                    )
+                    text = compiled_pattern.sub(redaction_tag, text)
+                    verbose_proxy_logger.info(f"Masked all {pattern_name} matches in content")
 
             # Check blocked words - iterate through ALL blocked words
             # to ensure all matching keywords are processed, not just the first one

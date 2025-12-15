@@ -26,6 +26,7 @@ class TestVertexAIPSCEndpointSupport:
         endpoint_id = "1234567890"
         project_id = "test-project"
         location = "us-central1"
+        use_psc_endpoint_format = True
 
         auth_header, url = vertex_base._check_custom_proxy(
             api_base=psc_api_base,
@@ -39,6 +40,7 @@ class TestVertexAIPSCEndpointSupport:
             vertex_project=project_id,
             vertex_location=location,
             vertex_api_version="v1",
+            use_psc_endpoint_format=use_psc_endpoint_format,
         )
 
         expected_url = f"{psc_api_base}/v1/projects/{project_id}/locations/{location}/endpoints/{endpoint_id}:predict"
@@ -53,7 +55,7 @@ class TestVertexAIPSCEndpointSupport:
         endpoint_id = "1234567890"
         project_id = "test-project"
         location = "us-central1"
-
+        use_psc_endpoint_format = True
         auth_header, url = vertex_base._check_custom_proxy(
             api_base=psc_api_base,
             custom_llm_provider="vertex_ai",
@@ -66,6 +68,7 @@ class TestVertexAIPSCEndpointSupport:
             vertex_project=project_id,
             vertex_location=location,
             vertex_api_version="v1",
+            use_psc_endpoint_format=use_psc_endpoint_format,
         )
 
         expected_url = f"{psc_api_base}/v1/projects/{project_id}/locations/{location}/endpoints/{endpoint_id}:streamGenerateContent?alt=sse"
@@ -80,7 +83,7 @@ class TestVertexAIPSCEndpointSupport:
         endpoint_id = "1234567890"
         project_id = "test-project"
         location = "us-central1"
-
+        use_psc_endpoint_format = True
         auth_header, url = vertex_base._check_custom_proxy(
             api_base=psc_api_base,
             custom_llm_provider="vertex_ai",
@@ -93,6 +96,7 @@ class TestVertexAIPSCEndpointSupport:
             vertex_project=project_id,
             vertex_location=location,
             vertex_api_version="v1beta1",
+            use_psc_endpoint_format=use_psc_endpoint_format,
         )
 
         expected_url = f"{psc_api_base}/v1beta1/projects/{project_id}/locations/{location}/endpoints/{endpoint_id}:predict"
@@ -107,7 +111,7 @@ class TestVertexAIPSCEndpointSupport:
         endpoint_id = "1234567890"
         project_id = "test-project"
         location = "us-central1"
-
+        use_psc_endpoint_format = True
         auth_header, url = vertex_base._check_custom_proxy(
             api_base=psc_api_base,
             custom_llm_provider="vertex_ai",
@@ -120,6 +124,7 @@ class TestVertexAIPSCEndpointSupport:
             vertex_project=project_id,
             vertex_location=location,
             vertex_api_version="v1",
+            use_psc_endpoint_format=use_psc_endpoint_format,
         )
 
         expected_url = f"{psc_api_base}/v1/projects/{project_id}/locations/{location}/endpoints/{endpoint_id}:predict"
@@ -134,7 +139,7 @@ class TestVertexAIPSCEndpointSupport:
         endpoint_id = "1234567890"
         project_id = "test-project"
         location = "us-central1"
-
+        use_psc_endpoint_format = True
         auth_header, url = vertex_base._check_custom_proxy(
             api_base=psc_api_base,
             custom_llm_provider="vertex_ai",
@@ -147,6 +152,7 @@ class TestVertexAIPSCEndpointSupport:
             vertex_project=project_id,
             vertex_location=location,
             vertex_api_version="v1",
+            use_psc_endpoint_format=use_psc_endpoint_format,
         )
 
         # rstrip('/') should remove the trailing slash
@@ -162,7 +168,6 @@ class TestVertexAIPSCEndpointSupport:
         endpoint_id = "gemini-pro"  # Not numeric
         project_id = "test-project"
         location = "us-central1"
-
         auth_header, url = vertex_base._check_custom_proxy(
             api_base=proxy_api_base,
             custom_llm_provider="vertex_ai",
@@ -190,7 +195,7 @@ class TestVertexAIPSCEndpointSupport:
         endpoint_id = "9876543210"  # Numeric endpoint ID
         project_id = "test-project"
         location = "us-central1"
-
+        use_psc_endpoint_format = True
         auth_header, url = vertex_base._check_custom_proxy(
             api_base=proxy_api_base,
             custom_llm_provider="vertex_ai",
@@ -203,6 +208,7 @@ class TestVertexAIPSCEndpointSupport:
             vertex_project=project_id,
             vertex_location=location,
             vertex_api_version="v1",
+            use_psc_endpoint_format=use_psc_endpoint_format,
         )
 
         # Numeric model should trigger full path construction
@@ -215,7 +221,7 @@ class TestVertexAIPSCEndpointSupport:
         """Test that when api_base is None, the original URL is returned"""
         vertex_base = VertexBase()
         original_url = "https://us-central1-aiplatform.googleapis.com/v1/projects/test/locations/us-central1/publishers/google/models/gemini-pro:generateContent"
-
+        use_psc_endpoint_format = True
         auth_header, url = vertex_base._check_custom_proxy(
             api_base=None,
             custom_llm_provider="vertex_ai",
@@ -228,6 +234,7 @@ class TestVertexAIPSCEndpointSupport:
             vertex_project="test-project",
             vertex_location="us-central1",
             vertex_api_version="v1",
+            use_psc_endpoint_format=use_psc_endpoint_format,
         )
 
         # When api_base is None, original URL should be returned unchanged
@@ -238,7 +245,7 @@ class TestVertexAIPSCEndpointSupport:
         vertex_base = VertexBase()
         psc_api_base = "http://10.96.32.8"
         test_auth_header = "Bearer test-token-12345"
-
+        use_psc_endpoint_format = True
         auth_header, url = vertex_base._check_custom_proxy(
             api_base=psc_api_base,
             custom_llm_provider="vertex_ai",
@@ -251,6 +258,7 @@ class TestVertexAIPSCEndpointSupport:
             vertex_project="test-project",
             vertex_location="us-central1",
             vertex_api_version="v1",
+            use_psc_endpoint_format=use_psc_endpoint_format,
         )
 
         assert (

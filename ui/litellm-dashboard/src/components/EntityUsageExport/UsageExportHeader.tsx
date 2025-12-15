@@ -1,13 +1,13 @@
-import React, { useState } from "react";
+import type { DateRangePickerValue } from "@tremor/react";
 import { Button, Text } from "@tremor/react";
 import { Select } from "antd";
+import React, { useState } from "react";
 import EntityUsageExportModal from "./EntityUsageExportModal";
-import type { DateRangePickerValue } from "@tremor/react";
-import type { EntitySpendData } from "./types";
+import type { EntitySpendData, EntityType } from "./types";
 
 interface UsageExportHeaderProps {
   dateValue: DateRangePickerValue;
-  entityType: "tag" | "team" | "organization";
+  entityType: EntityType;
   spendData: EntitySpendData;
   // Optional filter props
   showFilters?: boolean;

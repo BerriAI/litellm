@@ -247,6 +247,7 @@ class LiteLLMRoutes(enum.Enum):
         "/openai/deployments/{model}/chat/completions",
         "/chat/completions",
         "/v1/chat/completions",
+        "/cursor/chat/completions",
         # completions
         "/engines/{model}/completions",
         "/openai/deployments/{model}/completions",
@@ -539,12 +540,14 @@ class LiteLLMRoutes(enum.Enum):
             "/public/model_hub",
             "/public/agent_hub",
             "/public/mcp_hub",
+            "/public/litellm_model_cost_map",
         ]
     )
 
     ui_routes = [
         "/sso",
         "/sso/get/ui_settings",
+        "/get/ui_settings",
         "/login",
         "/key/info",
         "/config",
@@ -562,7 +565,6 @@ class LiteLLMRoutes(enum.Enum):
         "/global/predict/spend/logs",
         "/global/activity",
         "/health/services",
-        "/get/litellm_model_cost_map",
     ] + info_routes
 
     internal_user_routes = (
@@ -1069,6 +1071,8 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     url: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
     mcp_access_groups: List[str] = Field(default_factory=list)
+    allowed_tools: Optional[List[str]] = None
+    extra_headers: Optional[List[str]] = None
     static_headers: Optional[Dict[str, str]] = None
     # Stdio-specific fields
     command: Optional[str] = None
@@ -2577,7 +2581,13 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
 
     custom_callback_api: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="custom_callback_api",
-        litellm_callback_params=["GENERIC_LOGGER_ENDPOINT"],
+        litellm_callback_params=["GENERIC_LOGGER_ENDPOINT", "GENERIC_LOGGER_HEADERS"],
+        ui_callback_name="Custom Callback API",
+    )
+
+    generic_api: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="generic_api",
+        litellm_callback_params=["GENERIC_LOGGER_ENDPOINT", "GENERIC_LOGGER_HEADERS"],
         ui_callback_name="Custom Callback API",
     )
 
@@ -2613,6 +2623,14 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ],
         ui_callback_name="Lago Billing",
     )
+
+    traceloop: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="traceloop",
+        litellm_callback_params=[
+            "TRACELOOP_API_KEY",
+        ],
+        ui_callback_name="Traceloop",
+    )   
 
 
 class SpendLogsMetadata(TypedDict):
@@ -2663,6 +2681,7 @@ class SpendLogsPayload(TypedDict):
     model_id: Optional[str]
     model_group: Optional[str]
     mcp_namespaced_tool_name: Optional[str]
+    agent_id: Optional[str]
     api_base: str
     user: str
     metadata: str  # json str
@@ -3631,10 +3650,15 @@ class DailyOrganizationSpendTransaction(BaseDailySpendTransaction):
 class DailyUserSpendTransaction(BaseDailySpendTransaction):
     user_id: str
 
+class DailyEndUserSpendTransaction(BaseDailySpendTransaction):
+    end_user_id: str
 
 class DailyTagSpendTransaction(BaseDailySpendTransaction):
     request_id: Optional[str]
     tag: str
+
+class DailyAgentSpendTransaction(BaseDailySpendTransaction):
+    agent_id: str
 
 
 class DBSpendUpdateTransactions(TypedDict):
@@ -3664,6 +3688,8 @@ class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
     flat_model_file_ids: List[str]
     created_by: Optional[str]
     updated_by: Optional[str]
+    storage_backend: Optional[str] = None  
+    storage_url: Optional[str] = None 
 
 
 class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):

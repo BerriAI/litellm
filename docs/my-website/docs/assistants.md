@@ -3,6 +3,14 @@ import TabItem from '@theme/TabItem';
 
 # /assistants
 
+:::warning Deprecation Notice
+
+OpenAI has deprecated the Assistants API. It will shut down on **August 26, 2026**.
+
+Consider migrating to the [Responses API](/docs/response_api) instead. See [OpenAI's migration guide](https://platform.openai.com/docs/guides/responses-vs-assistants) for details.
+
+:::
+
 Covers Threads, Messages, Assistants. 
 
 LiteLLM currently covers: 

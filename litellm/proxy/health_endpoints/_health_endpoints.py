@@ -409,7 +409,7 @@ def _build_model_param_to_info_mapping(model_list: list) -> dict:
     Returns:
         Dictionary mapping model parameter to list of model info dicts
     """
-    model_param_to_info = {}
+    model_param_to_info: dict = {}
     for model in model_list:
         model_info = model.get("model_info", {})
         model_name = model.get("model_name")
@@ -1048,28 +1048,6 @@ async def health_readiness():
                     index_info = "index does not exist - error: " + str(e)
                 cache_type = {"type": cache_type, "index_info": index_info}
 
-        # build license metadata
-        try:
-            from litellm.proxy.proxy_server import _license_check  # type: ignore
-
-            license_available: bool = _license_check.is_premium() if _license_check else False
-            license_expiration: Optional[str] = None
-
-            if getattr(_license_check, "airgapped_license_data", None):
-                license_expiration = _license_check.airgapped_license_data.get(  # type: ignore[arg-type]
-                    "expiration_date"
-                )
-
-            license_metadata = {
-                "license": {
-                    "has_license": license_available,
-                    "expiration_date": license_expiration,
-                }
-            }
-        except Exception:
-            # fail closed: don't let license check break readiness
-            license_metadata = {"license": {"has_license": False, "expiration_date": None}}
-
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
             db_health_status = await _db_health_readiness_check()
@@ -1080,7 +1058,6 @@ async def health_readiness():
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
                 "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
-                **license_metadata,
                 **db_health_status,
             }
         else:
@@ -1091,7 +1068,6 @@ async def health_readiness():
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
                 "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
-                **license_metadata,
             }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Service Unhealthy ({str(e)})")

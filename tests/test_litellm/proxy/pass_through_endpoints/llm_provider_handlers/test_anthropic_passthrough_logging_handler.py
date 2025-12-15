@@ -3,7 +3,7 @@ import os
 import sys
 from datetime import datetime
 from typing import Any, Dict, List
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -184,212 +184,434 @@ class TestAnthropicLoggingHandlerModelFallback:
         logging_obj = self._create_mock_logging_obj()  # Empty dict
 
         model = request_body.get("model", "")
-        if (
-            not model
-            and hasattr(logging_obj, "model_call_details")
-            and logging_obj.model_call_details.get("model")
-        ):
-            model = logging_obj.model_call_details.get("model")
-
+        if not model and hasattr(logging_obj, 'model_call_details') and logging_obj.model_call_details.get('model'):
+            model = logging_obj.model_call_details.get('model')
+            
         assert model == ""  # Should remain empty
 
 
-class TestAnthropicStreamingResponseBuilder:
-    """Test building complete response from Anthropic streaming chunks."""
+class TestAzureAnthropicCostCalculation:
+    """Test the custom_llm_provider cost calculation logic for Azure AI Anthropic."""
 
-    def setup_method(self):
-        """Set up test fixtures"""
-        # Real chunks from Anthropic streaming response with tool use
-        self.real_anthropic_chunks = [
-            "event: message_start",
-            'data: {"type":"message_start","message":{"model":"claude-sonnet-4-5-20250929","id":"msg_01H2B1LUhw4LkcRVJ3jGh27h","type":"message","role":"assistant","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":586,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":1,"service_tier":"standard"}}}',
-            "event: content_block_start",
-            'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_01KYPPgZb11FPC16ic8kZttc","name":"get_weather","input":{}}}',
-            "event: content_block_delta",
-            'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":""}}',
-            "event: content_block_delta",
-            'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"location\\":\\""}}',
-            "event: content_block_delta",
-            'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":" \\"San Fr"}}',
-            "event: content_block_delta",
-            'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"ancis"}}',
-            "event: content_block_delta",
-            'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"co, CA"}}',
-            "event: content_block_delta",
-            'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\\"}"}}',
-            "event: content_block_stop",
-            'data: {"type":"content_block_stop","index":0}',
-            "event: message_delta",
-            'data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"input_tokens":586,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":56}}',
-            "event: message_stop",
-            'data: {"type":"message_stop"}',
-        ]
-
-    def _create_mock_logging_obj(self) -> LiteLLMLoggingObj:
-        """Create a mock logging object"""
+    def _create_mock_logging_obj(
+        self, model: str = None, custom_llm_provider: str = None
+    ) -> LiteLLMLoggingObj:
+        """Create a mock logging object with optional model and custom_llm_provider"""
         mock_logging_obj = MagicMock()
-        mock_logging_obj.model_call_details = {}
+        mock_model_call_details = {}
+        if model:
+            mock_model_call_details["model"] = model
+        if custom_llm_provider:
+            mock_model_call_details["custom_llm_provider"] = custom_llm_provider
+        mock_logging_obj.model_call_details = mock_model_call_details
+        mock_logging_obj.litellm_call_id = "test-call-id"
         return mock_logging_obj
 
-    def test_build_complete_streaming_response_with_real_chunks(self):
-        """Test that _build_complete_streaming_response can handle real Anthropic chunks"""
-        # Arrange
-        logging_obj = self._create_mock_logging_obj()
-        model = "claude-sonnet-4-5-20250929"
+    @patch("litellm.completion_cost")
+    def test_cost_calculation_with_azure_ai_custom_llm_provider(
+        self, mock_completion_cost
+    ):
+        """Test that custom_llm_provider is passed to completion_cost for Azure AI Anthropic"""
+        from litellm.types.utils import ModelResponse
+        from datetime import datetime
 
-        # Act
-        result = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
-            all_chunks=self.real_anthropic_chunks,
-            litellm_logging_obj=logging_obj,
-            model=model,
+        mock_completion_cost.return_value = 0.001
+
+        logging_obj = self._create_mock_logging_obj(
+            model="claude-sonnet-4-5_gb_20250929", custom_llm_provider="azure_ai"
         )
 
-        print("result", result)
+        mock_response = MagicMock(spec=ModelResponse)
+        mock_response.id = "test-id"
+        mock_response.model = "claude-sonnet-4-5_gb_20250929"
 
-        # Assert
-        assert result is not None, "Should return a valid response"
-        assert hasattr(result, "model"), "Response should have model attribute"
-        assert hasattr(result, "choices"), "Response should have choices attribute"
+        kwargs = {}
+        start_time = datetime.now()
+        end_time = datetime.now()
 
-    def test_build_complete_streaming_response_with_empty_chunks(self):
-        """Test that _build_complete_streaming_response handles empty chunks gracefully"""
-        # Arrange
-        logging_obj = self._create_mock_logging_obj()
-        model = "claude-3-haiku-20240307"
-
-        # Act
-        result = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
-            all_chunks=[],
-            litellm_logging_obj=logging_obj,
-            model=model,
+        AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=mock_response,
+            model="claude-sonnet-4-5_gb_20250929",
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+            logging_obj=logging_obj,
         )
 
-        # Assert - should handle gracefully (might return None or empty response)
-        # The exact behavior depends on implementation
-        assert True  # If we get here without exception, the test passes
+        # Verify completion_cost was called with the correct parameters
+        mock_completion_cost.assert_called_once()
+        call_kwargs = mock_completion_cost.call_args[1]
+        assert call_kwargs["model"] == "azure_ai/claude-sonnet-4-5_gb_20250929"
+        assert call_kwargs["custom_llm_provider"] == "azure_ai"
 
-    def test_build_complete_streaming_response_with_text_content(self):
-        """Test building response from chunks with text content"""
-        # Arrange
-        logging_obj = self._create_mock_logging_obj()
-        model = "claude-3-haiku-20240307"
-        text_chunks = [
-            "event: message_start",
-            'data: {"type":"message_start","message":{"model":"claude-3-haiku-20240307","id":"msg_123","type":"message","role":"assistant","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}',
-            "event: content_block_start",
-            'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
-            "event: content_block_delta",
-            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}',
-            "event: content_block_delta",
-            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" world"}}',
-            "event: content_block_stop",
-            'data: {"type":"content_block_stop","index":0}',
-            "event: message_delta",
-            'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":15}}',
-            "event: message_stop",
-            'data: {"type":"message_stop"}',
-        ]
+    @patch("litellm.completion_cost")
+    def test_cost_calculation_without_custom_llm_provider(self, mock_completion_cost):
+        """Test that cost calculation works without custom_llm_provider (standard Anthropic)"""
+        from litellm.types.utils import ModelResponse
+        from datetime import datetime
 
-        # Act
-        result = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
-            all_chunks=text_chunks,
-            litellm_logging_obj=logging_obj,
-            model=model,
+        mock_completion_cost.return_value = 0.001
+
+        # No custom_llm_provider in model_call_details
+        logging_obj = self._create_mock_logging_obj(model="claude-3-sonnet-20240229")
+
+        mock_response = MagicMock(spec=ModelResponse)
+        mock_response.id = "test-id"
+        mock_response.model = "claude-3-sonnet-20240229"
+
+        kwargs = {}
+        start_time = datetime.now()
+        end_time = datetime.now()
+
+        AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=mock_response,
+            model="claude-3-sonnet-20240229",
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+            logging_obj=logging_obj,
         )
 
-        # Assert
-        assert result is not None, "Should return a valid response"
-        assert hasattr(result, "model"), "Response should have model attribute"
-        assert hasattr(result, "choices"), "Response should have choices attribute"
+        # Verify completion_cost was called without provider prefix
+        mock_completion_cost.assert_called_once()
+        call_kwargs = mock_completion_cost.call_args[1]
+        assert call_kwargs["model"] == "claude-3-sonnet-20240229"
+        assert call_kwargs["custom_llm_provider"] is None
 
-    def test_build_response_with_multi_event_chunks(self):
-        """
-        Test that chunks containing multiple SSE events are properly split and processed.
+    @patch("litellm.completion_cost")
+    def test_cost_calculation_does_not_duplicate_provider_prefix(
+        self, mock_completion_cost
+    ):
+        """Test that provider prefix is not duplicated if already present in model name"""
+        from litellm.types.utils import ModelResponse
+        from datetime import datetime
 
-        This tests the fix for the issue where chunks with multiple events (like multiple
-        content_block_delta events in one chunk) would only process the first event,
-        causing incomplete tool call arguments.
-        """
-        # Arrange
-        logging_obj = self._create_mock_logging_obj()
-        model = "claude-sonnet-4-5-20250929"
+        mock_completion_cost.return_value = 0.001
 
-        # Simulate real scenario: multiple SSE events in single chunks (as bytes)
-        # This mimics what happens when the API returns multiple deltas in one network chunk
-        multi_event_chunks = [
-            b'event: message_start\ndata: {"type":"message_start","message":{"model":"claude-sonnet-4-5-20250929","id":"msg_01Gg6BZQjp3qz6FNvZeTfYKG","type":"message","role":"assistant","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":586,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":1,"service_tier":"standard"}}}\n\n',
-            b'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_01P41bkuuqosu2X5vJtdH8Sw","name":"get_weather","input":{}}}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":""}}\n\n',
-            b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"location\\":"}}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":" \\"San Franci"}}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"sco, CA"}}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\\"}"}}',
-            b'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
-            b'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"input_tokens":586,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":56}}\n\n',
-            b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
-        ]
-
-        # Act
-        result = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
-            all_chunks=multi_event_chunks,
-            litellm_logging_obj=logging_obj,
-            model=model,
+        logging_obj = self._create_mock_logging_obj(
+            model="azure_ai/claude-sonnet-4-5_gb_20250929",
+            custom_llm_provider="azure_ai",
         )
 
-        # Assert
-        assert result is not None, "Should return a valid response"
-        assert hasattr(result, "choices"), "Response should have choices attribute"
-        assert len(result.choices) > 0, "Should have at least one choice"
+        mock_response = MagicMock(spec=ModelResponse)
+        mock_response.id = "test-id"
+        mock_response.model = "azure_ai/claude-sonnet-4-5_gb_20250929"
 
-        choice = result.choices[0]
-        assert hasattr(choice, "message"), "Choice should have message attribute"
-        assert hasattr(choice.message, "tool_calls"), "Message should have tool_calls"
-        assert choice.message.tool_calls is not None, "Tool calls should not be None"
-        assert len(choice.message.tool_calls) > 0, "Should have at least one tool call"
+        kwargs = {}
+        start_time = datetime.now()
+        end_time = datetime.now()
 
-        tool_call = choice.message.tool_calls[0]
-        assert (
-            tool_call.function.name == "get_weather"
-        ), "Tool name should be get_weather"
-
-        # This is the critical assertion - the arguments should be complete
-        # Not just '{"location":' but the full '{"location": "San Francisco, CA"}'
-        assert (
-            tool_call.function.arguments == '{"location": "San Francisco, CA"}'
-        ), f"Tool arguments should be complete, got: {tool_call.function.arguments}"
-
-        print(
-            f"✓ Tool call built correctly with complete arguments: {tool_call.function.arguments}"
+        # Model already has the provider prefix
+        AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=mock_response,
+            model="azure_ai/claude-sonnet-4-5_gb_20250929",
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+            logging_obj=logging_obj,
         )
 
-    def test_split_sse_chunk_into_events(self):
-        """Test the helper function that splits multi-event chunks into individual events."""
-        # Test with multiple events in one chunk
-        multi_event_chunk = b'event: content_block_start\ndata: {"type":"content_block_start"}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta"}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta2"}\n\n'
+        # Verify provider prefix was not duplicated
+        mock_completion_cost.assert_called_once()
+        call_kwargs = mock_completion_cost.call_args[1]
+        assert call_kwargs["model"] == "azure_ai/claude-sonnet-4-5_gb_20250929"
+        assert call_kwargs["custom_llm_provider"] == "azure_ai"
 
-        events = AnthropicPassthroughLoggingHandler._split_sse_chunk_into_events(
-            multi_event_chunk
+
+class TestAnthropicBatchPassthroughCostTracking:
+    """Test cases for Anthropic batch passthrough cost tracking functionality"""
+
+    @pytest.fixture
+    def mock_httpx_response(self):
+        """Mock httpx response for batch job creation"""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "id": "msgbatch_01Wj7gkQk7gn4MpAKR8ZEDU2",
+            "archived_at": None,
+            "cancel_initiated_at": None,
+            "created_at": "2024-08-20T18:37:24.100435Z",
+            "ended_at": None,
+            "expires_at": "2024-08-21T18:37:24.100435Z",
+            "processing_status": "in_progress",
+            "request_counts": {
+                "canceled": 0,
+                "errored": 0,
+                "expired": 0,
+                "processing": 1,
+                "succeeded": 0
+            },
+            "results_url": "https://api.anthropic.com/v1/messages/batches/msgbatch_01Wj7gkQk7gn4MpAKR8ZEDU2/results",
+            "type": "message_batch"
+        }
+        return mock_response
+
+    @pytest.fixture
+    def mock_logging_obj(self):
+        """Mock logging object"""
+        mock = MagicMock()
+        mock.litellm_call_id = "test-call-id-123"
+        mock.model_call_details = {}
+        mock.model = None
+        return mock
+
+    @pytest.fixture
+    def mock_request_body(self):
+        """Mock request body for batch creation"""
+        return {
+            "requests": [
+                {
+                    "custom_id": "my-custom-id-1",
+                    "params": {
+                        "max_tokens": 1024,
+                        "messages": [
+                            {
+                                "content": "Hello, world",
+                                "role": "user"
+                            }
+                        ],
+                        "model": "claude-sonnet-4-5-20250929"
+                    }
+                }
+            ]
+        }
+
+    @patch('litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler._store_batch_managed_object')
+    @patch('litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler.get_actual_model_id_from_router')
+    @patch('litellm.llms.anthropic.batches.transformation.AnthropicBatchesConfig')
+    def test_batch_creation_handler_success(
+        self,
+        mock_batches_config,
+        mock_get_model_id,
+        mock_store_batch,
+        mock_httpx_response,
+        mock_logging_obj,
+        mock_request_body
+    ):
+        """Test successful batch creation and managed object storage"""
+        from litellm.types.utils import LiteLLMBatch
+        
+        # Setup mocks
+        mock_get_model_id.return_value = "claude-sonnet-4-5-20250929"
+        
+        mock_batch_response = LiteLLMBatch(
+            id="msgbatch_01Wj7gkQk7gn4MpAKR8ZEDU2",
+            object="batch",
+            endpoint="/v1/messages",
+            errors=None,
+            input_file_id="None",
+            completion_window="24h",
+            status="validating",
+            output_file_id="msgbatch_01Wj7gkQk7gn4MpAKR8ZEDU2",
+            error_file_id=None,
+            created_at=1704067200,
+            in_progress_at=1704067200,
+            expires_at=1704153600,
+            finalizing_at=None,
+            completed_at=None,
+            failed_at=None,
+            expired_at=None,
+            cancelling_at=None,
+            cancelled_at=None,
+            request_counts={"total": 1, "completed": 0, "failed": 0},
+            metadata={},
         )
-
-        assert len(events) == 3, f"Should split into 3 events, got {len(events)}"
-        assert (
-            "content_block_start" in events[0]
-        ), "First event should be content_block_start"
-        assert (
-            "content_block_delta" in events[1]
-        ), "Second event should be content_block_delta"
-        assert (
-            "content_block_delta2" in events[2]
-        ), "Third event should be content_block_delta2"
-
-        # Test with single event
-        single_event_chunk = 'event: message_start\ndata: {"type":"message_start"}\n\n'
-        events = AnthropicPassthroughLoggingHandler._split_sse_chunk_into_events(
-            single_event_chunk
+        
+        mock_batches_config_instance = MagicMock()
+        mock_batches_config_instance.transform_retrieve_batch_response.return_value = mock_batch_response
+        mock_batches_config.return_value = mock_batches_config_instance
+        
+        # Test the handler
+        result = AnthropicPassthroughLoggingHandler.batch_creation_handler(
+            httpx_response=mock_httpx_response,
+            logging_obj=mock_logging_obj,
+            url_route="https://api.anthropic.com/v1/messages/batches",
+            result="success",
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            cache_hit=False,
+            request_body=mock_request_body,
         )
+        
+        # Verify the result
+        assert result is not None
+        assert "result" in result
+        assert "kwargs" in result
+        # Model should be extracted from request body
+        assert result["kwargs"]["model"] == "claude-sonnet-4-5-20250929"
+        assert result["kwargs"]["batch_id"] == "msgbatch_01Wj7gkQk7gn4MpAKR8ZEDU2"
+        assert result["kwargs"]["batch_job_state"] == "in_progress"
+        assert "unified_object_id" in result["kwargs"]
+        
+        # Verify batch was stored
+        mock_store_batch.assert_called_once()
+        call_kwargs = mock_store_batch.call_args[1]
+        assert call_kwargs["model_object_id"] == "msgbatch_01Wj7gkQk7gn4MpAKR8ZEDU2"
+        assert call_kwargs["batch_object"].status == "validating"
+        
+        # Verify the response object
+        assert result["result"].model == "claude-sonnet-4-5-20250929"
+        assert result["result"].object == "batch"
 
-        assert len(events) == 1, "Should have 1 event for single event chunk"
-
-        # Test with empty chunk
-        empty_chunk = ""
-        events = AnthropicPassthroughLoggingHandler._split_sse_chunk_into_events(
-            empty_chunk
+    @patch('litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler._store_batch_managed_object')
+    @patch('litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler.get_actual_model_id_from_router')
+    def test_batch_creation_handler_model_extraction_from_nested_request(
+        self,
+        mock_get_model_id,
+        mock_store_batch,
+        mock_httpx_response,
+        mock_logging_obj
+    ):
+        """Test that model is correctly extracted from nested request structure"""
+        from litellm.llms.anthropic.batches.transformation import AnthropicBatchesConfig
+        from litellm.types.utils import LiteLLMBatch
+        
+        # Setup mocks
+        mock_get_model_id.return_value = "claude-sonnet-4-5-20250929"
+        
+        mock_batch_response = LiteLLMBatch(
+            id="msgbatch_123",
+            object="batch",
+            endpoint="/v1/messages",
+            input_file_id="None",
+            completion_window="24h",
+            status="validating",
+            created_at=1704067200,
+            request_counts={"total": 1, "completed": 0, "failed": 0},
         )
+        
+        with patch.object(AnthropicBatchesConfig, 'transform_retrieve_batch_response', return_value=mock_batch_response):
+            # Request body with nested model in requests[0].params.model
+            request_body = {
+                "requests": [
+                    {
+                        "custom_id": "test-1",
+                        "params": {
+                            "model": "claude-sonnet-4-5-20250929",
+                            "messages": [{"role": "user", "content": "test"}]
+                        }
+                    }
+                ]
+            }
+            
+            result = AnthropicPassthroughLoggingHandler.batch_creation_handler(
+                httpx_response=mock_httpx_response,
+                logging_obj=mock_logging_obj,
+                url_route="https://api.anthropic.com/v1/messages/batches",
+                result="success",
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+                cache_hit=False,
+                request_body=request_body,
+            )
+            
+            # Verify model was extracted correctly
+            assert result["kwargs"]["model"] == "claude-sonnet-4-5-20250929"
 
-        assert len(events) == 0, "Should have 0 events for empty chunk"
+    @patch('litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler.get_actual_model_id_from_router')
+    def test_batch_creation_handler_model_prefix_when_not_in_router(
+        self,
+        mock_get_model_id,
+        mock_httpx_response,
+        mock_logging_obj,
+        mock_request_body
+    ):
+        """Test that model gets 'anthropic/' prefix when not found in router"""
+        from litellm.llms.anthropic.batches.transformation import AnthropicBatchesConfig
+        from litellm.types.utils import LiteLLMBatch
+        import base64
+        
+        # Model not in router - returns same model name
+        mock_get_model_id.return_value = "claude-sonnet-4-5-20250929"
+        
+        mock_batch_response = LiteLLMBatch(
+            id="msgbatch_123",
+            object="batch",
+            endpoint="/v1/messages",
+            input_file_id="None",
+            completion_window="24h",
+            status="validating",
+            created_at=1704067200,
+            request_counts={"total": 1, "completed": 0, "failed": 0},
+        )
+        
+        with patch.object(AnthropicBatchesConfig, 'transform_retrieve_batch_response', return_value=mock_batch_response):
+            with patch.object(AnthropicPassthroughLoggingHandler, '_store_batch_managed_object'):
+                result = AnthropicPassthroughLoggingHandler.batch_creation_handler(
+                    httpx_response=mock_httpx_response,
+                    logging_obj=mock_logging_obj,
+                    url_route="https://api.anthropic.com/v1/messages/batches",
+                    result="success",
+                    start_time=datetime.now(),
+                    end_time=datetime.now(),
+                    cache_hit=False,
+                    request_body=mock_request_body,
+                )
+                
+                # Verify unified_object_id contains anthropic/ prefix
+                unified_object_id = result["kwargs"]["unified_object_id"]
+                decoded = base64.urlsafe_b64decode(unified_object_id + "==").decode()
+                assert "anthropic/claude-sonnet-4-5-20250929" in decoded or "claude-sonnet-4-5-20250929" in decoded
+
+    def test_batch_creation_handler_failure_status_code(
+        self,
+        mock_logging_obj,
+        mock_request_body
+    ):
+        """Test batch creation handler with non-200 status code"""
+        mock_response = MagicMock()
+        mock_response.status_code = 400
+        mock_response.json.return_value = {"error": "Bad request"}
+        
+        result = AnthropicPassthroughLoggingHandler.batch_creation_handler(
+            httpx_response=mock_response,
+            logging_obj=mock_logging_obj,
+            url_route="https://api.anthropic.com/v1/messages/batches",
+            result="error",
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            cache_hit=False,
+            request_body=mock_request_body,
+        )
+        
+        # Verify error response
+        assert result is not None
+        assert result["kwargs"]["batch_job_state"] == "failed"
+        assert result["kwargs"]["response_cost"] == 0.0
+
+    @patch('litellm.proxy.proxy_server.proxy_logging_obj')
+    def test_store_batch_managed_object_success(
+        self,
+        mock_proxy_logging_obj,
+        mock_logging_obj
+    ):
+        """Test storing batch managed object"""
+        from litellm.types.utils import LiteLLMBatch
+        
+        # Setup mocks
+        mock_managed_files_hook = MagicMock()
+        mock_managed_files_hook.store_unified_object_id = AsyncMock()
+        mock_proxy_logging_obj.get_proxy_hook.return_value = mock_managed_files_hook
+        
+        batch_object = LiteLLMBatch(
+            id="msgbatch_123",
+            object="batch",
+            endpoint="/v1/messages",
+            input_file_id="None",
+            completion_window="24h",
+            status="validating",
+            created_at=1704067200,
+            request_counts={"total": 1, "completed": 0, "failed": 0},
+        )
+        
+        with patch('asyncio.create_task'):
+            AnthropicPassthroughLoggingHandler._store_batch_managed_object(
+                unified_object_id="test-unified-id",
+                batch_object=batch_object,
+                model_object_id="msgbatch_123",
+                logging_obj=mock_logging_obj,
+                user_id="test-user"
+            )
+            
+            # Verify managed files hook was called
+            mock_proxy_logging_obj.get_proxy_hook.assert_called_once_with("managed_files") 

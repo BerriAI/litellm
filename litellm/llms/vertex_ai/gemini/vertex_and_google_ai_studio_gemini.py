@@ -309,6 +309,44 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         return Tools(googleSearch={})
 
+    def _transform_computer_use_config(
+        self, computer_use_config: dict
+    ) -> dict:
+        """
+        Transform Computer Use configuration to Gemini API format.
+
+        Args:
+            computer_use_config: The computer use configuration from LiteLLM
+
+        Returns:
+            Transformed computer use configuration for Gemini API
+        """
+        transformed_config = {}
+        
+        # Transform environment values if needed
+        if "environment" in computer_use_config:
+            env_value = computer_use_config["environment"]
+            if env_value == "browser":
+                transformed_config["environment"] = "ENVIRONMENT_BROWSER"
+            elif env_value == "unspecified":
+                transformed_config["environment"] = "ENVIRONMENT_UNSPECIFIED"
+            elif env_value in ["ENVIRONMENT_BROWSER", "ENVIRONMENT_UNSPECIFIED"]:
+                # Already in correct format
+                transformed_config["environment"] = env_value
+            else:
+                verbose_logger.info(
+                    f"Invalid environment value for computer_use: {env_value}. "
+                    f"Supported: 'browser', 'unspecified', 'ENVIRONMENT_BROWSER', 'ENVIRONMENT_UNSPECIFIED'"
+                )
+        
+        # Transform excluded_predefined_functions to camelCase
+        if "excluded_predefined_functions" in computer_use_config:
+            transformed_config["excludedPredefinedFunctions"] = computer_use_config["excluded_predefined_functions"]
+        elif "excludedPredefinedFunctions" in computer_use_config:
+            transformed_config["excludedPredefinedFunctions"] = computer_use_config["excludedPredefinedFunctions"]
+        
+        return transformed_config
+
     def _extract_google_maps_retrieval_config(
         self, google_maps_config: dict
     ) -> Tuple[dict, Optional[dict]]:
@@ -400,6 +438,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         code_execution: Optional[dict] = None
         googleMaps: Optional[dict] = None
         google_maps_retrieval_config: Optional[dict] = None
+        computerUse: Optional[dict] = None
         # remove 'additionalProperties' from tools
         value = _remove_additional_properties(value)
         # remove 'strict' from tools
@@ -428,10 +467,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif "name" in tool:  # functions list
                 openai_function_object = ChatCompletionToolParamFunctionChunk(**tool)  # type: ignore
 
+            if "type" in tool and tool["type"] == "computer_use":
+                computer_use_config = {k: v for k, v in tool.items() if k != "type"}
+                tool = {VertexToolName.COMPUTER_USE.value: computer_use_config}
             # Handle tools with 'type' field (OpenAI spec compliance) Ignore this field -> https://github.com/BerriAI/litellm/issues/14644#issuecomment-3342061838
-            if "type" in tool:
+            elif "type" in tool:
                 tool = {k: tool[k] for k in tool if k != "type"}
-
             tool_name = list(tool.keys())[0] if len(tool.keys()) == 1 else None
             if tool_name and (
                 tool_name == "codeExecution"
@@ -473,6 +514,22 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     ) = self._extract_google_maps_retrieval_config(
                         google_maps_config=google_maps_value
                     )
+            elif tool_name and (
+                tool_name == VertexToolName.COMPUTER_USE.value
+                or tool_name == "computer_use"
+            ):
+                computer_use_value = self.get_tool_value(
+                    tool, VertexToolName.COMPUTER_USE.value
+                )
+
+                # Transform Computer Use configuration to Gemini API format
+                if computer_use_value is not None:
+                    computerUse = self._transform_computer_use_config(
+                        computer_use_config=computer_use_value
+                    )
+                else:
+                    # Empty config - Gemini will use defaults
+                    computerUse = {}
             elif openai_function_object is not None:
                 gtool_func_declaration = FunctionDeclaration(
                     name=openai_function_object["name"],
@@ -510,6 +567,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             _tools[VertexToolName.URL_CONTEXT.value] = urlContext
         if googleMaps is not None:
             _tools[VertexToolName.GOOGLE_MAPS.value] = googleMaps
+        if computerUse is not None:
+            _tools[VertexToolName.COMPUTER_USE.value] = computerUse
 
         # Add retrieval config to toolConfig if googleMaps has location data
         if google_maps_retrieval_config is not None:
@@ -1085,24 +1144,26 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def _extract_thinking_blocks_from_parts(
         self, parts: List[HttpxPartType]
     ) -> List[ChatCompletionThinkingBlock]:
-        """Extract thinking blocks from parts if present"""
+        """Extract thinking blocks from parts if present.
+
+        Per Google's docs (https://ai.google.dev/gemini-api/docs/thinking):
+        - Parts with `thought: true` contain thinking/reasoning content
+        - `thoughtSignature` is a separate token for multi-turn context preservation,
+          it does NOT indicate that the content is thinking (a part can have
+          thoughtSignature without thought: true, e.g., function calls)
+        """
         thinking_blocks: List[ChatCompletionThinkingBlock] = []
         for part in parts:
-            if "thoughtSignature" in part:
-                part_copy = part.copy()
-                part_copy.pop("thoughtSignature")
-
-                text_content = part_copy.get("text")
-                if isinstance(text_content, str) and text_content.strip() == "":
-                    continue
-
-                thinking_blocks.append(
-                    ChatCompletionThinkingBlock(
-                        type="thinking",
-                        thinking=json.dumps(part_copy),
-                        signature=part["thoughtSignature"],
-                    )
-                )
+            if part.get("thought") is True:
+                thinking_text = part.get("text", "")
+                block: ChatCompletionThinkingBlock = {
+                    "type": "thinking",
+                    "thinking": thinking_text,
+                }                
+                signature = part.get("thoughtSignature")
+                if signature is not None:
+                    block["signature"] = signature
+                thinking_blocks.append(block)
         return thinking_blocks
 
     def _extract_image_response_from_parts(
@@ -1492,9 +1553,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             for grounding_metadata_item in grounding_metadata:
                 web_search_queries = grounding_metadata_item.get("webSearchQueries")
                 if web_search_queries and web_search_requests:
-                    web_search_requests += len(web_search_queries)
+                    web_search_requests += len([q for q in web_search_queries if q])
                 elif web_search_queries:
-                    web_search_requests = len(grounding_metadata)
+                    web_search_requests = len([q for q in web_search_queries if q])
         return web_search_requests
 
     @staticmethod
@@ -2123,6 +2184,9 @@ class VertexLLM(VertexBase):
             custom_llm_provider=custom_llm_provider,
         )
 
+        # Extract use_psc_endpoint_format from optional_params
+        use_psc_endpoint_format = optional_params.get("use_psc_endpoint_format", False)
+
         auth_header, api_base = self._get_token_and_url(
             model=model,
             gemini_api_key=gemini_api_key,
@@ -2134,6 +2198,7 @@ class VertexLLM(VertexBase):
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             should_use_v1beta1_features=should_use_v1beta1_features,
+            use_psc_endpoint_format=use_psc_endpoint_format,
         )
 
         headers = VertexGeminiConfig().validate_environment(
@@ -2217,6 +2282,9 @@ class VertexLLM(VertexBase):
             custom_llm_provider=custom_llm_provider,
         )
 
+        # Extract use_psc_endpoint_format from optional_params
+        use_psc_endpoint_format = optional_params.get("use_psc_endpoint_format", False)
+
         auth_header, api_base = self._get_token_and_url(
             model=model,
             gemini_api_key=gemini_api_key,
@@ -2228,6 +2296,7 @@ class VertexLLM(VertexBase):
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             should_use_v1beta1_features=should_use_v1beta1_features,
+            use_psc_endpoint_format=use_psc_endpoint_format,
         )
 
         headers = VertexGeminiConfig().validate_environment(
@@ -2401,6 +2470,9 @@ class VertexLLM(VertexBase):
             custom_llm_provider=custom_llm_provider,
         )
 
+        # Extract use_psc_endpoint_format from optional_params
+        use_psc_endpoint_format = optional_params.get("use_psc_endpoint_format", False)
+
         auth_header, url = self._get_token_and_url(
             model=model,
             gemini_api_key=gemini_api_key,
@@ -2412,6 +2484,7 @@ class VertexLLM(VertexBase):
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             should_use_v1beta1_features=should_use_v1beta1_features,
+            use_psc_endpoint_format=use_psc_endpoint_format,
         )
         headers = VertexGeminiConfig().validate_environment(
             api_key=auth_header,
