@@ -509,21 +509,30 @@ class TestEmbeddingChunkingEdgeCases:
         # All content should be preserved
         assert "".join(chunks) == text
 
-    def test_merge_embeddings_different_dimensions(self):
-        """Test that merging embeddings with different dimensions raises an error or handles gracefully.
+    def test_merge_embeddings_different_dimensions(self, caplog):
+        """Test that merging embeddings with different dimensions logs a warning.
 
-        Note: The current implementation uses zip() which will silently truncate
-        to the shortest vector. This test documents the current behavior.
+        The implementation uses zip() which truncates to the shortest vector.
+        A warning should be logged to alert users of the dimension mismatch.
         """
+        import logging
+
         embeddings = [
             [1.0, 2.0, 3.0],
             [4.0, 5.0],  # Different dimension
         ]
-        # Current behavior: zip truncates to shortest
-        result = self.router._merge_embeddings(embeddings)
+
+        with caplog.at_level(logging.WARNING):
+            result = self.router._merge_embeddings(embeddings)
+
         # Result will have length of shortest vector (2)
         assert len(result) == 2
         assert result == [2.5, 3.5]  # Average of [1,4] and [2,5]
+
+        # Verify warning was logged
+        assert any(
+            "dimension mismatch" in record.message.lower() for record in caplog.records
+        ), "Expected warning about dimension mismatch"
 
     def test_chunk_text_single_word_exceeds_limit(self):
         """Test chunking when a single 'word' exceeds the chunk limit."""

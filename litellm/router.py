@@ -3275,12 +3275,25 @@ class Router:
         Returns:
             A single averaged embedding vector. Returns empty list if input is empty,
             or the single vector unchanged if only one is provided.
+
+        Note:
+            If vectors have mismatched dimensions, a warning is logged and the
+            result is truncated to the shortest vector length.
         """
         if not embeddings:
             return []
 
         if len(embeddings) == 1:
             return embeddings[0]
+
+        # Check for dimension mismatches
+        dimensions = [len(emb) for emb in embeddings]
+        if len(set(dimensions)) > 1:
+            verbose_router_logger.warning(
+                f"Embedding dimension mismatch detected during merge: {dimensions}. "
+                f"Result will be truncated to shortest dimension ({min(dimensions)}). "
+                "This may indicate API issues or model inconsistencies."
+            )
 
         num_vecs = len(embeddings)
 
