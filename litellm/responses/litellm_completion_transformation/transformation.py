@@ -39,6 +39,7 @@ from litellm.types.llms.openai import (
     ValidChatCompletionMessageContentTypes,
     ValidChatCompletionMessageContentTypesLiteral,
 )
+from litellm.types.llms.vertex_ai import VertexToolName
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
     GenericResponseOutputItemContentAnnotation,
@@ -55,8 +56,6 @@ from litellm.types.utils import (
     ModelResponse,
     Usage,
 )
-from litellm.types.llms.vertex_ai import VertexToolName
-
 
 ########### Initialize Classes used for Responses API  ###########
 TOOL_CALLS_CACHE = InMemoryCache()
@@ -694,36 +693,36 @@ class LiteLLMCompletionResponsesConfig:
                     user_location=_user_location,
                 )
             elif len(tool) == 1 and next(iter(tool)) in {e.value for e in VertexToolName}:
-                chat_completion_tools.append(tool)
+                chat_completion_tools.append(cast(Union[ChatCompletionToolParam, OpenAIMcpServerTool], tool))
             elif tool.get("type") == "computer_use":
-                chat_completion_tools.append(tool)
+                chat_completion_tools.append(cast(Union[ChatCompletionToolParam, OpenAIMcpServerTool], tool))
             elif tool.get("name") == "tool_search_tool_regex" or tool.get("name") == "tool_search_tool_bm25" or tool.get("type") == "code_execution_20250825":
-                chat_completion_tools.append(tool)
+                chat_completion_tools.append(cast(Union[ChatCompletionToolParam, OpenAIMcpServerTool], tool))
             else:
                 typed_tool = cast(FunctionToolParam, tool)
                 # Ensure parameters has "type": "object" as required by providers like Anthropic
                 parameters = dict(typed_tool.get("parameters", {}) or {})
                 if not parameters or "type" not in parameters:
                     parameters["type"] = "object"
-                chat_completion_tool = ChatCompletionToolParam(
-                        type="function",
-                        function=ChatCompletionToolParamFunctionChunk(
-                            name=typed_tool.get("name") or "",
-                            description=typed_tool.get("description") or "",
-                            parameters=parameters,
-                            strict=typed_tool.get("strict", False) or False,
-                        ),
-                    )
+                chat_completion_tool: Dict[str, Any] = {
+                    "type": "function",
+                    "function": {
+                        "name": typed_tool.get("name") or "",
+                        "description": typed_tool.get("description") or "",
+                        "parameters": parameters,
+                        "strict": typed_tool.get("strict", False) or False,
+                    }
+                }
                 if tool.get("cache_control"):
-                    chat_completion_tool["cache_control"] = tool.get("cache_control")
+                    chat_completion_tool["cache_control"] = tool.get("cache_control")  # type: ignore
                 if tool.get("defer_loading"):
-                    chat_completion_tool["defer_loading"] = tool.get("defer_loading")
+                    chat_completion_tool["defer_loading"] = tool.get("defer_loading")  # type: ignore
                 if tool.get("allowed_callers"):
-                    chat_completion_tool["allowed_callers"] = tool.get("allowed_callers")
+                    chat_completion_tool["allowed_callers"] = tool.get("allowed_callers")  # type: ignore
                 if tool.get("input_examples"):
-                    chat_completion_tool["input_examples"] = tool.get("input_examples")
+                    chat_completion_tool["input_examples"] = tool.get("input_examples")  # type: ignore
                 chat_completion_tools.append(
-                    chat_completion_tool
+                    cast(ChatCompletionToolParam, chat_completion_tool)
                 )
         return chat_completion_tools, web_search_options
 
