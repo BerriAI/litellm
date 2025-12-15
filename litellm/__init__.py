@@ -1065,7 +1065,6 @@ openai_video_generation_models = ["sora-2"]
 from .timeout import timeout
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
-from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
 # client must be imported immediately as it's used as a decorator at function definition time
 from .utils import client
 # Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py
@@ -1567,6 +1566,7 @@ def __getattr__(name: str) -> Any:
         COST_CALCULATOR_NAMES,
         LITELLM_LOGGING_NAMES,
         UTILS_NAMES,
+        TOKEN_COUNTER_NAMES,
         CACHING_NAMES,
         HTTP_HANDLER_NAMES,
     )
@@ -1585,6 +1585,11 @@ def __getattr__(name: str) -> Any:
     if name in UTILS_NAMES:
         from ._lazy_imports import _lazy_import_utils
         return _lazy_import_utils(name)
+    
+    # Lazy load token counter utilities
+    if name in TOKEN_COUNTER_NAMES:
+        from ._lazy_imports import _lazy_import_token_counter
+        return _lazy_import_token_counter(name)
     
     # Lazy load caching classes
     if name in CACHING_NAMES:
