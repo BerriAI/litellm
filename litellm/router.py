@@ -3427,7 +3427,7 @@ class Router:
         prepared_kwargs = kwargs.copy()
         # Deep copy metadata to avoid mutating the original kwargs
         if "metadata" in prepared_kwargs:
-            prepared_kwargs["metadata"] = prepared_kwargs["metadata"].copy()
+            prepared_kwargs["metadata"] = copy.deepcopy(prepared_kwargs["metadata"])
         prepared_kwargs.update(
             {
                 "model": model,
