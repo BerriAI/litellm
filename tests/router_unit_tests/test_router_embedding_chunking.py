@@ -61,7 +61,7 @@ class TestEmbeddingChunkingHelpers:
     def test_chunk_text_large_input(self):
         """Test that large inputs are properly chunked."""
         # Create text that's ~1100 tokens (4000 chars)
-        text = "word " * 800  # 4000 chars = 1100 tokens (with 1.1 safty margin) 
+        text = "word " * 800  # 4000 chars = 1100 tokens (with 1.1 safety margin) 
         chunks = self.router._chunk_text(text, chunk_size=512)
 
         # Should create multiple chunks
