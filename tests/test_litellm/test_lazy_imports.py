@@ -12,9 +12,11 @@ from litellm._lazy_imports import (
     COST_CALCULATOR_NAMES,
     LITELLM_LOGGING_NAMES,
     UTILS_NAMES,
+    HTTP_HANDLER_NAMES,
     _lazy_import_cost_calculator,
     _lazy_import_litellm_logging,
     _lazy_import_utils,
+    _lazy_import_http_handlers,
 )
 
 
@@ -76,6 +78,18 @@ def test_utils_lazy_imports():
         
         # Verify only the requested name is in globals, not the others
         _verify_only_requested_name_imported(name, UTILS_NAMES)
+
+
+def test_http_handler_lazy_imports():
+    """Test that HTTP handler singletons can be lazy imported."""
+    for name in HTTP_HANDLER_NAMES:
+        _clear_names_from_globals(HTTP_HANDLER_NAMES)
+
+        handler = _lazy_import_http_handlers(name)
+        assert handler is not None
+        assert name in litellm.__dict__
+
+        _verify_only_requested_name_imported(name, HTTP_HANDLER_NAMES)
 
 
 def test_unknown_attribute_raises_error():

@@ -34,6 +34,12 @@ UTILS_NAMES = (
     "ModelResponseListIterator", "get_valid_models",
 )
 
+# HTTP handler names that support lazy loading via _lazy_import_http_handlers
+HTTP_HANDLER_NAMES = (
+    "module_level_aclient",
+    "module_level_client",
+)
+
 # Lazy import for utils module - imports only the requested item by name.
 # Note: PLR0915 (too many statements) is suppressed because the many if statements
 # are intentional - each attribute is imported individually only when requested,
@@ -279,3 +285,30 @@ def _lazy_import_litellm_logging(name: str) -> Any:
         return _modify_integration
     
     raise AttributeError(f"Litellm logging lazy import: unknown attribute {name!r}")
+
+
+def _lazy_import_http_handlers(name: str) -> Any:
+    """Lazy import and instantiate module-level HTTP handlers."""
+    _globals = _get_litellm_globals()
+
+    if name == "module_level_aclient":
+        # Import handler type locally to avoid heavy imports at module load time
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+        timeout = _globals.get("request_timeout")
+        client = AsyncHTTPHandler(
+            timeout=timeout, client_alias="module level aclient"
+        )
+        _globals["module_level_aclient"] = client
+        return client
+
+    if name == "module_level_client":
+        # Import handler type locally to avoid heavy imports at module load time
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        timeout = _globals.get("request_timeout")
+        client = HTTPHandler(timeout=timeout)
+        _globals["module_level_client"] = client
+        return client
+
+    raise AttributeError(f"HTTP handlers lazy import: unknown attribute {name!r}")
