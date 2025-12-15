@@ -716,3 +716,108 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
         assert texts_to_check[0] == "I'll check the weather for you"
         assert len(tool_calls_to_check) == 1
         assert tool_calls_to_check[0]["function"]["name"] == "get_current_weather"
+
+    def test_extract_text_from_basemodel_instance(self):
+        """Test extracting text from GenericResponseOutputItem as BaseModel instance
+
+        This test verifies that _extract_output_text_and_images correctly handles
+        GenericResponseOutputItem when passed as a Pydantic BaseModel instance
+        (not as a dict). This addresses the issue where isinstance(output_item, BaseModel)
+        was failing because the handler was importing BaseModel from openai instead of pydantic.
+        """
+        handler = OpenAIResponsesHandler()
+
+        # Create a proper GenericResponseOutputItem instance (Pydantic BaseModel)
+        output_item = GenericResponseOutputItem(
+            type="message",
+            id="msg_123",
+            status="completed",
+            role="assistant",
+            content=[
+                OutputText(
+                    type="output_text",
+                    text="Hi! My name is Ishaan.",
+                    annotations=[],
+                )
+            ],
+        )
+
+        texts_to_check: List[str] = []
+        images_to_check: List[str] = []
+        tool_calls_to_check: List[Any] = []
+        task_mappings: List[Tuple[int, int]] = []
+
+        # Extract text from the BaseModel instance
+        handler._extract_output_text_and_images(
+            output_item=output_item,
+            output_idx=0,
+            texts_to_check=texts_to_check,
+            images_to_check=images_to_check,
+            task_mappings=task_mappings,
+            tool_calls_to_check=tool_calls_to_check,
+        )
+
+        # Verify text was extracted correctly
+        assert len(texts_to_check) == 1
+        assert texts_to_check[0] == "Hi! My name is Ishaan."
+        assert len(task_mappings) == 1
+        assert task_mappings[0] == (0, 0)  # (output_idx, content_idx)
+        assert len(tool_calls_to_check) == 0  # No tool calls in this output
+
+    def test_extract_text_from_basemodel_with_multiple_content_items(self):
+        """Test extracting multiple text items from GenericResponseOutputItem BaseModel
+
+        This test verifies that the handler correctly processes a BaseModel instance
+        with multiple content items in the content array.
+        """
+        handler = OpenAIResponsesHandler()
+
+        # Create GenericResponseOutputItem with multiple content items
+        output_item = GenericResponseOutputItem(
+            type="message",
+            id="msg_456",
+            status="completed",
+            role="assistant",
+            content=[
+                OutputText(
+                    type="output_text",
+                    text="First paragraph.",
+                    annotations=[],
+                ),
+                OutputText(
+                    type="output_text",
+                    text="Second paragraph.",
+                    annotations=[],
+                ),
+                OutputText(
+                    type="output_text",
+                    text="Third paragraph.",
+                    annotations=[],
+                ),
+            ],
+        )
+
+        texts_to_check: List[str] = []
+        images_to_check: List[str] = []
+        tool_calls_to_check: List[Any] = []
+        task_mappings: List[Tuple[int, int]] = []
+
+        # Extract all text items
+        handler._extract_output_text_and_images(
+            output_item=output_item,
+            output_idx=0,
+            texts_to_check=texts_to_check,
+            images_to_check=images_to_check,
+            task_mappings=task_mappings,
+            tool_calls_to_check=tool_calls_to_check,
+        )
+
+        # Verify all text items were extracted
+        assert len(texts_to_check) == 3
+        assert texts_to_check[0] == "First paragraph."
+        assert texts_to_check[1] == "Second paragraph."
+        assert texts_to_check[2] == "Third paragraph."
+        assert len(task_mappings) == 3
+        assert task_mappings[0] == (0, 0)
+        assert task_mappings[1] == (0, 1)
+        assert task_mappings[2] == (0, 2)
