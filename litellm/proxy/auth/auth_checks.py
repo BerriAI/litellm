@@ -1941,7 +1941,7 @@ async def _virtual_key_soft_budget_check(
     proxy_logging_obj: ProxyLogging,
 ):
     """
-    Triggers a budget alert if the token is over it's soft budget.
+    Triggers a budget alert if the token is over it's soft budget
 
     """
 
