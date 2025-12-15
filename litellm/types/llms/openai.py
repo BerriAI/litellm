@@ -62,6 +62,7 @@ except (ImportError, AttributeError):
         ResponseTextConfigParam as ResponseText,
     )
 
+from openai.types.responses import ResponseFunctionToolCall
 from openai.types.responses.response_create_params import (
     Reasoning,
     ResponseIncludable,
@@ -351,11 +352,12 @@ CREATE_FILE_REQUESTS_PURPOSE = Literal["assistants", "batch", "fine-tune"]
 class FileExpiresAfter(TypedDict):
     """
     File expiration policy
-    
+
     Properties:
         anchor: Anchor timestamp after which the expiration policy applies. Supported anchors: created_at.
         seconds: The number of seconds after the anchor time that the file will expire. Must be between 3600 (1 hour) and 2592000 (30 days).
     """
+
     anchor: Required[Literal["created_at"]]
     seconds: Required[int]
 
@@ -458,6 +460,7 @@ class ListBatchRequest(TypedDict, total=False):
 # OpenAI Batch Result Types
 class OpenAIErrorBody(TypedDict, total=False):
     """Error body in OpenAI batch response format."""
+
     error: Dict[str, str]
 
 
@@ -1152,7 +1155,14 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     object: Optional[str] = None
     output: Union[
         List[Union[ResponseOutputItem, Dict]],
-        List[Union[GenericResponseOutputItem, OutputFunctionToolCall, OutputImageGenerationCall]],
+        List[
+            Union[
+                GenericResponseOutputItem,
+                OutputFunctionToolCall,
+                OutputImageGenerationCall,
+                ResponseFunctionToolCall,
+            ]
+        ],
     ]
     parallel_tool_calls: Optional[bool] = None
     temperature: Optional[float] = None
@@ -1907,6 +1917,7 @@ class OpenAIChatCompletionResponse(TypedDict, total=False):
 # OpenAI Batch Result Types (defined after OpenAIChatCompletionResponse for forward reference)
 class OpenAIBatchResponse(TypedDict, total=False):
     """Response wrapper in OpenAI batch result format."""
+
     status_code: int
     request_id: str
     body: Union[OpenAIChatCompletionResponse, OpenAIErrorBody]
@@ -1914,6 +1925,7 @@ class OpenAIBatchResponse(TypedDict, total=False):
 
 class OpenAIBatchResult(TypedDict, total=False):
     """OpenAI batch result format."""
+
     custom_id: str
     response: OpenAIBatchResponse
 
