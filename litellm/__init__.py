@@ -1563,41 +1563,24 @@ if TYPE_CHECKING:
 
 def __getattr__(name: str) -> Any:
     """Lazy import handler for cost_calculator and litellm_logging functions."""
-    # Lazy load cost_calculator functions
-    _cost_calculator_names = (
-        "completion_cost",
-        "cost_per_token",
-        "response_cost_calculator",
+    from ._lazy_imports import (
+        COST_CALCULATOR_NAMES,
+        LITELLM_LOGGING_NAMES,
+        UTILS_NAMES,
     )
-    if name in _cost_calculator_names:
+    
+    # Lazy load cost_calculator functions
+    if name in COST_CALCULATOR_NAMES:
         from ._lazy_imports import _lazy_import_cost_calculator
         return _lazy_import_cost_calculator(name)
 
     # Lazy load litellm_logging functions
-    _litellm_logging_names = (
-        "Logging",
-        "modify_integration",
-    )
-    if name in _litellm_logging_names:
+    if name in LITELLM_LOGGING_NAMES:
         from ._lazy_imports import _lazy_import_litellm_logging
         return _lazy_import_litellm_logging(name)
 
     # Lazy load utils functions
-    _utils_names = (
-        "exception_type", "get_optional_params", "get_response_string", "token_counter",
-        "create_pretrained_tokenizer", "create_tokenizer", "supports_function_calling",
-        "supports_web_search", "supports_url_context", "supports_response_schema",
-        "supports_parallel_function_calling", "supports_vision", "supports_audio_input",
-        "supports_audio_output", "supports_system_messages", "supports_reasoning",
-        "get_litellm_params", "acreate", "get_max_tokens", "get_model_info",
-        "register_prompt_template", "validate_environment", "check_valid_key",
-        "register_model", "encode", "decode", "_calculate_retry_after", "_should_retry",
-        "get_supported_openai_params", "get_api_base", "get_first_chars_messages",
-        "ModelResponse", "ModelResponseStream", "EmbeddingResponse", "ImageResponse",
-        "TranscriptionResponse", "TextCompletionResponse", "get_provider_fields",
-        "ModelResponseListIterator", "get_valid_models",
-    )
-    if name in _utils_names:
+    if name in UTILS_NAMES:
         from ._lazy_imports import _lazy_import_utils
         return _lazy_import_utils(name)
     

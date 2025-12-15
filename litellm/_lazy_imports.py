@@ -5,6 +5,35 @@ def _get_litellm_globals() -> dict:
     """Helper to get the globals dictionary of the litellm module."""
     return sys.modules["litellm"].__dict__
 
+# Cost calculator names that support lazy loading via _lazy_import_cost_calculator
+COST_CALCULATOR_NAMES = (
+    "completion_cost",
+    "cost_per_token",
+    "response_cost_calculator",
+)
+
+# Litellm logging names that support lazy loading via _lazy_import_litellm_logging
+LITELLM_LOGGING_NAMES = (
+    "Logging",
+    "modify_integration",
+)
+
+# Utils names that support lazy loading via _lazy_import_utils
+UTILS_NAMES = (
+    "exception_type", "get_optional_params", "get_response_string", "token_counter",
+    "create_pretrained_tokenizer", "create_tokenizer", "supports_function_calling",
+    "supports_web_search", "supports_url_context", "supports_response_schema",
+    "supports_parallel_function_calling", "supports_vision", "supports_audio_input",
+    "supports_audio_output", "supports_system_messages", "supports_reasoning",
+    "get_litellm_params", "acreate", "get_max_tokens", "get_model_info",
+    "register_prompt_template", "validate_environment", "check_valid_key",
+    "register_model", "encode", "decode", "_calculate_retry_after", "_should_retry",
+    "get_supported_openai_params", "get_api_base", "get_first_chars_messages",
+    "ModelResponse", "ModelResponseStream", "EmbeddingResponse", "ImageResponse",
+    "TranscriptionResponse", "TextCompletionResponse", "get_provider_fields",
+    "ModelResponseListIterator", "get_valid_models",
+)
+
 # Lazy import for utils module - imports only the requested item by name.
 # Note: PLR0915 (too many statements) is suppressed because the many if statements
 # are intentional - each attribute is imported individually only when requested,
@@ -218,42 +247,35 @@ def _lazy_import_utils(name: str) -> Any:  # noqa: PLR0915
 def _lazy_import_cost_calculator(name: str) -> Any:
     """Lazy import for cost_calculator functions."""
     _globals = _get_litellm_globals()
-    from .cost_calculator import (
-        completion_cost as _completion_cost,
-        cost_per_token as _cost_per_token,
-        response_cost_calculator as _response_cost_calculator,
-    )
+    if name == "completion_cost":
+        from .cost_calculator import completion_cost as _completion_cost
+        _globals["completion_cost"] = _completion_cost
+        return _completion_cost
     
-    _cost_functions = {
-        "completion_cost": _completion_cost,
-        "cost_per_token": _cost_per_token,
-        "response_cost_calculator": _response_cost_calculator,
-    }
+    if name == "cost_per_token":
+        from .cost_calculator import cost_per_token as _cost_per_token
+        _globals["cost_per_token"] = _cost_per_token
+        return _cost_per_token
     
-    func = _cost_functions[name]
-    _globals[name] = func
-    return func
+    if name == "response_cost_calculator":
+        from .cost_calculator import response_cost_calculator as _response_cost_calculator
+        _globals["response_cost_calculator"] = _response_cost_calculator
+        return _response_cost_calculator
+    
+    raise AttributeError(f"Cost calculator lazy import: unknown attribute {name!r}")
 
 
 def _lazy_import_litellm_logging(name: str) -> Any:
     """Lazy import for litellm_logging module."""
     _globals = _get_litellm_globals()
-    try:
-        from litellm.litellm_core_utils.litellm_logging import (
-            Logging as _Logging,
-            modify_integration as _modify_integration,
-        )
-        
-        _logging_objects = {
-            "Logging": _Logging,
-            "modify_integration": _modify_integration,
-        }
-        
-        obj = _logging_objects[name]
-        _globals[name] = obj
-        return obj
-    except Exception as e:
-        raise AttributeError(
-            f"module 'litellm' has no attribute {name!r}. "
-            f"Lazy import failed: {e}"
-        ) from e
+    if name == "Logging":
+        from litellm.litellm_core_utils.litellm_logging import Logging as _Logging
+        _globals["Logging"] = _Logging
+        return _Logging
+    
+    if name == "modify_integration":
+        from litellm.litellm_core_utils.litellm_logging import modify_integration as _modify_integration
+        _globals["modify_integration"] = _modify_integration
+        return _modify_integration
+    
+    raise AttributeError(f"Litellm logging lazy import: unknown attribute {name!r}")
