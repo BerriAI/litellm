@@ -12,11 +12,13 @@ from litellm._lazy_imports import (
     COST_CALCULATOR_NAMES,
     LITELLM_LOGGING_NAMES,
     UTILS_NAMES,
+    TOKEN_COUNTER_NAMES,
     CACHING_NAMES,
     HTTP_HANDLER_NAMES,
     _lazy_import_cost_calculator,
     _lazy_import_litellm_logging,
     _lazy_import_utils,
+    _lazy_import_token_counter,
     _lazy_import_caching,
     _lazy_import_http_handlers,
 )
@@ -97,6 +99,18 @@ def test_caching_lazy_imports():
         _verify_only_requested_name_imported(name, CACHING_NAMES)
 
 
+def test_token_counter_lazy_imports():
+    """Test that token counter utilities can be lazy imported."""
+    for name in TOKEN_COUNTER_NAMES:
+        _clear_names_from_globals(TOKEN_COUNTER_NAMES)
+
+        func = _lazy_import_token_counter(name)
+        assert func is not None
+        assert name in litellm.__dict__
+
+        _verify_only_requested_name_imported(name, TOKEN_COUNTER_NAMES)
+
+
 def test_http_handler_lazy_imports():
     """Test that HTTP handler singletons can be lazy imported."""
     for name in HTTP_HANDLER_NAMES:
@@ -122,4 +136,7 @@ def test_unknown_attribute_raises_error():
 
     with pytest.raises(AttributeError):
         _lazy_import_caching("unknown")
+
+    with pytest.raises(AttributeError):
+        _lazy_import_token_counter("unknown")
 
