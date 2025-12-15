@@ -39,7 +39,6 @@ from litellm.types.llms.openai import (
     ValidChatCompletionMessageContentTypes,
     ValidChatCompletionMessageContentTypesLiteral,
 )
-from litellm.types.llms.vertex_ai import VertexToolName
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
     GenericResponseOutputItemContentAnnotation,
@@ -692,13 +691,7 @@ class LiteLLMCompletionResponsesConfig:
                     search_context_size=_search_context_size,
                     user_location=_user_location,
                 )
-            elif len(tool) == 1 and next(iter(tool)) in {e.value for e in VertexToolName}:
-                chat_completion_tools.append(cast(Union[ChatCompletionToolParam, OpenAIMcpServerTool], tool))
-            elif tool.get("type") == "computer_use":
-                chat_completion_tools.append(cast(Union[ChatCompletionToolParam, OpenAIMcpServerTool], tool))
-            elif tool.get("name") == "tool_search_tool_regex" or tool.get("name") == "tool_search_tool_bm25" or tool.get("type") == "code_execution_20250825":
-                chat_completion_tools.append(cast(Union[ChatCompletionToolParam, OpenAIMcpServerTool], tool))
-            else:
+            elif tool.get("type") == "function":
                 typed_tool = cast(FunctionToolParam, tool)
                 # Ensure parameters has "type": "object" as required by providers like Anthropic
                 parameters = dict(typed_tool.get("parameters", {}) or {})
@@ -724,6 +717,8 @@ class LiteLLMCompletionResponsesConfig:
                 chat_completion_tools.append(
                     cast(ChatCompletionToolParam, chat_completion_tool)
                 )
+            else:
+                chat_completion_tools.append(cast(Union[ChatCompletionToolParam, OpenAIMcpServerTool], tool))
         return chat_completion_tools, web_search_options
 
     @staticmethod
