@@ -9,6 +9,8 @@ sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm._lazy_imports import (
+    COST_CALCULATOR_NAMES,
+    LITELLM_LOGGING_NAMES,
     UTILS_NAMES,
     _lazy_import_cost_calculator,
     _lazy_import_litellm_logging,
@@ -19,7 +21,7 @@ from litellm._lazy_imports import (
 def test_cost_calculator_lazy_imports():
     """Test that all cost calculator functions can be lazy imported."""
     # Clear from globals to test fresh import
-    for name in ["completion_cost", "cost_per_token", "response_cost_calculator"]:
+    for name in COST_CALCULATOR_NAMES:
         if name in litellm.__dict__:
             del litellm.__dict__[name]
         
@@ -31,7 +33,7 @@ def test_cost_calculator_lazy_imports():
 
 def test_litellm_logging_lazy_imports():
     """Test that all litellm_logging items can be lazy imported."""
-    for name in ["Logging", "modify_integration"]:
+    for name in LITELLM_LOGGING_NAMES:
         if name in litellm.__dict__:
             del litellm.__dict__[name]
         

@@ -5,6 +5,19 @@ def _get_litellm_globals() -> dict:
     """Helper to get the globals dictionary of the litellm module."""
     return sys.modules["litellm"].__dict__
 
+# Cost calculator names that support lazy loading via _lazy_import_cost_calculator
+COST_CALCULATOR_NAMES = (
+    "completion_cost",
+    "cost_per_token",
+    "response_cost_calculator",
+)
+
+# Litellm logging names that support lazy loading via _lazy_import_litellm_logging
+LITELLM_LOGGING_NAMES = (
+    "Logging",
+    "modify_integration",
+)
+
 # Utils names that support lazy loading via _lazy_import_utils
 UTILS_NAMES = (
     "exception_type", "get_optional_params", "get_response_string", "token_counter",

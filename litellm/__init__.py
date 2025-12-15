@@ -1563,27 +1563,23 @@ if TYPE_CHECKING:
 
 def __getattr__(name: str) -> Any:
     """Lazy import handler for cost_calculator and litellm_logging functions."""
-    # Lazy load cost_calculator functions
-    _cost_calculator_names = (
-        "completion_cost",
-        "cost_per_token",
-        "response_cost_calculator",
+    from ._lazy_imports import (
+        COST_CALCULATOR_NAMES,
+        LITELLM_LOGGING_NAMES,
+        UTILS_NAMES,
     )
-    if name in _cost_calculator_names:
+    
+    # Lazy load cost_calculator functions
+    if name in COST_CALCULATOR_NAMES:
         from ._lazy_imports import _lazy_import_cost_calculator
         return _lazy_import_cost_calculator(name)
 
     # Lazy load litellm_logging functions
-    _litellm_logging_names = (
-        "Logging",
-        "modify_integration",
-    )
-    if name in _litellm_logging_names:
+    if name in LITELLM_LOGGING_NAMES:
         from ._lazy_imports import _lazy_import_litellm_logging
         return _lazy_import_litellm_logging(name)
 
     # Lazy load utils functions
-    from ._lazy_imports import UTILS_NAMES
     if name in UTILS_NAMES:
         from ._lazy_imports import _lazy_import_utils
         return _lazy_import_utils(name)
