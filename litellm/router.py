@@ -6216,6 +6216,13 @@ class Router:
             except Exception:
                 model_info = None
 
+            # Merge supports_vision from deployment's stored model_info if not present
+            # This ensures DB-configured supports_vision takes precedence
+            if model_info is not None:
+                db_supports_vision = model_info_dict.get("supports_vision", None)
+                if db_supports_vision is not None and model_info.get("supports_vision") is None:
+                    model_info["supports_vision"] = db_supports_vision
+
             # get llm provider
             litellm_model, llm_provider = "", ""
             try:
@@ -6235,9 +6242,10 @@ class Router:
                 if supported_openai_params is None:
                     supported_openai_params = []
 
-                # Get mode from database model_info if available, otherwise default to "chat"
+                # Get mode and supports_vision from database model_info if available
                 db_model_info = model.get("model_info", {})
                 mode = db_model_info.get("mode", "chat")
+                supports_vision = db_model_info.get("supports_vision", None)
 
                 model_info = ModelMapInfo(
                     key=model_group,
@@ -6250,6 +6258,7 @@ class Router:
                     mode=mode,
                     supported_openai_params=supported_openai_params,
                     supports_system_messages=None,
+                    supports_vision=supports_vision,
                 )
 
             if model_group_info is None:
