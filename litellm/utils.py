@@ -810,7 +810,12 @@ def function_setup(  # noqa: PLR0915
             or call_type == CallTypes.responses.value
         ):
             # Handle both 'input' (standard Responses API) and 'messages' (Cursor chat format)
-            messages = args[0] if len(args) > 0 else kwargs.get("input") or kwargs.get("messages", "default-message-value")
+            messages = (
+                args[0]
+                if len(args) > 0
+                else kwargs.get("input")
+                or kwargs.get("messages", "default-message-value")
+            )
         else:
             messages = "default-message-value"
         stream = False
@@ -6900,7 +6905,9 @@ def last_assistant_with_tool_calls_has_no_thinking_blocks(
 
     # Check if it has thinking_blocks
     thinking_blocks = last_assistant_with_tools.get("thinking_blocks")
-    return thinking_blocks is None or len(thinking_blocks) == 0
+    return thinking_blocks is None or (
+        hasattr(thinking_blocks, "__len__") and len(thinking_blocks) == 0
+    )
 
 
 def add_dummy_tool(custom_llm_provider: str) -> List[ChatCompletionToolParam]:
@@ -7032,7 +7039,9 @@ def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
                         for item in user_content:
                             if isinstance(item, dict):
                                 if item.get("type") not in ValidUserMessageContentTypes:
-                                    raise Exception(f"invalid content type={item.get('type')}")
+                                    raise Exception(
+                                        f"invalid content type={item.get('type')}"
+                                    )
         except Exception as e:
             if isinstance(e, KeyError):
                 raise Exception(
@@ -7867,9 +7876,7 @@ class ProviderConfigManager:
 
             return GeminiVideoConfig()
         elif LlmProviders.VERTEX_AI == provider:
-            from litellm.llms.vertex_ai.videos.transformation import (
-                VertexAIVideoConfig,
-            )
+            from litellm.llms.vertex_ai.videos.transformation import VertexAIVideoConfig
 
             return VertexAIVideoConfig()
         elif LlmProviders.RUNWAYML == provider:
