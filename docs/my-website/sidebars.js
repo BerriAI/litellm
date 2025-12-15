@@ -665,6 +665,7 @@ const sidebars = {
         },
         "providers/litellm_proxy",
         "providers/ai21",
+        "providers/aibadgr",
         "providers/aiml",
         "providers/aleph_alpha",
         "providers/anyscale",

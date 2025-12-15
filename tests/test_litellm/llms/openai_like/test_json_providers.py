@@ -26,6 +26,16 @@ class TestJSONProviderLoader:
         """Test that JSON providers load correctly"""
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
+        # Verify aibadgr is loaded
+        assert JSONProviderRegistry.exists("aibadgr")
+
+        # Get aibadgr config
+        aibadgr = JSONProviderRegistry.get("aibadgr")
+        assert aibadgr is not None
+        assert aibadgr.base_url == "https://aibadgr.com/api/v1"
+        assert aibadgr.api_key_env == "AIBADGR_API_KEY"
+        assert aibadgr.api_base_env == "AIBADGR_BASE_URL"
+
         # Verify publicai is loaded
         assert JSONProviderRegistry.exists("publicai")
 
@@ -103,6 +113,19 @@ class TestJSONProviderLoader:
             get_llm_provider,
         )
 
+        # Test aibadgr provider resolution
+        model, provider, api_key, api_base = get_llm_provider(
+            model="aibadgr/premium",
+            custom_llm_provider=None,
+            api_base=None,
+            api_key=None,
+        )
+
+        assert model == "premium"
+        assert provider == "aibadgr"
+        assert api_base == "https://aibadgr.com/api/v1"
+
+        # Test publicai provider resolution
         model, provider, api_key, api_base = get_llm_provider(
             model="publicai/gpt-4",
             custom_llm_provider=None,
@@ -113,6 +136,38 @@ class TestJSONProviderLoader:
         assert model == "gpt-4"
         assert provider == "publicai"
         assert api_base == "https://api.publicai.co/v1"
+
+    def test_aibadgr_tier_models(self):
+        """Test AI Badgr tier model resolution"""
+        from litellm.litellm_core_utils.get_llm_provider_logic import (
+            get_llm_provider,
+        )
+
+        # Test tier models (basic, normal, premium)
+        tier_models = ["basic", "normal", "premium"]
+        for tier in tier_models:
+            model, provider, api_key, api_base = get_llm_provider(
+                model=f"aibadgr/{tier}",
+                custom_llm_provider=None,
+                api_base=None,
+                api_key=None,
+            )
+            assert model == tier
+            assert provider == "aibadgr"
+            assert api_base == "https://aibadgr.com/api/v1"
+
+        # Test power-user model names
+        power_models = ["phi-3-mini", "mistral-7b", "llama3-8b-instruct"]
+        for power_model in power_models:
+            model, provider, api_key, api_base = get_llm_provider(
+                model=f"aibadgr/{power_model}",
+                custom_llm_provider=None,
+                api_base=None,
+                api_key=None,
+            )
+            assert model == power_model
+            assert provider == "aibadgr"
+            assert api_base == "https://aibadgr.com/api/v1"
 
     def test_provider_config_manager(self):
         """Test that ProviderConfigManager returns JSON-based configs"""
