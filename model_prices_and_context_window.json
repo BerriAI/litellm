@@ -12619,7 +12619,7 @@
         "rpm": 100000,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
-            "/vertex_ai/live"
+            "/v1/realtime"
         ],
         "supported_modalities": [
             "text",
