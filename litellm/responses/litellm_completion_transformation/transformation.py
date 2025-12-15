@@ -716,6 +716,12 @@ class LiteLLMCompletionResponsesConfig:
                     )
                 if tool.get("cache_control"):
                     chat_completion_tool["cache_control"] = tool.get("cache_control")
+                if tool.get("defer_loading"):
+                    chat_completion_tool["defer_loading"] = tool.get("defer_loading")
+                if tool.get("allowed_callers"):
+                    chat_completion_tool["allowed_callers"] = tool.get("allowed_callers")
+                if tool.get("input_examples"):
+                    chat_completion_tool["input_examples"] = tool.get("input_examples")
                 chat_completion_tools.append(
                     chat_completion_tool
                 )
