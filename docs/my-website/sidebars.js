@@ -669,6 +669,7 @@ const sidebars = {
         "providers/aleph_alpha",
         "providers/anyscale",
         "providers/baseten",
+        "providers/black_forest_labs_img_edit",
         "providers/bytez",
         "providers/cerebras",
         "providers/clarifai",
