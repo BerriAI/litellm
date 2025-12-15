@@ -3640,7 +3640,6 @@ class Router:
             prepared_kwargs["input"] = input  # Preserve original format
             return await self.async_function_with_fallbacks(**prepared_kwargs)
         except Exception as e:
-
             asyncio.create_task(
                 send_llm_exception_alert(
                     litellm_router_instance=self,
