@@ -86,6 +86,7 @@ class LiteLLMCompletionResponsesConfig:
             "metadata",
             "parallel_tool_calls",
             "previous_response_id",
+            "reasoning",
             "stream",
             "temperature",
             "text",
@@ -122,6 +123,17 @@ class LiteLLMCompletionResponsesConfig:
                 text_param
             )
 
+        # Extract reasoning_effort from reasoning parameter
+        reasoning_effort = None
+        reasoning_param = responses_api_request.get("reasoning")
+        if reasoning_param:
+            if isinstance(reasoning_param, dict):
+                # reasoning can be {"effort": "low|medium|high"}
+                reasoning_effort = reasoning_param.get("effort")
+            elif isinstance(reasoning_param, str):
+                # reasoning could be a string directly
+                reasoning_effort = reasoning_param
+
         litellm_completion_request: dict = {
             "messages": LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input,
@@ -140,6 +152,7 @@ class LiteLLMCompletionResponsesConfig:
             "service_tier": kwargs.get("service_tier"),
             "web_search_options": web_search_options,
             "response_format": response_format,
+            "reasoning_effort": reasoning_effort,
             # litellm specific params
             "custom_llm_provider": custom_llm_provider,
             "extra_headers": extra_headers,
@@ -161,7 +174,6 @@ class LiteLLMCompletionResponsesConfig:
         litellm_completion_request = {
             k: v for k, v in litellm_completion_request.items() if v is not None
         }
-
         return litellm_completion_request
 
     @staticmethod
