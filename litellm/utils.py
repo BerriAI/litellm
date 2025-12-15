@@ -7929,6 +7929,12 @@ class ProviderConfigManager:
             )
 
             return RecraftImageEditConfig()
+        elif LlmProviders.BLACK_FOREST_LABS == provider:
+            from litellm.llms.black_forest_labs.image_edit.transformation import (
+                BlackForestLabsImageEditConfig,
+            )
+
+            return BlackForestLabsImageEditConfig()
         elif LlmProviders.AZURE_AI == provider:
             from litellm.llms.azure_ai.image_edit import get_azure_ai_image_edit_config
 
