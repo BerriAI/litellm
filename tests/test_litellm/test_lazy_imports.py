@@ -18,14 +18,26 @@ from litellm._lazy_imports import (
 )
 
 
+def _clear_names_from_globals(names: tuple):
+    """Clear all names from litellm globals."""
+    for name in names:
+        if name in litellm.__dict__:
+            del litellm.__dict__[name]
+
+
+def _verify_only_requested_name_imported(name: str, all_names: tuple):
+    """Verify that only the requested name is in globals, not the others."""
+    for other_name in all_names:
+        if other_name != name:
+            assert other_name not in litellm.__dict__, f"{other_name} should not be imported when importing {name}"
+
+
 def test_cost_calculator_lazy_imports():
     """Test that all cost calculator functions can be lazy imported."""
     # Test each name individually - only that name should be imported
     for name in COST_CALCULATOR_NAMES:
         # Clear all names before importing just one
-        for n in COST_CALCULATOR_NAMES:
-            if n in litellm.__dict__:
-                del litellm.__dict__[n]
+        _clear_names_from_globals(COST_CALCULATOR_NAMES)
         
         func = _lazy_import_cost_calculator(name)
         assert func is not None
@@ -33,9 +45,7 @@ def test_cost_calculator_lazy_imports():
         assert name in litellm.__dict__
         
         # Verify only the requested name is in globals, not the others
-        for other_name in COST_CALCULATOR_NAMES:
-            if other_name != name:
-                assert other_name not in litellm.__dict__, f"{other_name} should not be imported when importing {name}"
+        _verify_only_requested_name_imported(name, COST_CALCULATOR_NAMES)
 
 
 def test_litellm_logging_lazy_imports():
@@ -43,18 +53,14 @@ def test_litellm_logging_lazy_imports():
     # Test each name individually - only that name should be imported
     for name in LITELLM_LOGGING_NAMES:
         # Clear all names before importing just one
-        for n in LITELLM_LOGGING_NAMES:
-            if n in litellm.__dict__:
-                del litellm.__dict__[n]
+        _clear_names_from_globals(LITELLM_LOGGING_NAMES)
         
         item = _lazy_import_litellm_logging(name)
         assert item is not None
         assert name in litellm.__dict__
         
         # Verify only the requested name is in globals, not the others
-        for other_name in LITELLM_LOGGING_NAMES:
-            if other_name != name:
-                assert other_name not in litellm.__dict__, f"{other_name} should not be imported when importing {name}"
+        _verify_only_requested_name_imported(name, LITELLM_LOGGING_NAMES)
 
 
 def test_utils_lazy_imports():
@@ -62,18 +68,14 @@ def test_utils_lazy_imports():
     # Test each name individually - only that name should be imported
     for name in UTILS_NAMES:
         # Clear all names before importing just one
-        for n in UTILS_NAMES:
-            if n in litellm.__dict__:
-                del litellm.__dict__[n]
+        _clear_names_from_globals(UTILS_NAMES)
         
         attr = _lazy_import_utils(name)
         assert attr is not None
         assert name in litellm.__dict__
         
         # Verify only the requested name is in globals, not the others
-        for other_name in UTILS_NAMES:
-            if other_name != name:
-                assert other_name not in litellm.__dict__, f"{other_name} should not be imported when importing {name}"
+        _verify_only_requested_name_imported(name, UTILS_NAMES)
 
 
 def test_unknown_attribute_raises_error():
