@@ -7914,6 +7914,12 @@ class ProviderConfigManager:
             )
 
             return get_vertex_ai_image_edit_config(model)
+        elif LlmProviders.STABILITY == provider:
+            from litellm.llms.stability.image_edit import (
+                get_stability_image_edit_config,
+            )
+
+            return get_stability_image_edit_config(model)
         return None
 
     @staticmethod

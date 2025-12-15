@@ -23828,6 +23828,90 @@
         "output_cost_per_image": 0.08,
         "supported_endpoints": ["/v1/images/generations"]
     },
+    "stability/inpaint": {
+        "litellm_provider": "stability",
+        "mode": "image_edit",
+        "output_cost_per_image": 0.005,
+        "supported_endpoints": ["/v1/images/edits"]
+    },
+    "stability/outpaint": {
+        "litellm_provider": "stability",
+        "mode": "image_edit",
+        "output_cost_per_image": 0.004,
+        "supported_endpoints": ["/v1/images/edits"]
+    },
+    "stability/erase": {
+        "litellm_provider": "stability",
+        "mode": "image_edit",
+        "output_cost_per_image": 0.005,
+        "supported_endpoints": ["/v1/images/edits"]
+    },
+    "stability/search-and-replace": {
+        "litellm_provider": "stability",
+        "mode": "image_edit",
+        "output_cost_per_image": 0.005,
+        "supported_endpoints": ["/v1/images/edits"]
+    },
+    "stability/search-and-recolor": {
+        "litellm_provider": "stability",
+        "mode": "image_edit",
+        "output_cost_per_image": 0.005,
+        "supported_endpoints": ["/v1/images/edits"]
+    },
+    "stability/remove-background": {
+        "litellm_provider": "stability",
+        "mode": "image_edit",
+        "output_cost_per_image": 0.005,
+        "supported_endpoints": ["/v1/images/edits"]
+    },
+    "stability/replace-background-and-relight": {
+        "litellm_provider": "stability",
+        "mode": "image_edit",
+        "output_cost_per_image": 0.008,
+        "supported_endpoints": ["/v1/images/edits"]
+    },
+    "stability/sketch": {
+        "litellm_provider": "stability",
+        "mode": "image_edit",
+        "output_cost_per_image": 0.005,
+        "supported_endpoints": ["/v1/images/edits"]
+    },
+    "stability/structure": {
+        "litellm_provider": "stability",
+        "mode": "image_edit",
+        "output_cost_per_image": 0.005,
+        "supported_endpoints": ["/v1/images/edits"]
+    },
+    "stability/style": {
+        "litellm_provider": "stability",
+        "mode": "image_edit",
+        "output_cost_per_image": 0.005,
+        "supported_endpoints": ["/v1/images/edits"]
+    },
+    "stability/style-transfer": {
+        "litellm_provider": "stability",
+        "mode": "image_edit",
+        "output_cost_per_image": 0.008,
+        "supported_endpoints": ["/v1/images/edits"]
+    },
+    "stability/fast": {
+        "litellm_provider": "stability",
+        "mode": "image_edit",
+        "output_cost_per_image": 0.002,
+        "supported_endpoints": ["/v1/images/edits"]
+    },
+    "stability/conservative": {
+        "litellm_provider": "stability",
+        "mode": "image_edit",
+        "output_cost_per_image": 0.04,
+        "supported_endpoints": ["/v1/images/edits"]
+    },
+    "stability/creative": {
+        "litellm_provider": "stability",
+        "mode": "image_edit",
+        "output_cost_per_image": 0.06,
+        "supported_endpoints": ["/v1/images/edits"]
+    },
     "stability/stable-image-core": {
         "litellm_provider": "stability",
         "mode": "image_generation",

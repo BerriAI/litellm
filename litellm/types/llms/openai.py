@@ -1025,6 +1025,19 @@ OpenAIImageGenerationOptionalParams = Literal[
     "user",
 ]
 
+OpenAIImageEditOptionalParams = Literal[
+    "background",
+    "n",
+    "mask"
+    "output_compression",
+    "output_format",
+    "quality",
+    "partial_images",
+    "response_format",
+    "size",
+    "style",
+    "user",
+]
 
 class ComputerToolParam(TypedDict, total=False):
     display_height: Required[float]

@@ -1,6 +1,6 @@
 from typing import Optional
 
-from litellm.llms.bedrock.image.image_handler import BedrockImageGeneration
+from litellm.llms.bedrock.image_generation.image_handler import BedrockImageGeneration
 from litellm.types.utils import ImageResponse
 
 
