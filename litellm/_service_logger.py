@@ -162,6 +162,16 @@ class ServiceLogging(CustomLogger):
                         event_metadata=event_metadata,
                     )
 
+        # log to stdout for GCP Cloud Logging
+        await self._log_to_regular_callbacks(
+            severity="INFO",
+            message=f"Service success: {service.value if hasattr(service, 'value') else str(service)} - {call_type}",
+            service=service,
+            call_type=call_type,
+            duration=duration,
+            event_metadata=event_metadata,
+        )
+
     async def init_prometheus_services_logger_if_none(self):
         """
         initializes prometheusServicesLogger if it is None or no attribute exists on ServiceLogging Object
@@ -202,6 +212,45 @@ class ServiceLogging(CustomLogger):
                     "ServiceLogger: open_telemetry_logger is None or not an instance of OpenTelemetry"
                 )
         return
+
+    async def _log_to_regular_callbacks(
+        self,
+        severity: str,
+        message: str,
+        service: ServiceTypes,
+        call_type: str,
+        duration: float,
+        event_metadata: Optional[dict] = None,
+        error: Optional[str] = None,
+    ):
+        """
+        Log service events to stdout in structured JSON format for GCP Cloud Logging
+        """
+        try:
+            import json
+            import sys
+
+            log_entry = {
+                "severity": severity,
+                "message": message,
+                "timestamp": datetime.now().isoformat(),
+                "logType": "service_log",
+                "component": "litellm_service",
+                "service": service.value if hasattr(service, 'value') else str(service),
+                "callType": call_type,
+                "durationSeconds": duration,
+            }
+
+            if event_metadata:
+                log_entry["eventMetadata"] = event_metadata
+
+            if error:
+                log_entry["error"] = error
+
+            # Write to stdout for GCP Cloud Logging ingestion
+            print(json.dumps(log_entry, default=str), file=sys.stdout, flush=True)
+        except Exception as e:
+            verbose_logger.debug(f"Error logging service event to stdout: {e}")
 
     async def async_service_failure_hook(
         self,
@@ -272,6 +321,17 @@ class ServiceLogging(CustomLogger):
                         end_time=end_time,
                         event_metadata=event_metadata,
                     )
+
+        # Also log to stdout for GCP Cloud Logging and other log aggregators
+        await self._log_to_regular_callbacks(
+            severity="ERROR",
+            message=f"Service failure: {service.value if hasattr(service, 'value') else str(service)} - {call_type} - {error_message}",
+            service=service,
+            call_type=call_type,
+            duration=duration,
+            event_metadata=event_metadata,
+            error=error_message,
+        )
 
     async def async_post_call_failure_hook(
         self,
