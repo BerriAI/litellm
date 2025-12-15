@@ -34,6 +34,14 @@ UTILS_NAMES = (
     "ModelResponseListIterator", "get_valid_models",
 )
 
+# Caching / cache classes that support lazy loading via _lazy_import_caching
+CACHING_NAMES = (
+    "Cache",
+    "DualCache",
+    "RedisCache",
+    "InMemoryCache",
+)
+
 # HTTP handler names that support lazy loading via _lazy_import_http_handlers
 HTTP_HANDLER_NAMES = (
     "module_level_aclient",
@@ -269,6 +277,37 @@ def _lazy_import_cost_calculator(name: str) -> Any:
         return _response_cost_calculator
     
     raise AttributeError(f"Cost calculator lazy import: unknown attribute {name!r}")
+
+
+def _lazy_import_caching(name: str) -> Any:
+    """Lazy import for caching module classes."""
+    _globals = _get_litellm_globals()
+
+    if name == "Cache":
+        from litellm.caching.caching import Cache as _Cache
+
+        _globals["Cache"] = _Cache
+        return _Cache
+
+    if name == "DualCache":
+        from litellm.caching.caching import DualCache as _DualCache
+
+        _globals["DualCache"] = _DualCache
+        return _DualCache
+
+    if name == "RedisCache":
+        from litellm.caching.caching import RedisCache as _RedisCache
+
+        _globals["RedisCache"] = _RedisCache
+        return _RedisCache
+
+    if name == "InMemoryCache":
+        from litellm.caching.caching import InMemoryCache as _InMemoryCache
+
+        _globals["InMemoryCache"] = _InMemoryCache
+        return _InMemoryCache
+
+    raise AttributeError(f"Caching lazy import: unknown attribute {name!r}")
 
 
 def _lazy_import_litellm_logging(name: str) -> Any:
