@@ -41,6 +41,13 @@ class BaseOCRTest(ABC):
                 pytest.skip(f"Rate limit exceeded - {error_msg}")
         except litellm.InternalServerError:
             pytest.skip("Model is overloaded")
+        except litellm.BadRequestError as e:
+            # Handle URL rejection errors from Vertex AI
+            error_msg = str(e)
+            if "URL_REJECTED" in error_msg or "Cannot fetch content from the provided URL" in error_msg:
+                pytest.skip(f"URL rejected by provider - {error_msg}")
+            else:
+                raise
 
     @pytest.mark.parametrize("sync_mode", [True, False])
     @pytest.mark.asyncio
