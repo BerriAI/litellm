@@ -705,8 +705,7 @@ class LiteLLMCompletionResponsesConfig:
                 parameters = dict(typed_tool.get("parameters", {}) or {})
                 if not parameters or "type" not in parameters:
                     parameters["type"] = "object"
-                chat_completion_tools.append(
-                    ChatCompletionToolParam(
+                chat_completion_tool = ChatCompletionToolParam(
                         type="function",
                         function=ChatCompletionToolParamFunctionChunk(
                             name=typed_tool.get("name") or "",
@@ -715,6 +714,10 @@ class LiteLLMCompletionResponsesConfig:
                             strict=typed_tool.get("strict", False) or False,
                         ),
                     )
+                if tool.get("cache_control"):
+                    chat_completion_tool["cache_control"] = tool.get("cache_control")
+                chat_completion_tools.append(
+                    chat_completion_tool
                 )
         return chat_completion_tools, web_search_options
 
