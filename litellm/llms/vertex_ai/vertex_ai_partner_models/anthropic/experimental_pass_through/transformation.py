@@ -26,9 +26,9 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
 
         Validate the environment for the request
         """
-            vertex_ai_project = VertexBase.get_vertex_ai_project(litellm_params)
-            vertex_credentials = VertexBase.get_vertex_ai_credentials(litellm_params)
-            vertex_ai_location = VertexBase.get_vertex_ai_location(litellm_params)
+        vertex_ai_project = VertexBase.get_vertex_ai_project(litellm_params)
+        vertex_credentials = VertexBase.get_vertex_ai_credentials(litellm_params)
+        vertex_ai_location = VertexBase.get_vertex_ai_location(litellm_params)
         
         if "Authorization" not in headers:
             access_token, project_id = self._ensure_access_token(
