@@ -398,7 +398,6 @@ class ProxyLogging:
         litellm.logging_callback_manager.add_litellm_callback(self.service_logging_obj)  # type: ignore
         for callback in litellm.callbacks:
             if isinstance(callback, str):
-
                 callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
                     cast(_custom_logger_compatible_callbacks_literal, callback),
                     internal_usage_cache=self.internal_usage_cache.dual_cache,
@@ -773,6 +772,7 @@ class ProxyLogging:
         data: dict,
         user_api_key_dict: Optional[UserAPIKeyAuth],
         call_type: CallTypesLiteral,
+        hook_type: str = "pre_call",
     ) -> Optional[dict]:
         """
         Process a guardrail callback during pre-call hook.
@@ -782,11 +782,19 @@ class ProxyLogging:
             data: The request data dictionary
             user_api_key_dict: User API key authentication details
             call_type: The type of API call being made
+            hook_type: Type of hook ("pre_call", "during_call", "post_call")
 
         Returns:
             Updated data dictionary if guardrail passes, None if guardrail should be skipped
         """
         from litellm.types.guardrails import GuardrailEventHooks
+        from litellm.integrations.prometheus import PrometheusLogger
+
+        # Get guardrail name
+        guardrail_name = (
+            getattr(callback, "guardrail_name", callback.__class__.__name__)
+            or "unknown"
+        )
 
         # Determine the event type based on call type
         event_type = GuardrailEventHooks.pre_call
@@ -797,30 +805,58 @@ class ProxyLogging:
         if callback.should_run_guardrail(data=data, event_type=event_type) is not True:
             return None
 
-        # Execute the appropriate guardrail hook
-        if "apply_guardrail" in type(callback).__dict__:
-            # Use unified guardrail for callbacks with apply_guardrail method
-            data["guardrail_to_apply"] = callback
-            response = await unified_guardrail.async_pre_call_hook(
-                user_api_key_dict=user_api_key_dict,  # type: ignore
-                cache=self.call_details["user_api_key_cache"],
-                data=data,  # type: ignore
-                call_type=call_type,  # type: ignore
-            )
-        else:
-            # Use the callback's own async_pre_call_hook method
-            response = await callback.async_pre_call_hook(
-                user_api_key_dict=user_api_key_dict,  # type: ignore
-                cache=self.call_details["user_api_key_cache"],
-                data=data,  # type: ignore
-                call_type=call_type,  # type: ignore
-            )
+        # Track timing and errors for prometheus metrics
+        guardrail_start_time = time.time()
+        status = "success"
+        error_type = None
 
-        # Process the response if one was returned
-        if response is not None:
-            data = await self.process_pre_call_hook_response(
-                response=response, data=data, call_type=call_type
-            )
+        try:
+            # Execute the appropriate guardrail hook
+            if "apply_guardrail" in type(callback).__dict__:
+                # Use unified guardrail for callbacks with apply_guardrail method
+                data["guardrail_to_apply"] = callback
+                response = await unified_guardrail.async_pre_call_hook(
+                    user_api_key_dict=user_api_key_dict,  # type: ignore
+                    cache=self.call_details["user_api_key_cache"],
+                    data=data,  # type: ignore
+                    call_type=call_type,  # type: ignore
+                )
+            else:
+                # Use the callback's own async_pre_call_hook method
+                response = await callback.async_pre_call_hook(
+                    user_api_key_dict=user_api_key_dict,  # type: ignore
+                    cache=self.call_details["user_api_key_cache"],
+                    data=data,  # type: ignore
+                    call_type=call_type,  # type: ignore
+                )
+
+            # Process the response if one was returned
+            if response is not None:
+                data = await self.process_pre_call_hook_response(
+                    response=response, data=data, call_type=call_type
+                )
+
+        except Exception as e:
+            status = "error"
+            error_type = type(e).__name__
+            # Re-raise the exception to maintain existing behavior
+            raise
+        finally:
+            # Record prometheus metrics
+            guardrail_end_time = time.time()
+            latency_seconds = guardrail_end_time - guardrail_start_time
+
+            # Find PrometheusLogger in callbacks and record metrics
+            for prom_callback in litellm.callbacks:
+                if isinstance(prom_callback, PrometheusLogger):
+                    prom_callback._record_guardrail_metrics(
+                        guardrail_name=guardrail_name,
+                        latency_seconds=latency_seconds,
+                        status=status,
+                        error_type=error_type,
+                        hook_type=hook_type,
+                    )
+                    break
 
         return data
 
@@ -861,7 +897,6 @@ class ProxyLogging:
             data.pop("prompt_id", None)
 
         if custom_logger and prompt_spec is not None:
-
             (
                 model,
                 messages,
@@ -1008,6 +1043,7 @@ class ProxyLogging:
                         data=data,  # type: ignore
                         user_api_key_dict=user_api_key_dict,
                         call_type=call_type,
+                        hook_type="pre_call",
                     )
                     if result is None:
                         continue
@@ -1055,7 +1091,7 @@ class ProxyLogging:
         except Exception as e:
             raise e
 
-    async def during_call_hook(
+    async def during_call_hook(  # noqa: PLR0915
         self,
         data: dict,
         user_api_key_dict: Optional[UserAPIKeyAuth],
@@ -1064,8 +1100,56 @@ class ProxyLogging:
         """
         Runs the CustomGuardrail's async_moderation_hook() in parallel
         """
+        from litellm.integrations.prometheus import PrometheusLogger
+
         # Step 1: Collect all guardrail tasks to run in parallel
         guardrail_tasks = []
+        guardrail_callbacks = []
+
+        async def _wrap_guardrail_with_metrics(
+            callback: CustomGuardrail,
+            guardrail_task: Any,
+        ) -> tuple[Any, float, str, Optional[str]]:
+            """
+            Wrap guardrail task with timing and error tracking.
+            Returns: (result, latency_seconds, status, error_type)
+            """
+            guardrail_name = (
+                getattr(callback, "guardrail_name", callback.__class__.__name__)
+                or "unknown"
+            )
+            start_time = time.time()
+            status = "success"
+            error_type = None
+            result = None
+
+            try:
+                result = await guardrail_task
+            except Exception as e:
+                status = "error"
+                error_type = type(e).__name__
+                raise
+            finally:
+                end_time = time.time()
+                latency_seconds = end_time - start_time
+
+                # Record prometheus metrics
+                prometheus_logger = None
+                for prom_callback in litellm.callbacks:
+                    if isinstance(prom_callback, PrometheusLogger):
+                        prometheus_logger = prom_callback
+                        break
+
+                if prometheus_logger:
+                    prometheus_logger._record_guardrail_metrics(
+                        guardrail_name=guardrail_name,
+                        latency_seconds=latency_seconds,
+                        status=status,
+                        error_type=error_type,
+                        hook_type="during_call",
+                    )
+
+            return result, latency_seconds, status, error_type
 
         for callback in litellm.callbacks:
             if isinstance(callback, CustomGuardrail):
@@ -1099,7 +1183,11 @@ class ProxyLogging:
                     )
                 else:
                     user_api_key_auth_dict = user_api_key_dict
-                # Add task to list for parallel execution
+
+                # Store callback for reference
+                guardrail_callbacks.append(callback)
+
+                # Create guardrail task
                 if (
                     "apply_guardrail" in type(callback).__dict__
                     and user_api_key_dict is not None
@@ -1111,13 +1199,15 @@ class ProxyLogging:
                         call_type=call_type,
                     )
                 else:
-
                     guardrail_task = callback.async_moderation_hook(
                         data=data,
                         user_api_key_dict=user_api_key_auth_dict,  # type: ignore
                         call_type=call_type,  # type: ignore
                     )
-                guardrail_tasks.append(guardrail_task)
+
+                # Wrap task with metrics tracking
+                wrapped_task = _wrap_guardrail_with_metrics(callback, guardrail_task)
+                guardrail_tasks.append(wrapped_task)
 
         # Step 2: Run all guardrail tasks in parallel
         if guardrail_tasks:
@@ -1643,7 +1733,6 @@ class ProxyLogging:
         current_response = response
 
         for callback in litellm.callbacks:
-
             _callback: Optional[CustomLogger] = None
             if isinstance(callback, str):
                 _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
@@ -3362,11 +3451,13 @@ class ProxyUpdateSpend:
         )
         # Atomically read and remove logs to process (protected by lock)
         async with prisma_client._spend_log_transactions_lock:
-            logs_to_process = prisma_client.spend_log_transactions[:MAX_LOGS_PER_INTERVAL]
+            logs_to_process = prisma_client.spend_log_transactions[
+                :MAX_LOGS_PER_INTERVAL
+            ]
             # Remove the logs we're about to process
-            prisma_client.spend_log_transactions = (
-                prisma_client.spend_log_transactions[len(logs_to_process):]
-            )
+            prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[
+                len(logs_to_process) :
+            ]
         start_time = time.time()
         try:
             for i in range(n_retry_times + 1):
@@ -3469,9 +3560,7 @@ async def update_spend(  # noqa: PLR0915
     # Check queue size with lock protection
     async with prisma_client._spend_log_transactions_lock:
         queue_size = len(prisma_client.spend_log_transactions)
-    verbose_proxy_logger.debug(
-        "Spend Logs transactions: {}".format(queue_size)
-    )
+    verbose_proxy_logger.debug("Spend Logs transactions: {}".format(queue_size))
 
     # Process spend log transactions when called directly.
     # This keeps backwards compatibility with the old behavior.
@@ -3493,19 +3582,19 @@ async def update_spend_logs_job(
 ):
     """
     Job to process spend_log_transactions queue.
-    
+
     This job is triggered based on queue size rather than time.
     Processes spend log transactions when the queue reaches a threshold.
     """
     n_retry_times = 3
-    
+
     # Check queue size with lock protection
     async with prisma_client._spend_log_transactions_lock:
         queue_size = len(prisma_client.spend_log_transactions)
-    
+
     if queue_size == 0:
         return
-    
+
     await ProxyUpdateSpend.update_spend_logs(
         n_retry_times=n_retry_times,
         prisma_client=prisma_client,
@@ -3522,30 +3611,33 @@ async def _monitor_spend_logs_queue(
     """
     Background task that monitors the spend_log_transactions queue size
     and triggers processing when the threshold is reached.
-    
+
     Args:
         prisma_client: Prisma client instance
         db_writer_client: Optional HTTP handler for external spend logs endpoint
         proxy_logging_obj: Proxy logging object
     """
-    from litellm.constants import SPEND_LOG_QUEUE_SIZE_THRESHOLD, SPEND_LOG_QUEUE_POLL_INTERVAL
-    
+    from litellm.constants import (
+        SPEND_LOG_QUEUE_SIZE_THRESHOLD,
+        SPEND_LOG_QUEUE_POLL_INTERVAL,
+    )
+
     threshold = SPEND_LOG_QUEUE_SIZE_THRESHOLD
     base_interval = SPEND_LOG_QUEUE_POLL_INTERVAL
     max_backoff = 30.0  # Maximum backoff interval in seconds
     backoff_multiplier = 1.5  # Exponential backoff multiplier
     current_interval = base_interval
-    
+
     verbose_proxy_logger.info(
         f"Starting spend logs queue monitor (threshold: {threshold}, poll_interval: {base_interval}s)"
     )
-    
+
     while True:
         try:
             # Check queue size with lock protection
             async with prisma_client._spend_log_transactions_lock:
                 queue_size = len(prisma_client.spend_log_transactions)
-            
+
             if queue_size > 0:
                 if queue_size >= threshold:
                     verbose_proxy_logger.debug(
@@ -3558,8 +3650,10 @@ async def _monitor_spend_logs_queue(
                         f"Spend logs queue size ({queue_size}) below threshold ({threshold}), processing with backoff"
                     )
                     # Exponential backoff when below threshold but still processing
-                    current_interval = min(current_interval * backoff_multiplier, max_backoff)
-                
+                    current_interval = min(
+                        current_interval * backoff_multiplier, max_backoff
+                    )
+
                 await update_spend_logs_job(
                     prisma_client=prisma_client,
                     db_writer_client=db_writer_client,
@@ -3567,8 +3661,10 @@ async def _monitor_spend_logs_queue(
                 )
             else:
                 # Exponential backoff when no logs to process
-                current_interval = min(current_interval * backoff_multiplier, max_backoff)
-            
+                current_interval = min(
+                    current_interval * backoff_multiplier, max_backoff
+                )
+
             await asyncio.sleep(current_interval)
         except Exception as e:
             verbose_proxy_logger.error(
@@ -3577,7 +3673,6 @@ async def _monitor_spend_logs_queue(
             # Continue monitoring even if there's an error, with exponential backoff
             current_interval = min(current_interval * backoff_multiplier, max_backoff)
             await asyncio.sleep(current_interval)
-
 
 
 def _raise_failed_update_spend_exception(

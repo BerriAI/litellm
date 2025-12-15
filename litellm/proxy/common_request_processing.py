@@ -235,7 +235,11 @@ class ProxyBaseLLMRequestProcessing:
         if response_cost is not None:
             try:
                 # Convert response_cost to float if it's a string
-                cost_value = float(response_cost) if isinstance(response_cost, str) else response_cost
+                cost_value = (
+                    float(response_cost)
+                    if isinstance(response_cost, str)
+                    else response_cost
+                )
                 if cost_value > 0:
                     updated_spend = current_spend + cost_value
             except (ValueError, TypeError):
@@ -363,6 +367,17 @@ class ProxyBaseLLMRequestProcessing:
     ) -> Tuple[dict, LiteLLMLoggingObj]:
         start_time = datetime.now()  # start before calling guardrail hooks
 
+        # Calculate request queue time if arrival_time is available
+        import time
+
+        proxy_server_request = self.data.get("proxy_server_request", {})
+        arrival_time = proxy_server_request.get("arrival_time")
+        queue_time_seconds = None
+        if arrival_time is not None:
+            # Convert start_time (datetime) to timestamp for calculation
+            processing_start_time = time.time()
+            queue_time_seconds = processing_start_time - arrival_time
+
         self.data = await add_litellm_data_to_request(
             data=self.data,
             request=request,
@@ -371,6 +386,19 @@ class ProxyBaseLLMRequestProcessing:
             version=version,
             proxy_config=proxy_config,
         )
+
+        # Store queue time in metadata after add_litellm_data_to_request to ensure it's preserved
+        if queue_time_seconds is not None:
+            from litellm.proxy.litellm_pre_call_utils import _get_metadata_variable_name
+
+            _metadata_variable_name = _get_metadata_variable_name(request)
+            if _metadata_variable_name not in self.data:
+                self.data[_metadata_variable_name] = {}
+            if not isinstance(self.data[_metadata_variable_name], dict):
+                self.data[_metadata_variable_name] = {}
+            self.data[_metadata_variable_name][
+                "queue_time_seconds"
+            ] = queue_time_seconds
 
         self.data["model"] = (
             general_settings.get("completion_model", None)  # server default
@@ -1127,9 +1155,9 @@ class ProxyBaseLLMRequestProcessing:
 
             # Add cache-related fields to **params (handled by Usage.__init__)
             if cache_creation_input_tokens is not None:
-                usage_kwargs["cache_creation_input_tokens"] = (
-                    cache_creation_input_tokens
-                )
+                usage_kwargs[
+                    "cache_creation_input_tokens"
+                ] = cache_creation_input_tokens
             if cache_read_input_tokens is not None:
                 usage_kwargs["cache_read_input_tokens"] = cache_read_input_tokens
 
