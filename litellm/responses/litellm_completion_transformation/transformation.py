@@ -697,6 +697,8 @@ class LiteLLMCompletionResponsesConfig:
                 chat_completion_tools.append(tool)
             elif tool.get("type") == "computer_use":
                 chat_completion_tools.append(tool)
+            elif tool.get("name") == "tool_search_tool_regex" or tool.get("name") == "tool_search_tool_bm25" or tool.get("type") == "code_execution_20250825":
+                chat_completion_tools.append(tool)
             else:
                 typed_tool = cast(FunctionToolParam, tool)
                 # Ensure parameters has "type": "object" as required by providers like Anthropic
