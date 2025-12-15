@@ -557,7 +557,9 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 ## OpenAI Chat Completion to Responses API Bridge
 
-Use OpenAI's [Responses API](https://platform.openai.com/docs/api-reference/responses) features (like `web_search_preview`, `code_interpreter`, and other built-in tools) through LiteLLM's `/chat/completions` endpoint.
+LiteLLM offers a chat completion to Responses API bridge. This lets you use the completion interface while calling the Responses API under the hood.
+
+This is useful when you want to use [Responses API](https://platform.openai.com/docs/api-reference/responses) specific features (like built-in tools, web search preview, or code interpreter).
 
 ### When to use the `openai/responses/` prefix
 
