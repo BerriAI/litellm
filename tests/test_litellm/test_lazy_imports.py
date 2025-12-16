@@ -31,6 +31,8 @@ from litellm._lazy_imports import (
     _lazy_import_dotprompt,
     LLM_CONFIG_NAMES,
     _lazy_import_llm_configs,
+    TYPES_NAMES,
+    _lazy_import_types,
 )
 
 
@@ -213,6 +215,9 @@ def test_unknown_attribute_raises_error():
     with pytest.raises(AttributeError):
         _lazy_import_llm_configs("unknown")
 
+    with pytest.raises(AttributeError):
+        _lazy_import_types("unknown")
+
 
 def test_llm_config_lazy_imports():
     """Test that LLM config classes can be lazy imported."""
@@ -226,4 +231,18 @@ def test_llm_config_lazy_imports():
         assert isinstance(obj, type), f"{name} should be a class"
 
         _verify_only_requested_name_imported(name, LLM_CONFIG_NAMES)
+
+
+def test_types_lazy_imports():
+    """Test that type classes can be lazy imported."""
+    for name in TYPES_NAMES:
+        _clear_names_from_globals(TYPES_NAMES)
+
+        obj = _lazy_import_types(name)
+        assert obj is not None
+        assert name in litellm.__dict__
+        # Type classes should be classes/types
+        assert isinstance(obj, type), f"{name} should be a class"
+
+        _verify_only_requested_name_imported(name, TYPES_NAMES)
 
