@@ -14,12 +14,14 @@ from litellm._lazy_imports import (
     UTILS_NAMES,
     TOKEN_COUNTER_NAMES,
     CACHING_NAMES,
+    BEDROCK_TYPES_NAMES,
     LLM_CLIENT_CACHE_NAMES,
     HTTP_HANDLER_NAMES,
     _lazy_import_cost_calculator,
     _lazy_import_litellm_logging,
     _lazy_import_utils,
     _lazy_import_token_counter,
+    _lazy_import_bedrock_types,
     _lazy_import_caching,
     _lazy_import_llm_client_cache,
     _lazy_import_http_handlers,
@@ -111,6 +113,18 @@ def test_token_counter_lazy_imports():
         assert name in litellm.__dict__
 
         _verify_only_requested_name_imported(name, TOKEN_COUNTER_NAMES)
+
+
+def test_bedrock_types_lazy_imports():
+    """Test that Bedrock type aliases can be lazy imported."""
+    for name in BEDROCK_TYPES_NAMES:
+        _clear_names_from_globals(BEDROCK_TYPES_NAMES)
+
+        alias = _lazy_import_bedrock_types(name)
+        assert alias is not None
+        assert name in litellm.__dict__
+
+        _verify_only_requested_name_imported(name, BEDROCK_TYPES_NAMES)
 
 
 def test_llm_client_cache_lazy_imports():
