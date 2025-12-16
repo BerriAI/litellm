@@ -157,6 +157,7 @@ DOTPROMPT_NAMES = (
 # LLM config classes that support lazy loading via _lazy_import_llm_configs
 LLM_CONFIG_NAMES = (
     "AmazonConverseConfig",
+    "OpenAILikeChatConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -650,5 +651,13 @@ def _lazy_import_llm_configs(name: str) -> Any:
 
         _globals["AmazonConverseConfig"] = _AmazonConverseConfig
         return _AmazonConverseConfig
+
+    if name == "OpenAILikeChatConfig":
+        from .llms.openai_like.chat.handler import (
+            OpenAILikeChatConfig as _OpenAILikeChatConfig,
+        )
+
+        _globals["OpenAILikeChatConfig"] = _OpenAILikeChatConfig
+        return _OpenAILikeChatConfig
 
     raise AttributeError(f"LLM config lazy import: unknown attribute {name!r}")
