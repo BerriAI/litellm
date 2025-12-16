@@ -30628,7 +30628,7 @@
         "litellm_provider": "fireworks_ai",
         "mode": "embedding"
     },
-    "fireworks_ai/accounts/fireworks/models/qwen3-embedding-8b": {
+    "fireworks_ai/accounts/fireworks/models/": {
         "max_tokens": 40960,
         "max_input_tokens": 40960,
         "max_output_tokens": 40960,
