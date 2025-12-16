@@ -21,7 +21,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.vertex_ai.agent_engine.sse_iterator import (
-    VertexAgentEngineSSEStreamIterator,
+    VertexAgentEngineResponseIterator,
 )
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.llms.openai import AllMessageValues
@@ -350,9 +350,12 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         self,
         model: str,
         raw_response: httpx.Response,
-    ) -> "VertexAgentEngineSSEStreamIterator":
+    ) -> VertexAgentEngineResponseIterator:
         """Return a streaming iterator for SSE responses."""
-        return VertexAgentEngineSSEStreamIterator(response=raw_response, model=model)
+        return VertexAgentEngineResponseIterator(
+            streaming_response=raw_response.iter_lines(),
+            sync_stream=True,
+        )
 
     def get_sync_custom_stream_wrapper(
         self,
@@ -454,8 +457,11 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
                 status_code=response.status_code, message=str(await response.aread())
             )
 
-        # Create iterator for SSE stream
-        completion_stream = self.get_streaming_response(model=model, raw_response=response)
+        # Create iterator for SSE stream (async)
+        completion_stream = VertexAgentEngineResponseIterator(
+            streaming_response=response.aiter_lines(),
+            sync_stream=False,
+        )
 
         streaming_response = CustomStreamWrapper(
             completion_stream=completion_stream,
