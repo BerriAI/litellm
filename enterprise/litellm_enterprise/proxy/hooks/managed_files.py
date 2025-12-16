@@ -191,8 +191,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
 
         if db_object:
-            print(f"🔥 [get_unified_file_id] db_object: {db_object}")
-            print(f"🔥 [get_unified_file_id] db_object.model_dump(): {db_object.model_dump()}")
             return LiteLLM_ManagedFileTable(**db_object.model_dump())
         return None
 
