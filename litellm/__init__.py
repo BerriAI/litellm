@@ -1351,6 +1351,8 @@ from .llms.cometapi.embed.transformation import CometAPIEmbeddingConfig
 from .llms.lemonade.chat.transformation import LemonadeChatConfig
 from .llms.snowflake.embedding.transformation import SnowflakeEmbeddingConfig
 from .llms.amazon_nova.chat.transformation import AmazonNovaChatConfig
+
+## Lazy loading this is not straightforward, will leave it here for now.
 from .main import *  # type: ignore
 
 # Skills API
