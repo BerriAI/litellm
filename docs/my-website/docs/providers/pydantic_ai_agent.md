@@ -18,7 +18,7 @@ All Pydantic AI agents need to be exposed as A2A agents using the `to_a2a()` met
 
 ### 1. Setup Pydantic AI Agent Server
 
-Create a [Pydantic AI](https://ai.pydantic.dev/agents/) agent and expose it as an A2A server using the native `to_a2a()` method.
+LiteLLM requires Pydantic AI agents to follow the [A2A (Agent-to-Agent) protocol](https://github.com/google/A2A). Pydantic AI has native A2A support via the `to_a2a()` method, which exposes your agent as an A2A-compliant server.
 
 #### Install Dependencies
 
