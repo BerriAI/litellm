@@ -8393,3 +8393,17 @@ def should_run_mock_completion(
     if mock_response or mock_tool_calls or mock_timeout:
         return True
     return False
+
+
+# Re-export encoding from main.py for backward compatibility
+# This allows tests to import: from litellm.utils import encoding
+# We use a lazy import to avoid loading main.py at utils.py import time
+def __getattr__(name: str) -> Any:
+    """Lazy import handler for utils module"""
+    if name == "encoding":
+        from litellm.main import encoding as _encoding
+        # Cache it in the module's __dict__ for subsequent accesses
+        import sys
+        sys.modules[__name__].__dict__["encoding"] = _encoding
+        return _encoding
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
