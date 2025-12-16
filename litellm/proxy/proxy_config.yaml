@@ -1,20 +1,9 @@
 model_list:
-  - model_name: openai/gpt-4o-mini
+  - model_name: gemini/*
     litellm_params:
-      model: openai/gpt-4o-mini
-      tpm: 1000
+      model: gemini/*
 
-  # LangGraph models
-  - model_name: langgraph/*
-    litellm_params:
-      model: langgraph/*
+
 
 litellm_settings:
-  callbacks: ["dynamic_rate_limiter_v3"]
-  priority_reservation:
-    "prod": 0.9 # 90% reserved for production
-    "dev": 0.1 # 10% reserved for development
-
-
-
-
+  callbacks: ["langfuse"]
