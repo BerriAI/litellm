@@ -65,7 +65,7 @@ for chunk in response:
     print(chunk)
 ```
 
-## **LiteLLM Proxy Usage**
+## **LiteLLM AI Gateway (Proxy) Usage**
 
 ### Setup
 
