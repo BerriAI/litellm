@@ -36,6 +36,11 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypes, CallTypesLiteral
 
 try:
+    from litellm_enterprise.enterprise_callbacks.send_emails.base_email import BaseEmailLogger
+except ImportError:
+    BaseEmailLogger = None  # type: ignore
+
+try:
     import backoff
 except ImportError:
     raise ImportError(
@@ -266,6 +271,11 @@ class ProxyLogging:
             alerting=self.alerting,
             internal_usage_cache=self.internal_usage_cache.dual_cache,
         )
+        self.email_logging_instance: Optional[Any] = None
+        if BaseEmailLogger is not None:
+            self.email_logging_instance = BaseEmailLogger(
+                internal_usage_cache=self.internal_usage_cache.dual_cache,
+            )
         self.premium_user = premium_user
         self.service_logging_obj = ServiceLogging()
         self.db_spend_update_writer = DBSpendUpdateWriter()
@@ -1156,13 +1166,24 @@ class ProxyLogging:
         ],
         user_info: CallInfo,
     ):
+        print("BUDGET ALERTS", type, user_info)
+        print("ALERTING", self.alerting)
         if self.alerting is None:
             # do nothing if alerting is not switched on
             return
-        await self.slack_alerting_instance.budget_alerts(
-            type=type,
-            user_info=user_info,
-        )
+        
+        if "slack" in self.alerting:
+            await self.slack_alerting_instance.budget_alerts(
+                type=type,
+                user_info=user_info,
+            )
+
+        if "email" in self.alerting and self.email_logging_instance is not None:
+            print("BUDGET ALERTS EMAIL", type, user_info)
+            await self.email_logging_instance.budget_alerts(
+                type=type,
+                user_info=user_info,
+            )
 
     async def alerting_handler(
         self,

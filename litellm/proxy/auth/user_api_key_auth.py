@@ -1066,6 +1066,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             await _virtual_key_soft_budget_check(
                 valid_token=valid_token,
                 proxy_logging_obj=proxy_logging_obj,
+                user_obj=user_obj,
             )
 
             # Check 5. Token Model Spend is under Model budget
