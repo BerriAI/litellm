@@ -20,10 +20,11 @@ import TabItem from '@theme/TabItem';
 
 ## Available Models
 
-AI Badgr offers three tiers of models optimized for different use cases and budgets:
+AI Badgr offers four tiers of models optimized for different use cases and budgets:
 
 | Model | Description | Use Case |
 |-------|-------------|----------|
+| `aibadgr/budget` | Most cost-effective tier | High-volume, simple tasks |
 | `aibadgr/basic` | Entry-level model for simple tasks | Basic text generation, simple Q&A |
 | `aibadgr/normal` | Balanced performance and cost | General-purpose applications |
 | `aibadgr/premium` | Best performance tier | Complex reasoning, production workloads |
@@ -406,6 +407,7 @@ response = litellm.completion(
 
 ### Choose the Right Tier
 
+- **budget**: Most cost-effective option for high-volume, simple tasks
 - **basic**: Use for simple, high-volume tasks where speed and cost matter more than sophistication
 - **normal**: Good balance for most applications
 - **premium**: Best for complex reasoning, production-critical workloads, or when quality is paramount
@@ -414,7 +416,7 @@ response = litellm.completion(
 
 AI Badgr is designed for budget-conscious applications:
 
-- Start with `basic` tier and upgrade only if needed
+- Start with `budget` or `basic` tier and upgrade only if needed
 - Use `normal` tier for most production workloads
 - Reserve `premium` tier for complex reasoning tasks
 
