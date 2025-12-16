@@ -173,8 +173,11 @@ def test_dotprompt_lazy_imports():
         _clear_names_from_globals(DOTPROMPT_NAMES)
 
         obj = _lazy_import_dotprompt(name)
-        assert obj is not None
         assert name in litellm.__dict__
+
+        # Only the setter must be callable; others may be None by default
+        if name == "set_global_prompt_directory":
+            assert callable(obj), f"{name} should be callable"
 
         _verify_only_requested_name_imported(name, DOTPROMPT_NAMES)
 
