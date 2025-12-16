@@ -1,4 +1,6 @@
 ### Hide pydantic namespace conflict warnings globally ###
+from __future__ import annotations
+
 import warnings
 
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
@@ -72,7 +74,6 @@ from litellm.constants import (
     DEFAULT_SOFT_BUDGET,
     DEFAULT_ALLOWED_FAILS,
 )
-from litellm.types.guardrails import GuardrailItem
 from litellm.types.secret_managers.main import (
     KeyManagementSystem,
     KeyManagementSettings,
@@ -1506,6 +1507,7 @@ if TYPE_CHECKING:
         PriorityReservationDict,
         StandardKeyGenerationConfig,
     )
+    from litellm.types.guardrails import GuardrailItem
 
     # Cost calculator functions
     cost_per_token: Callable[..., Tuple[float, float]]
@@ -1568,6 +1570,7 @@ def __getattr__(name: str) -> Any:
         HTTP_HANDLER_NAMES,
         DOTPROMPT_NAMES,
         LLM_CONFIG_NAMES,
+        TYPES_NAMES,
     )
     
     # Lazy load cost_calculator functions
@@ -1627,6 +1630,12 @@ def __getattr__(name: str) -> Any:
         from ._lazy_imports import _lazy_import_llm_configs
 
         return _lazy_import_llm_configs(name)
+
+    # Lazy load types
+    if name in TYPES_NAMES:
+        from ._lazy_imports import _lazy_import_types
+
+        return _lazy_import_types(name)
 
     # Lazy load encoding from main.py to avoid heavy tiktoken import
     if name == "encoding":
