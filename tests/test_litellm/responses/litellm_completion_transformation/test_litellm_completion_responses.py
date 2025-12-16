@@ -664,15 +664,126 @@ class TestFunctionCallTransformation:
             "arguments": '{"location": "test"}',
             "id": "fallback_id"  # Only has 'id', not 'call_id'
         }
-        
+
         result = LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
             function_call=function_call_item
         )
-        
+
         assert len(result) == 1
         message = result[0]
         tool_calls = message.get("tool_calls", [])
         assert len(tool_calls) == 1
-        
+
         tool_call = tool_calls[0]
         assert tool_call.get("id") == "fallback_id"
+
+    def test_tool_choice_defaults_to_auto_when_tools_present(self):
+        """
+        Test that tool_choice is automatically set to 'auto' when tools are provided
+        but tool_choice is not explicitly set in the Responses API request.
+
+        This is critical for providers like Snowflake that require tool_choice to
+        enable tool calling functionality.
+        """
+        test_input = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": "What's the weather?"
+            }
+        ]
+
+        tools = [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get weather info",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string"}
+                    }
+                }
+            }
+        ]
+
+        # Request with tools but NO tool_choice
+        responses_api_request = {
+            "tools": tools
+            # Note: tool_choice is NOT provided
+        }
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="snowflake/claude-sonnet-4-5",
+            input=test_input,
+            responses_api_request=responses_api_request,
+            extra_headers={}
+        )
+
+        # tool_choice should be automatically set to "auto"
+        assert "tool_choice" in result
+        assert result["tool_choice"] == "auto"
+        assert "tools" in result
+        assert len(result["tools"]) == 1
+
+    def test_tool_choice_not_added_when_no_tools(self):
+        """
+        Test that tool_choice is NOT added when tools are not provided.
+        """
+        test_input = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": "Hello"
+            }
+        ]
+
+        # Request without tools
+        responses_api_request = {}
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="snowflake/claude-sonnet-4-5",
+            input=test_input,
+            responses_api_request=responses_api_request,
+            extra_headers={}
+        )
+
+        # tool_choice should NOT be added when no tools
+        assert "tool_choice" not in result or result["tool_choice"] is None
+
+    def test_explicit_tool_choice_preserved(self):
+        """
+        Test that explicitly provided tool_choice values are preserved
+        and not overwritten by the auto-default.
+        """
+        test_input = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": "What's the weather?"
+            }
+        ]
+
+        tools = [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "parameters": {"type": "object", "properties": {}}
+            }
+        ]
+
+        # Request with explicit tool_choice
+        responses_api_request = {
+            "tools": tools,
+            "tool_choice": "required"
+        }
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="snowflake/claude-sonnet-4-5",
+            input=test_input,
+            responses_api_request=responses_api_request,
+            extra_headers={}
+        )
+
+        # Explicit tool_choice should be preserved
+        assert result["tool_choice"] == "required"
