@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, get_ty
 import httpx
 
 import litellm
-from litellm.utils import supports_response_schema, supports_system_messages
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
@@ -14,6 +13,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import PartType, Schema
 from litellm.types.utils import TokenCountResponse
+from litellm.utils import supports_response_schema, supports_system_messages
 
 
 class VertexAIError(BaseLLMException):
@@ -36,6 +36,7 @@ class VertexAIModelRoute(str, Enum):
     MODEL_GARDEN = "model_garden"
     NON_GEMINI = "non_gemini"
     OPENAI_COMPATIBLE = "openai"
+    AGENT_ENGINE = "agent_engine"
 
 VERTEX_AI_MODEL_ROUTES = [f"{route.value}/" for route in VertexAIModelRoute]
 
@@ -76,6 +77,10 @@ def get_vertex_ai_model_route(
     if litellm_params and litellm_params.get("base_model") is not None:
         if "gemini" in litellm_params["base_model"]:
             return VertexAIModelRoute.GEMINI
+
+    # Check for agent_engine models (Reasoning Engines)
+    if "agent_engine/" in model:
+        return VertexAIModelRoute.AGENT_ENGINE
     
     # Check if numeric endpoint ID with custom api_base (PSC endpoint)
     # Route to GEMINI (HTTP path) to support PSC endpoints properly

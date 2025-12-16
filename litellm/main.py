@@ -3242,6 +3242,37 @@ def completion(  # type: ignore # noqa: PLR0915
                     timeout=timeout,
                     client=client,
                 )
+            elif model_route == VertexAIModelRoute.AGENT_ENGINE:
+                # Vertex AI Agent Engine (Reasoning Engines)
+                from litellm.llms.vertex_ai.agent_engine.transformation import (
+                    VertexAgentEngineConfig,
+                )
+
+                vertex_agent_engine_config = VertexAgentEngineConfig()
+
+                # Update litellm_params with vertex credentials
+                litellm_params["vertex_project"] = vertex_ai_project
+                litellm_params["vertex_location"] = vertex_ai_location
+                litellm_params["vertex_credentials"] = vertex_credentials
+
+                model_response = base_llm_http_handler.completion(
+                    model=model,
+                    stream=stream,
+                    messages=messages,
+                    model_response=model_response,
+                    optional_params=new_params,
+                    litellm_params=litellm_params,  # type: ignore
+                    encoding=encoding,
+                    api_key=None,
+                    api_base=api_base,
+                    logging_obj=logging,
+                    acompletion=acompletion,
+                    timeout=timeout,
+                    client=client,
+                    custom_llm_provider="vertex_ai",
+                    provider_config=vertex_agent_engine_config,
+                    headers=headers or {},
+                )
             else:  # VertexAIModelRoute.NON_GEMINI
                 model_response = vertex_ai_non_gemini.completion(
                     model=model,
@@ -4476,6 +4507,12 @@ def embedding(  # noqa: PLR0915
 
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
+            
+            if encoding_format is not None:
+                optional_params["encoding_format"] = encoding_format
+            else:
+                # Omiting causes openai sdk to add default value of "float"
+                optional_params["encoding_format"] = None
 
             api_version = None
 

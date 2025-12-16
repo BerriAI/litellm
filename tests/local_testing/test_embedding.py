@@ -1308,3 +1308,110 @@ def test_jina_ai_img_embeddings(input_data, expected_payload_input):
         #    Assert that the 'input' field in the payload matches our expectation.
         assert "input" in sent_data
         assert sent_data["input"] == expected_payload_input
+
+
+def test_encoding_format_none_not_omitted_from_openai_sdk():
+    """
+    Test that encoding_format=None is explicitly sent to OpenAI SDK.
+    
+    This test verifies that when encoding_format is not provided by the user,
+    liteLLM explicitly sets it to None rather than omitting it. This prevents
+    the OpenAI SDK from adding its default value of 'base64'.
+    
+    Without this fix:
+    - OpenAI SDK adds encoding_format='base64' as default when parameter is missing
+    - This causes issues with providers that don't support encoding_format (like Gemini)
+    
+    With this fix:
+    - encoding_format=None is explicitly passed
+    - OpenAI SDK respects the explicit None and doesn't add defaults
+    """
+    with patch("litellm.llms.openai.openai.OpenAIChatCompletion._get_openai_client") as mock_get_client:
+        # Create a mock client instance
+        mock_client_instance = MagicMock()
+        mock_get_client.return_value = mock_client_instance
+        
+        # Mock the embeddings.with_raw_response.create method
+        mock_response = MagicMock()
+        mock_response.parse.return_value = MagicMock(
+            model_dump=lambda: {
+                'data': [{'embedding': [0.1, 0.2, 0.3], 'index': 0}],
+                'model': 'text-embedding-ada-002',
+                'object': 'list',
+                'usage': {'prompt_tokens': 1, 'total_tokens': 1}
+            }
+        )
+        mock_response.headers = {}
+        
+        mock_client_instance.embeddings.with_raw_response.create.return_value = mock_response
+        
+        # Call the embedding function without encoding_format
+        response = embedding(
+            model="text-embedding-ada-002",
+            input="Hello world",
+        )
+        
+        # Get the call arguments to verify what was sent to OpenAI SDK
+        call_args = mock_client_instance.embeddings.with_raw_response.create.call_args
+        assert call_args is not None, "OpenAI SDK embeddings.create should have been called"
+        
+        call_kwargs = call_args[1]  # Get kwargs
+        
+        # The key assertion: encoding_format should be in the request with value None
+        # This prevents OpenAI SDK from adding its default 'base64' value
+        assert 'encoding_format' in call_kwargs, (
+            "encoding_format should be explicitly passed to OpenAI SDK "
+            "(even if None) to prevent SDK from adding default value"
+        )
+        assert call_kwargs['encoding_format'] is None, (
+            "encoding_format should be None when not provided by user"
+        )
+        
+        print("✅ PASS: encoding_format=None is correctly passed to OpenAI SDK")
+
+
+def test_encoding_format_explicit_value_preserved():
+    """
+    Test that explicitly provided encoding_format values are preserved.
+    
+    When user provides encoding_format='float' or 'base64', it should be 
+    sent as-is to the OpenAI SDK.
+    """
+    with patch("litellm.llms.openai.openai.OpenAIChatCompletion._get_openai_client") as mock_get_client:
+        # Create a mock client instance
+        mock_client_instance = MagicMock()
+        mock_get_client.return_value = mock_client_instance
+        
+        # Mock the embeddings.with_raw_response.create method
+        mock_response = MagicMock()
+        mock_response.parse.return_value = MagicMock(
+            model_dump=lambda: {
+                'data': [{'embedding': [0.1, 0.2, 0.3], 'index': 0}],
+                'model': 'text-embedding-ada-002',
+                'object': 'list',
+                'usage': {'prompt_tokens': 1, 'total_tokens': 1}
+            }
+        )
+        mock_response.headers = {}
+        
+        mock_client_instance.embeddings.with_raw_response.create.return_value = mock_response
+        
+        # Test with explicit encoding_format='float'
+        response = embedding(
+            model="text-embedding-ada-002",
+            input="Hello world",
+            encoding_format="float"
+        )
+        
+        # Verify the encoding_format was passed correctly
+        call_args = mock_client_instance.embeddings.with_raw_response.create.call_args
+        call_kwargs = call_args[1]
+        
+        assert 'encoding_format' in call_kwargs, (
+            "encoding_format should be in the request"
+        )
+        assert call_kwargs['encoding_format'] == 'float', (
+            "encoding_format should be 'float' when explicitly provided"
+        )
+        
+        print("✅ PASS: encoding_format='float' is correctly preserved")

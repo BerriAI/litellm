@@ -13,7 +13,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIImageGenerationOptionalParams,
 )
-from litellm.types.utils import ImageObject, ImageResponse
+from litellm.types.utils import ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -234,6 +234,27 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         
         return request_body
 
+    def _transform_image_usage(self, usage: dict) -> ImageUsage:
+        input_tokens_details = ImageUsageInputTokensDetails(
+            image_tokens=0,
+            text_tokens=0,
+        )
+        tokens_details = usage.get("promptTokensDetails", [])
+        for details in tokens_details:
+            if isinstance(details, dict) and (modality := details.get("modality")):
+                token_count = details.get("tokenCount", 0)
+                if modality == "TEXT":
+                    input_tokens_details.text_tokens += token_count
+                elif modality == "IMAGE":
+                    input_tokens_details.image_tokens += token_count
+
+        return ImageUsage(
+            input_tokens=usage.get("promptTokenCount", 0),
+            input_tokens_details=input_tokens_details,
+            output_tokens=usage.get("candidatesTokenCount", 0),
+            total_tokens=usage.get("totalTokenCount", 0),
+        )
+
     def transform_image_generation_response(
         self,
         model: str,
@@ -276,6 +297,9 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                             b64_json=inline_data["data"],
                             url=None,
                         ))
+
+        if usage_metadata := response_data.get("usageMetadata", None):
+            model_response.usage = self._transform_image_usage(usage_metadata)
         
         return model_response
 

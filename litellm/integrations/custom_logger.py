@@ -16,7 +16,6 @@ from typing import (
 from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
-from litellm.caching.caching import DualCache
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
 from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
@@ -33,6 +32,7 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
+    from litellm.caching.caching import DualCache
     from opentelemetry.trace import Span as _Span
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -334,7 +334,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        cache: DualCache,
+        cache: "DualCache",
         data: dict,
         call_type: CallTypesLiteral,
     ) -> Optional[

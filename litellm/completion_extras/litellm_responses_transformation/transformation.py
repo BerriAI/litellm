@@ -457,6 +457,24 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 raw_response.usage
             ),
         )
+        
+        # Preserve hidden params from the ResponsesAPIResponse, especially the headers
+        # which contain important provider information like x-request-id
+        raw_response_hidden_params = getattr(raw_response, "_hidden_params", {})
+        if raw_response_hidden_params:
+            if not hasattr(model_response, "_hidden_params") or model_response._hidden_params is None:
+                model_response._hidden_params = {}
+            # Merge the raw_response hidden params with model_response hidden params
+            # Preserve existing keys in model_response but add/override with raw_response params
+            for key, value in raw_response_hidden_params.items():
+                if key == "additional_headers" and key in model_response._hidden_params:
+                    # Merge additional_headers to preserve both sets
+                    existing_additional_headers = model_response._hidden_params.get("additional_headers", {})
+                    merged_headers = {**value, **existing_additional_headers}
+                    model_response._hidden_params[key] = merged_headers
+                else:
+                    model_response._hidden_params[key] = value
+        
         return model_response
 
     def get_model_response_iterator(

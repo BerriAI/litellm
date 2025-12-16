@@ -79,3 +79,102 @@ def test_chunk_parser_usage_transformation():
     assert "usage" in parsed
     assert parsed["usage"]["input_tokens"] == 10
     assert parsed["usage"]["output_tokens"] == 5
+
+
+def test_remove_ttl_from_cache_control():
+    """Ensure ttl field is removed from cache_control in messages."""
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    # Test case 1: Message with cache_control containing ttl
+    request = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Hello",
+                        "cache_control": {
+                            "type": "ephemeral",
+                            "ttl": "1h"
+                        }
+                    }
+                ]
+            }
+        ]
+    }
+
+    cfg._remove_ttl_from_cache_control(request)
+
+    # Verify ttl is removed but cache_control remains
+    assert "cache_control" in request["messages"][0]["content"][0]
+    assert "ttl" not in request["messages"][0]["content"][0]["cache_control"]
+    assert request["messages"][0]["content"][0]["cache_control"]["type"] == "ephemeral"
+
+    # Test case 2: Message with multiple content items
+    request2 = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Hello",
+                        "cache_control": {
+                            "type": "ephemeral",
+                            "ttl": "1h"
+                        }
+                    },
+                    {
+                        "type": "text",
+                        "text": "World",
+                        "cache_control": {
+                            "type": "ephemeral",
+                            "ttl": "2h"
+                        }
+                    }
+                ]
+            }
+        ]
+    }
+
+    cfg._remove_ttl_from_cache_control(request2)
+
+    # Verify ttl is removed from all items
+    for item in request2["messages"][0]["content"]:
+        if "cache_control" in item:
+            assert "ttl" not in item["cache_control"]
+
+    # Test case 3: Message without ttl (should remain unchanged)
+    request3 = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Hello",
+                        "cache_control": {
+                            "type": "ephemeral"
+                        }
+                    }
+                ]
+            }
+        ]
+    }
+
+    cfg._remove_ttl_from_cache_control(request3)
+
+    # Verify cache_control is unchanged
+    assert request3["messages"][0]["content"][0]["cache_control"]["type"] == "ephemeral"
+
+    # Test case 4: Empty messages (should not raise error)
+    request4 = {"messages": []}
+    cfg._remove_ttl_from_cache_control(request4)
+    assert request4 == {"messages": []}
+
+    # Test case 5: Request without messages key (should not raise error)
+    request5 = {}
+    cfg._remove_ttl_from_cache_control(request5)
+    assert request5 == {}
