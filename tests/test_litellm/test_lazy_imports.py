@@ -29,6 +29,8 @@ from litellm._lazy_imports import (
     _lazy_import_http_handlers,
     DOTPROMPT_NAMES,
     _lazy_import_dotprompt,
+    LLM_CONFIG_NAMES,
+    _lazy_import_llm_configs,
 )
 
 
@@ -207,4 +209,21 @@ def test_unknown_attribute_raises_error():
 
     with pytest.raises(AttributeError):
         _lazy_import_types_utils("unknown")
+
+    with pytest.raises(AttributeError):
+        _lazy_import_llm_configs("unknown")
+
+
+def test_llm_config_lazy_imports():
+    """Test that LLM config classes can be lazy imported."""
+    for name in LLM_CONFIG_NAMES:
+        _clear_names_from_globals(LLM_CONFIG_NAMES)
+
+        obj = _lazy_import_llm_configs(name)
+        assert obj is not None
+        assert name in litellm.__dict__
+        # Config classes should be classes/types
+        assert isinstance(obj, type), f"{name} should be a class"
+
+        _verify_only_requested_name_imported(name, LLM_CONFIG_NAMES)
 
