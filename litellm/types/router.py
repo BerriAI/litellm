@@ -213,6 +213,9 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     vector_store_id: Optional[str] = None
     milvus_text_field: Optional[str] = None
 
+    # Anthropic Beta Header Filtering
+    exclude_anthropic_beta_values: Optional[List[str]] = None
+
     def __init__(
         self,
         custom_llm_provider: Optional[str] = None,
@@ -266,6 +269,8 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         s3_bucket_name: Optional[str] = None,
         s3_encryption_key_id: Optional[str] = None,
         gcs_bucket_name: Optional[str] = None,
+        # Anthropic Beta Header Filtering
+        exclude_anthropic_beta_values: Optional[List[str]] = None,
         **params,
     ):
         args = locals()

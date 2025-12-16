@@ -84,9 +84,14 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         if tool_search_used:
             beta_set.add("tool-search-tool-2025-10-19")  # Vertex requires this header for tool search
 
+        # Filter out excluded anthropic beta values if configured
+        exclude_anthropic_beta_values = litellm_params.get("exclude_anthropic_beta_values") or []
+        if exclude_anthropic_beta_values:
+            beta_set = {b for b in beta_set if b not in exclude_anthropic_beta_values}
+
         if beta_set:
             data["anthropic_beta"] = list(beta_set)
-        
+
         return data
 
     def transform_response(
