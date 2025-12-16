@@ -18,6 +18,7 @@
         "ocr": "Supports /ocr endpoint",
         "search": "Supports /search endpoint",
         "skills": "Supports /skills endpoint",
+        "interactions": "Supports /interactions endpoint (Google AI Interactions API)",
         "a2a_(Agent Gateway)": "Supports /a2a/{agent}/message/send endpoint (A2A Protocol)",
         "create_container": "Supports POST /containers endpoint",
         "list_containers": "Supports GET /containers endpoint",
@@ -831,6 +832,7 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
+        "interactions": true,
         "a2a": true
       }
     },
