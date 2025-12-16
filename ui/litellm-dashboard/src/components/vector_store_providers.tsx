@@ -34,7 +34,7 @@ export interface VectorStoreFieldConfig {
   tooltip: string;
   placeholder?: string;
   required: boolean;
-  type?: "text" | "password";
+  type?: "text" | "password" | "select";
 }
 
 // Provider-specific field configurations
@@ -104,6 +104,14 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
       placeholder: "https://your-milvus-endpoint.com/",
       required: true,
       type: "text",
+    },
+    {
+      name: "embedding_model",
+      label: "Embedding Model",
+      tooltip: "Select the embedding model to use",
+      placeholder: "text-embedding-3-small",
+      required: true,
+      type: "select",
     },
   ],
 };
