@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import litellm
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
@@ -7,10 +7,15 @@ from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_fil
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
 if TYPE_CHECKING:
+    from litellm import Router
     from litellm.types.guardrails import Guardrail, LitellmParams
 
 
-def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
+def initialize_guardrail(
+    litellm_params: "LitellmParams",
+    guardrail: "Guardrail",
+    llm_router: Optional["Router"] = None,
+):
     """
     Initialize the Content Filter Guardrail.
 
@@ -22,7 +27,6 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         Initialized ContentFilterGuardrail instance
     """
     guardrail_name = guardrail.get("guardrail_name")
-    from litellm.proxy.proxy_server import llm_router
 
     if not guardrail_name:
         raise ValueError("Content Filter: guardrail_name is required")

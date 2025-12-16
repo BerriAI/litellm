@@ -157,6 +157,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                             url = image_url.get("url")
                             if url:
                                 images_to_check.append(url)
+                        elif isinstance(image_url, str):
+                            images_to_check.append(image_url)
 
         # Extract tool calls (typically in assistant messages)
         tool_calls = message.get("tool_calls", None)
@@ -390,7 +392,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     for content_idx, content_item in enumerate(content):
                         text_str = content_item.get("text")
                         if text_str:
-                            list_key: Tuple[int, Optional[int]] = (choice_idx, content_idx)
+                            list_key: Tuple[int, Optional[int]] = (
+                                choice_idx,
+                                content_idx,
+                            )
                             if list_key not in combined_texts:
                                 combined_texts[list_key] = ""
                             combined_texts[list_key] += text_str
@@ -706,7 +711,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     # List content - handle each content item
                     for content_idx, content_item in enumerate(content):
                         if "text" in content_item:
-                            list_key: Tuple[int, Optional[int]] = (choice_idx_in_response, content_idx)
+                            list_key: Tuple[int, Optional[int]] = (
+                                choice_idx_in_response,
+                                content_idx,
+                            )
                             if list_key in guardrail_map:
                                 if list_key not in already_set:
                                     # First chunk - set the complete guardrailed text
