@@ -2539,6 +2539,40 @@ async def _rotate_master_key(
         new_master_key=new_master_key,
     )
 
+    # 5. process credentials table
+    try:
+        credentials = await prisma_client.db.litellm_credentialstable.find_many()
+    except Exception:
+        credentials = None
+    if credentials:
+        from litellm.proxy.credential_endpoints.endpoints import update_db_credential
+
+        for cred in credentials:
+            try:
+                decrypted_cred = proxy_config.decrypt_credentials(cred)
+                encrypted_cred = update_db_credential(
+                    db_credential=cred,
+                    updated_patch=decrypted_cred,
+                    new_encryption_key=new_master_key,
+                )
+                credential_object_jsonified = jsonify_object(encrypted_cred.model_dump())
+                await prisma_client.db.litellm_credentialstable.update(
+                    where={"credential_name": cred.credential_name},
+                    data={
+                        **credential_object_jsonified,
+                        "updated_by": user_api_key_dict.user_id,
+                    },
+                )
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    f"Failed to re-encrypt credential {cred.credential_name}: {str(e)}"
+                )
+                # Continue with next credential instead of failing entire rotation
+                continue
+        verbose_proxy_logger.debug(
+            f"Successfully re-encrypted {len(credentials)} credentials with new master key"
+        )
+
 
 def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
     if data and data.new_key is not None:
