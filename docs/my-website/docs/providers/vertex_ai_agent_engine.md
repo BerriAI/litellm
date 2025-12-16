@@ -12,85 +12,39 @@ Call Vertex AI Agent Engine (Reasoning Engines) in the OpenAI Request/Response f
 | Supported Endpoints | `/chat/completions`, `/v1/messages`, `/v1/responses`, `/v1/a2a/message/send` |
 | Provider Doc | [Vertex AI Agent Engine ↗](https://cloud.google.com/vertex-ai/generative-ai/docs/reasoning-engine/overview) |
 
-## Authentication
-
-Vertex AI Agent Engine requires **Google Cloud authentication**. You can authenticate using:
-
-### Option 1: Application Default Credentials (Recommended)
-
-```bash
-gcloud auth application-default login
-```
-
-### Option 2: Service Account Key
-
-Set the path to your service account JSON key:
-
-```bash
-export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account.json"
-```
-
-### Option 3: Pass Credentials Directly
-
-Pass credentials via `vertex_credentials` parameter:
-
-```python
-response = litellm.completion(
-    model="vertex_ai/agent_engine/projects/123/locations/us-central1/reasoningEngines/456",
-    messages=[{"role": "user", "content": "Hello!"}],
-    vertex_credentials=json.dumps(service_account_dict),
-)
-```
-
 ## Quick Start
 
-### Model Format to LiteLLM
+### Model Format
 
-To call a Vertex AI Agent Engine through LiteLLM, use the following model format.
-
-Here the `model=vertex_ai/agent_engine/` tells LiteLLM to call the Vertex AI Reasoning Engine API.
-
-```shell showLineNumbers title="Model Format to LiteLLM"
+```shell showLineNumbers title="Model Format"
 vertex_ai/agent_engine/{RESOURCE_NAME}
 ```
 
 **Example:**
 - `vertex_ai/agent_engine/projects/1060139831167/locations/us-central1/reasoningEngines/8263861224643493888`
 
-You can find the Resource Name in your Google Cloud Console under Vertex AI > Agent Engine.
-
 ### LiteLLM Python SDK
 
 ```python showLineNumbers title="Basic Agent Completion"
 import litellm
 
-# Make a completion request to your Vertex AI Agent Engine
-# Uses Application Default Credentials for auth
 response = litellm.completion(
     model="vertex_ai/agent_engine/projects/1060139831167/locations/us-central1/reasoningEngines/8263861224643493888",
     messages=[
-        {
-            "role": "user", 
-            "content": "Explain machine learning in simple terms"
-        }
+        {"role": "user", "content": "Explain machine learning in simple terms"}
     ],
 )
 
 print(response.choices[0].message.content)
-print(f"Usage: {response.usage}")
 ```
 
 ```python showLineNumbers title="Streaming Agent Responses"
 import litellm
 
-# Stream responses from your Vertex AI Agent Engine
 response = await litellm.acompletion(
     model="vertex_ai/agent_engine/projects/1060139831167/locations/us-central1/reasoningEngines/8263861224643493888",
     messages=[
-        {
-            "role": "user",
-            "content": "What are the key principles of software architecture?"
-        }
+        {"role": "user", "content": "What are the key principles of software architecture?"}
     ],
     stream=True,
 )
@@ -112,15 +66,6 @@ model_list:
   - model_name: vertex-agent-1
     litellm_params:
       model: vertex_ai/agent_engine/projects/1060139831167/locations/us-central1/reasoningEngines/8263861224643493888
-      vertex_project: your-project-id
-      vertex_location: us-central1
-      # Uses Application Default Credentials by default
-      # Or specify credentials path:
-      # vertex_credentials: /path/to/service-account.json
-
-  - model_name: vertex-agent-assistant
-    litellm_params:
-      model: vertex_ai/agent_engine/projects/1060139831167/locations/us-central1/reasoningEngines/9876543210123456789
       vertex_project: your-project-id
       vertex_location: us-central1
 ```
@@ -146,27 +91,8 @@ curl http://localhost:4000/v1/chat/completions \
   -d '{
     "model": "vertex-agent-1",
     "messages": [
-      {
-        "role": "user", 
-        "content": "Summarize the main benefits of cloud computing"
-      }
+      {"role": "user", "content": "Summarize the main benefits of cloud computing"}
     ]
-  }'
-```
-
-```bash showLineNumbers title="Streaming Agent Request"
-curl http://localhost:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $LITELLM_API_KEY" \
-  -d '{
-    "model": "vertex-agent-assistant",
-    "messages": [
-      {
-        "role": "user",
-        "content": "What is 25 * 4?"
-      }
-    ],
-    "stream": true
   }'
 ```
 
@@ -177,53 +103,88 @@ curl http://localhost:4000/v1/chat/completions \
 ```python showLineNumbers title="Using OpenAI SDK with LiteLLM Proxy"
 from openai import OpenAI
 
-# Initialize client with your LiteLLM proxy URL
 client = OpenAI(
     base_url="http://localhost:4000",
     api_key="your-litellm-api-key"
 )
 
-# Make a completion request to your Vertex AI Agent Engine
 response = client.chat.completions.create(
     model="vertex-agent-1",
     messages=[
-      {
-        "role": "user",
-        "content": "What are best practices for API design?"
-      }
+      {"role": "user", "content": "What are best practices for API design?"}
     ]
 )
 
 print(response.choices[0].message.content)
 ```
 
-```python showLineNumbers title="Streaming with OpenAI SDK"
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="http://localhost:4000", 
-    api_key="your-litellm-api-key"
-)
-
-# Stream Agent responses
-stream = client.chat.completions.create(
-    model="vertex-agent-assistant",
-    messages=[
-      {
-        "role": "user",
-        "content": "Explain the Pythagorean theorem"
-      }
-    ],
-    stream=True
-)
-
-for chunk in stream:
-    if chunk.choices[0].delta.content is not None:
-        print(chunk.choices[0].delta.content, end="")
-```
-
 </TabItem>
 </Tabs>
+
+## LiteLLM A2A Gateway
+
+You can also connect to Vertex AI Agent Engine through LiteLLM's A2A (Agent-to-Agent) Gateway UI. This provides a visual way to register and test agents without writing code.
+
+### 1. Navigate to Agents
+
+From the sidebar, click "Agents" to open the agent management page, then click "+ Add New Agent".
+
+![Click Agents](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/9a979927-ce6b-4168-9fba-e53e28f1c2c4/ascreenshot.jpeg?tl_px=0,14&br_px=1376,783&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=17,277)
+
+![Add New Agent](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/a311750c-2e85-4589-99cb-2ce7e4021e77/ascreenshot.jpeg?tl_px=0,0&br_px=1376,769&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=195,257)
+
+### 2. Select Vertex AI Agent Engine Type
+
+Click "A2A Standard" to see available agent types, then select "Vertex AI Agent Engine".
+
+![Select A2A Standard](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/5b1acc4c-dc3f-4639-b4a0-e64b35c228fd/ascreenshot.jpeg?tl_px=52,0&br_px=1428,769&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=524,271)
+
+![Select Vertex AI Agent Engine](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/2f3bab61-3e02-4db7-84f0-82200a0f4136/ascreenshot.jpeg?tl_px=0,244&br_px=1376,1013&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=477,277)
+
+### 3. Configure the Agent
+
+Fill in the following fields:
+
+- **Agent Name** - A friendly name for your agent (e.g., `my-vertex-agent`)
+- **Reasoning Engine Resource ID** - The full resource path from Google Cloud Console (e.g., `projects/1060139831167/locations/us-central1/reasoningEngines/8263861224643493888`)
+- **Vertex Project** - Your Google Cloud project ID
+- **Vertex Location** - The region where your agent is deployed (e.g., `us-central1`)
+
+![Enter Agent Name](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/695b84c7-9511-4337-bf19-f4505ab2b72b/ascreenshot.jpeg?tl_px=0,90&br_px=1376,859&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=480,276)
+
+![Enter Resource ID](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/ddce64df-b3a3-4519-ab62-f137887bcea2/ascreenshot.jpeg?tl_px=0,294&br_px=1376,1063&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=440,277)
+
+![Enter Vertex Project](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/a64da441-3e61-4811-a1e3-9f0b12c949ff/ascreenshot.jpeg?tl_px=0,233&br_px=1376,1002&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=501,277)
+
+![Enter Vertex Location](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/316d1f38-4fb7-4377-86b6-c0fe7ac24383/ascreenshot.jpeg?tl_px=0,330&br_px=1376,1099&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=423,277)
+
+### 4. Create Agent
+
+Click "Create Agent" to save your configuration.
+
+![Create Agent](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/fb04b95d-793f-4eed-acf4-d1b3b5fa65e9/ascreenshot.jpeg?tl_px=352,347&br_px=1728,1117&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=623,498)
+
+### 5. Test in Playground
+
+Go to "Playground" in the sidebar to test your agent.
+
+![Go to Playground](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/9e01369b-6102-4fe3-96a7-90082cadfd6e/ascreenshot.jpeg?tl_px=0,0&br_px=1376,769&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=55,226)
+
+### 6. Select A2A Endpoint
+
+Click the endpoint dropdown and select `/v1/a2a/message/send`.
+
+![Select Endpoint](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/d5aeac35-531b-4cf0-af2d-88f0a71fd736/ascreenshot.jpeg?tl_px=0,146&br_px=1376,915&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=299,277)
+
+### 7. Select Your Agent and Send a Message
+
+Pick your Vertex AI Agent Engine from the dropdown and send a test message.
+
+![Select Agent](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/353431f3-a0ba-4436-865d-ae11595e9cc4/ascreenshot.jpeg?tl_px=0,263&br_px=1376,1032&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=270,277)
+
+![Send Message](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/fbfce72e-f50b-43e1-b6e5-0d41192d8e2d/ascreenshot.jpeg?tl_px=95,347&br_px=1471,1117&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=524,474)
+
+![Agent Response](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/892dd826-fbf9-4530-8d82-95270889274a/ascreenshot.jpeg?tl_px=0,82&br_px=1376,851&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=485,277)
 
 ## Environment Variables
 
@@ -239,81 +200,9 @@ export VERTEXAI_PROJECT="your-project-id"
 export VERTEXAI_LOCATION="us-central1"
 ```
 
-## Session Management
-
-Vertex AI Agent Engine supports session management for maintaining conversation context. You can pass a `session_id` to continue a conversation or a `user_id` for user-specific sessions.
-
-```python showLineNumbers title="Using Sessions"
-import litellm
-
-# First message creates a new session
-response1 = await litellm.acompletion(
-    model="vertex_ai/agent_engine/projects/123/locations/us-central1/reasoningEngines/456",
-    messages=[{"role": "user", "content": "My name is Alice"}],
-    user="alice-user-123",  # Maps to user_id
-)
-
-# Continue the conversation with the same user
-response2 = await litellm.acompletion(
-    model="vertex_ai/agent_engine/projects/123/locations/us-central1/reasoningEngines/456",
-    messages=[{"role": "user", "content": "What's my name?"}],
-    user="alice-user-123",  # Same user_id maintains context
-)
-
-print(response2.choices[0].message.content)  # Should mention "Alice"
-```
-
-## Provider-specific Parameters
-
-Vertex AI Agent Engine supports additional parameters that can be passed to customize the agent invocation.
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python showLineNumbers title="Using Agent-specific parameters"
-from litellm import completion
-
-response = litellm.completion(
-    model="vertex_ai/agent_engine/projects/123/locations/us-central1/reasoningEngines/456",
-    messages=[
-        {
-            "role": "user",
-            "content": "Analyze this data and provide insights",
-        }
-    ],
-    user="user-123",  # Optional: User ID for session management
-    session_id="session-abc",  # Optional: Continue existing session
-)
-```
-
-</TabItem>
-<TabItem value="proxy" label="Proxy">
-
-```yaml showLineNumbers title="LiteLLM Proxy Configuration with Parameters"
-model_list:
-  - model_name: vertex-agent-analyst
-    litellm_params:
-      model: vertex_ai/agent_engine/projects/123/locations/us-central1/reasoningEngines/456
-      vertex_project: your-project-id
-      vertex_location: us-central1
-```
-
-</TabItem>
-</Tabs>
-
-### Available Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `user` | string | User ID for session management (maps to `user_id` in Agent Engine) |
-| `session_id` | string | Optional session ID to continue an existing conversation |
-| `vertex_project` | string | Google Cloud project ID |
-| `vertex_location` | string | Google Cloud region (default: `us-central1`) |
-| `vertex_credentials` | string | Path to service account JSON or JSON string of credentials |
-
 ## Further Reading
 
 - [Vertex AI Agent Engine Documentation](https://cloud.google.com/vertex-ai/generative-ai/docs/reasoning-engine/overview)
 - [Create a Reasoning Engine](https://cloud.google.com/vertex-ai/generative-ai/docs/reasoning-engine/create)
+- [A2A Agent Gateway](../a2a.md)
 - [Vertex AI Provider](./vertex.md)
-
