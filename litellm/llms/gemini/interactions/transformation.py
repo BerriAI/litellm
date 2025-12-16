@@ -123,7 +123,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         
         # Pass through optional params directly (they match the spec)
         optional_keys = [
-            "tools", "system_instruction", "generation_config", "store",
+            "tools", "system_instruction", "generation_config", "stream", "store",
             "background", "response_modalities", "response_format",
             "response_mime_type", "previous_interaction_id",
         ]

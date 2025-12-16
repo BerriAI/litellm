@@ -418,6 +418,13 @@ class LiteLLMRoutes(enum.Enum):
         "/models/{model_name}:countTokens",
         "/models/{model_name}:generateContent",
         "/models/{model_name}:streamGenerateContent",
+        # Google Interactions API
+        "/interactions",
+        "/v1beta/interactions",
+        "/interactions/{interaction_id}",
+        "/v1beta/interactions/{interaction_id}",
+        "/interactions/{interaction_id}/cancel",
+        "/v1beta/interactions/{interaction_id}/cancel",
     ]
 
     apply_guardrail_routes = [

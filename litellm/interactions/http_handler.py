@@ -20,6 +20,10 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import request_timeout
+from litellm.interactions.streaming_iterator import (
+    InteractionsAPIStreamingIterator,
+    SyncInteractionsAPIStreamingIterator,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.interactions.transformation import BaseInteractionsAPIConfig
 from litellm.llms.custom_httpx.http_handler import (
@@ -283,63 +287,37 @@ class InteractionsHTTPHandler:
         model: Optional[str],
         logging_obj: LiteLLMLoggingObj,
         interactions_api_config: BaseInteractionsAPIConfig,
-    ) -> Iterator[InteractionsAPIStreamingResponse]:
+    ) -> SyncInteractionsAPIStreamingIterator:
         """Create a synchronous streaming iterator.
         
         Google AI's streaming format uses SSE (Server-Sent Events).
+        Returns a proper streaming iterator that yields chunks as they arrive.
         """
-        # Read the full response and parse as JSON array
-        full_content = response.read().decode("utf-8")
-        try:
-            chunks = json.loads(full_content)
-            if isinstance(chunks, list):
-                for parsed_chunk in chunks:
-                    yield interactions_api_config.transform_streaming_response(
-                        model=model,
-                        parsed_chunk=parsed_chunk,
-                        logging_obj=logging_obj,
-                    )
-            else:
-                # Single object response
-                yield interactions_api_config.transform_streaming_response(
-                    model=model,
-                    parsed_chunk=chunks,
-                    logging_obj=logging_obj,
-                )
-        except json.JSONDecodeError as e:
-            verbose_logger.debug(f"Failed to parse streaming response: {full_content[:500]}..., error: {e}")
+        return SyncInteractionsAPIStreamingIterator(
+            response=response,
+            model=model,
+            interactions_api_config=interactions_api_config,
+            logging_obj=logging_obj,
+        )
 
-    async def _create_async_streaming_iterator(
+    def _create_async_streaming_iterator(
         self,
         response: httpx.Response,
         model: Optional[str],
         logging_obj: LiteLLMLoggingObj,
         interactions_api_config: BaseInteractionsAPIConfig,
-    ) -> AsyncIterator[InteractionsAPIStreamingResponse]:
+    ) -> InteractionsAPIStreamingIterator:
         """Create an asynchronous streaming iterator.
         
         Google AI's streaming format uses SSE (Server-Sent Events).
+        Returns a proper streaming iterator that yields chunks as they arrive.
         """
-        # Read the full response and parse as JSON array
-        full_content = (await response.aread()).decode("utf-8")
-        try:
-            chunks = json.loads(full_content)
-            if isinstance(chunks, list):
-                for parsed_chunk in chunks:
-                    yield interactions_api_config.transform_streaming_response(
-                        model=model,
-                        parsed_chunk=parsed_chunk,
-                        logging_obj=logging_obj,
-                    )
-            else:
-                # Single object response
-                yield interactions_api_config.transform_streaming_response(
-                    model=model,
-                    parsed_chunk=chunks,
-                    logging_obj=logging_obj,
-                )
-        except json.JSONDecodeError as e:
-            verbose_logger.debug(f"Failed to parse async streaming response: {full_content[:500]}..., error: {e}")
+        return InteractionsAPIStreamingIterator(
+            response=response,
+            model=model,
+            interactions_api_config=interactions_api_config,
+            logging_obj=logging_obj,
+        )
 
     # =========================================================
     # GET INTERACTION
