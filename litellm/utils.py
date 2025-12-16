@@ -7312,6 +7312,21 @@ class ProviderConfigManager:
         model: str,
         provider: LlmProviders,
     ) -> Optional[BaseEmbeddingConfig]:
+        # Check JSON providers FIRST (same pattern as get_provider_chat_config)
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        if JSONProviderRegistry.exists(provider.value):
+            provider_config = JSONProviderRegistry.get(provider.value)
+            if provider_config is None:
+                raise ValueError(f"Provider {provider.value} not found")
+            # For JSON providers, use a simple OpenAI-compatible embedding config
+            # Similar to CometAPI but dynamically created from JSON
+            from litellm.llms.openai_like.embedding.dynamic_config import (
+                create_json_embedding_config,
+            )
+
+            return create_json_embedding_config(provider_config)
+
         if (
             litellm.LlmProviders.VOYAGE == provider
             and litellm.VoyageContextualEmbeddingConfig.is_contextualized_embeddings(

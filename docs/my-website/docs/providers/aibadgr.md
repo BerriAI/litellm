@@ -11,7 +11,7 @@ import TabItem from '@theme/TabItem';
 | Provider Route on LiteLLM | `aibadgr/` |
 | Link to Provider Doc | [AI Badgr Documentation ↗](https://aibadgr.com) |
 | Base URL | `https://aibadgr.com/api/v1` |
-| Supported Operations | [`/chat/completions`](#sample-usage) |
+| Supported Operations | [`/chat/completions`](#sample-usage), [`/embeddings`](#embeddings), [`/v1/messages`](#claude-compatible) |
 
 <br />
 <br />
@@ -22,23 +22,11 @@ import TabItem from '@theme/TabItem';
 
 AI Badgr offers three tiers of models optimized for different use cases and budgets:
 
-### Tier-Based Models (Recommended)
-
 | Model | Description | Use Case |
 |-------|-------------|----------|
 | `aibadgr/basic` | Entry-level model for simple tasks | Basic text generation, simple Q&A |
 | `aibadgr/normal` | Balanced performance and cost | General-purpose applications |
 | `aibadgr/premium` | Best performance tier | Complex reasoning, production workloads |
-
-### Power-User Model Names
-
-For advanced users who prefer specific model implementations:
-
-| Model | Maps To | Description |
-|-------|---------|-------------|
-| `aibadgr/phi-3-mini` | basic | Microsoft Phi-3 Mini |
-| `aibadgr/mistral-7b` | normal | Mistral 7B base model |
-| `aibadgr/llama3-8b-instruct` | premium | Meta Llama 3 8B Instruct |
 
 :::info
 OpenAI model names are accepted and automatically mapped to appropriate AI Badgr models.
@@ -303,6 +291,62 @@ curl http://localhost:4000/v1/chat/completions \
 </Tabs>
 
 For more detailed information on using the LiteLLM Proxy, see the [LiteLLM Proxy documentation](../providers/litellm_proxy).
+
+## Embeddings
+
+AI Badgr supports OpenAI-compatible embeddings for RAG, vector search, and semantic similarity tasks.
+
+```python showLineNumbers title="AI Badgr Embeddings"
+import os
+import litellm
+from litellm import embedding
+
+os.environ["AIBADGR_API_KEY"] = ""  # your AI Badgr API key
+
+# Generate embeddings
+response = embedding(
+    model="aibadgr/text-embedding-ada-002",  # or your embedding model name
+    input=["The quick brown fox", "jumps over the lazy dog"]
+)
+
+print(response.data[0].embedding)  # Access embedding vector
+```
+
+### Supported Embedding Models
+
+AI Badgr supports OpenAI-compatible embedding models. Use the model name that matches your AI Badgr embedding model:
+
+```python
+# Example embedding call
+response = litellm.embedding(
+    model="aibadgr/text-embedding-ada-002",
+    input=["Your text here"]
+)
+```
+
+## Claude-Compatible Endpoint
+
+AI Badgr supports the Anthropic `/v1/messages` endpoint for Claude-compatible API calls.
+
+```python showLineNumbers title="AI Badgr Claude-Compatible Messages"
+import os
+import litellm
+
+os.environ["AIBADGR_API_KEY"] = ""  # your AI Badgr API key
+
+# Use Claude-compatible messages endpoint
+response = litellm.completion(
+    model="aibadgr/premium",
+    messages=[{"role": "user", "content": "Hello!"}],
+    custom_llm_provider="aibadgr"
+)
+
+print(response)
+```
+
+:::info
+The `/v1/messages` endpoint automatically translates between OpenAI and Anthropic message formats, allowing seamless compatibility with tools that use Claude-style APIs.
+:::
 
 ## Supported OpenAI Parameters
 
