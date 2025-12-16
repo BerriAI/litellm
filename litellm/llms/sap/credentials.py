@@ -257,12 +257,6 @@ def get_token_creator(
         # Log debug information to help troubleshoot
         verbose_logger.debug("SAP AI Core credentials were not found or are incomplete.")
         verbose_logger.debug(f"After attempting to resolve the credentials, the following credentials fields were found: [{', '.join(credentials.keys())}]")
-        verbose_logger.debug(f"Profile used: {profile or 'default'}")
-        verbose_logger.debug(f"Config file checked: {os.getenv(CONFIG_FILE_ENV_VAR) or os.path.join(_get_home(), 'config.json')}")
-        verbose_logger.debug("Individual environment variables checked: AICORE_AUTH_URL, AICORE_CLIENT_ID, etc.")
-        verbose_logger.debug(f"Service key environment variable checked: {SERVICE_KEY_ENV_VAR}")
-        verbose_logger.debug(f"VCAP_SERVICES environment variable checked for service label: {VCAP_AICORE_SERVICE_NAME}")
-        verbose_logger.debug("Credential resolution order: kwargs > env vars > config file > service key/VCAP > defaults")
         
         raise ValueError(
             "SAP AI Core credentials not found. "
