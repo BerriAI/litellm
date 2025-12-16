@@ -45,6 +45,11 @@ LLM_CLIENT_CACHE_NAMES = (
     "in_memory_llm_clients_cache",
 )
 
+# Bedrock type names that support lazy loading via _lazy_import_bedrock_types
+BEDROCK_TYPES_NAMES = (
+    "COHERE_EMBEDDING_INPUT_TYPES",
+)
+
 # Caching / cache classes that support lazy loading via _lazy_import_caching
 CACHING_NAMES = (
     "Cache",
@@ -303,6 +308,21 @@ def _lazy_import_token_counter(name: str) -> Any:
         return _get_modified_max_tokens
 
     raise AttributeError(f"Token counter lazy import: unknown attribute {name!r}")
+
+
+def _lazy_import_bedrock_types(name: str) -> Any:
+    """Lazy import for Bedrock type aliases."""
+    _globals = _get_litellm_globals()
+
+    if name == "COHERE_EMBEDDING_INPUT_TYPES":
+        from litellm.types.llms.bedrock import (
+            COHERE_EMBEDDING_INPUT_TYPES as _COHERE_EMBEDDING_INPUT_TYPES,
+        )
+
+        _globals["COHERE_EMBEDDING_INPUT_TYPES"] = _COHERE_EMBEDDING_INPUT_TYPES
+        return _COHERE_EMBEDDING_INPUT_TYPES
+
+    raise AttributeError(f"Bedrock types lazy import: unknown attribute {name!r}")
 
 
 def _lazy_import_caching(name: str) -> Any:
