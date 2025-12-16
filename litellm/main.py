@@ -238,7 +238,6 @@ from .types.utils import (
     all_litellm_params,
 )
 
-encoding = tiktoken.get_encoding("cl100k_base")
 from litellm.types.utils import ModelResponseStream
 from litellm.utils import (
     Choices,
@@ -6891,3 +6890,15 @@ def stream_chunk_builder(  # noqa: PLR0915
             llm_provider="",
             model="",
         )
+
+
+def __getattr__(name: str) -> Any:
+    """Lazy import handler for main module"""
+    if name == "encoding":
+        # Lazy load encoding to avoid heavy tiktoken import at module load time
+        _encoding = tiktoken.get_encoding("cl100k_base")
+        # Cache it in the module's __dict__ for subsequent accesses
+        import sys
+        sys.modules[__name__].__dict__["encoding"] = _encoding
+        return _encoding
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
