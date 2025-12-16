@@ -426,7 +426,18 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         # Check category keywords
         for keyword, (category, severity, action) in self.category_keywords.items():
-            if keyword in text_lower:
+            # Use word boundary matching for single words to avoid false positives
+            # (e.g., "men" should not match "recommend")
+            # For multi-word phrases, use substring matching
+            if " " in keyword:
+                # Multi-word phrase - use substring matching
+                keyword_found = keyword in text_lower
+            else:
+                # Single word - use word boundary matching to match whole words only
+                keyword_pattern = r"\b" + re.escape(keyword) + r"\b"
+                keyword_found = bool(re.search(keyword_pattern, text_lower))
+
+            if keyword_found:
                 # Check if this keyword has exceptions
                 category_obj = self.loaded_categories.get(category)
                 if category_obj:
