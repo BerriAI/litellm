@@ -3,9 +3,11 @@ import TabItem from '@theme/TabItem';
 import Image from '@theme/IdealImage';
 
 
-# LiteLLM Content Filter
+# LiteLLM Content Filter (Built-in Guardrails)
 
 **Built-in guardrail** for detecting and filtering sensitive information using regex patterns and keyword matching. No external dependencies required.
+
+**When to use?** Good for cases which do not require an ML model to detect sensitive information.
 
 ## Overview
 
