@@ -1,9 +1,8 @@
 /* @vitest-environment jsdom */
-import { render, screen } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import ModelsAndEndpointsView from "./ModelsAndEndpointsView";
-import { Team } from "@/components/key_team_helpers/key_list";
 
 // Minimal stubs to avoid Next.js router and network usage during render
 vi.mock("@/components/networking", () => ({
