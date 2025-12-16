@@ -750,9 +750,27 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         model_id=model_id,
                         model_name=model_name,
                     )
-                    await self.store_unified_file_id(  # need to store otherwise any retrieve call will fail
+                    
+                    # Fetch the actual file object for the output file
+                    file_object = None
+                    try:
+                        # Use litellm to retrieve the file object from the provider
+                        from litellm import afile_retrieve
+                        file_object = await afile_retrieve(
+                            custom_llm_provider=model_name.split("/")[0] if model_name and "/" in model_name else "openai",
+                            file_id=original_output_file_id
+                        )
+                        verbose_logger.debug(
+                            f"Successfully retrieved file object for output_file_id={original_output_file_id}"
+                        )
+                    except Exception as e:
+                        verbose_logger.warning(
+                            f"Failed to retrieve file object for output_file_id={original_output_file_id}: {str(e)}. Storing with None and will fetch on-demand."
+                        )
+                    
+                    await self.store_unified_file_id(
                         file_id=response.output_file_id,
-                        file_object=None,
+                        file_object=file_object,
                         litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
                         model_mappings={model_id: original_output_file_id},
                         user_api_key_dict=user_api_key_dict,

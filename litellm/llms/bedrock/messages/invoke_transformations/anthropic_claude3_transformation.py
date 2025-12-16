@@ -199,6 +199,7 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         if beta_set:
             anthropic_messages_request["anthropic_beta"] = list(beta_set)
+        
             
         return anthropic_messages_request
 
