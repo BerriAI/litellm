@@ -9,6 +9,7 @@ Call Pydantic AI Agents via LiteLLM's A2A Gateway.
 |----------|---------|
 | Description | Pydantic AI agents with native A2A support via the `to_a2a()` method. LiteLLM provides fake streaming support for agents that don't natively stream. |
 | Provider Route on LiteLLM | A2A Gateway |
+| Supported Endpoints | `/v1/a2a/message/send` |
 | Provider Doc | [Pydantic AI Agents ↗](https://ai.pydantic.dev/agents/) |
 
 ## Setup Pydantic AI Agent Server
@@ -54,7 +55,7 @@ Server runs at `http://localhost:9999`
 
 ## LiteLLM A2A Gateway
 
-Connect to your Pydantic AI agent through LiteLLM's A2A Gateway UI.
+All Pydantic AI agents need to be exposed as A2A agents using the `to_a2a()` method. Once your agent server is running, you can add it to the LiteLLM Gateway.
 
 ### 1. Navigate to Agents
 
@@ -64,84 +65,55 @@ From the sidebar, click "Agents" to open the agent management page, then click "
 
 Click "A2A Standard" to see available agent types, then select "Pydantic AI".
 
+![Select A2A Standard](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/1055acb1-064b-4465-8e6a-8278291bc661/ascreenshot.jpeg?tl_px=0,0&br_px=2201,1230&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=395,147)
+
+![Select Pydantic AI](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/0998e38c-8534-40f1-931a-be96c2cae0ad/ascreenshot.jpeg?tl_px=0,52&br_px=2201,1283&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=421,277)
+
 ### 3. Configure the Agent
 
 Fill in the following fields:
 
-#### Agent Name
+- **Agent Name** - A unique identifier for your agent (e.g., `test-pydantic-agent`)
+- **Agent URL** - The URL where your Pydantic AI agent is running. We use `http://localhost:9999` because that's where we started our Pydantic AI agent server in the previous step.
 
-Enter a friendly name for your agent - callers will see this name when selecting agents.
+![Enter Agent Name](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/8cf3fbde-05f3-48d1-81b6-6f857bd6d360/ascreenshot.jpeg?tl_px=0,0&br_px=2201,1230&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=443,225)
 
-#### Agent URL
+![Configure Agent Name](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/fb555808-4761-4c49-a415-200ac1bdb525/ascreenshot.jpeg?tl_px=0,0&br_px=2617,1463&force_format=jpeg&q=100&width=1120.0)
 
-Enter the URL where your Pydantic AI agent is running:
-- Local development: `http://localhost:9999`
-- Production: Your deployed agent URL
-
-#### A2A Fields (Optional)
-
-You can optionally configure:
-- **Agent Description**: Description of what your agent does
-- **Skills**: List of capabilities your agent provides
+![Enter Agent URL](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/303eae61-4352-4fb0-a537-806839c234ba/ascreenshot.jpeg?tl_px=0,212&br_px=2201,1443&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=456,277)
 
 ### 4. Create Agent
 
 Click "Create Agent" to save your configuration.
 
+![Create Agent](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/914f3367-df7d-4244-bd4d-e99ce0a6193a/ascreenshot.jpeg?tl_px=416,438&br_px=2618,1669&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=690,277)
+
 ### 5. Test in Playground
 
-Go to "Playground" in the sidebar to test your agent:
+Go to "Playground" in the sidebar to test your agent.
 
-1. Change the endpoint type to `/v1/a2a/message/send`
-2. Select your Pydantic AI agent from the dropdown
-3. Send a test message
+![Go to Playground](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/c73c9f3b-22af-4105-aafa-2d34c4986ef3/ascreenshot.jpeg?tl_px=0,0&br_px=2201,1230&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=44,97)
 
-## LiteLLM Proxy Configuration
+### 6. Select A2A Endpoint
 
-You can also configure Pydantic AI agents directly in your `config.yaml`:
+Click the endpoint dropdown and search for "a2a", then select `/v1/a2a/message/send`.
 
-```yaml title="config.yaml"
-a2a_config:
-  agents:
-    - agent_name: pydantic-weather-agent
-      litellm_params:
-        custom_llm_provider: pydantic_ai_agents
-        api_base: http://localhost:9999
-      agent_description: "Weather and calculator agent powered by Pydantic AI"
-      skills:
-        - skill_id: weather
-          skill_name: Get Weather
-          skill_description: Get current weather for any city
-        - skill_id: calculator
-          skill_name: Calculator
-          skill_description: Evaluate mathematical expressions
-```
+![Click Endpoint Dropdown](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/196d97ac-bcba-47f0-9880-97b80250e00c/ascreenshot.jpeg?tl_px=0,0&br_px=2201,1230&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=261,230)
 
-Start the proxy:
+![Search for A2A](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/26b68f21-29f9-4c4c-b8b5-d2e11cbfd14a/ascreenshot.jpeg?tl_px=0,0&br_px=2617,1463&force_format=jpeg&q=100&width=1120.0)
 
-```bash
-litellm --config config.yaml
-```
+![Select A2A Endpoint](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/41576fb1-d385-4fb2-84e9-142dd7fe5181/ascreenshot.jpeg?tl_px=0,0&br_px=2201,1230&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=307,270)
 
-## Streaming Support
+### 7. Select Your Agent and Send a Message
 
-Pydantic AI agents don't natively support streaming responses. LiteLLM provides **fake streaming** - the complete response is fetched and then chunked to simulate streaming behavior.
+Pick your Pydantic AI agent from the dropdown and send a test message.
 
-This allows you to use streaming APIs with Pydantic AI agents:
+![Click Agent Dropdown](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/a96d7967-3d54-4cbf-bd3e-b38f1be9df76/ascreenshot.jpeg?tl_px=0,54&br_px=2201,1285&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=274,277)
 
-```python
-import litellm
+![Select Agent](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/e05a5a6e-d044-4480-b94e-7c03cfb92ac5/ascreenshot.jpeg?tl_px=0,113&br_px=2201,1344&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=290,277)
 
-# Fake streaming works automatically
-response = await litellm.a2a_message_send(
-    agent_name="pydantic-weather-agent",
-    message="What's the weather in Paris?",
-    stream=True,  # LiteLLM handles fake streaming
-)
+![Send Message](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/29162702-968a-401a-aac1-c844bfc5f4a3/ascreenshot.jpeg?tl_px=91,653&br_px=2292,1883&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=524,436)
 
-async for chunk in response:
-    print(chunk)
-```
 
 ## Further Reading
 
