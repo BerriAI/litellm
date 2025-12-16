@@ -39,6 +39,12 @@ TOKEN_COUNTER_NAMES = (
     "get_modified_max_tokens",
 )
 
+# LLM client cache names that support lazy loading via _lazy_import_llm_client_cache
+LLM_CLIENT_CACHE_NAMES = (
+    "LLMClientCache",
+    "in_memory_llm_clients_cache",
+)
+
 # Caching / cache classes that support lazy loading via _lazy_import_caching
 CACHING_NAMES = (
     "Cache",
@@ -328,6 +334,28 @@ def _lazy_import_caching(name: str) -> Any:
         return _InMemoryCache
 
     raise AttributeError(f"Caching lazy import: unknown attribute {name!r}")
+
+
+def _lazy_import_llm_client_cache(name: str) -> Any:
+    """Lazy import for LLM client cache class and singleton."""
+    _globals = _get_litellm_globals()
+
+    if name == "LLMClientCache":
+        from litellm.caching.llm_caching_handler import LLMClientCache as _LLMClientCache
+
+        _globals["LLMClientCache"] = _LLMClientCache
+        return _LLMClientCache
+
+    if name == "in_memory_llm_clients_cache":
+        from litellm.caching.llm_caching_handler import LLMClientCache as _LLMClientCache
+
+        instance = _LLMClientCache()
+        # Only populate the requested singleton name to keep lazy-import
+        # semantics consistent with other helpers (no extra symbols).
+        _globals["in_memory_llm_clients_cache"] = instance
+        return instance
+
+    raise AttributeError(f"LLM client cache lazy import: unknown attribute {name!r}")
 
 
 def _lazy_import_litellm_logging(name: str) -> Any:
