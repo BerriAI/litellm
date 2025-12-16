@@ -2,10 +2,25 @@
 Utility functions for Interactions API.
 """
 
-from typing import Any, Dict, Optional, cast, get_type_hints
+from typing import Any, Dict, Optional, cast
 
 from litellm.llms.base_llm.interactions.transformation import BaseInteractionsAPIConfig
-from litellm.types.interactions.main import InteractionsAPIOptionalRequestParams
+from litellm.types.interactions import InteractionsAPIOptionalRequestParams
+
+# Valid optional parameter keys per OpenAPI spec
+INTERACTIONS_API_OPTIONAL_PARAMS = {
+    "tools",
+    "system_instruction",
+    "generation_config",
+    "stream",
+    "store",
+    "background",
+    "response_modalities",
+    "response_format",
+    "response_mime_type",
+    "previous_interaction_id",
+    "agent_config",
+}
 
 
 def get_provider_interactions_api_config(
@@ -41,17 +56,16 @@ class InteractionsAPIRequestUtils:
         params: Dict[str, Any],
     ) -> InteractionsAPIOptionalRequestParams:
         """
-        Filter parameters to only include those defined in InteractionsAPIOptionalRequestParams.
+        Filter parameters to only include valid optional params per OpenAPI spec.
 
         Args:
             params: Dictionary of parameters to filter (typically from locals())
 
         Returns:
-            InteractionsAPIOptionalRequestParams with only the valid parameters
+            Dict with only the valid optional parameters
         """
         from litellm.utils import PreProcessNonDefaultParams
 
-        valid_keys = get_type_hints(InteractionsAPIOptionalRequestParams).keys()
         custom_llm_provider = params.pop("custom_llm_provider", None)
         special_params = params.pop("kwargs", {})
         additional_drop_params = params.pop("additional_drop_params", None)
@@ -62,7 +76,7 @@ class InteractionsAPIRequestUtils:
                 special_params=special_params,
                 custom_llm_provider=custom_llm_provider,
                 additional_drop_params=additional_drop_params,
-                default_param_values={k: None for k in valid_keys},
+                default_param_values={k: None for k in INTERACTIONS_API_OPTIONAL_PARAMS},
                 additional_endpoint_specific_params=["input", "model", "agent"],
             )
         )

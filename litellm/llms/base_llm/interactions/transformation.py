@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx
 
-from litellm.types.interactions.main import (
+from litellm.types.interactions import (
     CancelInteractionResult,
     DeleteInteractionResult,
     InteractionInput,

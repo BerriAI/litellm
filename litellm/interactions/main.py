@@ -54,14 +54,13 @@ from litellm.interactions.utils import (
     get_provider_interactions_api_config,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.types.interactions.main import (
+from litellm.types.interactions import (
     CancelInteractionResult,
     DeleteInteractionResult,
     InteractionInput,
     InteractionsAPIResponse,
     InteractionsAPIStreamingResponse,
     InteractionTool,
-    InteractionToolChoiceConfig,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import client
@@ -80,13 +79,22 @@ async def acreate(
     input: Optional[InteractionInput] = None,
     # Tools (for model interactions)
     tools: Optional[List[InteractionTool]] = None,
-    tool_choice: Optional[InteractionToolChoiceConfig] = None,
-    # Instructions
-    instructions: Optional[str] = None,
-    # Agent config (for agent interactions)
-    agent_config: Optional[Dict[str, Any]] = None,
+    # System instruction
+    system_instruction: Optional[str] = None,
+    # Generation config
+    generation_config: Optional[Dict[str, Any]] = None,
     # Streaming
     stream: Optional[bool] = None,
+    # Storage
+    store: Optional[bool] = None,
+    # Background execution
+    background: Optional[bool] = None,
+    # Response format
+    response_modalities: Optional[List[str]] = None,
+    response_format: Optional[Dict[str, Any]] = None,
+    response_mime_type: Optional[str] = None,
+    # Continuation
+    previous_interaction_id: Optional[str] = None,
     # Extra params
     extra_headers: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
@@ -105,10 +113,15 @@ async def acreate(
         agent: The agent to use (e.g., "deep-research-pro-preview-12-2025")
         input: The input content (string, content object, or list)
         tools: Tools available for the model
-        tool_choice: Tool choice configuration
-        instructions: Instructions for the model/agent
-        agent_config: Agent configuration (for agent interactions)
+        system_instruction: System instruction for the interaction
+        generation_config: Generation configuration
         stream: Whether to stream the response
+        store: Whether to store the response for later retrieval
+        background: Whether to run in background
+        response_modalities: Requested response modalities (TEXT, IMAGE, AUDIO)
+        response_format: JSON schema for response format
+        response_mime_type: MIME type of the response
+        previous_interaction_id: ID of previous interaction for continuation
         extra_headers: Additional headers
         extra_body: Additional body parameters
         timeout: Request timeout
@@ -135,10 +148,15 @@ async def acreate(
             agent=agent,
             input=input,
             tools=tools,
-            tool_choice=tool_choice,
-            instructions=instructions,
-            agent_config=agent_config,
+            system_instruction=system_instruction,
+            generation_config=generation_config,
             stream=stream,
+            store=store,
+            background=background,
+            response_modalities=response_modalities,
+            response_format=response_format,
+            response_mime_type=response_mime_type,
+            previous_interaction_id=previous_interaction_id,
             extra_headers=extra_headers,
             extra_body=extra_body,
             timeout=timeout,
@@ -175,13 +193,22 @@ def create(
     input: Optional[InteractionInput] = None,
     # Tools (for model interactions)
     tools: Optional[List[InteractionTool]] = None,
-    tool_choice: Optional[InteractionToolChoiceConfig] = None,
-    # Instructions
-    instructions: Optional[str] = None,
-    # Agent config (for agent interactions)
-    agent_config: Optional[Dict[str, Any]] = None,
+    # System instruction
+    system_instruction: Optional[str] = None,
+    # Generation config
+    generation_config: Optional[Dict[str, Any]] = None,
     # Streaming
     stream: Optional[bool] = None,
+    # Storage
+    store: Optional[bool] = None,
+    # Background execution
+    background: Optional[bool] = None,
+    # Response format
+    response_modalities: Optional[List[str]] = None,
+    response_format: Optional[Dict[str, Any]] = None,
+    response_mime_type: Optional[str] = None,
+    # Continuation
+    previous_interaction_id: Optional[str] = None,
     # Extra params
     extra_headers: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
@@ -204,10 +231,15 @@ def create(
         agent: The agent to use (e.g., "deep-research-pro-preview-12-2025")
         input: The input content (string, content object, or list)
         tools: Tools available for the model
-        tool_choice: Tool choice configuration
-        instructions: Instructions for the model/agent
-        agent_config: Agent configuration (for agent interactions)
+        system_instruction: System instruction for the interaction
+        generation_config: Generation configuration
         stream: Whether to stream the response
+        store: Whether to store the response for later retrieval
+        background: Whether to run in background
+        response_modalities: Requested response modalities (TEXT, IMAGE, AUDIO)
+        response_format: JSON schema for response format
+        response_mime_type: MIME type of the response
+        previous_interaction_id: ID of previous interaction for continuation
         extra_headers: Additional headers
         extra_body: Additional body parameters
         timeout: Request timeout
