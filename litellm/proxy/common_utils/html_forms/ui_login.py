@@ -227,7 +227,7 @@ def build_ui_login_form(show_deprecation_banner: bool = False) -> str:
         {banner_html}
         <div class="logo-container">
             <div class="logo">
-                :check AriLLM
+                AriLLM
             </div>
         </div>
         <h2>Login</h2>
