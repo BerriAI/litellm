@@ -306,6 +306,8 @@ jobs:
 
       - name: Generate changelog with Claude
         id: changelog
+        # Claude Code Action only supports pull_request and release events, not push
+        if: github.event_name != 'push'
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -469,6 +471,39 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Generate basic message for push events
+        if: github.event_name == 'push'
+        run: |
+          echo "::group::Generating basic push notification (Claude skipped for push events)"
+
+          COMMIT_SHA="${{ github.sha }}"
+          SHORT_SHA="${COMMIT_SHA:0:7}"
+          AUTHOR="${{ github.actor }}"
+          COMMIT_MSG=$(git log -1 --format="%s" "${COMMIT_SHA}" 2>/dev/null || echo "Direct push")
+          COMMIT_COUNT=${{ steps.context.outputs.commit_count }}
+
+          # Generate basic Slack message (using printf to avoid heredoc indentation issues)
+          {
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ":zap:  *LiteLLM Direct Push*"
+            echo ""
+            echo "*${COMMIT_MSG}*"
+            echo ""
+            echo "┌───────────────────────────────────────"
+            echo "│  :label:  *Type:* Direct Push"
+            echo "│  :bust_in_silhouette:  *Author:* @${AUTHOR}"
+            echo "│  :hash:  *Commits:* ${COMMIT_COUNT:-1}"
+            echo "└───────────────────────────────────────"
+            echo ""
+            echo ":link: <https://github.com/${{ github.repository }}/commit/${COMMIT_SHA}|View commit \`${SHORT_SHA}\`>"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          } > slack_message.txt
+
+          echo "✅ Basic push message generated"
+          cat slack_message.txt
+
+          echo "::endgroup::"
+
       - name: Verify messages were created
         id: verify
         run: |
@@ -483,7 +518,10 @@ jobs:
           else
             echo "❌ Main message not found"
             echo "message_exists=false" >> $GITHUB_OUTPUT
-            exit 1
+            # Only fail for non-push events (push uses basic message)
+            if [[ "${{ github.event_name }}" != "push" ]]; then
+              exit 1
+            fi
           fi
 
           if [ -f "slack_thread.txt" ]; then
@@ -493,7 +531,7 @@ jobs:
             cat slack_thread.txt
             echo "--- End ---"
           else
-            echo "⚠️ Thread message not found (optional)"
+            echo "⚠️ Thread message not found (optional for push events)"
             echo "thread_exists=false" >> $GITHUB_OUTPUT
           fi
 
