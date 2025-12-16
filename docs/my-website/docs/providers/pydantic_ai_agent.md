@@ -12,19 +12,21 @@ Call Pydantic AI Agents via LiteLLM's A2A Gateway.
 | Supported Endpoints | `/v1/a2a/message/send` |
 | Provider Doc | [Pydantic AI Agents ↗](https://ai.pydantic.dev/agents/) |
 
-## Setup Pydantic AI Agent Server
+## LiteLLM A2A Gateway
 
-### Overview
+All Pydantic AI agents need to be exposed as A2A agents using the `to_a2a()` method. Once your agent server is running, you can add it to the LiteLLM Gateway.
 
-This example demonstrates how to create a [Pydantic AI](https://ai.pydantic.dev/agents/) agent and expose it as an A2A server using the native `to_a2a()` method.
+### 1. Setup Pydantic AI Agent Server
 
-### Install Dependencies
+Create a [Pydantic AI](https://ai.pydantic.dev/agents/) agent and expose it as an A2A server using the native `to_a2a()` method.
+
+#### Install Dependencies
 
 ```bash
 pip install pydantic-ai fasta2a uvicorn
 ```
 
-### Create Agent
+#### Create Agent
 
 ```python title="agent.py"
 from pydantic_ai import Agent
@@ -45,7 +47,7 @@ def calculator(expression: str) -> str:
 app = agent.to_a2a()
 ```
 
-### Run Server
+#### Run Server
 
 ```bash
 uvicorn agent:app --host 0.0.0.0 --port 9999
@@ -53,15 +55,11 @@ uvicorn agent:app --host 0.0.0.0 --port 9999
 
 Server runs at `http://localhost:9999`
 
-## LiteLLM A2A Gateway
-
-All Pydantic AI agents need to be exposed as A2A agents using the `to_a2a()` method. Once your agent server is running, you can add it to the LiteLLM Gateway.
-
-### 1. Navigate to Agents
+### 2. Navigate to Agents
 
 From the sidebar, click "Agents" to open the agent management page, then click "+ Add New Agent".
 
-### 2. Select Pydantic AI Agent Type
+### 3. Select Pydantic AI Agent Type
 
 Click "A2A Standard" to see available agent types, then select "Pydantic AI".
 
@@ -69,7 +67,7 @@ Click "A2A Standard" to see available agent types, then select "Pydantic AI".
 
 ![Select Pydantic AI](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/0998e38c-8534-40f1-931a-be96c2cae0ad/ascreenshot.jpeg?tl_px=0,52&br_px=2201,1283&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=421,277)
 
-### 3. Configure the Agent
+### 4. Configure the Agent
 
 Fill in the following fields:
 
@@ -82,19 +80,19 @@ Fill in the following fields:
 
 ![Enter Agent URL](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/303eae61-4352-4fb0-a537-806839c234ba/ascreenshot.jpeg?tl_px=0,212&br_px=2201,1443&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=456,277)
 
-### 4. Create Agent
+### 5. Create Agent
 
 Click "Create Agent" to save your configuration.
 
 ![Create Agent](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/914f3367-df7d-4244-bd4d-e99ce0a6193a/ascreenshot.jpeg?tl_px=416,438&br_px=2618,1669&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=690,277)
 
-### 5. Test in Playground
+### 6. Test in Playground
 
 Go to "Playground" in the sidebar to test your agent.
 
 ![Go to Playground](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/c73c9f3b-22af-4105-aafa-2d34c4986ef3/ascreenshot.jpeg?tl_px=0,0&br_px=2201,1230&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=44,97)
 
-### 6. Select A2A Endpoint
+### 7. Select A2A Endpoint
 
 Click the endpoint dropdown and search for "a2a", then select `/v1/a2a/message/send`.
 
@@ -104,7 +102,7 @@ Click the endpoint dropdown and search for "a2a", then select `/v1/a2a/message/s
 
 ![Select A2A Endpoint](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-16/41576fb1-d385-4fb2-84e9-142dd7fe5181/ascreenshot.jpeg?tl_px=0,0&br_px=2201,1230&force_format=jpeg&q=100&width=1120.0&wat=1&wat_opacity=0.7&wat_gravity=northwest&wat_url=https://colony-recorder.s3.us-west-1.amazonaws.com/images/watermarks/FB923C_standard.png&wat_pad=307,270)
 
-### 7. Select Your Agent and Send a Message
+### 8. Select Your Agent and Send a Message
 
 Pick your Pydantic AI agent from the dropdown and send a test message.
 
