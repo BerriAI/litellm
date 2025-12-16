@@ -46,6 +46,11 @@ ROUTE_ENDPOINT_MAPPING = {
     "aget_skill": "/skills/{skill_id}",
     "adelete_skill": "/skills/{skill_id}",
     "aingest": "/rag/ingest",
+    # Google Interactions API routes
+    "acreate_interaction": "/interactions",
+    "aget_interaction": "/interactions/{interaction_id}",
+    "adelete_interaction": "/interactions/{interaction_id}",
+    "acancel_interaction": "/interactions/{interaction_id}/cancel",
 }
 
 
@@ -147,6 +152,10 @@ async def route_request(
         "adelete_skill",
         "aingest",
         "anthropic_messages",
+        "acreate_interaction",
+        "aget_interaction",
+        "adelete_interaction",
+        "acancel_interaction",
     ],
 ):
     """
@@ -197,6 +206,13 @@ async def route_request(
             "aretrieve_container_file",
             "adelete_container_file",
             "aretrieve_container_file_content",
+        ]:
+            return getattr(llm_router, f"{route_type}")(**data)
+        # Interactions API: get/delete/cancel don't need model routing
+        if route_type in [
+            "aget_interaction",
+            "adelete_interaction",
+            "acancel_interaction",
         ]:
             return getattr(llm_router, f"{route_type}")(**data)
         if route_type in [

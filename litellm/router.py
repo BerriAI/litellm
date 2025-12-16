@@ -4024,6 +4024,8 @@ class Router:
                 "alist_skills",
                 "aget_skill",
                 "adelete_skill",
+                "acreate_interaction",
+                "create_interaction",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
