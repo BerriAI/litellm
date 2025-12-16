@@ -96,6 +96,65 @@ def test_get_complete_url():
 
 
 @pytest.mark.serial
+def test_get_complete_url_with_deployment_path():
+    """
+    Test that get_complete_url correctly strips deployment paths from api_base.
+
+    Unlike Chat Completions API which uses /openai/deployments/{deployment-id}/chat/completions,
+    the Responses API uses /openai/responses and the model is specified in the request body.
+    """
+    azure_openai_responses_apiconfig = AzureOpenAIResponsesAPIConfig()
+    litellm_params = {"api_version": "2024-05-01-preview"}
+
+    # Test with full deployment path including /chat/completions
+    api_base_full = "https://ai-azure-product-dev.openai.azure.com/openai/deployments/gpt-4o/chat/completions"
+    result_full = azure_openai_responses_apiconfig.get_complete_url(
+        api_base=api_base_full, litellm_params=litellm_params
+    )
+    expected = "https://ai-azure-product-dev.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
+    assert result_full == expected, f"Expected {expected}, got {result_full}"
+
+    # Test with deployment path without /chat/completions suffix
+    api_base_no_suffix = "https://ai-azure-product-dev.openai.azure.com/openai/deployments/gpt-4o"
+    result_no_suffix = azure_openai_responses_apiconfig.get_complete_url(
+        api_base=api_base_no_suffix, litellm_params=litellm_params
+    )
+    assert result_no_suffix == expected, f"Expected {expected}, got {result_no_suffix}"
+
+    # Test with deployment path with other suffixes
+    api_base_other = "https://ai-azure-product-dev.openai.azure.com/openai/deployments/gpt-4o/embeddings"
+    result_other = azure_openai_responses_apiconfig.get_complete_url(
+        api_base=api_base_other, litellm_params=litellm_params
+    )
+    assert result_other == expected, f"Expected {expected}, got {result_other}"
+
+
+@pytest.mark.serial
+def test_get_complete_url_preserves_correct_base():
+    """
+    Test that get_complete_url preserves correct api_base URLs that don't have deployment paths.
+    """
+    azure_openai_responses_apiconfig = AzureOpenAIResponsesAPIConfig()
+    litellm_params = {"api_version": "2024-05-01-preview"}
+
+    # Test base URL without any path
+    api_base = "https://myresource.openai.azure.com"
+    result = azure_openai_responses_apiconfig.get_complete_url(
+        api_base=api_base, litellm_params=litellm_params
+    )
+    expected = "https://myresource.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
+    assert result == expected
+
+    # Test URL that already has /openai/responses path
+    api_base_with_responses = "https://myresource.openai.azure.com/openai/responses"
+    result_with_responses = azure_openai_responses_apiconfig.get_complete_url(
+        api_base=api_base_with_responses, litellm_params=litellm_params
+    )
+    expected_with_responses = "https://myresource.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
+    assert result_with_responses == expected_with_responses
+
+
+@pytest.mark.serial
 def test_azure_o_series_responses_api_supported_params():
     """Test that Azure OpenAI O-series responses API excludes temperature from supported parameters."""
     config = AzureOpenAIOSeriesResponsesAPIConfig()
