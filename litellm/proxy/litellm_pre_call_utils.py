@@ -843,6 +843,11 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         )
     )
 
+    # Add headers to metadata for guardrails to access (fixes #17477)
+    # Guardrails use metadata["headers"] to access request headers (e.g., User-Agent)
+    if _metadata_variable_name in data and isinstance(data[_metadata_variable_name], dict):
+        data[_metadata_variable_name]["headers"] = _headers
+
     # check for forwardable headers
     data = LiteLLMProxyRequestSetup.add_headers_to_llm_call_by_model_group(
         data=data, headers=_headers, user_api_key_dict=user_api_key_dict
