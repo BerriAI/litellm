@@ -36,7 +36,7 @@ import ModelAnalyticsTab from "@/app/(dashboard)/models-and-endpoints/components
 import ModelRetrySettingsTab from "@/app/(dashboard)/models-and-endpoints/components/ModelRetrySettingsTab";
 import PriceDataManagementTab from "@/app/(dashboard)/models-and-endpoints/components/PriceDataManagementTab";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
-import { all_admin_roles, internalUserRoles } from "@/utils/roles";
+import { all_admin_roles, internalUserRoles, isProxyAdminRole, isUserTeamAdminForAnyTeam } from "@/utils/roles";
 import HealthCheckComponent from "../../../components/model_dashboard/HealthCheckComponent";
 import ModelGroupAliasSettings from "../../../components/model_group_alias_settings";
 import NotificationsManager from "../../../components/molecules/notifications_manager";
@@ -161,8 +161,13 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
   const credentialsList = credentialsResponse?.credentials || [];
   const { data: uiSettings } = useUISettings(accessToken || "");
 
+  const isProxyAdmin = userRole && isProxyAdminRole(userRole);
   const isInternalUser = userRole && internalUserRoles.includes(userRole);
-  const shouldHideAddModelTab = isInternalUser && uiSettings?.values?.disable_model_add_for_internal_users === true;
+  const isUserTeamAdmin = userID && isUserTeamAdminForAnyTeam(teams, userID);
+  const addModelDisabledForInternalUsers =
+    isInternalUser && uiSettings?.values?.disable_model_add_for_internal_users === true;
+  // Hide tab if user is NOT a proxy admin AND (internal user with setting enabled OR not a team admin)
+  const shouldHideAddModelTab = !isProxyAdmin && (addModelDisabledForInternalUsers || !isUserTeamAdmin);
 
   const setProviderModelsFn = (provider: Providers) => {
     const _providerModels = getProviderModels(provider, modelMap);
