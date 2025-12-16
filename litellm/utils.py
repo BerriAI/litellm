@@ -270,6 +270,7 @@ if TYPE_CHECKING:
     # Heavy types that are only needed for type checking; avoid importing
     # their modules at runtime during `litellm` import.
     from litellm.llms.base_llm.files.transformation import BaseFilesConfig
+    from litellm.proxy._types import AllowedModelRegion
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
@@ -320,7 +321,6 @@ from .exceptions import (
     UnprocessableEntityError,
     UnsupportedParamsError,
 )
-from .proxy._types import AllowedModelRegion, KeyManagementSystem
 from .types.llms.openai import (
     ChatCompletionDeltaToolCallChunk,
     ChatCompletionToolCallChunk,
