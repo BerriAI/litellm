@@ -5167,6 +5167,34 @@
         "mode": "rerank",
         "output_cost_per_token": 0.0
     },
+        "azure_ai/deepseek-v3.2": {
+        "input_cost_per_token": 5.8e-07,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 163840,
+        "max_output_tokens": 163840,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 1.68e-06,
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "azure_ai/deepseek-v3.2-speciale": {
+        "input_cost_per_token": 5.8e-07,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 163840,
+        "max_output_tokens": 163840,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 1.68e-06,
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
     "azure_ai/deepseek-r1": {
         "input_cost_per_token": 1.35e-06,
         "litellm_provider": "azure_ai",
