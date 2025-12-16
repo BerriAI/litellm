@@ -697,7 +697,7 @@ class ModelResponseIterator:
                         type="function",
                         function=ChatCompletionToolCallFunctionChunk(
                             name=content_block_start["content_block"]["name"],
-                            arguments=content_block_start["content_block"]["input"],
+                            arguments=str(content_block_start["content_block"]["input"]),
                         ),
                         index=self.tool_index,
                     )
