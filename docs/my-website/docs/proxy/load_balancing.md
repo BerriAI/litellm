@@ -249,15 +249,7 @@ class RouterModelGroupAliasItem(TypedDict):
 
 ## Deployment Ordering (Priority)
 
-Use the `order` parameter in `litellm_params` to set the priority of deployments within a model group. Deployments with a lower `order` value are tried first. If multiple deployments share the same `order` value, the routing strategy (default: `simple-shuffle`) picks among them.
-
-### Use Cases
-
-- **Primary/Fallback pattern**: Use your preferred deployment first, fall back to others only when needed
-- **Tiered routing**: Route to cheaper or faster deployments first
-- **Gradual rollout**: Test new deployments by giving them higher order values
-
-### Configuration
+Set `order` in `litellm_params` to prioritize deployments. Lower values = higher priority. When multiple deployments share the same `order`, the routing strategy picks among them.
 
 ```yaml
 model_list:
@@ -265,48 +257,16 @@ model_list:
     litellm_params:
       model: azure/gpt-4-primary
       api_key: os.environ/AZURE_API_KEY
-      api_base: os.environ/AZURE_API_BASE
       order: 1  # 👈 Highest priority - always tried first
 
   - model_name: gpt-4
     litellm_params:
-      model: azure/gpt-4-secondary
+      model: azure/gpt-4-fallback
       api_key: os.environ/AZURE_API_KEY_2
-      api_base: os.environ/AZURE_API_BASE_2
       order: 2  # 👈 Used when order=1 is unavailable
-
-  - model_name: gpt-4
-    litellm_params:
-      model: openai/gpt-4
-      api_key: os.environ/OPENAI_API_KEY
-      order: 2  # 👈 Same order as above - routing strategy picks between these
-
-router_settings:
-  routing_strategy: simple-shuffle  # Applied when multiple deployments have same order
 ```
 
-### How It Works
-
-1. **Filter by lowest order**: Only deployments with the minimum `order` value are considered
-2. **Apply routing strategy**: If multiple deployments have the same `order`, the routing strategy (e.g., `simple-shuffle`) selects among them
-3. **Fallback**: If all lowest-order deployments are unavailable (e.g., cooled down), the router moves to the next order level
-
-### Example Scenario
-
-| Deployment | Order | Status |
-|------------|-------|--------|
-| azure/gpt-4-primary | 1 | ✅ Healthy |
-| azure/gpt-4-secondary | 2 | ✅ Healthy |
-| openai/gpt-4 | 2 | ✅ Healthy |
-
-**Request flow:**
-- All requests go to `azure/gpt-4-primary` (order=1)
-- If `azure/gpt-4-primary` gets rate-limited → Router uses `simple-shuffle` to pick between the two order=2 deployments
-- When `azure/gpt-4-primary` recovers → Requests return to it
-
-:::tip
-Deployments without an `order` value are treated as having the lowest priority and are only selected when all ordered deployments are unavailable.
-:::
+If `order=1` deployment is unavailable (e.g., rate-limited), the router falls back to `order=2` deployments.
 
 ### When You'll See Load Balancing in Action
 
