@@ -37,8 +37,14 @@ from litellm.types.utils import CallTypes, CallTypesLiteral
 
 try:
     from litellm_enterprise.enterprise_callbacks.send_emails.base_email import BaseEmailLogger
+    from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import SendGridEmailLogger
+    from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import SMTPEmailLogger
+    from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import ResendEmailLogger
 except ImportError:
     BaseEmailLogger = None  # type: ignore
+    SendGridEmailLogger = None  # type: ignore
+    SMTPEmailLogger = None  # type: ignore
+    ResendEmailLogger = None  # type: ignore
 
 try:
     import backoff
@@ -131,6 +137,33 @@ def print_verbose(print_statement):
     verbose_proxy_logger.debug("{}\n{}".format(print_statement, traceback.format_exc()))
     if litellm.set_verbose:
         print(f"LiteLLM Proxy: {print_statement}")  # noqa
+
+
+def _get_email_logger_class():
+    """
+    Determine which email logger class to use based on environment variables.
+    Priority: SendGrid > Resend > SMTP > BaseEmailLogger (fallback)
+    
+    Returns:
+        The email logger class to use, or None if BaseEmailLogger is not available
+    """
+    if BaseEmailLogger is None:
+        return None
+    
+    # Check for SendGrid API key
+    if SendGridEmailLogger is not None and os.getenv("SENDGRID_API_KEY"):
+        return SendGridEmailLogger
+    
+    # Check for Resend API key
+    if ResendEmailLogger is not None and os.getenv("RESEND_API_KEY"):
+        return ResendEmailLogger
+    
+    # Check for SMTP configuration
+    if SMTPEmailLogger is not None and os.getenv("SMTP_HOST"):
+        return SMTPEmailLogger
+    
+    # Fallback to BaseEmailLogger (though it won't actually send emails)
+    return BaseEmailLogger
 
 
 class InternalUsageCache:
@@ -273,9 +306,12 @@ class ProxyLogging:
         )
         self.email_logging_instance: Optional[Any] = None
         if BaseEmailLogger is not None:
-            self.email_logging_instance = BaseEmailLogger(
-                internal_usage_cache=self.internal_usage_cache.dual_cache,
-            )
+            email_logger_class = _get_email_logger_class()
+            if email_logger_class is not None:
+                # All email logger classes now accept internal_usage_cache
+                self.email_logging_instance = email_logger_class(
+                    internal_usage_cache=self.internal_usage_cache.dual_cache,
+                )
         self.premium_user = premium_user
         self.service_logging_obj = ServiceLogging()
         self.db_spend_update_writer = DBSpendUpdateWriter()
@@ -1166,8 +1202,6 @@ class ProxyLogging:
         ],
         user_info: CallInfo,
     ):
-        print("BUDGET ALERTS", type, user_info)
-        print("ALERTING", self.alerting)
         if self.alerting is None:
             # do nothing if alerting is not switched on
             return
@@ -1179,7 +1213,6 @@ class ProxyLogging:
             )
 
         if "email" in self.alerting and self.email_logging_instance is not None:
-            print("BUDGET ALERTS EMAIL", type, user_info)
             await self.email_logging_instance.budget_alerts(
                 type=type,
                 user_info=user_info,

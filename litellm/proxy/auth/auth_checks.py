@@ -1911,6 +1911,7 @@ async def _virtual_key_max_budget_check(
             token=valid_token.token,
             spend=valid_token.spend,
             max_budget=valid_token.max_budget,
+            soft_budget=valid_token.soft_budget,
             user_id=valid_token.user_id,
             team_id=valid_token.team_id,
             organization_id=valid_token.org_id,
@@ -1939,6 +1940,7 @@ async def _virtual_key_max_budget_check(
 async def _virtual_key_soft_budget_check(
     valid_token: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLogging,
+    user_obj: Optional[LiteLLM_UserTable] = None,
 ):
     """
     Triggers a budget alert if the token is over it's soft budget.
@@ -1961,12 +1963,11 @@ async def _virtual_key_soft_budget_check(
             team_id=valid_token.team_id,
             team_alias=valid_token.team_alias,
             organization_id=valid_token.org_id,
-            user_email=None,
+            user_email=user_obj.user_email if user_obj else None,
             key_alias=valid_token.key_alias,
             event_group=Litellm_EntityType.KEY,
         )
 
-        print("VIRTUAL KEY SOFT BUDGET CHECK", call_info.json())
         asyncio.create_task(
             proxy_logging_obj.budget_alerts(
                 type="soft_budget",

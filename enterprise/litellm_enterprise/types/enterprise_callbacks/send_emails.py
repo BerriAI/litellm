@@ -36,6 +36,7 @@ class EmailEvent(str, enum.Enum):
     virtual_key_created = "Virtual Key Created"
     new_user_invitation = "New User Invitation"
     virtual_key_rotated = "Virtual Key Rotated"
+    soft_budget_crossed = "Soft Budget Crossed"
 
 class EmailEventSettings(BaseModel):
     event: EmailEvent
@@ -51,6 +52,7 @@ class DefaultEmailSettings(BaseModel):
             EmailEvent.virtual_key_created: True,  # On by default
             EmailEvent.new_user_invitation: True,  # On by default
             EmailEvent.virtual_key_rotated: True,  # On by default
+            EmailEvent.soft_budget_crossed: True,  # On by default
         }
     )
     def to_dict(self) -> Dict[str, bool]:
