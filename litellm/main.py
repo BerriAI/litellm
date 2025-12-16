@@ -4476,6 +4476,12 @@ def embedding(  # noqa: PLR0915
 
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
+            
+            if encoding_format is not None:
+                optional_params["encoding_format"] = encoding_format
+            else:
+                # Omiting causes openai sdk to add default value of "float"
+                optional_params["encoding_format"] = None
 
             api_version = None
 
