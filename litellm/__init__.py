@@ -1056,7 +1056,6 @@ from .utils import client
 
 from .llms.bytez.chat.transformation import BytezChatConfig
 from .llms.custom_llm import CustomLLM
-from .llms.openai_like.chat.handler import OpenAILikeChatConfig
 from .llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig
 from .llms.galadriel.chat.transformation import GaladrielChatConfig
 from .llms.github.chat.transformation import GithubChatConfig
@@ -1554,6 +1553,7 @@ if TYPE_CHECKING:
 
     # LLM config classes - lazy loaded only
     AmazonConverseConfig: Type[Any]
+    OpenAILikeChatConfig: Type[Any]
 
 
 def __getattr__(name: str) -> Any:
