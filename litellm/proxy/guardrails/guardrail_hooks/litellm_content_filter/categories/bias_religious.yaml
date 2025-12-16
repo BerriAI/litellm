@@ -5,39 +5,60 @@ default_action: "BLOCK"
 
 # Keywords with severity levels
 keywords:
-  # High severity - explicit religious discrimination
-  - keyword: "religious war"
+  # High severity - religion terms that could be used discriminatorily
+  - keyword: "muslim"
     severity: "high"
-  - keyword: "holy war"
+  - keyword: "muslims"
     severity: "high"
-  - keyword: "kill the infidels"
+  - keyword: "islam"
     severity: "high"
-  - keyword: "crusade against"
+  - keyword: "islamic"
     severity: "high"
-  - keyword: "jihad against"
+  - keyword: "jew"
     severity: "high"
-  - keyword: "all muslims are terrorists"
+  - keyword: "jews"
     severity: "high"
-  - keyword: "all jews are greedy"
+  - keyword: "jewish"
     severity: "high"
-  - keyword: "jews control the world"
+  - keyword: "christian"
     severity: "high"
-  - keyword: "jewish conspiracy"
+  - keyword: "christians"
     severity: "high"
-  - keyword: "zionist conspiracy"
+  - keyword: "christianity"
     severity: "high"
-  - keyword: "islamophobia is justified"
+  - keyword: "atheist"
     severity: "high"
-  - keyword: "christians are stupid"
+  - keyword: "atheists"
     severity: "high"
-  - keyword: "atheists are immoral"
+  - keyword: "hindu"
     severity: "high"
-  - keyword: "muslims are barbaric"
+  - keyword: "hindus"
     severity: "high"
-  - keyword: "islam is evil"
+  - keyword: "hinduism"
     severity: "high"
-  - keyword: "christianity is a cult"
+  - keyword: "buddhist"
     severity: "high"
+  - keyword: "buddhists"
+    severity: "high"
+  - keyword: "buddhism"
+    severity: "high"
+  - keyword: "sikh"
+    severity: "high"
+  - keyword: "sikhs"
+    severity: "high"
+  - keyword: "catholic"
+    severity: "high"
+  - keyword: "catholics"
+    severity: "high"
+  - keyword: "protestant"
+    severity: "high"
+  - keyword: "protestants"
+    severity: "high"
+  - keyword: "mormon"
+    severity: "high"
+  - keyword: "mormons"
+    severity: "high"
+
   
   # Medium severity - context-dependent
   - keyword: "religious extremist"
@@ -46,96 +67,12 @@ keywords:
     severity: "medium"
   - keyword: "infidel"
     severity: "medium"
-
-# Multi-word phrases for context-aware detection
-phrases:
-  # Exact match phrases
-  - phrase: "all muslims are terrorists"
-    severity: "high"
-    match_type: "exact"
-  
-  - phrase: "islam promotes violence"
-    severity: "high"
-    match_type: "exact"
-  
-  - phrase: "jews control the media"
-    severity: "high"
-    match_type: "exact"
-  
-  - phrase: "jews control the banks"
-    severity: "high"
-    match_type: "exact"
-  
-  - phrase: "christians are intolerant"
-    severity: "high"
-    match_type: "exact"
-  
-  - phrase: "religion is poison"
-    severity: "high"
-    match_type: "exact"
-  
-  - phrase: "muslims want sharia law"
-    severity: "high"
-    match_type: "exact"
-  
-  - phrase: "ban all muslims"
-    severity: "high"
-    match_type: "exact"
-  
-  - phrase: "atheists have no morals"
-    severity: "high"
-    match_type: "exact"
-  
-  # Fuzzy match phrases
-  - phrase: "all muslims are"
-    severity: "high"
-    match_type: "fuzzy"
-  
-  - phrase: "all jews are"
-    severity: "high"
-    match_type: "fuzzy"
-  
-  - phrase: "all christians are"
-    severity: "high"
-    match_type: "fuzzy"
-  
-  - phrase: "all atheists are"
-    severity: "high"
-    match_type: "fuzzy"
-  
-  - phrase: "all hindus are"
-    severity: "high"
-    match_type: "fuzzy"
-  
-  - phrase: "all buddhists are"
-    severity: "high"
-    match_type: "fuzzy"
-  
-  # Proximity-based detection
-  - phrase: "muslim terrorist"
-    severity: "high"
-    match_type: "proximity"
-    max_distance: 2
-  
-  - phrase: "jewish conspiracy"
-    severity: "high"
-    match_type: "proximity"
-    max_distance: 3
-  
-  - phrase: "christian extremist"
-    severity: "high"
-    match_type: "proximity"
-    max_distance: 2
-  
-  - phrase: "islam violence"
-    severity: "high"
-    match_type: "proximity"
-    max_distance: 3
-  
-  - phrase: "jews money"
-    severity: "high"
-    match_type: "proximity"
-    max_distance: 3
+  - keyword: "infidels"
+    severity: "medium"
+  - keyword: "jihad"
+    severity: "medium"
+  - keyword: "crusade"
+    severity: "medium"
 
 # Exceptions - legitimate religious discussion, education, interfaith work
 exceptions:
@@ -153,8 +90,29 @@ exceptions:
   - "religious equality"
   - "anti-muslim bias"
   - "anti-semitism"
+  - "antisemitism"
   - "religious bigotry"
   - "theological"
   - "scripture"
   - "comparative religion"
-
+  - "protect muslims"
+  - "protect jews"
+  - "protect christians"
+  - "muslim rights"
+  - "jewish rights"
+  - "christian rights"
+  - "muslim community"
+  - "jewish community"
+  - "christian community"
+  - "muslim culture"
+  - "jewish culture"
+  - "christian culture"
+  - "islam teaches"
+  - "judaism teaches"
+  - "christianity teaches"
+  - "muslim faith"
+  - "jewish faith"
+  - "christian faith"
+  - "muslim americans"
+  - "jewish americans"
+  - "christian americans"

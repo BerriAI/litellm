@@ -5,117 +5,31 @@ default_action: "BLOCK"
 
 # Keywords with severity levels
 keywords:
-  # High severity - explicit discriminatory language and slurs
-  - keyword: "women belong in the kitchen"
+  # High severity - gender identity terms
+  - keyword: "women"
     severity: "high"
-  - keyword: "women are inferior"
+  - keyword: "woman"
     severity: "high"
-  - keyword: "men are superior"
+  - keyword: "men"
     severity: "high"
-  - keyword: "women can't lead"
+  - keyword: "man"
     severity: "high"
-  - keyword: "women shouldn't work"
+  - keyword: "female"
     severity: "high"
-  - keyword: "women are too emotional"
+  - keyword: "females"
     severity: "high"
-  - keyword: "men are better at"
+  - keyword: "male"
     severity: "high"
-  - keyword: "women drivers"
-    severity: "medium"
-  - keyword: "typical woman"
-    severity: "medium"
-  - keyword: "typical man"
-    severity: "medium"
-  - keyword: "act like a man"
-    severity: "medium"
-  - keyword: "man up"
-    severity: "medium"
-  - keyword: "be a man"
-    severity: "medium"
-  - keyword: "like a girl"
-    severity: "medium"
-  - keyword: "throw like a girl"
-    severity: "medium"
-  - keyword: "cry like a girl"
-    severity: "medium"
-  - keyword: "women are bad at"
+  - keyword: "males"
     severity: "high"
-  - keyword: "men are bad at"
+  - keyword: "girl"
     severity: "high"
-  - keyword: "gold digger"
-    severity: "medium"
-  - keyword: "feminazi"
+  - keyword: "girls"
     severity: "high"
-
-# Multi-word phrases for context-aware detection
-phrases:
-  # Exact match phrases - explicit stereotypes
-  - phrase: "women belong in the kitchen"
+  - keyword: "boy"
     severity: "high"
-    match_type: "exact"
-  
-  - phrase: "women can't do math"
+  - keyword: "boys"
     severity: "high"
-    match_type: "exact"
-  
-  - phrase: "women are too emotional to lead"
-    severity: "high"
-    match_type: "exact"
-  
-  - phrase: "men are naturally better"
-    severity: "high"
-    match_type: "exact"
-  
-  - phrase: "women shouldn't be in tech"
-    severity: "high"
-    match_type: "exact"
-  
-  - phrase: "hire women for diversity not merit"
-    severity: "high"
-    match_type: "exact"
-  
-  # Fuzzy match phrases - variations of stereotypes
-  - phrase: "all women are"
-    severity: "high"
-    match_type: "fuzzy"
-  
-  - phrase: "all men are"
-    severity: "high"
-    match_type: "fuzzy"
-  
-  - phrase: "women always"
-    severity: "high"
-    match_type: "fuzzy"
-  
-  - phrase: "men never"
-    severity: "high"
-    match_type: "fuzzy"
-  
-  # Proximity-based detection - stereotyping patterns
-  - phrase: "women emotional"
-    severity: "high"
-    match_type: "proximity"
-    max_distance: 3
-  
-  - phrase: "women irrational"
-    severity: "high"
-    match_type: "proximity"
-    max_distance: 3
-  
-  - phrase: "men unemotional"
-    severity: "medium"
-    match_type: "proximity"
-    max_distance: 3
-  
-  - phrase: "women weak"
-    severity: "high"
-    match_type: "proximity"
-    max_distance: 2
-  
-  - phrase: "men aggressive"
-    severity: "medium"
-    match_type: "proximity"
-    max_distance: 3
 
 # Exceptions - legitimate discussions about gender
 exceptions:
@@ -124,7 +38,7 @@ exceptions:
   - "gender studies"
   - "gender gap"
   - "gender discrimination"
-  - "combat gender bias"
+  - "combat gender"
   - "address gender"
   - "research shows"
   - "study found"
@@ -132,4 +46,8 @@ exceptions:
   - "gender expression"
   - "transgender"
   - "gender neutral"
-
+  - "women's rights"
+  - "women's health"
+  - "men's health"
+  - "gender bias"
+  - "gender equity"

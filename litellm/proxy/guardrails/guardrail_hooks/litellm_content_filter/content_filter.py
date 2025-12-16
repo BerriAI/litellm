@@ -42,37 +42,7 @@ from litellm.types.utils import ModelResponseStream
 from .patterns import get_compiled_pattern
 
 
-# Helper data structures for category-based detection
-class PhraseMatch:
-    """Represents a phrase to match with its configuration."""
-
-    def __init__(
-        self,
-        phrase: str,
-        severity: str,
-        match_type: str,
-        max_distance: Optional[int] = None,
-    ):
-        self.phrase = phrase
-        self.severity = severity
-        self.match_type = match_type  # exact, fuzzy, proximity
-        self.max_distance = max_distance
-        self.tokens = phrase.lower().split()
-        self.stemmed_tokens = self._stem_tokens(self.tokens)
-
-    def _stem_tokens(self, tokens: List[str]) -> List[str]:
-        """Simple stemming by removing common suffixes."""
-        stemmed = []
-        for token in tokens:
-            # Simple suffix removal (not perfect but good enough)
-            for suffix in ["ing", "ed", "s", "es", "er", "ly"]:
-                if token.endswith(suffix) and len(token) > len(suffix) + 2:
-                    token = token[: -len(suffix)]
-                    break
-            stemmed.append(token)
-        return stemmed
-
-
+# Helper data structure for category-based detection
 class CategoryConfig:
     """Configuration for a content category."""
 
@@ -82,23 +52,13 @@ class CategoryConfig:
         description: str,
         default_action: ContentFilterAction,
         keywords: List[Dict[str, str]],
-        phrases: List[Dict[str, Any]],
         exceptions: List[str],
-        identity_keywords: Optional[List[str]] = None,
-        negative_modifiers: Optional[List[str]] = None,
-        harmful_actions: Optional[List[str]] = None,
-        proximity_detection: Optional[Dict[str, Any]] = None,
     ):
         self.category_name = category_name
         self.description = description
         self.default_action = default_action
         self.keywords = keywords
-        self.phrases = [PhraseMatch(**p) for p in phrases]
         self.exceptions = [e.lower() for e in exceptions]
-        self.identity_keywords = identity_keywords or []
-        self.negative_modifiers = negative_modifiers or []
-        self.harmful_actions = harmful_actions or []
-        self.proximity_detection = proximity_detection or {}
 
 
 class ContentFilterGuardrail(CustomGuardrail):
@@ -131,11 +91,6 @@ class ContentFilterGuardrail(CustomGuardrail):
         keyword_redaction_tag: Optional[str] = None,
         categories: Optional[List[Dict[str, Any]]] = None,
         severity_threshold: str = "medium",
-        identity_keywords: Optional[List[str]] = None,
-        negative_modifiers: Optional[List[str]] = None,
-        harmful_actions: Optional[List[str]] = None,
-        identity_plus_negative: Optional[Dict[str, Any]] = None,
-        action_plus_identity: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
         """
@@ -152,11 +107,6 @@ class ContentFilterGuardrail(CustomGuardrail):
             keyword_redaction_tag: Tag to use for keyword redaction
             categories: List of category configurations with enabled/action/severity settings
             severity_threshold: Minimum severity to block ("high", "medium", "low")
-            identity_keywords: List of identity keywords (e.g., 'gay', 'muslim', 'black')
-            negative_modifiers: List of negative modifiers (e.g., 'unnatural', 'disease')
-            harmful_actions: List of harmful action verbs (e.g., 'cure', 'eliminate')
-            identity_plus_negative: Config for detecting identity + negative proximity
-            action_plus_identity: Config for detecting action + identity proximity
         """
         super().__init__(
             guardrail_name=guardrail_name,
@@ -182,28 +132,6 @@ class ContentFilterGuardrail(CustomGuardrail):
         self.category_keywords: Dict[str, Tuple[str, str, ContentFilterAction]] = (
             {}
         )  # keyword -> (category, severity, action)
-        self.category_phrases: List[Tuple[PhraseMatch, str, ContentFilterAction]] = (
-            []
-        )  # (phrase_match, category, action)
-
-        # Proximity-based detection
-        self.identity_keywords: List[str] = [
-            kw.lower() for kw in (identity_keywords or [])
-        ]
-        self.negative_modifiers: List[str] = [
-            mod.lower() for mod in (negative_modifiers or [])
-        ]
-        self.harmful_actions: List[str] = [
-            action.lower() for action in (harmful_actions or [])
-        ]
-        self.identity_plus_negative_config = identity_plus_negative or {
-            "max_distance": 5,
-            "severity": "high",
-        }
-        self.action_plus_identity_config = action_plus_identity or {
-            "max_distance": 4,
-            "severity": "high",
-        }
 
         # Load categories if provided
         if categories:
@@ -253,7 +181,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         )
         verbose_proxy_logger.debug(
             f"Loaded {len(self.loaded_categories)} categories with "
-            f"{len(self.category_keywords)} keywords and {len(self.category_phrases)} phrases"
+            f"{len(self.category_keywords)} keywords"
         )
 
     def _load_categories(self, categories: List[Dict[str, Any]]) -> None:
@@ -327,52 +255,9 @@ class ContentFilterGuardrail(CustomGuardrail):
                             category_action,
                         )
 
-                # Add phrases from this category
-                for phrase_match in category.phrases:
-                    if self._should_apply_severity(
-                        phrase_match.severity, severity_threshold
-                    ):
-                        self.category_phrases.append(
-                            (phrase_match, category_name, category_action)
-                        )
-
-                # Merge proximity detection settings from category
-                if (
-                    hasattr(category, "identity_keywords")
-                    and category.identity_keywords
-                ):
-                    self.identity_keywords.extend(
-                        [kw.lower() for kw in category.identity_keywords]
-                    )
-                if (
-                    hasattr(category, "negative_modifiers")
-                    and category.negative_modifiers
-                ):
-                    self.negative_modifiers.extend(
-                        [mod.lower() for mod in category.negative_modifiers]
-                    )
-                if hasattr(category, "harmful_actions") and category.harmful_actions:
-                    self.harmful_actions.extend(
-                        [action.lower() for action in category.harmful_actions]
-                    )
-                if (
-                    hasattr(category, "proximity_detection")
-                    and category.proximity_detection
-                ):
-                    # Update proximity configs if provided in category
-                    if "identity_plus_negative" in category.proximity_detection:
-                        self.identity_plus_negative_config.update(
-                            category.proximity_detection["identity_plus_negative"]
-                        )
-                    if "action_plus_identity" in category.proximity_detection:
-                        self.action_plus_identity_config.update(
-                            category.proximity_detection["action_plus_identity"]
-                        )
-
                 verbose_proxy_logger.info(
                     f"Loaded category {category_name}: "
-                    f"{len(category.keywords)} keywords, {len(category.phrases)} phrases, "
-                    f"{len(getattr(category, 'identity_keywords', []))} identity keywords"
+                    f"{len(category.keywords)} keywords"
                 )
             except Exception as e:
                 verbose_proxy_logger.error(
@@ -397,12 +282,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             description=data.get("description", ""),
             default_action=ContentFilterAction(data.get("default_action", "BLOCK")),
             keywords=data.get("keywords", []),
-            phrases=data.get("phrases", []),
             exceptions=data.get("exceptions", []),
-            identity_keywords=data.get("identity_keywords", []),
-            negative_modifiers=data.get("negative_modifiers", []),
-            harmful_actions=data.get("harmful_actions", []),
-            proximity_detection=data.get("proximity_detection", {}),
         )
 
     def _should_apply_severity(self, severity: str, threshold: str) -> bool:
@@ -568,237 +448,6 @@ class ContentFilterGuardrail(CustomGuardrail):
                 return (keyword, category, severity, action)
         return None
 
-    def _check_category_phrases(
-        self, text: str
-    ) -> Optional[Tuple[str, str, str, ContentFilterAction]]:
-        """
-        Check text for category phrases using exact, fuzzy, or proximity matching.
-
-        Args:
-            text: Text to check
-
-        Returns:
-            Tuple of (phrase, category, severity, action) if match found, None otherwise
-        """
-        text_lower = text.lower()
-        text_tokens = text_lower.split()
-
-        for phrase_match, category, action in self.category_phrases:
-            # Check category-specific exceptions
-            category_obj = self.loaded_categories.get(category)
-            if category_obj:
-                exception_found = False
-                for exception in category_obj.exceptions:
-                    if exception in text_lower:
-                        verbose_proxy_logger.debug(
-                            f"Category exception '{exception}' found, skipping phrase check"
-                        )
-                        exception_found = True
-                        break
-                if exception_found:
-                    continue
-
-            match_found = False
-
-            if phrase_match.match_type == "exact":
-                # Exact substring match
-                if phrase_match.phrase in text_lower:
-                    match_found = True
-
-            elif phrase_match.match_type == "fuzzy":
-                # Fuzzy match using stemmed tokens
-                match_found = self._fuzzy_phrase_match(
-                    text_tokens, phrase_match.stemmed_tokens
-                )
-
-            elif phrase_match.match_type == "proximity":
-                # Proximity match - words within max_distance
-                match_found = self._proximity_phrase_match(
-                    text_tokens, phrase_match.tokens, phrase_match.max_distance or 5
-                )
-
-            if match_found:
-                verbose_proxy_logger.debug(
-                    f"Category phrase '{phrase_match.phrase}' matched in category '{category}' "
-                    f"with severity {phrase_match.severity} (match_type: {phrase_match.match_type})"
-                )
-                return (phrase_match.phrase, category, phrase_match.severity, action)
-
-        return None
-
-    def _fuzzy_phrase_match(
-        self, text_tokens: List[str], phrase_stemmed_tokens: List[str]
-    ) -> bool:
-        """
-        Check if phrase tokens match text tokens using simple stemming.
-
-        Args:
-            text_tokens: Tokenized text
-            phrase_stemmed_tokens: Stemmed phrase tokens to find
-
-        Returns:
-            True if fuzzy match found
-        """
-        # Stem the text tokens
-        stemmed_text = []
-        for token in text_tokens:
-            stemmed_token = token
-            for suffix in ["ing", "ed", "s", "es", "er", "ly"]:
-                if (
-                    stemmed_token.endswith(suffix)
-                    and len(stemmed_token) > len(suffix) + 2
-                ):
-                    stemmed_token = stemmed_token[: -len(suffix)]
-                    break
-            stemmed_text.append(stemmed_token)
-
-        # Check if all phrase tokens appear in order (with gaps allowed)
-        phrase_idx = 0
-        for text_idx in range(len(stemmed_text)):
-            if phrase_idx >= len(phrase_stemmed_tokens):
-                return True
-            if stemmed_text[text_idx] == phrase_stemmed_tokens[phrase_idx]:
-                phrase_idx += 1
-
-        return phrase_idx >= len(phrase_stemmed_tokens)
-
-    def _proximity_phrase_match(
-        self, text_tokens: List[str], phrase_tokens: List[str], max_distance: int
-    ) -> bool:
-        """
-        Check if phrase tokens appear within max_distance of each other.
-
-        Args:
-            text_tokens: Tokenized text
-            phrase_tokens: Phrase tokens to find
-            max_distance: Maximum distance between tokens
-
-        Returns:
-            True if all phrase tokens found within max_distance
-        """
-        if not phrase_tokens:
-            return False
-
-        # Find positions of first phrase token
-        first_token = phrase_tokens[0]
-        first_positions = [
-            i for i, token in enumerate(text_tokens) if token == first_token
-        ]
-
-        # For each occurrence of the first token, check if remaining tokens are nearby
-        for start_pos in first_positions:
-            all_found = True
-            for phrase_token in phrase_tokens[1:]:
-                # Look for this token within max_distance
-                found = False
-                for check_pos in range(
-                    start_pos + 1, min(start_pos + max_distance + 1, len(text_tokens))
-                ):
-                    if text_tokens[check_pos] == phrase_token:
-                        found = True
-                        break
-                if not found:
-                    all_found = False
-                    break
-
-            if all_found:
-                return True
-
-        return False
-
-    def _check_proximity_based_bias(
-        self, text: str
-    ) -> Optional[Tuple[str, str, str, str]]:
-        """
-        Check for proximity-based bias detection.
-
-        Looks for combinations like:
-        - Identity keyword + negative modifier (e.g., "gay" + "unnatural")
-        - Harmful action + identity keyword (e.g., "cure" + "gay")
-
-        Args:
-            text: Text to check
-
-        Returns:
-            Tuple of (matched_text, identity_term, negative_term, type) if match found
-            type is either "identity_negative" or "action_identity"
-        """
-        if not self.identity_keywords:
-            return None
-
-        text_lower = text.lower()
-        text_tokens = text_lower.split()
-
-        # Check identity + negative modifier proximity
-        if self.negative_modifiers:
-            max_dist = self.identity_plus_negative_config.get("max_distance", 5)
-            for identity_kw in self.identity_keywords:
-                if identity_kw not in text_lower:
-                    continue
-                # Find all positions of this identity keyword
-                identity_positions = [
-                    i for i, token in enumerate(text_tokens) if identity_kw in token
-                ]
-
-                for neg_mod in self.negative_modifiers:
-                    if neg_mod not in text_lower:
-                        continue
-                    # Find all positions of this negative modifier
-                    neg_positions = [
-                        i for i, token in enumerate(text_tokens) if neg_mod in token
-                    ]
-
-                    # Check if any identity position is within max_dist of any negative position
-                    for id_pos in identity_positions:
-                        for neg_pos in neg_positions:
-                            if abs(id_pos - neg_pos) <= max_dist:
-                                verbose_proxy_logger.debug(
-                                    f"Proximity match: '{identity_kw}' near '{neg_mod}' "
-                                    f"(distance: {abs(id_pos - neg_pos)})"
-                                )
-                                return (
-                                    f"{identity_kw} ... {neg_mod}",
-                                    identity_kw,
-                                    neg_mod,
-                                    "identity_negative",
-                                )
-
-        # Check harmful action + identity proximity
-        if self.harmful_actions:
-            max_dist = self.action_plus_identity_config.get("max_distance", 4)
-            for action in self.harmful_actions:
-                if action not in text_lower:
-                    continue
-                # Find all positions of this harmful action
-                action_positions = [
-                    i for i, token in enumerate(text_tokens) if action in token
-                ]
-
-                for identity_kw in self.identity_keywords:
-                    if identity_kw not in text_lower:
-                        continue
-                    # Find all positions of this identity keyword
-                    identity_positions = [
-                        i for i, token in enumerate(text_tokens) if identity_kw in token
-                    ]
-
-                    # Check if any action position is within max_dist of any identity position
-                    for action_pos in action_positions:
-                        for id_pos in identity_positions:
-                            if abs(action_pos - id_pos) <= max_dist:
-                                verbose_proxy_logger.debug(
-                                    f"Proximity match: '{action}' near '{identity_kw}' "
-                                    f"(distance: {abs(action_pos - id_pos)})"
-                                )
-                                return (
-                                    f"{action} ... {identity_kw}",
-                                    identity_kw,
-                                    action,
-                                    "action_identity",
-                                )
-
-        return None
-
     def _check_blocked_words(
         self, text: str
     ) -> Optional[Tuple[str, ContentFilterAction, Optional[str]]]:
@@ -894,7 +543,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             for category in self.loaded_categories.values():
                 all_exceptions.extend(category.exceptions)
 
-            # Check category keywords first
+            # Check category keywords
             category_keyword_match = self._check_category_keywords(text, all_exceptions)
             if category_keyword_match:
                 keyword, category, severity, action = category_keyword_match
@@ -923,68 +572,6 @@ class ContentFilterGuardrail(CustomGuardrail):
                     )
                     verbose_proxy_logger.info(
                         f"Masked category keyword '{keyword}' from {category} (severity: {severity})"
-                    )
-
-            # Check category phrases
-            category_phrase_match = self._check_category_phrases(text)
-            if category_phrase_match:
-                phrase, category, severity, action = category_phrase_match
-                if action == ContentFilterAction.BLOCK:
-                    error_msg = (
-                        f"Content blocked: {category} category phrase '{phrase}' detected "
-                        f"(severity: {severity})"
-                    )
-                    verbose_proxy_logger.warning(error_msg)
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "error": error_msg,
-                            "category": category,
-                            "phrase": phrase,
-                            "severity": severity,
-                        },
-                    )
-                elif action == ContentFilterAction.MASK:
-                    # Replace phrase with redaction tag
-                    text = re.sub(
-                        re.escape(phrase),
-                        self.keyword_redaction_tag,
-                        text,
-                        flags=re.IGNORECASE,
-                    )
-                    verbose_proxy_logger.info(
-                        f"Masked category phrase '{phrase}' from {category} (severity: {severity})"
-                    )
-
-            # Check proximity-based bias detection (identity + negative/action)
-            proximity_match = self._check_proximity_based_bias(text)
-            if proximity_match:
-                matched_text, identity_term, negative_term, match_type = proximity_match
-
-                # Determine severity and action based on config
-                if match_type == "identity_negative":
-                    severity = self.identity_plus_negative_config.get(
-                        "severity", "high"
-                    )
-                else:  # action_identity
-                    severity = self.action_plus_identity_config.get("severity", "high")
-
-                # Check if severity meets threshold
-                if self._should_apply_severity(severity, self.severity_threshold):
-                    error_msg = (
-                        f"Content blocked: proximity-based bias detected - "
-                        f"'{identity_term}' near '{negative_term}' (type: {match_type})"
-                    )
-                    verbose_proxy_logger.warning(error_msg)
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "error": error_msg,
-                            "identity_term": identity_term,
-                            "negative_term": negative_term,
-                            "match_type": match_type,
-                            "severity": severity,
-                        },
                     )
 
             # Check regex patterns - process ALL patterns, not just first match
