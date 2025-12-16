@@ -45,9 +45,6 @@ You can add A2A-compatible agents through the LiteLLM Admin UI.
 
 The URL should be the invocation URL for your A2A agent (e.g., `http://localhost:10001`).
 
-### Add Pydantic AI Agents
-
-Follow [this guide, to add your pydantic ai agent to LiteLLM Agent Gateway](./providers/pydantic_ai_agent#litellm-a2a-gateway)
 
 ### Add Azure AI Foundry Agents
 
@@ -60,6 +57,10 @@ Follow [this guide, to add your langgraph agent to LiteLLM Agent Gateway](./prov
 ### Add Bedrock AgentCore Agents
 
 Follow [this guide, to add your bedrock agentcore agent to LiteLLM Agent Gateway](./providers/bedrock_agentcore#litellm-a2a-gateway)
+
+### Add Pydantic AI Agents
+
+Follow [this guide, to add your pydantic ai agent to LiteLLM Agent Gateway](./providers/pydantic_ai_agent#litellm-a2a-gateway)
 
 ## Invoking your Agents
 
