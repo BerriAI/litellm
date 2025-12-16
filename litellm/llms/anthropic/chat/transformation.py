@@ -1132,19 +1132,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if content["type"] == "text":
                 text_content += content["text"]
             ## TOOL CALLING
-            elif content["type"] == "tool_use":
+            elif content["type"] == "tool_use" or content["type"] == "server_tool_use":
                 tool_call = AnthropicConfig.convert_tool_use_to_openai_format(
                     anthropic_tool_content=content,
-                    index=idx,
-                )
-                tool_calls.append(tool_call)
-            ## SERVER TOOL USE (for tool search)
-            elif content["type"] == "server_tool_use":
-                # Server tool use blocks are for tool search - treat as tool calls
-                # Note: using .get("input", {}) for server_tool_use as input may not be present
-                content_with_input = {**content, "input": content.get("input", {})}
-                tool_call = AnthropicConfig.convert_tool_use_to_openai_format(
-                    anthropic_tool_content=content_with_input,
                     index=idx,
                 )
                 tool_calls.append(tool_call)
@@ -1343,6 +1333,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 "context_management"
             )
 
+            container: Optional[Dict] = completion_response.get("container")
+
             provider_specific_fields: Dict[str, Any] = {
                 "citations": citations,
                 "thinking_blocks": thinking_blocks,
@@ -1351,7 +1343,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 provider_specific_fields["context_management"] = context_management
             if web_search_results is not None:
                 provider_specific_fields["web_search_results"] = web_search_results
-
+            if container is not None:
+                provider_specific_fields["container"] = container
+                
             _message = litellm.Message(
                 tool_calls=tool_calls,
                 content=text_content or None,
