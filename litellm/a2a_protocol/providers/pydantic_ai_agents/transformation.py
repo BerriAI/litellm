@@ -6,7 +6,7 @@ This module provides fake streaming by converting non-streaming responses into s
 """
 
 import asyncio
-from typing import Any, AsyncIterator, Dict, Optional
+from typing import Any, AsyncIterator, Dict
 from uuid import uuid4
 
 import httpx
