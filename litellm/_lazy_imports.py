@@ -154,6 +154,11 @@ DOTPROMPT_NAMES = (
     "set_global_prompt_directory",
 )
 
+# LLM config classes that support lazy loading via _lazy_import_llm_configs
+LLM_CONFIG_NAMES = (
+    "AmazonConverseConfig",
+)
+
 # Lazy import for utils module - imports only the requested item by name.
 # Note: PLR0915 (too many statements) is suppressed because the many if statements
 # are intentional - each attribute is imported individually only when requested,
@@ -612,3 +617,18 @@ def _lazy_import_dotprompt(name: str) -> Any:
         return _set_global_prompt_directory
 
     raise AttributeError(f"Dotprompt lazy import: unknown attribute {name!r}")
+
+
+def _lazy_import_llm_configs(name: str) -> Any:
+    """Lazy import for LLM config classes."""
+    _globals = _get_litellm_globals()
+
+    if name == "AmazonConverseConfig":
+        from .llms.bedrock.chat.converse_transformation import (
+            AmazonConverseConfig as _AmazonConverseConfig,
+        )
+
+        _globals["AmazonConverseConfig"] = _AmazonConverseConfig
+        return _AmazonConverseConfig
+
+    raise AttributeError(f"LLM config lazy import: unknown attribute {name!r}")
