@@ -1965,6 +1965,8 @@ async def _virtual_key_soft_budget_check(
             key_alias=valid_token.key_alias,
             event_group=Litellm_EntityType.KEY,
         )
+
+        print("VIRTUAL KEY SOFT BUDGET CHECK", call_info.json())
         asyncio.create_task(
             proxy_logging_obj.budget_alerts(
                 type="soft_budget",

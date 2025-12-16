@@ -5,7 +5,7 @@ Base class for sending emails to user after creating keys or invite links
 
 import json
 import os
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from litellm_enterprise.types.enterprise_callbacks.send_emails import (
     EmailEvent,
@@ -15,6 +15,7 @@ from litellm_enterprise.types.enterprise_callbacks.send_emails import (
 )
 
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.email_templates.email_footer import EMAIL_FOOTER
 from litellm.integrations.email_templates.key_created_email import (
@@ -26,7 +27,10 @@ from litellm.integrations.email_templates.key_rotated_email import (
 from litellm.integrations.email_templates.user_invitation_email import (
     USER_INVITATION_EMAIL_TEMPLATE,
 )
-from litellm.proxy._types import InvitationNew, UserAPIKeyAuth, WebhookEvent
+from litellm.integrations.email_templates.templates import (
+    SOFT_BUDGET_ALERT_EMAIL_TEMPLATE,
+)
+from litellm.proxy._types import CallInfo, InvitationNew, UserAPIKeyAuth, WebhookEvent
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.integrations.slack_alerting import LITELLM_LOGO_URL
 
@@ -39,6 +43,22 @@ class BaseEmailLogger(CustomLogger):
         EmailEvent.virtual_key_created: "LiteLLM: {event_message}",
         EmailEvent.virtual_key_rotated: "LiteLLM: {event_message}",
     }
+    DEFAULT_BUDGET_ALERT_TTL = 24 * 60 * 60  # 24 hours in seconds
+
+    def __init__(
+        self,
+        internal_usage_cache: Optional[DualCache] = None,
+        **kwargs,
+    ):
+        """
+        Initialize BaseEmailLogger
+
+        Args:
+            internal_usage_cache: DualCache instance for preventing duplicate alerts
+            **kwargs: Additional arguments passed to CustomLogger
+        """
+        super().__init__(**kwargs)
+        self.internal_usage_cache = internal_usage_cache or DualCache()
 
     async def send_user_invitation_email(self, event: WebhookEvent):
         """
@@ -153,6 +173,124 @@ class BaseEmailLogger(CustomLogger):
             html_body=email_html_content,
         )
         pass
+
+    async def send_soft_budget_alert_email(self, event: WebhookEvent):
+        """
+        Send email to user when soft budget is crossed
+        """
+        print("SENDING SOFT BUDGET ALERT EMAIL", event.json())
+        email_params = await self._get_email_params(
+            email_event=EmailEvent.virtual_key_created,  # Reuse existing event type for subject template
+            user_id=event.user_id,
+            user_email=event.user_email,
+            event_message=event.event_message or "Soft Budget Crossed",
+        )
+
+        verbose_proxy_logger.debug(
+            f"send_soft_budget_alert_email_event: {json.dumps(event.model_dump(exclude_none=True), indent=4, default=str)}"
+        )
+
+        # Format budget values
+        soft_budget_str = f"${event.soft_budget}" if event.soft_budget is not None else "N/A"
+        spend_str = f"${event.spend}" if event.spend is not None else "$0.00"
+        max_budget_info = ""
+        if event.max_budget is not None:
+            max_budget_info = f"<b>Maximum Budget:</b> ${event.max_budget} <br />"
+
+        email_html_content = SOFT_BUDGET_ALERT_EMAIL_TEMPLATE.format(
+            email_logo_url=email_params.logo_url,
+            recipient_email=email_params.recipient_email,
+            soft_budget=soft_budget_str,
+            spend=spend_str,
+            max_budget_info=max_budget_info,
+            base_url=email_params.base_url,
+            email_support_contact=email_params.support_contact,
+        )
+
+        await self.send_email(
+            from_email=self.DEFAULT_LITELLM_EMAIL,
+            to_email=[email_params.recipient_email],
+            subject=email_params.subject,
+            html_body=email_html_content,
+        )
+        pass
+
+    async def budget_alerts(
+        self,
+        type: Literal[
+            "token_budget",
+            "soft_budget",
+            "user_budget",
+            "team_budget",
+            "organization_budget",
+            "proxy_budget",
+            "projected_limit_exceeded",
+        ],
+        user_info: CallInfo,
+    ):
+        """
+        Send a budget alert via email
+
+        Args:
+            type: The type of budget alert to send
+            user_info: The user info to send the alert for
+        """
+        ## PREVENTITIVE ALERTING ##
+        # - Alert once within 24hr period
+        # - Cache this information
+        # - Don't re-alert, if alert already sent
+        _cache: DualCache = self.internal_usage_cache
+
+        # percent of max_budget left to spend
+        if user_info.max_budget is None and user_info.soft_budget is None:
+            return
+
+        # For soft_budget alerts, check if we've already sent an alert
+        if type == "soft_budget":
+            if user_info.soft_budget is not None and user_info.spend >= user_info.soft_budget:
+                # Generate cache key based on event type and identifier
+                _id = user_info.token or user_info.user_id or "default_id"
+                _cache_key = f"email_budget_alerts:soft_budget_crossed:{_id}"
+                
+                # Check if we've already sent this alert
+                result = await _cache.async_get_cache(key=_cache_key)
+                if result is None:
+                    # Create WebhookEvent for soft budget alert
+                    event_message = f"Soft Budget Crossed - Total Soft Budget: ${user_info.soft_budget}"
+                    webhook_event = WebhookEvent(
+                        event="soft_budget_crossed",
+                        event_message=event_message,
+                        spend=user_info.spend,
+                        max_budget=user_info.max_budget,
+                        soft_budget=user_info.soft_budget,
+                        token=user_info.token,
+                        customer_id=user_info.customer_id,
+                        user_id=user_info.user_id,
+                        team_id=user_info.team_id,
+                        team_alias=user_info.team_alias,
+                        organization_id=user_info.organization_id,
+                        user_email=user_info.user_email,
+                        key_alias=user_info.key_alias,
+                        projected_exceeded_date=user_info.projected_exceeded_date,
+                        projected_spend=user_info.projected_spend,
+                        event_group=user_info.event_group,
+                    )
+                    
+                    try:
+                        await self.send_soft_budget_alert_email(webhook_event)
+                        
+                        # Cache the alert to prevent duplicate sends
+                        await _cache.async_set_cache(
+                            key=_cache_key,
+                            value="SENT",
+                            ttl=self.DEFAULT_BUDGET_ALERT_TTL,
+                        )
+                    except Exception as e:
+                        verbose_proxy_logger.error(
+                            f"Error sending soft budget alert email: {e}",
+                            exc_info=True,
+                        )
+            return
 
     async def _get_email_params(
         self,
