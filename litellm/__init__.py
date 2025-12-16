@@ -1055,7 +1055,6 @@ from .utils import client
 
 from .llms.bytez.chat.transformation import BytezChatConfig
 from .llms.custom_llm import CustomLLM
-from .llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from .llms.openai_like.chat.handler import OpenAILikeChatConfig
 from .llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig
 from .llms.galadriel.chat.transformation import GaladrielChatConfig
@@ -1551,6 +1550,9 @@ if TYPE_CHECKING:
     module_level_aclient: AsyncHTTPHandler
     module_level_client: HTTPHandler
 
+    # LLM config classes - lazy loaded only
+    AmazonConverseConfig: Type[Any]
+
 
 def __getattr__(name: str) -> Any:
     """Lazy import handler"""
@@ -1565,6 +1567,7 @@ def __getattr__(name: str) -> Any:
         CACHING_NAMES,
         HTTP_HANDLER_NAMES,
         DOTPROMPT_NAMES,
+        LLM_CONFIG_NAMES,
     )
     
     # Lazy load cost_calculator functions
@@ -1618,6 +1621,12 @@ def __getattr__(name: str) -> Any:
         from ._lazy_imports import _lazy_import_dotprompt
 
         return _lazy_import_dotprompt(name)
+
+    # Lazy load LLM config classes
+    if name in LLM_CONFIG_NAMES:
+        from ._lazy_imports import _lazy_import_llm_configs
+
+        return _lazy_import_llm_configs(name)
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
