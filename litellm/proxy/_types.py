@@ -892,6 +892,12 @@ class GenerateKeyResponse(KeyRequestBase):
     updated_by: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    rotated_key_id: Optional[str] = Field(
+        default=None,
+        description="The hashed token ID of the old key that was rotated. "
+        "Only present when key regeneration was done with a grace period. "
+        "The old key remains active until its expiry time.",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -946,6 +952,14 @@ class RegenerateKeyRequest(GenerateKeyRequest):
     spend: Optional[float] = None
     metadata: Optional[dict] = None
     new_master_key: Optional[str] = None
+    key_rotation_grace_period: Optional[str] = Field(
+        default=None,
+        description="Grace period during which both old and new keys remain active. "
+        "Specify duration as seconds ('30s'), minutes ('30m'), hours ('30h'), or days ('30d'). "
+        "During this period, both keys can be used for authentication. "
+        "After the grace period, the old key expires automatically. "
+        "Example: '24h' means both keys work for 24 hours.",
+    )
 
 
 class KeyRequest(LiteLLMPydanticObjectBase):

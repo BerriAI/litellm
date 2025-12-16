@@ -2589,6 +2589,149 @@ def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
     return new_token
 
 
+async def _regenerate_key_with_grace_period(
+    prisma_client,
+    existing_key,
+    new_token: str,
+    new_token_hash: str,
+    new_token_key_name: str,
+    grace_period: str,
+    data: Optional[RegenerateKeyRequest],
+    hashed_api_key: str,
+    user_api_key_cache,
+    proxy_logging_obj,
+) -> GenerateKeyResponse:
+    """
+    Performs zero-downtime key rotation by:
+    1. Creating a NEW key record with the new token and existing key properties
+    2. Updating the OLD key to expire after the grace period
+    3. Both keys remain active during the grace period
+
+    Args:
+        prisma_client: The prisma database client
+        existing_key: The existing key record from the database
+        new_token: The new plaintext token
+        new_token_hash: The hashed new token
+        new_token_key_name: The display name for the new key
+        grace_period: Duration string for grace period (e.g., "24h", "7d")
+        data: Optional update data from the request
+        hashed_api_key: The hashed old token
+        user_api_key_cache: Cache for API keys
+        proxy_logging_obj: Proxy logging object
+
+    Returns:
+        GenerateKeyResponse with the new key and rotated_key_id pointing to old key
+    """
+    # Parse the grace period duration
+    grace_period_seconds = duration_in_seconds(grace_period)
+    old_key_expires = datetime.now(timezone.utc) + timedelta(seconds=grace_period_seconds)
+
+    verbose_proxy_logger.info(
+        f"Zero-downtime key rotation: old key will expire at {old_key_expires}"
+    )
+
+    # Get all properties from the existing key to create a new key record
+    existing_key_dict = dict(existing_key)
+
+    # Remove fields that should not be copied
+    fields_to_exclude = [
+        "token",  # Will use new token
+        "key_name",  # Will use new key name
+        "created_at",  # New key gets new timestamp
+        "updated_at",  # New key gets new timestamp
+        "litellm_budget_table",  # Relationship field
+        "litellm_organization_table",  # Relationship field
+        "object_permission",  # Relationship field
+    ]
+    for field in fields_to_exclude:
+        existing_key_dict.pop(field, None)
+
+    # Apply any updates from the request data
+    non_default_values = {}
+    if data is not None:
+        non_default_values = await prepare_key_update_data(
+            data=data, existing_key_row=existing_key
+        )
+        verbose_proxy_logger.debug(
+            "non_default_values for grace period rotation: %s", non_default_values
+        )
+
+    # Merge existing key properties with updates
+    new_key_data = {**existing_key_dict, **non_default_values}
+
+    # Set the new token and key name
+    new_key_data["token"] = new_token_hash
+    new_key_data["key_name"] = new_token_key_name
+
+    # Update rotation tracking metadata
+    existing_metadata = new_key_data.get("metadata") or {}
+    if isinstance(existing_metadata, str):
+        import json as json_module
+        existing_metadata = json_module.loads(existing_metadata)
+
+    existing_metadata["rotated_from"] = hashed_api_key
+    existing_metadata["rotation_time"] = datetime.now(timezone.utc).isoformat()
+    new_key_data["metadata"] = existing_metadata
+
+    # Increment rotation count
+    rotation_count = existing_key_dict.get("rotation_count") or 0
+    new_key_data["rotation_count"] = rotation_count + 1
+    new_key_data["last_rotation_at"] = datetime.now(timezone.utc)
+
+    # Jsonify the data for prisma
+    new_key_data = prisma_client.jsonify_object(data=new_key_data)
+
+    # Create the new key record
+    new_key_record = await prisma_client.db.litellm_verificationtoken.create(
+        data=new_key_data  # type: ignore
+    )
+
+    verbose_proxy_logger.info(
+        f"Created new key during zero-downtime rotation: {new_token_key_name}"
+    )
+
+    # Update the old key to expire after grace period
+    # Also add metadata to indicate it was rotated
+    old_key_metadata = existing_key.metadata or {}
+    if isinstance(old_key_metadata, str):
+        import json as json_module
+        old_key_metadata = json_module.loads(old_key_metadata)
+
+    old_key_metadata["rotated_to"] = new_token_hash
+    old_key_metadata["rotation_time"] = datetime.now(timezone.utc).isoformat()
+    old_key_metadata["rotation_grace_period"] = grace_period
+
+    old_key_update_data = {
+        "expires": old_key_expires,
+        "metadata": old_key_metadata,
+    }
+    old_key_update_data = prisma_client.jsonify_object(data=old_key_update_data)
+
+    await prisma_client.db.litellm_verificationtoken.update(
+        where={"token": hashed_api_key},
+        data=old_key_update_data,  # type: ignore
+    )
+
+    verbose_proxy_logger.info(
+        f"Updated old key to expire at {old_key_expires} during zero-downtime rotation"
+    )
+
+    # Invalidate the old key from cache so it gets refreshed with new expiry
+    await _delete_cache_key_object(
+        hashed_token=hashed_api_key,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    # Build the response
+    new_key_dict = dict(new_key_record) if new_key_record else {}
+    new_key_dict["key"] = new_token
+    new_key_dict["token_id"] = new_key_dict.pop("token", new_token_hash)
+    new_key_dict["rotated_key_id"] = hashed_api_key  # Reference to the old key
+
+    return GenerateKeyResponse(**new_key_dict)
+
+
 @router.post(
     "/key/{key:path}/regenerate",
     tags=["key management"],
@@ -2612,12 +2755,20 @@ async def regenerate_key_fn(
     """
     Regenerate an existing API key while optionally updating its parameters.
 
+    Supports two modes:
+    1. **Standard rotation** (default): Old key is immediately invalidated, new key takes its place.
+    2. **Zero-downtime rotation**: Pass `key_rotation_grace_period` to keep both old and new keys
+       active during the grace period. This allows gradual migration without service interruption.
+
     Parameters:
     - key: str (path parameter) - The key to regenerate
     - data: Optional[RegenerateKeyRequest] - Request body containing optional parameters to update
         - key: Optional[str] - The key to regenerate.
         - new_master_key: Optional[str] - The new master key to use, if key is the master key.
         - new_key: Optional[str] - The new key to use, if key is not the master key. If both set, new_master_key will be used.
+        - key_rotation_grace_period: Optional[str] - **Zero-downtime rotation**: Grace period during
+          which both old and new keys remain active. Specify as "30s", "5m", "24h", "7d", etc.
+          After grace period, old key expires automatically. When set, response includes `rotated_key_id`.
         - key_alias: Optional[str] - User-friendly key alias
         - user_id: Optional[str] - User ID associated with key
         - team_id: Optional[str] - Team ID associated with key
@@ -2643,8 +2794,9 @@ async def regenerate_key_fn(
 
     Returns:
     - GenerateKeyResponse containing the new key and its updated parameters
+    - When using grace period, includes `rotated_key_id` (hashed token of old key)
 
-    Example:
+    Example (Standard rotation - immediate):
     ```bash
     curl --location --request POST 'http://localhost:4000/key/sk-1234/regenerate' \
     --header 'Authorization: Bearer sk-1234' \
@@ -2653,6 +2805,16 @@ async def regenerate_key_fn(
         "max_budget": 100,
         "metadata": {"team": "core-infra"},
         "models": ["gpt-4", "gpt-3.5-turbo"]
+    }'
+    ```
+
+    Example (Zero-downtime rotation with 24h grace period):
+    ```bash
+    curl --location --request POST 'http://localhost:4000/key/sk-1234/regenerate' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data-raw '{
+        "key_rotation_grace_period": "24h"
     }'
     ```
 
@@ -2746,54 +2908,73 @@ async def regenerate_key_fn(
         new_token_hash = hash_token(new_token)
         new_token_key_name = f"sk-...{new_token[-4:]}"
 
-        # Prepare the update data
-        update_data = {
-            "token": new_token_hash,
-            "key_name": new_token_key_name,
-        }
+        # Check if zero-downtime rotation with grace period is requested
+        grace_period = data.key_rotation_grace_period if data else None
 
-        non_default_values = {}
-        if data is not None:
-            # Update with any provided parameters from GenerateKeyRequest
-            non_default_values = await prepare_key_update_data(
-                data=data, existing_key_row=_key_in_db
-            )
-            verbose_proxy_logger.debug("non_default_values: %s", non_default_values)
-
-        update_data.update(non_default_values)
-        update_data = prisma_client.jsonify_object(data=update_data)
-        # Update the token in the database
-        updated_token = await prisma_client.db.litellm_verificationtoken.update(
-            where={"token": hashed_api_key},
-            data=update_data,  # type: ignore
-        )
-
-        updated_token_dict = {}
-        if updated_token is not None:
-            updated_token_dict = dict(updated_token)
-
-        updated_token_dict["key"] = new_token
-        updated_token_dict["token_id"] = updated_token_dict.pop("token")
-
-        ### 3. remove existing key entry from cache
-        ######################################################################
-        if key:
-            await _delete_cache_key_object(
-                hashed_token=hash_token(key),
+        if grace_period:
+            # Zero-downtime rotation: create a NEW key, update OLD key to expire
+            response = await _regenerate_key_with_grace_period(
+                prisma_client=prisma_client,
+                existing_key=_key_in_db,
+                new_token=new_token,
+                new_token_hash=new_token_hash,
+                new_token_key_name=new_token_key_name,
+                grace_period=grace_period,
+                data=data,
+                hashed_api_key=hashed_api_key,
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
             )
+        else:
+            # Standard rotation: replace the token in-place (immediate invalidation)
+            # Prepare the update data
+            update_data = {
+                "token": new_token_hash,
+                "key_name": new_token_key_name,
+            }
 
-        if hashed_api_key:
-            await _delete_cache_key_object(
-                hashed_token=hash_token(key),
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
+            non_default_values = {}
+            if data is not None:
+                # Update with any provided parameters from GenerateKeyRequest
+                non_default_values = await prepare_key_update_data(
+                    data=data, existing_key_row=_key_in_db
+                )
+                verbose_proxy_logger.debug("non_default_values: %s", non_default_values)
+
+            update_data.update(non_default_values)
+            update_data = prisma_client.jsonify_object(data=update_data)
+            # Update the token in the database
+            updated_token = await prisma_client.db.litellm_verificationtoken.update(
+                where={"token": hashed_api_key},
+                data=update_data,  # type: ignore
             )
 
-        response = GenerateKeyResponse(
-            **updated_token_dict,
-        )
+            updated_token_dict = {}
+            if updated_token is not None:
+                updated_token_dict = dict(updated_token)
+
+            updated_token_dict["key"] = new_token
+            updated_token_dict["token_id"] = updated_token_dict.pop("token")
+
+            ### 3. remove existing key entry from cache
+            ######################################################################
+            if key:
+                await _delete_cache_key_object(
+                    hashed_token=hash_token(key),
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+
+            if hashed_api_key:
+                await _delete_cache_key_object(
+                    hashed_token=hash_token(key),
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+
+            response = GenerateKeyResponse(
+                **updated_token_dict,
+            )
 
         asyncio.create_task(
             KeyManagementEventHooks.async_key_rotated_hook(

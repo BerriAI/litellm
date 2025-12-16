@@ -2613,3 +2613,558 @@ def test_check_org_key_model_specific_limits_org_model_tpm_overallocation():
         "Allocated TPM limit=17000 + Key TPM limit=4000 is greater than organization TPM limit=20000"
         in str(exc_info.value.detail)
     )
+
+
+# ============================================
+# Zero-Downtime Key Rotation Tests
+# ============================================
+
+
+def test_regenerate_key_request_has_grace_period_field():
+    """
+    Test that RegenerateKeyRequest has the key_rotation_grace_period field.
+    """
+    from litellm.proxy._types import RegenerateKeyRequest
+
+    # Test that the field exists and can be set
+    request = RegenerateKeyRequest(key="sk-test123", key_rotation_grace_period="24h")
+
+    assert request.key_rotation_grace_period == "24h"
+
+    # Test default value is None
+    request_no_grace = RegenerateKeyRequest(key="sk-test123")
+    assert request_no_grace.key_rotation_grace_period is None
+
+
+def test_generate_key_response_has_rotated_key_id_field():
+    """
+    Test that GenerateKeyResponse has the rotated_key_id field for tracking
+    which key was rotated during zero-downtime rotation.
+    """
+    from litellm.proxy._types import GenerateKeyResponse
+
+    # Test with rotated_key_id
+    response = GenerateKeyResponse(
+        key="sk-newkey123",
+        rotated_key_id="hashed_old_key_abc123",
+    )
+
+    assert response.rotated_key_id == "hashed_old_key_abc123"
+
+    # Test default value is None
+    response_no_rotation = GenerateKeyResponse(key="sk-newkey456")
+    assert response_no_rotation.rotated_key_id is None
+
+
+@pytest.mark.asyncio
+async def test_regenerate_key_with_grace_period_creates_new_key(monkeypatch):
+    """
+    Test that regenerating a key with a grace period creates a NEW key record
+    instead of updating the existing one in-place.
+    """
+    from datetime import datetime, timedelta, timezone
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LiteLLM_VerificationToken, RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _regenerate_key_with_grace_period,
+    )
+
+    # Mock prisma client
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data
+
+    # Mock existing key
+    existing_key = LiteLLM_VerificationToken(
+        token="hashed_old_token_123",
+        key_name="sk-...old1",
+        user_id="test-user",
+        team_id="test-team",
+        models=["gpt-4", "gpt-3.5-turbo"],
+        max_budget=100.0,
+        spend=25.0,
+        metadata={"app": "test-app"},
+    )
+
+    # Mock the create call for new key
+    new_key_record = MagicMock()
+    new_key_record.token = "hashed_new_token_456"
+    new_key_record.key_name = "sk-...new1"
+    new_key_record.user_id = "test-user"
+    new_key_record.team_id = "test-team"
+    new_key_record.models = ["gpt-4", "gpt-3.5-turbo"]
+    new_key_record.max_budget = 100.0
+    new_key_record.spend = 25.0
+    new_key_record.__iter__ = lambda self: iter(
+        {
+            "token": "hashed_new_token_456",
+            "key_name": "sk-...new1",
+            "user_id": "test-user",
+            "team_id": "test-team",
+            "models": ["gpt-4", "gpt-3.5-turbo"],
+            "max_budget": 100.0,
+            "spend": 25.0,
+        }.items()
+    )
+
+    mock_prisma_client.db.litellm_verificationtoken.create = AsyncMock(
+        return_value=new_key_record
+    )
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(
+        return_value=MagicMock()
+    )
+
+    # Mock cache deletion
+    mock_user_api_key_cache = MagicMock()
+    mock_proxy_logging_obj = MagicMock()
+
+    # Mock _delete_cache_key_object
+    async def mock_delete_cache(*args, **kwargs):
+        pass
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+        mock_delete_cache,
+    )
+
+    # Create regenerate request with grace period
+    data = RegenerateKeyRequest(
+        key="sk-oldkey123",
+        key_rotation_grace_period="24h",
+    )
+
+    # Call the function
+    response = await _regenerate_key_with_grace_period(
+        prisma_client=mock_prisma_client,
+        existing_key=existing_key,
+        new_token="sk-newtoken456",
+        new_token_hash="hashed_new_token_456",
+        new_token_key_name="sk-...new1",
+        grace_period="24h",
+        data=data,
+        hashed_api_key="hashed_old_token_123",
+        user_api_key_cache=mock_user_api_key_cache,
+        proxy_logging_obj=mock_proxy_logging_obj,
+    )
+
+    # Verify a NEW key was created (not updated)
+    mock_prisma_client.db.litellm_verificationtoken.create.assert_called_once()
+
+    # Verify the old key was updated (to set expiry)
+    mock_prisma_client.db.litellm_verificationtoken.update.assert_called_once()
+
+    # Verify the update was for setting expiry on the old key
+    update_call_args = mock_prisma_client.db.litellm_verificationtoken.update.call_args
+    assert update_call_args.kwargs["where"]["token"] == "hashed_old_token_123"
+    assert "expires" in update_call_args.kwargs["data"]
+
+    # Verify response has rotated_key_id pointing to old key
+    assert response.rotated_key_id == "hashed_old_token_123"
+    assert response.key == "sk-newtoken456"
+
+
+@pytest.mark.asyncio
+async def test_regenerate_key_with_grace_period_sets_correct_expiry(monkeypatch):
+    """
+    Test that regenerating a key with a grace period sets the correct expiry
+    on the old key based on the grace period duration.
+    """
+    from datetime import datetime, timedelta, timezone
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LiteLLM_VerificationToken, RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _regenerate_key_with_grace_period,
+    )
+
+    # Mock prisma client
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data
+
+    # Mock existing key
+    existing_key = LiteLLM_VerificationToken(
+        token="hashed_old_token_xyz",
+        key_name="sk-...old2",
+        user_id="test-user-2",
+        team_id=None,
+        models=["gpt-4"],
+        metadata={},
+    )
+
+    # Track what data is passed to update
+    update_data_captured = {}
+
+    async def mock_update(**kwargs):
+        update_data_captured.update(kwargs.get("data", {}))
+        return MagicMock()
+
+    # Mock new key creation
+    new_key_record = MagicMock()
+    new_key_record.__iter__ = lambda self: iter(
+        {
+            "token": "hashed_new_token_xyz",
+            "key_name": "sk-...new2",
+            "user_id": "test-user-2",
+        }.items()
+    )
+
+    mock_prisma_client.db.litellm_verificationtoken.create = AsyncMock(
+        return_value=new_key_record
+    )
+    mock_prisma_client.db.litellm_verificationtoken.update = mock_update
+
+    # Mock cache deletion
+    async def mock_delete_cache(*args, **kwargs):
+        pass
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+        mock_delete_cache,
+    )
+
+    mock_user_api_key_cache = MagicMock()
+    mock_proxy_logging_obj = MagicMock()
+
+    # Record the time before the call
+    before_call = datetime.now(timezone.utc)
+
+    # Create request with 1 hour grace period
+    data = RegenerateKeyRequest(
+        key="sk-oldkey",
+        key_rotation_grace_period="1h",
+    )
+
+    await _regenerate_key_with_grace_period(
+        prisma_client=mock_prisma_client,
+        existing_key=existing_key,
+        new_token="sk-newtoken",
+        new_token_hash="hashed_new_token_xyz",
+        new_token_key_name="sk-...new2",
+        grace_period="1h",
+        data=data,
+        hashed_api_key="hashed_old_token_xyz",
+        user_api_key_cache=mock_user_api_key_cache,
+        proxy_logging_obj=mock_proxy_logging_obj,
+    )
+
+    after_call = datetime.now(timezone.utc)
+
+    # Verify expiry was set correctly (within 1 hour + small margin for test execution)
+    assert "expires" in update_data_captured
+    expiry = update_data_captured["expires"]
+
+    # Expiry should be approximately 1 hour from now (3600 seconds)
+    expected_expiry_min = before_call + timedelta(seconds=3599)
+    expected_expiry_max = after_call + timedelta(seconds=3601)
+
+    assert (
+        expected_expiry_min <= expiry <= expected_expiry_max
+    ), f"Expiry {expiry} not within expected range"
+
+
+@pytest.mark.asyncio
+async def test_regenerate_key_with_grace_period_preserves_key_properties(monkeypatch):
+    """
+    Test that regenerating a key with a grace period preserves the existing
+    key properties (models, budget, team, etc.) on the new key.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LiteLLM_VerificationToken, RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _regenerate_key_with_grace_period,
+    )
+
+    # Mock prisma client
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data
+
+    # Mock existing key with various properties
+    existing_key = LiteLLM_VerificationToken(
+        token="hashed_old_token_preserve",
+        key_name="sk-...old3",
+        user_id="preserve-user",
+        team_id="preserve-team",
+        models=["gpt-4", "claude-3"],
+        max_budget=500.0,
+        spend=100.0,
+        tpm_limit=10000,
+        rpm_limit=100,
+        metadata={"environment": "production", "department": "engineering"},
+        allowed_cache_controls=["no-cache"],
+        budget_duration="30d",
+    )
+
+    # Track the data passed to create
+    create_data_captured = {}
+
+    async def mock_create(**kwargs):
+        create_data_captured.update(kwargs.get("data", {}))
+        result = MagicMock()
+        result.__iter__ = lambda self: iter(create_data_captured.items())
+        return result
+
+    mock_prisma_client.db.litellm_verificationtoken.create = mock_create
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(
+        return_value=MagicMock()
+    )
+
+    # Mock cache deletion
+    async def mock_delete_cache(*args, **kwargs):
+        pass
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+        mock_delete_cache,
+    )
+
+    mock_user_api_key_cache = MagicMock()
+    mock_proxy_logging_obj = MagicMock()
+
+    data = RegenerateKeyRequest(
+        key="sk-oldkey",
+        key_rotation_grace_period="12h",
+    )
+
+    await _regenerate_key_with_grace_period(
+        prisma_client=mock_prisma_client,
+        existing_key=existing_key,
+        new_token="sk-newpreserve",
+        new_token_hash="hashed_new_token_preserve",
+        new_token_key_name="sk-...new3",
+        grace_period="12h",
+        data=data,
+        hashed_api_key="hashed_old_token_preserve",
+        user_api_key_cache=mock_user_api_key_cache,
+        proxy_logging_obj=mock_proxy_logging_obj,
+    )
+
+    # Verify key properties were preserved on the new key
+    assert create_data_captured["user_id"] == "preserve-user"
+    assert create_data_captured["team_id"] == "preserve-team"
+    assert create_data_captured["models"] == ["gpt-4", "claude-3"]
+    assert create_data_captured["max_budget"] == 500.0
+    assert create_data_captured["spend"] == 100.0
+    assert create_data_captured["tpm_limit"] == 10000
+    assert create_data_captured["rpm_limit"] == 100
+    assert create_data_captured["budget_duration"] == "30d"
+
+    # Verify new token was set
+    assert create_data_captured["token"] == "hashed_new_token_preserve"
+    assert create_data_captured["key_name"] == "sk-...new3"
+
+
+@pytest.mark.asyncio
+async def test_regenerate_key_with_grace_period_updates_metadata(monkeypatch):
+    """
+    Test that regenerating a key with grace period updates metadata to track
+    the rotation relationship between old and new keys.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LiteLLM_VerificationToken, RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _regenerate_key_with_grace_period,
+    )
+
+    # Mock prisma client
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data
+
+    # Mock existing key
+    existing_key = LiteLLM_VerificationToken(
+        token="hashed_old_token_meta",
+        key_name="sk-...old4",
+        user_id="meta-user",
+        team_id=None,
+        models=["gpt-4"],
+        metadata={"original_key": True},
+    )
+
+    # Track data passed to create and update
+    create_data_captured = {}
+    update_data_captured = {}
+
+    async def mock_create(**kwargs):
+        create_data_captured.update(kwargs.get("data", {}))
+        result = MagicMock()
+        result.__iter__ = lambda self: iter(create_data_captured.items())
+        return result
+
+    async def mock_update(**kwargs):
+        update_data_captured.update(kwargs.get("data", {}))
+        return MagicMock()
+
+    mock_prisma_client.db.litellm_verificationtoken.create = mock_create
+    mock_prisma_client.db.litellm_verificationtoken.update = mock_update
+
+    # Mock cache deletion
+    async def mock_delete_cache(*args, **kwargs):
+        pass
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+        mock_delete_cache,
+    )
+
+    mock_user_api_key_cache = MagicMock()
+    mock_proxy_logging_obj = MagicMock()
+
+    data = RegenerateKeyRequest(
+        key="sk-oldkey",
+        key_rotation_grace_period="6h",
+    )
+
+    await _regenerate_key_with_grace_period(
+        prisma_client=mock_prisma_client,
+        existing_key=existing_key,
+        new_token="sk-newmeta",
+        new_token_hash="hashed_new_token_meta",
+        new_token_key_name="sk-...new4",
+        grace_period="6h",
+        data=data,
+        hashed_api_key="hashed_old_token_meta",
+        user_api_key_cache=mock_user_api_key_cache,
+        proxy_logging_obj=mock_proxy_logging_obj,
+    )
+
+    # Verify new key metadata includes rotation tracking
+    new_key_metadata = create_data_captured.get("metadata", {})
+    assert new_key_metadata.get("rotated_from") == "hashed_old_token_meta"
+    assert "rotation_time" in new_key_metadata
+    # Original metadata should be preserved
+    assert new_key_metadata.get("original_key") is True
+
+    # Verify old key metadata includes rotation tracking
+    old_key_metadata = update_data_captured.get("metadata", {})
+    assert old_key_metadata.get("rotated_to") == "hashed_new_token_meta"
+    assert old_key_metadata.get("rotation_grace_period") == "6h"
+    assert "rotation_time" in old_key_metadata
+
+
+@pytest.mark.asyncio
+async def test_regenerate_key_without_grace_period_uses_standard_flow(monkeypatch):
+    """
+    Test that regenerating a key without a grace period uses the standard
+    in-place update flow (not the zero-downtime flow).
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy._types import LiteLLM_VerificationToken, RegenerateKeyRequest
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        regenerate_key_fn,
+    )
+
+    # Mock dependencies
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data
+
+    # Mock existing key
+    existing_key = MagicMock()
+    existing_key.token = "hashed_old_token_standard"
+    existing_key.key_name = "sk-...old5"
+    existing_key.user_id = "standard-user"
+    existing_key.team_id = None
+    existing_key.models = ["gpt-4"]
+    existing_key.metadata = {}
+    # Make it dict-like for the dict() call
+    existing_key.__iter__ = lambda self: iter(
+        {
+            "token": "hashed_old_token_standard",
+            "key_name": "sk-...old5",
+            "user_id": "standard-user",
+        }.items()
+    )
+
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=existing_key
+    )
+
+    # Track if update was called (standard flow) vs create (grace period flow)
+    update_called = False
+    create_called = False
+
+    async def mock_update(**kwargs):
+        nonlocal update_called
+        update_called = True
+        result = MagicMock()
+        result.__iter__ = lambda self: iter(
+            {
+                "token": "hashed_new_token_standard",
+                "key_name": "sk-...new5",
+                "user_id": "standard-user",
+            }.items()
+        )
+        return result
+
+    async def mock_create(**kwargs):
+        nonlocal create_called
+        create_called = True
+        return MagicMock()
+
+    mock_prisma_client.db.litellm_verificationtoken.update = mock_update
+    mock_prisma_client.db.litellm_verificationtoken.create = mock_create
+
+    mock_user_api_key_cache = MagicMock()
+    mock_proxy_logging_obj = MagicMock()
+
+    # Mock various dependencies
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), patch(
+        "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    ), patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj
+    ), patch(
+        "litellm.proxy.proxy_server.master_key", None
+    ), patch(
+        "litellm.proxy.proxy_server.premium_user", True
+    ), patch(
+        "litellm.proxy.proxy_server.hash_token",
+        lambda x: f"hashed_{x}" if x.startswith("sk-") else x,
+    ), patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint",
+        AsyncMock(),
+    ), patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+        AsyncMock(),
+    ), patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_rotated_hook",
+        AsyncMock(),
+    ):
+
+        # Create request WITHOUT grace period
+        data = RegenerateKeyRequest(
+            key="sk-oldkey",
+            key_rotation_grace_period=None,  # No grace period
+        )
+
+        user_api_key_dict = UserAPIKeyAuth(
+            user_role="proxy_admin",
+            api_key="sk-admin",
+            user_id="admin",
+        )
+
+        await regenerate_key_fn(
+            key="sk-oldkey",
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        # Verify standard flow (update) was used, not grace period flow (create)
+        assert update_called is True, "Standard flow should use UPDATE"
+        assert create_called is False, "Standard flow should NOT use CREATE"
+
+
+def test_grace_period_duration_parsing():
+    """
+    Test that various grace period duration formats are valid.
+    """
+    from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+
+    # Test various duration formats
+    assert duration_in_seconds("30s") == 30
+    assert duration_in_seconds("5m") == 300
+    assert duration_in_seconds("1h") == 3600
+    assert duration_in_seconds("24h") == 86400
+    assert duration_in_seconds("7d") == 604800
+    assert duration_in_seconds("30d") == 2592000
