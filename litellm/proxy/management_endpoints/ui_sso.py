@@ -1149,7 +1149,7 @@ class SSOAuthenticationHandler:
             generic_client_id (Optional[str], optional): The Generic Client ID. Defaults to None.
 
         Returns:
-            RedirectResponse: The redirect response from the SSO provider
+            RedirectResponse: The redirect response from the SSO provider.
         """
         # Google SSO Auth
         if google_client_id is not None:
