@@ -1628,6 +1628,14 @@ def __getattr__(name: str) -> Any:
 
         return _lazy_import_llm_configs(name)
 
+    # Lazy load encoding from main.py to avoid heavy tiktoken import
+    if name == "encoding":
+        from .main import encoding as _encoding
+        # Cache it in the module's __dict__ for subsequent accesses
+        import sys
+        sys.modules[__name__].__dict__["encoding"] = _encoding
+        return _encoding
+
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
