@@ -159,6 +159,11 @@ LLM_CONFIG_NAMES = (
     "AmazonConverseConfig",
 )
 
+# Types that support lazy loading via _lazy_import_types
+TYPES_NAMES = (
+    "GuardrailItem",
+)
+
 # Lazy import for utils module - imports only the requested item by name.
 # Note: PLR0915 (too many statements) is suppressed because the many if statements
 # are intentional - each attribute is imported individually only when requested,
@@ -617,6 +622,21 @@ def _lazy_import_dotprompt(name: str) -> Any:
         return _set_global_prompt_directory
 
     raise AttributeError(f"Dotprompt lazy import: unknown attribute {name!r}")
+
+
+def _lazy_import_types(name: str) -> Any:
+    """Lazy import for type classes."""
+    _globals = _get_litellm_globals()
+
+    if name == "GuardrailItem":
+        from litellm.types.guardrails import (
+            GuardrailItem as _GuardrailItem,
+        )
+
+        _globals["GuardrailItem"] = _GuardrailItem
+        return _GuardrailItem
+
+    raise AttributeError(f"Types lazy import: unknown attribute {name!r}")
 
 
 def _lazy_import_llm_configs(name: str) -> Any:
