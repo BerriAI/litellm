@@ -100,6 +100,7 @@ jobs:
           else
             echo "[Sync] ✅ Already on latest stable: ${CURRENT_VERSION}"
             echo "has-new-release=false" >> $GITHUB_OUTPUT
+            echo "current-version=${CURRENT_VERSION}" >> $GITHUB_OUTPUT
           fi
 
           echo "::endgroup::"
@@ -595,6 +596,8 @@ jobs:
 
           # Build message based on what happened
           # Using bash $'...' syntax to properly interpret \n as newlines
+          CURRENT_VERSION="${{ needs.check-new-release.outputs.current-version }}"
+
           case "${NEEDS_SYNC}:${PR_EXISTS}" in
             true:false)
               if [[ -n "${NEW_PR_URL}" ]]; then
