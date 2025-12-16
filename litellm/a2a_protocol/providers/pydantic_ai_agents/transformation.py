@@ -6,12 +6,13 @@ This module provides fake streaming by converting non-streaming responses into s
 """
 
 import asyncio
-from typing import Any, AsyncIterator, Dict
+from typing import Any, AsyncIterator, Dict, cast
 from uuid import uuid4
 
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 
 
 class PydanticAITransformation:
@@ -78,7 +79,7 @@ class PydanticAITransformation:
 
     @staticmethod
     async def _poll_for_completion(
-        client: httpx.AsyncClient,
+        client: AsyncHTTPHandler,
         endpoint: str,
         task_id: str,
         request_id: str,
@@ -179,34 +180,37 @@ class PydanticAITransformation:
             f"Pydantic AI: Sending non-streaming request to {endpoint}"
         )
 
-        # Send request to Pydantic AI agent
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                endpoint,
-                json=a2a_request,
-                headers={"Content-Type": "application/json"},
-            )
-            response.raise_for_status()
-            response_data = response.json()
-            
-            # Check if task is already completed
-            result = response_data.get("result", {})
-            status = result.get("status", {})
-            state = status.get("state", "")
-            
-            if state != "completed":
-                # Need to poll for completion
-                task_id = result.get("id")
-                if task_id:
-                    verbose_logger.info(
-                        f"Pydantic AI: Task {task_id} submitted, polling for completion..."
-                    )
-                    response_data = await PydanticAITransformation._poll_for_completion(
-                        client=client,
-                        endpoint=endpoint,
-                        task_id=task_id,
-                        request_id=request_id,
-                    )
+        # Send request to Pydantic AI agent using shared async HTTP client
+        client = get_async_httpx_client(
+            llm_provider=cast(Any, "pydantic_ai_agent"),
+            params={"timeout": timeout},
+        )
+        response = await client.post(
+            endpoint,
+            json=a2a_request,
+            headers={"Content-Type": "application/json"},
+        )
+        response.raise_for_status()
+        response_data = response.json()
+        
+        # Check if task is already completed
+        result = response_data.get("result", {})
+        status = result.get("status", {})
+        state = status.get("state", "")
+        
+        if state != "completed":
+            # Need to poll for completion
+            task_id = result.get("id")
+            if task_id:
+                verbose_logger.info(
+                    f"Pydantic AI: Task {task_id} submitted, polling for completion..."
+                )
+                response_data = await PydanticAITransformation._poll_for_completion(
+                    client=client,
+                    endpoint=endpoint,
+                    task_id=task_id,
+                    request_id=request_id,
+                )
 
         verbose_logger.info(f"Pydantic AI: Received completed response for request_id={request_id}")
 
