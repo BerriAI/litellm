@@ -15,6 +15,7 @@ from litellm._lazy_imports import (
     TOKEN_COUNTER_NAMES,
     CACHING_NAMES,
     BEDROCK_TYPES_NAMES,
+    TYPES_UTILS_NAMES,
     LLM_CLIENT_CACHE_NAMES,
     HTTP_HANDLER_NAMES,
     _lazy_import_cost_calculator,
@@ -22,6 +23,7 @@ from litellm._lazy_imports import (
     _lazy_import_utils,
     _lazy_import_token_counter,
     _lazy_import_bedrock_types,
+    _lazy_import_types_utils,
     _lazy_import_caching,
     _lazy_import_llm_client_cache,
     _lazy_import_http_handlers,
@@ -127,6 +129,18 @@ def test_bedrock_types_lazy_imports():
         _verify_only_requested_name_imported(name, BEDROCK_TYPES_NAMES)
 
 
+def test_types_utils_lazy_imports():
+    """Test that common types.utils symbols can be lazy imported."""
+    for name in TYPES_UTILS_NAMES:
+        _clear_names_from_globals(TYPES_UTILS_NAMES)
+
+        obj = _lazy_import_types_utils(name)
+        assert obj is not None
+        assert name in litellm.__dict__
+
+        _verify_only_requested_name_imported(name, TYPES_UTILS_NAMES)
+
+
 def test_llm_client_cache_lazy_imports():
     """Test that LLM client cache class and singleton can be lazy imported."""
     for name in LLM_CLIENT_CACHE_NAMES:
@@ -170,4 +184,10 @@ def test_unknown_attribute_raises_error():
 
     with pytest.raises(AttributeError):
         _lazy_import_llm_client_cache("unknown")
+
+    with pytest.raises(AttributeError):
+        _lazy_import_bedrock_types("unknown")
+
+    with pytest.raises(AttributeError):
+        _lazy_import_types_utils("unknown")
 

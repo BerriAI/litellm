@@ -26,14 +26,6 @@ from typing import (
 )
 from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
 from litellm.types.integrations.datadog import DatadogInitParams
-from litellm.types.utils import (
-    ImageObject,
-    BudgetConfig,
-    all_litellm_params,
-    all_litellm_params as _litellm_completion_params,
-    CredentialItem,
-    PriorityReservationDict,
-)  # maintain backwards compatibility for root param.
 from litellm._logging import (
     set_verbose,
     _turn_on_debug,
@@ -94,11 +86,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     LiteLLM_UpperboundKeyGenerateParams,
 )
-from litellm.types.utils import (
-    StandardKeyGenerationConfig,
-    LlmProviders,
-    SearchProviders,
-)
+from litellm.types.utils import LlmProviders
 from litellm.types.utils import PriorityReservationSettings
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
@@ -293,7 +281,7 @@ WATSONX_DEFAULT_API_VERSION = "2024-03-13"
 ### COHERE EMBEDDINGS DEFAULT TYPE ###
 COHERE_DEFAULT_EMBEDDING_INPUT_TYPE: "COHERE_EMBEDDING_INPUT_TYPES" = "search_document"
 ### CREDENTIALS ###
-credential_list: List[CredentialItem] = []
+credential_list: List["CredentialItem"] = []
 ### GUARDRAILS ###
 llamaguard_model_name: Optional[str] = None
 openai_moderations_model_name: Optional[str] = None
@@ -368,7 +356,7 @@ aws_sqs_callback_params: Optional[Dict] = None
 generic_logger_headers: Optional[Dict] = None
 default_key_generate_params: Optional[Dict] = None
 upperbound_key_generate_params: Optional[LiteLLM_UpperboundKeyGenerateParams] = None
-key_generation_settings: Optional[StandardKeyGenerationConfig] = None
+key_generation_settings: Optional["StandardKeyGenerationConfig"] = None
 default_internal_user_params: Optional[Dict] = None
 default_team_params: Optional[Union[DefaultTeamSSOParams, Dict]] = None
 default_team_settings: Optional[List] = None
@@ -377,7 +365,7 @@ default_max_internal_user_budget: Optional[float] = None
 max_internal_user_budget: Optional[float] = None
 max_ui_session_budget: Optional[float] = 10  # $10 USD budgets for UI Chat sessions
 internal_user_budget_duration: Optional[str] = None
-tag_budget_config: Optional[Dict[str, BudgetConfig]] = None
+tag_budget_config: Optional[Dict[str, "BudgetConfig"]] = None
 max_end_user_budget: Optional[float] = None
 max_end_user_budget_id: Optional[str] = None
 disable_end_user_cost_tracking: Optional[bool] = None
@@ -400,7 +388,9 @@ public_agent_groups: Optional[List[str]] = None
 # Old format: { "displayName": "url" } (for backward compatibility)
 public_model_groups_links: Dict[str, Union[str, Dict[str, Any]]] = {}
 #### REQUEST PRIORITIZATION #######
-priority_reservation: Optional[Dict[str, Union[float, PriorityReservationDict]]] = None
+priority_reservation: Optional[
+    Dict[str, Union[float, "PriorityReservationDict"]]
+] = None
 priority_reservation_settings: "PriorityReservationSettings" = (
     PriorityReservationSettings()
 )
@@ -1469,7 +1459,6 @@ from . import rag
 
 ### CUSTOM LLMs ###
 from .types.llms.custom_llm import CustomLLMItem
-from .types.utils import GenericStreamingChunk
 
 custom_provider_map: List[CustomLLMItem] = []
 _custom_providers: List[str] = (
@@ -1515,6 +1504,12 @@ if TYPE_CHECKING:
     from litellm.caching.caching import Cache
     from litellm.caching.llm_caching_handler import LLMClientCache
     from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
+    from litellm.types.utils import (
+        BudgetConfig,
+        CredentialItem,
+        PriorityReservationDict,
+        StandardKeyGenerationConfig,
+    )
 
     # Cost calculator functions
     cost_per_token: Callable[..., Tuple[float, float]]
@@ -1569,6 +1564,7 @@ def __getattr__(name: str) -> Any:
         TOKEN_COUNTER_NAMES,
         LLM_CLIENT_CACHE_NAMES,
         BEDROCK_TYPES_NAMES,
+        TYPES_UTILS_NAMES,
         CACHING_NAMES,
         HTTP_HANDLER_NAMES,
     )
@@ -1597,6 +1593,11 @@ def __getattr__(name: str) -> Any:
     if name in BEDROCK_TYPES_NAMES:
         from ._lazy_imports import _lazy_import_bedrock_types
         return _lazy_import_bedrock_types(name)
+    
+    # Lazy load common types.utils symbols
+    if name in TYPES_UTILS_NAMES:
+        from ._lazy_imports import _lazy_import_types_utils
+        return _lazy_import_types_utils(name)
     
     # Lazy load LLM client cache and its singleton
     if name in LLM_CLIENT_CACHE_NAMES:
