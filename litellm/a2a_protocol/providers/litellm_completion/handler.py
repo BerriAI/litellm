@@ -14,11 +14,13 @@ from typing import Any, AsyncIterator, Dict, Optional
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.a2a_protocol.litellm_completion_bridge.pydantic_ai_transformation import (
+    PydanticAITransformation,
+)
 from litellm.a2a_protocol.litellm_completion_bridge.transformation import (
     A2ACompletionBridgeTransformation,
     A2AStreamingContext,
 )
-from litellm.a2a_protocol.providers.config_manager import A2AProviderConfigManager
 
 
 class A2ACompletionBridgeHandler:
@@ -45,25 +47,21 @@ class A2ACompletionBridgeHandler:
         Returns:
             A2A SendMessageResponse dict
         """
-        # Get provider config for custom_llm_provider
+        # Check if this is a Pydantic AI agent request
         custom_llm_provider = litellm_params.get("custom_llm_provider")
-        a2a_provider_config = A2AProviderConfigManager.get_provider_config(
-            custom_llm_provider=custom_llm_provider
-        )
-        
-        # If provider config exists, use it
-        if a2a_provider_config is not None:
+        if custom_llm_provider == "pydantic_ai_agents":
             if api_base is None:
-                raise ValueError(f"api_base is required for {custom_llm_provider}")
+                raise ValueError("api_base is required for Pydantic AI agents")
             
             verbose_logger.info(
-                f"A2A: Using provider config for {custom_llm_provider}"
+                f"Pydantic AI: Routing to Pydantic AI agent at {api_base}"
             )
             
-            response_data = await a2a_provider_config.handle_non_streaming(
+            # Send request directly to Pydantic AI agent
+            response_data = await PydanticAITransformation.send_non_streaming_request(
+                api_base=api_base,
                 request_id=request_id,
                 params=params,
-                api_base=api_base,
             )
             
             return response_data
@@ -143,25 +141,27 @@ class A2ACompletionBridgeHandler:
         Yields:
             A2A streaming response events
         """
-        # Get provider config for custom_llm_provider
+        # Check if this is a Pydantic AI agent request
         custom_llm_provider = litellm_params.get("custom_llm_provider")
-        a2a_provider_config = A2AProviderConfigManager.get_provider_config(
-            custom_llm_provider=custom_llm_provider
-        )
-        
-        # If provider config exists, use it
-        if a2a_provider_config is not None:
+        if custom_llm_provider == "pydantic_ai_agents":
             if api_base is None:
-                raise ValueError(f"api_base is required for {custom_llm_provider}")
+                raise ValueError("api_base is required for Pydantic AI agents")
             
             verbose_logger.info(
-                f"A2A: Using provider config for {custom_llm_provider} (streaming)"
+                f"Pydantic AI: Faking streaming for Pydantic AI agent at {api_base}"
             )
             
-            async for chunk in a2a_provider_config.handle_streaming(
+            # Get non-streaming response first
+            response_data = await PydanticAITransformation.send_non_streaming_request(
+                api_base=api_base,
                 request_id=request_id,
                 params=params,
-                api_base=api_base,
+            )
+            
+            # Convert to fake streaming
+            async for chunk in PydanticAITransformation.fake_streaming_from_response(
+                response_data=response_data,
+                request_id=request_id,
             ):
                 yield chunk
             
