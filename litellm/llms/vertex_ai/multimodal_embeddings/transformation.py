@@ -110,28 +110,45 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
             # Look ahead for potential media elements
             next_elem = _input_list[i + 1] if i + 1 < len(_input_list) else None
 
-            # If current is a text and next is a GCS URI, or current is a GCS URI
+            # If current is a text/base64/GCS URI, or combination with next element
             if isinstance(current, str):
                 instance_args: Instance = {}
 
+                # Helper to attach base64 image bytes
+                def _set_base64_image(val: str):
+                    # Split data URI if present
+                    _bytes = val.split(",")[1] if "," in val else val
+                    instance_args["image"] = InstanceImage(bytesBase64Encoded=_bytes)
+
                 # Process current element
-                if "gs://" not in current:
-                    instance_args["text"] = current
-                elif "mp4" in current:
-                    instance_args["video"] = InstanceVideo(gcsUri=current)
-                else:
-                    instance_args["image"] = InstanceImage(gcsUri=current)
-
-                # Check next element if it's a GCS URI
-                if next_elem and isinstance(next_elem, str) and "gs://" in next_elem:
-                    if "mp4" in next_elem:
-                        instance_args["video"] = InstanceVideo(gcsUri=next_elem)
+                if "gs://" in current:
+                    if "mp4" in current:
+                        instance_args["video"] = InstanceVideo(gcsUri=current)
                     else:
-                        instance_args["image"] = InstanceImage(gcsUri=next_elem)
-                    i += 2  # Skip next element since we processed it
+                        instance_args["image"] = InstanceImage(gcsUri=current)
+                elif is_base64_encoded(s=current):
+                    _set_base64_image(current)
                 else:
-                    i += 1  # Move to next element
+                    instance_args["text"] = current
 
+                # Optionally merge the next element (text + image/video combos)
+                merge_next = False
+                if next_elem and isinstance(next_elem, str):
+                    if "gs://" in next_elem:
+                        merge_next = True
+                        if "mp4" in next_elem:
+                            instance_args["video"] = InstanceVideo(gcsUri=next_elem)
+                        else:
+                            instance_args["image"] = InstanceImage(gcsUri=next_elem)
+                    elif is_base64_encoded(s=next_elem):
+                        merge_next = True
+                        _set_base64_image(next_elem)
+                    elif "text" not in instance_args:
+                        # Allow combining with a following text chunk if current was media
+                        merge_next = True
+                        instance_args["text"] = next_elem
+
+                i += 2 if merge_next else 1
                 processed_instances.append(instance_args)
                 continue
 
