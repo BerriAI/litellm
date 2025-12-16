@@ -178,12 +178,11 @@ class BaseEmailLogger(CustomLogger):
         """
         Send email to user when soft budget is crossed
         """
-        print("SENDING SOFT BUDGET ALERT EMAIL", event.json())
         email_params = await self._get_email_params(
-            email_event=EmailEvent.virtual_key_created,  # Reuse existing event type for subject template
+            email_event=EmailEvent.soft_budget_crossed,  # Reuse existing event type for subject template
             user_id=event.user_id,
             user_email=event.user_email,
-            event_message=event.event_message or "Soft Budget Crossed",
+            event_message=event.event_message,
         )
 
         verbose_proxy_logger.debug(
@@ -206,7 +205,6 @@ class BaseEmailLogger(CustomLogger):
             base_url=email_params.base_url,
             email_support_contact=email_params.support_contact,
         )
-
         await self.send_email(
             from_email=self.DEFAULT_LITELLM_EMAIL,
             to_email=[email_params.recipient_email],
