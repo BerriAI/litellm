@@ -368,14 +368,13 @@ class ProxyBaseLLMRequestProcessing:
         start_time = datetime.now()  # start before calling guardrail hooks
 
         # Calculate request queue time if arrival_time is available
-        import time
-
+        # Use start_time.timestamp() to avoid extra time.time() call for better performance
         proxy_server_request = self.data.get("proxy_server_request", {})
         arrival_time = proxy_server_request.get("arrival_time")
         queue_time_seconds = None
         if arrival_time is not None:
             # Convert start_time (datetime) to timestamp for calculation
-            processing_start_time = time.time()
+            processing_start_time = start_time.timestamp()
             queue_time_seconds = processing_start_time - arrival_time
 
         self.data = await add_litellm_data_to_request(

@@ -806,7 +806,8 @@ class ProxyLogging:
             return None
 
         # Track timing and errors for prometheus metrics
-        guardrail_start_time = time.time()
+        # Use time.perf_counter() for more accurate duration measurements
+        guardrail_start_time = time.perf_counter()
         status = "success"
         error_type = None
 
@@ -843,7 +844,7 @@ class ProxyLogging:
             raise
         finally:
             # Record prometheus metrics
-            guardrail_end_time = time.time()
+            guardrail_end_time = time.perf_counter()
             latency_seconds = guardrail_end_time - guardrail_start_time
 
             # Find PrometheusLogger in callbacks and record metrics
@@ -1118,7 +1119,8 @@ class ProxyLogging:
                 getattr(callback, "guardrail_name", callback.__class__.__name__)
                 or "unknown"
             )
-            start_time = time.time()
+            # Use time.perf_counter() for more accurate duration measurements
+            start_time = time.perf_counter()
             status = "success"
             error_type = None
             result = None
@@ -1130,7 +1132,7 @@ class ProxyLogging:
                 error_type = type(e).__name__
                 raise
             finally:
-                end_time = time.time()
+                end_time = time.perf_counter()
                 latency_seconds = end_time - start_time
 
                 # Record prometheus metrics
