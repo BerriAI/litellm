@@ -1651,15 +1651,16 @@ def test_get_max_tokens_for_model_claude_35():
 def test_get_max_tokens_for_model_claude_37():
     """
     Test that get_max_tokens_for_model returns correct value for Claude 3.7 models.
-    Claude 3.7 Sonnet has max_output_tokens of 128000 (128K with extended thinking).
+    Claude 3.7 Sonnet has max_output_tokens of 64000 by default.
+    128K output requires the beta header 'output-128k-2025-02-19'.
 
     Fixes: https://github.com/BerriAI/litellm/issues/8835
     """
     config = AnthropicConfig()
 
-    # Claude 3.7 Sonnet should return 128000 (128K)
+    # Claude 3.7 Sonnet should return 64000 (64K default, 128K requires beta header)
     max_tokens = config.get_max_tokens_for_model("claude-3-7-sonnet-20250219")
-    assert max_tokens == 128000
+    assert max_tokens == 64000
 
 
 def test_get_max_tokens_for_model_unknown():
@@ -1698,9 +1699,9 @@ def test_get_config_with_model_uses_dynamic_max_tokens():
     config_claude35 = AnthropicConfig.get_config(model="claude-3-5-sonnet-20241022")
     assert config_claude35["max_tokens"] == 8192
 
-    # Claude 3.7 model should get 128000 (128K with extended thinking)
+    # Claude 3.7 model should get 64000 (64K default, 128K requires beta header)
     config_claude37 = AnthropicConfig.get_config(model="claude-3-7-sonnet-20250219")
-    assert config_claude37["max_tokens"] == 128000
+    assert config_claude37["max_tokens"] == 64000
 
 
 def test_get_config_without_model_uses_fallback():
