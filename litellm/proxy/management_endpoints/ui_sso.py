@@ -594,7 +594,7 @@ def _build_sso_user_update_data(
     user_id: Optional[str],
 ) -> dict:
     """
-    Build the update data dictionary for SSO user upsert
+    Build the update data dictionary for SSO user upsert.
 
     Args:
         result: The SSO response containing user information
