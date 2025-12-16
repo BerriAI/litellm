@@ -27,6 +27,8 @@ from litellm._lazy_imports import (
     _lazy_import_caching,
     _lazy_import_llm_client_cache,
     _lazy_import_http_handlers,
+    DOTPROMPT_NAMES,
+    _lazy_import_dotprompt,
 )
 
 
@@ -163,6 +165,21 @@ def test_http_handler_lazy_imports():
         assert name in litellm.__dict__
 
         _verify_only_requested_name_imported(name, HTTP_HANDLER_NAMES)
+
+
+def test_dotprompt_lazy_imports():
+    """Test that dotprompt globals can be lazy imported."""
+    for name in DOTPROMPT_NAMES:
+        _clear_names_from_globals(DOTPROMPT_NAMES)
+
+        obj = _lazy_import_dotprompt(name)
+        assert name in litellm.__dict__
+
+        # Only the setter must be callable; others may be None by default
+        if name == "set_global_prompt_directory":
+            assert callable(obj), f"{name} should be callable"
+
+        _verify_only_requested_name_imported(name, DOTPROMPT_NAMES)
 
 
 def test_unknown_attribute_raises_error():

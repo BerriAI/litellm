@@ -78,6 +78,13 @@ HTTP_HANDLER_NAMES = (
     "module_level_client",
 )
 
+# Dotprompt integration names that support lazy loading via _lazy_import_dotprompt
+DOTPROMPT_NAMES = (
+    "global_prompt_manager",
+    "global_prompt_directory",
+    "set_global_prompt_directory",
+)
+
 # Lazy import for utils module - imports only the requested item by name.
 # Note: PLR0915 (too many statements) is suppressed because the many if statements
 # are intentional - each attribute is imported individually only when requested,
@@ -505,3 +512,34 @@ def _lazy_import_http_handlers(name: str) -> Any:
         return sync_client
 
     raise AttributeError(f"HTTP handlers lazy import: unknown attribute {name!r}")
+
+
+def _lazy_import_dotprompt(name: str) -> Any:
+    """Lazy import for dotprompt integration globals."""
+    _globals = _get_litellm_globals()
+
+    if name == "global_prompt_manager":
+        from litellm.integrations.dotprompt import (
+            global_prompt_manager as _global_prompt_manager,
+        )
+
+        _globals["global_prompt_manager"] = _global_prompt_manager
+        return _global_prompt_manager
+
+    if name == "global_prompt_directory":
+        from litellm.integrations.dotprompt import (
+            global_prompt_directory as _global_prompt_directory,
+        )
+
+        _globals["global_prompt_directory"] = _global_prompt_directory
+        return _global_prompt_directory
+
+    if name == "set_global_prompt_directory":
+        from litellm.integrations.dotprompt import (
+            set_global_prompt_directory as _set_global_prompt_directory,
+        )
+
+        _globals["set_global_prompt_directory"] = _set_global_prompt_directory
+        return _set_global_prompt_directory
+
+    raise AttributeError(f"Dotprompt lazy import: unknown attribute {name!r}")
