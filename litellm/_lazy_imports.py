@@ -50,6 +50,20 @@ BEDROCK_TYPES_NAMES = (
     "COHERE_EMBEDDING_INPUT_TYPES",
 )
 
+# Common types from litellm.types.utils that support lazy loading via
+# _lazy_import_types_utils
+TYPES_UTILS_NAMES = (
+    "ImageObject",
+    "BudgetConfig",
+    "all_litellm_params",
+    "_litellm_completion_params",
+    "CredentialItem",
+    "PriorityReservationDict",
+    "StandardKeyGenerationConfig",
+    "SearchProviders",
+    "GenericStreamingChunk",
+)
+
 # Caching / cache classes that support lazy loading via _lazy_import_caching
 CACHING_NAMES = (
     "Cache",
@@ -323,6 +337,73 @@ def _lazy_import_bedrock_types(name: str) -> Any:
         return _COHERE_EMBEDDING_INPUT_TYPES
 
     raise AttributeError(f"Bedrock types lazy import: unknown attribute {name!r}")
+
+
+def _lazy_import_types_utils(name: str) -> Any:
+    """Lazy import for common types and constants from litellm.types.utils."""
+    _globals = _get_litellm_globals()
+
+    if name == "ImageObject":
+        from .types.utils import ImageObject as _ImageObject
+
+        _globals["ImageObject"] = _ImageObject
+        return _ImageObject
+
+    if name == "BudgetConfig":
+        from .types.utils import BudgetConfig as _BudgetConfig
+
+        _globals["BudgetConfig"] = _BudgetConfig
+        return _BudgetConfig
+
+    if name == "all_litellm_params":
+        from .types.utils import all_litellm_params as _all_litellm_params
+
+        _globals["all_litellm_params"] = _all_litellm_params
+        return _all_litellm_params
+
+    if name == "_litellm_completion_params":
+        from .types.utils import all_litellm_params as _all_litellm_params
+
+        _globals["_litellm_completion_params"] = _all_litellm_params
+        return _all_litellm_params
+
+    if name == "CredentialItem":
+        from .types.utils import CredentialItem as _CredentialItem
+
+        _globals["CredentialItem"] = _CredentialItem
+        return _CredentialItem
+
+    if name == "PriorityReservationDict":
+        from .types.utils import (
+            PriorityReservationDict as _PriorityReservationDict,
+        )
+
+        _globals["PriorityReservationDict"] = _PriorityReservationDict
+        return _PriorityReservationDict
+
+    if name == "StandardKeyGenerationConfig":
+        from .types.utils import (
+            StandardKeyGenerationConfig as _StandardKeyGenerationConfig,
+        )
+
+        _globals["StandardKeyGenerationConfig"] = _StandardKeyGenerationConfig
+        return _StandardKeyGenerationConfig
+
+    if name == "SearchProviders":
+        from .types.utils import SearchProviders as _SearchProviders
+
+        _globals["SearchProviders"] = _SearchProviders
+        return _SearchProviders
+
+    if name == "GenericStreamingChunk":
+        from .types.utils import (
+            GenericStreamingChunk as _GenericStreamingChunk,
+        )
+
+        _globals["GenericStreamingChunk"] = _GenericStreamingChunk
+        return _GenericStreamingChunk
+
+    raise AttributeError(f"Types utils lazy import: unknown attribute {name!r}")
 
 
 def _lazy_import_caching(name: str) -> Any:
