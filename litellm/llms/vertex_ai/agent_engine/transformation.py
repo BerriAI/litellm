@@ -380,7 +380,8 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         if client is None or not isinstance(client, HTTPHandler):
             client = _get_httpx_client(params={})
 
-        verbose_logger.debug(f"Making sync streaming request to: {api_base}")
+        # Avoid logging sensitive api_base directly
+        verbose_logger.debug("Making sync streaming request to Vertex AI endpoint.")
 
         # Make streaming request
         response = client.post(
@@ -441,7 +442,8 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
                 llm_provider=cast(Any, "vertex_ai"), params={}
             )
 
-        verbose_logger.debug(f"Making async streaming request to: {api_base}")
+        # Avoid logging sensitive api_base directly
+        verbose_logger.debug("Making async streaming request to Vertex AI endpoint.")
 
         # Make async streaming request
         response = await client.post(
