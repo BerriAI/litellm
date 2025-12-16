@@ -1,7 +1,11 @@
 import asyncio
 import contextvars
+import importlib
 from functools import partial
-from typing import Any, Coroutine, Dict, List, Literal, Optional, Union, cast, overload
+from typing import TYPE_CHECKING, Any, Coroutine, Dict, List, Literal, Optional, Union, cast, overload
+
+if TYPE_CHECKING:
+    from litellm.images.utils import ImageEditRequestUtils
 
 import httpx
 
@@ -50,7 +54,20 @@ from litellm.utils import (
     get_optional_params_image_gen,
 )
 
-from .utils import ImageEditRequestUtils
+# Cache for ImageEditRequestUtils to avoid repeated __getattr__ calls
+_ImageEditRequestUtils_cache: Optional["ImageEditRequestUtils"] = None
+
+
+def _get_ImageEditRequestUtils() -> "ImageEditRequestUtils":
+    """Get ImageEditRequestUtils, loading it lazily if needed."""
+    global _ImageEditRequestUtils_cache
+    if _ImageEditRequestUtils_cache is None:
+        # Access via module to trigger __getattr__ if not cached
+        module = importlib.import_module(__name__)
+        _ImageEditRequestUtils_cache = module.ImageEditRequestUtils
+    assert _ImageEditRequestUtils_cache is not None  # Type narrowing for type checker
+    return _ImageEditRequestUtils_cache
+
 
 
 ##### Image Generation #######################
@@ -769,12 +786,12 @@ def image_edit(
         local_vars.update(kwargs)
         # Get ImageEditOptionalRequestParams with only valid parameters
         image_edit_optional_params: ImageEditOptionalRequestParams = (
-            ImageEditRequestUtils.get_requested_image_edit_optional_param(local_vars)
+            _get_ImageEditRequestUtils().get_requested_image_edit_optional_param(local_vars)
         )
 
         # Get optional parameters for the responses API
         image_edit_request_params: Dict = (
-            ImageEditRequestUtils.get_optional_params_image_edit(
+            _get_ImageEditRequestUtils().get_optional_params_image_edit(
                 model=model,
                 image_edit_provider_config=image_edit_provider_config,
                 image_edit_optional_params=image_edit_optional_params,
@@ -898,3 +915,15 @@ async def aimage_edit(
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
+
+
+def __getattr__(name: str) -> Any:
+    """Lazy import handler for images.main module"""
+    if name == "ImageEditRequestUtils":
+        # Lazy load ImageEditRequestUtils to avoid heavy import from images.utils at module load time
+        from .utils import ImageEditRequestUtils as _ImageEditRequestUtils
+        # Cache it in the module's __dict__ for subsequent accesses
+        module = importlib.import_module(__name__)
+        module.__dict__["ImageEditRequestUtils"] = _ImageEditRequestUtils
+        return _ImageEditRequestUtils
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
