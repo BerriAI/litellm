@@ -392,6 +392,85 @@ for chunk in response:
     # Emails automatically masked in real-time
 ```
 
+## Image Content Filtering
+
+Content filter can analyze images by generating descriptions and applying filters to the text descriptions.
+
+:::warning
+
+This can introduce significant latency to the request - depending on the speed of the vision-capable model.
+
+This is because, each request containing images will be sent to the vision-capable model to generate a description.
+
+:::
+
+### Configuration
+
+
+```yaml showLineNumbers title="config.yaml"
+model_list:
+  - model_name: gpt-4-vision
+    litellm_params:
+      model: openai/gpt-4-vision-preview
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: "image-filter"
+    litellm_params:
+      guardrail: litellm_content_filter
+      mode: "pre_call"
+      image_model: "gpt-4-vision"  # value is `model_name` of the vision-capable model
+      
+      # Apply same filters to image descriptions
+      categories:
+        - category: "harmful_violence"
+          enabled: true
+          action: "BLOCK"
+          severity_threshold: "medium"
+      
+      patterns:
+        - pattern_type: "prebuilt"
+          pattern_name: "email"
+          action: "MASK"
+```
+
+### How It Works
+
+1. Image is sent to the vision model to generate a text description
+2. Content filters are applied to the description
+3. If harmful content is detected, request is blocked with context about the image
+
+**Example:**
+
+```python
+import openai
+
+client = openai.OpenAI(
+    api_key="sk-1234",
+    base_url="http://localhost:4000"
+)
+
+response = client.chat.completions.create(
+    model="gpt-4-vision",
+    messages=[{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "What's in this image?"},
+            {"type": "image_url", "image_url": {"url": "https://example.com/image.jpg"}}
+        ]
+    }],
+    extra_body={"guardrails": ["image-filter"]}
+)
+```
+
+If the image description contains filtered content, you'll get:
+
+```json
+{
+  "error": "Content blocked: harmful_violence category keyword 'weapon' detected (severity: high) (Image description): The image shows..."
+}
+```
+
 ## Customizing Redaction Tags
 
 When using the `MASK` action, sensitive content is replaced with redaction tags. You can customize how these tags appear.
@@ -713,217 +792,4 @@ patterns:
     action: "BLOCK"
 ```
 
-## Best Practices for Bias Detection
-
-### Choosing the Right Severity Threshold
-
-Bias detection requires careful tuning to avoid blocking legitimate content:
-
-**High Threshold (Recommended for most use cases)**
-- Blocks only explicit discriminatory language
-- Lower false positives
-- Allows nuanced discussions about identity, diversity, and social issues
-- Good for: Public-facing applications, education, research
-
-**Medium Threshold**
-- Blocks stereotypes and generalizations
-- Balanced approach
-- May catch some edge cases in legitimate discourse
-- Good for: Consumer applications, internal tools, moderated environments
-
-**Low Threshold**
-- Strictest filtering
-- Blocks even borderline language
-- Higher false positives but maximum safety
-- Good for: Youth-focused applications, highly controlled environments
-
-### Testing Your Bias Filters
-
-Always test with realistic use cases:
-
-```yaml
-# Test legitimate discussions (should NOT be blocked)
-- "Our company has a gender diversity initiative"
-- "Research shows racial disparities in healthcare"
-- "We support LGBTQ+ rights and equality"
-- "Religious freedom is a fundamental right"
-
-# Test discriminatory content (SHOULD be blocked)
-- "Women are too emotional to lead"
-- "All [group] are [negative stereotype]"
-- "Being gay is unnatural"
-- "[Religious group] are all extremists"
-```
-
-### Monitoring and Iteration
-
-1. **Log blocked requests** to review false positives
-2. **Add exceptions** for legitimate terms in your domain
-3. **Adjust severity thresholds** based on your audience
-4. **Use custom category files** for domain-specific bias patterns
-
-### Cultural and Linguistic Considerations
-
-The prebuilt categories focus on English and common patterns. For other languages or cultural contexts:
-
-1. Create custom category files with region-specific terms
-2. Consult with native speakers and cultural experts
-3. Include local slurs and stereotypes
-4. Adjust severity based on regional norms
-
-## Troubleshooting
-
-### False Positives with Bias Detection
-
-**Issue:** Legitimate discussions about diversity, identity, or social issues are being blocked
-
-**Solutions:**
-
-1. **Raise severity threshold:**
-```yaml
-categories:
-  - category: "bias_racial"
-    severity_threshold: "high"  # Only explicit discrimination
-```
-
-2. **Add domain-specific exceptions:**
-```yaml
-# my_custom_bias_gender.yaml
-exceptions:
-  - "gender pay gap"
-  - "gender diversity"
-  - "women in tech"
-  - "gender equality"
-  - "dei initiative"
-  - "inclusion program"
-```
-
-3. **Review what was blocked:**
-Check error details to understand what triggered the block:
-```json
-{
-  "error": "Content blocked: bias_gender category keyword 'women' detected (severity: medium)",
-  "category": "bias_gender",
-  "keyword": "women",
-  "severity": "medium"
-}
-```
-
-If this is a false positive, add "women in leadership" or other legitimate phrases to exceptions in your custom category file.
-
-### False Positives with Categories
-
-**Issue:** Legitimate content is being blocked by category filters
-
-**Solution 1:** Adjust severity threshold to only block high-severity items:
-```yaml
-categories:
-  - category: "harmful_violence"
-    enabled: true
-    action: "BLOCK"
-    severity_threshold: "high"  # Only block explicit harmful content
-```
-
-**Solution 2:** Add exceptions to your custom category file:
-```yaml
-# my_custom_violence.yaml
-exceptions:
-  - "crime statistics"
-  - "documentary"
-  - "news report"
-  - "historical context"
-```
-
-**Solution 3:** Use a custom category file with your own curated keyword list:
-```yaml
-categories:
-  - category: "harmful_violence"
-    enabled: true
-    action: "BLOCK"
-    category_file: "/path/to/my_violence_keywords.yaml"
-```
-
-### Category Not Loading
-
-**Issue:** Category is not being applied
-
-**Checklist:**
-1. Verify category is enabled: `enabled: true`
-2. Check category name matches file: `harmful_self_harm.yaml`
-3. Check file exists in `litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/categories/`
-4. Review logs for loading errors: `litellm --config config.yaml --detailed_debug`
-
-### Keyword Not Matching
-
-**Issue:** Expected keyword is not being detected
-
-**Solutions:**
-
-1. **For single words:** Ensure the keyword appears as a whole word. The system uses word boundary matching, so "men" won't match "recommend".
-
-2. **For multi-word phrases:** Use the exact phrase as it should appear. Multi-word keywords are matched as substrings (case-insensitive), so "harm myself" will match "I want to harm myself" or "harming myself".
-
-3. **Check exceptions:** If your keyword is in the exceptions list, it won't be detected. Review the category file's exceptions section.
-
-4. **Verify severity threshold:** Lower severity keywords won't match if your threshold is set too high. For example, if a keyword has `severity: "low"` but your `severity_threshold: "high"`, it won't match.
-
-### Too Many False Negatives
-
-**Issue:** Harmful content is not being caught
-
-**Solution 1:** Lower severity threshold:
-```yaml
-severity_threshold: "low"  # Catch more but may increase false positives
-```
-
-**Solution 2:** Add custom keywords for your specific use case:
-```yaml
-categories:
-  - category: "harmful_violence"
-    enabled: true
-    category_file: "/path/to/enhanced_violence.yaml"
-
-# In enhanced_violence.yaml, add domain-specific keywords
-keywords:
-  - keyword: "your specific harmful phrase"
-    severity: "high"
-  - keyword: "another harmful term"
-    severity: "medium"
-```
-
-### Pattern Not Matching
-
-**Issue:** Regex pattern isn't detecting expected content
-
-**Solution:** Test your regex pattern:
-```python
-import re
-pattern = r'\b[A-Z]{3}-\d{4}\b'
-test_text = "Employee ID: ABC-1234"
-print(re.search(pattern, test_text))  # Should match
-```
-
-### Multiple Pattern Matches
-
-**Issue:** Text contains multiple sensitive patterns
-
-**Solution:** Guardrail checks in this order: categories (keywords), regex patterns, then blocked words. Order by priority:
-```yaml
-# Categories checked first (high priority)
-# Category keywords are matched first
-categories:
-  - category: "harmful_self_harm"
-    severity_threshold: "high"
-
-# Then regex patterns
-patterns:
-  - pattern_type: "prebuilt"
-    pattern_name: "us_ssn"
-    action: "BLOCK"
-
-# Then simple blocked keywords
-blocked_words:
-  - keyword: "confidential"
-    action: "MASK"
-```
 
