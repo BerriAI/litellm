@@ -9,8 +9,6 @@ import asyncio
 from typing import Any, AsyncIterator, Dict, cast
 from uuid import uuid4
 
-import httpx
-
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 
