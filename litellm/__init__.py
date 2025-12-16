@@ -72,11 +72,6 @@ from litellm.constants import (
     DEFAULT_SOFT_BUDGET,
     DEFAULT_ALLOWED_FAILS,
 )
-from litellm.integrations.dotprompt import (
-    global_prompt_manager,
-    global_prompt_directory,
-    set_global_prompt_directory,
-)
 from litellm.types.guardrails import GuardrailItem
 from litellm.types.secret_managers.main import (
     KeyManagementSystem,
@@ -1567,6 +1562,7 @@ def __getattr__(name: str) -> Any:
         TYPES_UTILS_NAMES,
         CACHING_NAMES,
         HTTP_HANDLER_NAMES,
+        DOTPROMPT_NAMES,
     )
     
     # Lazy load cost_calculator functions
@@ -1614,6 +1610,12 @@ def __getattr__(name: str) -> Any:
         from ._lazy_imports import _lazy_import_http_handlers
 
         return _lazy_import_http_handlers(name)
+
+    # Lazy load dotprompt integration globals
+    if name in DOTPROMPT_NAMES:
+        from ._lazy_imports import _lazy_import_dotprompt
+
+        return _lazy_import_dotprompt(name)
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
