@@ -359,7 +359,11 @@ def get_remaining_tokens_and_requests_from_request_data(data: Dict) -> Dict[str,
 
 
 def get_logging_caching_headers(request_data: Dict) -> Optional[Dict]:
-    _metadata = request_data.get("metadata", None) or {}
+    _metadata = request_data.get("metadata", None)
+    if not _metadata:
+        _metadata = request_data.get("litellm_metadata", None)
+    if not isinstance(_metadata, dict):
+        _metadata = {}
     headers = {}
     if "applied_guardrails" in _metadata:
         headers["x-litellm-applied-guardrails"] = ",".join(
@@ -368,6 +372,12 @@ def get_logging_caching_headers(request_data: Dict) -> Optional[Dict]:
 
     if "semantic-similarity" in _metadata:
         headers["x-litellm-semantic-similarity"] = str(_metadata["semantic-similarity"])
+
+    pillar_headers = _metadata.get("pillar_response_headers")
+    if isinstance(pillar_headers, dict):
+        headers.update(pillar_headers)
+    elif "pillar_flagged" in _metadata:
+        headers["x-pillar-flagged"] = str(_metadata["pillar_flagged"]).lower()
 
     return headers
 
