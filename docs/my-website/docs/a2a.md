@@ -16,7 +16,7 @@ Add A2A Agents on LiteLLM AI Gateway, Invoke agents in A2A Protocol, track reque
 
 | Feature | Supported | 
 |---------|-----------|
-| Supported Agent Providers | A2A, Vertex AI Agent Engine, LangGraph, Azure AI Foundry, Bedrock AgentCore |
+| Supported Agent Providers | A2A, Vertex AI Agent Engine, LangGraph, Azure AI Foundry, Bedrock AgentCore, Pydantic AI |
 | Logging | ✅ |
 | Load Balancing | ✅ |
 | Streaming | ✅ |
@@ -45,6 +45,7 @@ You can add A2A-compatible agents through the LiteLLM Admin UI.
 
 The URL should be the invocation URL for your A2A agent (e.g., `http://localhost:10001`).
 
+
 ### Add Azure AI Foundry Agents
 
 Follow [this guide, to add your azure ai foundry agent to LiteLLM Agent Gateway](./providers/azure_ai_agents#litellm-a2a-gateway)
@@ -61,6 +62,9 @@ Follow [this guide, to add your bedrock agentcore agent to LiteLLM Agent Gateway
 
 Follow [this guide, to add your langgraph agent to LiteLLM Agent Gateway](./providers/langgraph#litellm-a2a-gateway)
 
+### Add Pydantic AI Agents
+
+Follow [this guide, to add your pydantic ai agent to LiteLLM Agent Gateway](./providers/pydantic_ai_agent#litellm-a2a-gateway)
 
 ## Invoking your Agents
 
