@@ -4,14 +4,14 @@ name: CARTO - Slack Changelog
 # AI-Augmented Slack Changelog
 ################################################################################
 #
-# Posts GROUNDED, INSIGHT-DRIVEN changelog updates to Slack when changes are
-# pushed or PRs are merged to carto/main.
+# Posts GROUNDED, INSIGHT-DRIVEN changelog updates to Slack when PRs are
+# merged to carto/main or new releases are created.
 #
 # Features:
 # - Two-part messages: Main post + detailed thread reply
 # - Claude analyzes diffs, commits, and historical context
 # - Dynamic investigation: Claude can run git/gh commands for deeper analysis
-# - Tracks both PR merges and direct pushes
+# - Tracks PR merges and releases
 #
 # Security:
 # - Claude has read access + limited bash for git/gh commands
@@ -19,8 +19,6 @@ name: CARTO - Slack Changelog
 # - Uses SLACK_KEY and ANTHROPIC_API_KEY secrets
 
 on:
-  push:
-    branches: [carto/main]
   pull_request:
     types: [closed]
     branches: [carto/main]
@@ -34,8 +32,8 @@ permissions:
 jobs:
   post-changelog:
     runs-on: ubuntu-latest
-    # Run on: PR merged, direct push, or new release created
-    if: github.event.pull_request.merged == true || github.event_name == 'push' || github.event_name == 'release'
+    # Run on: PR merged or new release created
+    if: github.event.pull_request.merged == true || github.event_name == 'release'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -242,72 +240,10 @@ jobs:
 
             echo "::endgroup::"
             echo "::endgroup::"
-
-          else
-            # === DIRECT PUSH MODE ===
-            echo "::group::Direct Push Mode"
-            echo "mode=direct_push" >> $GITHUB_OUTPUT
-
-            BEFORE="${{ github.event.before }}"
-            AFTER="${{ github.event.after }}"
-            echo "push_before=${BEFORE}" >> $GITHUB_OUTPUT
-            echo "push_after=${AFTER}" >> $GITHUB_OUTPUT
-
-            # Get pushed commits
-            git log --oneline "${BEFORE}..${AFTER}" > /tmp/pushed_commits.txt 2>/dev/null || echo "" > /tmp/pushed_commits.txt
-            COMMIT_COUNT=$(wc -l < /tmp/pushed_commits.txt | tr -d ' ')
-            echo "commit_count=${COMMIT_COUNT}" >> $GITHUB_OUTPUT
-            echo "Commits pushed: ${COMMIT_COUNT}"
-
-            # Get commit messages (use as PR body equivalent)
-            git log --format="%s%n%b" "${BEFORE}..${AFTER}" > /tmp/pr_body.txt 2>/dev/null || echo "" > /tmp/pr_body.txt
-
-            # Get diff
-            git diff "${BEFORE}..${AFTER}" --patch 2>/dev/null | head -1000 > /tmp/pr_diff.txt || echo "" > /tmp/pr_diff.txt
-
-            # Get diff stats
-            git diff "${BEFORE}..${AFTER}" --stat > /tmp/pr_stats.txt 2>/dev/null || echo "" > /tmp/pr_stats.txt
-
-            # Get total stats
-            git diff "${BEFORE}..${AFTER}" --numstat 2>/dev/null | awk '{add+=$1; del+=$2} END {print "+"add" -"del}' > /tmp/total_stats.txt || echo "+0 -0" > /tmp/total_stats.txt
-
-            # Get SHA and author
-            echo "${AFTER:0:7}" > /tmp/merge_sha.txt
-            git log -1 --format="%an" "${AFTER}" > /tmp/pr_author.txt 2>/dev/null || echo "unknown" > /tmp/pr_author.txt
-            PUSH_AUTHOR=$(cat /tmp/pr_author.txt)
-            echo "pr_author=${PUSH_AUTHOR}" >> $GITHUB_OUTPUT
-
-            # Mode file
-            echo "mode=direct_push" > /tmp/mode.txt
-
-            # Fork context
-            cp CARTO_CLAUDE.md /tmp/carto_context.md 2>/dev/null || echo "No CARTO_CLAUDE.md found" > /tmp/carto_context.md
-
-            # File history for pushed files
-            > /tmp/file_history.txt
-            for file in $(git diff "${BEFORE}..${AFTER}" --name-only 2>/dev/null | head -5); do
-              echo "=== History: $file ===" >> /tmp/file_history.txt
-              git log --oneline -10 -- "$file" >> /tmp/file_history.txt 2>/dev/null || true
-              echo "" >> /tmp/file_history.txt
-            done
-
-            # Recent commits
-            git log carto/main --oneline -20 > /tmp/recent_carto_commits.txt 2>/dev/null || echo "" > /tmp/recent_carto_commits.txt
-
-            # Change scope
-            > /tmp/change_scope.txt
-            grep -q "litellm/llms/" /tmp/pr_stats.txt 2>/dev/null && echo "scope_providers=true" >> /tmp/change_scope.txt
-            grep -q "litellm/proxy/" /tmp/pr_stats.txt 2>/dev/null && echo "scope_proxy=true" >> /tmp/change_scope.txt
-            grep -q ".github/" /tmp/pr_stats.txt 2>/dev/null && echo "scope_ci=true" >> /tmp/change_scope.txt
-            grep -q "Dockerfile" /tmp/pr_stats.txt 2>/dev/null && echo "scope_docker=true" >> /tmp/change_scope.txt
-
-            echo "::endgroup::"
           fi
 
       - name: Generate changelog with Claude
         id: changelog
-        # Claude Code Action only supports pull_request and release events, not push
-        if: github.event_name != 'push'
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -335,7 +271,6 @@ jobs:
             **Event info:**
             ${{ steps.context.outputs.mode == 'pr_merge' && format('- PR Number: {0}', steps.context.outputs.pr_number) || '' }}
             ${{ steps.context.outputs.mode == 'pr_merge' && format('- PR URL: {0}', steps.context.outputs.pr_url) || '' }}
-            ${{ steps.context.outputs.mode == 'direct_push' && format('- Commits: {0}', steps.context.outputs.commit_count) || '' }}
             ${{ steps.context.outputs.mode == 'release' && format('- Release Tag: {0}', steps.context.outputs.release_tag) || '' }}
             ${{ steps.context.outputs.mode == 'release' && format('- Release Name: {0}', steps.context.outputs.release_name) || '' }}
             ${{ steps.context.outputs.mode == 'release' && format('- Release URL: {0}', steps.context.outputs.release_url) || '' }}
@@ -399,9 +334,8 @@ jobs:
             ## 1. Main Message → `slack_message.txt`
 
             ${{ steps.context.outputs.mode == 'pr_merge' && '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            :rocket:  *LiteLLM Fork Update*' || steps.context.outputs.mode == 'release' && '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            :tada:  *LiteLLM CARTO Release*' || '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            :zap:  *LiteLLM Direct Push*' }}
+            :rocket:  *LiteLLM Fork Update*' || '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            :tada:  *LiteLLM CARTO Release*' }}
 
             *[GROUNDED 1-line summary with specific evidence]*
 
@@ -414,7 +348,7 @@ jobs:
             :bulb: *Key Insight*
             [GROUNDED analysis - MUST reference specific evidence from diff/history]
 
-            ${{ steps.context.outputs.mode == 'pr_merge' && format(':link: <{0}|PR #{1}>  •  @{2}', steps.context.outputs.pr_url, steps.context.outputs.pr_number, steps.context.outputs.pr_author) || steps.context.outputs.mode == 'release' && format(':link: <{0}|Release {1}>  •  @{2}  •  _{3} commit(s)_', steps.context.outputs.release_url, steps.context.outputs.release_tag, steps.context.outputs.pr_author, steps.context.outputs.commit_count) || format(':link: <https://github.com/CartoDB/litellm/commit/{0}|Commit `{0}`>  •  @{1}  •  _{2} commit(s)_', github.sha, steps.context.outputs.pr_author, steps.context.outputs.commit_count) }}
+            ${{ steps.context.outputs.mode == 'pr_merge' && format(':link: <{0}|PR #{1}>  •  @{2}', steps.context.outputs.pr_url, steps.context.outputs.pr_number, steps.context.outputs.pr_author) || format(':link: <{0}|Release {1}>  •  @{2}  •  _{3} commit(s)_', steps.context.outputs.release_url, steps.context.outputs.release_tag, steps.context.outputs.pr_author, steps.context.outputs.commit_count) }}
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
             ## 2. Thread Reply → `slack_thread.txt`
@@ -471,39 +405,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Generate basic message for push events
-        if: github.event_name == 'push'
-        run: |
-          echo "::group::Generating basic push notification (Claude skipped for push events)"
-
-          COMMIT_SHA="${{ github.sha }}"
-          SHORT_SHA="${COMMIT_SHA:0:7}"
-          AUTHOR="${{ github.actor }}"
-          COMMIT_MSG=$(git log -1 --format="%s" "${COMMIT_SHA}" 2>/dev/null || echo "Direct push")
-          COMMIT_COUNT=${{ steps.context.outputs.commit_count }}
-
-          # Generate basic Slack message (using printf to avoid heredoc indentation issues)
-          {
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo ":zap:  *LiteLLM Direct Push*"
-            echo ""
-            echo "*${COMMIT_MSG}*"
-            echo ""
-            echo "┌───────────────────────────────────────"
-            echo "│  :label:  *Type:* Direct Push"
-            echo "│  :bust_in_silhouette:  *Author:* @${AUTHOR}"
-            echo "│  :hash:  *Commits:* ${COMMIT_COUNT:-1}"
-            echo "└───────────────────────────────────────"
-            echo ""
-            echo ":link: <https://github.com/${{ github.repository }}/commit/${COMMIT_SHA}|View commit \`${SHORT_SHA}\`>"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          } > slack_message.txt
-
-          echo "✅ Basic push message generated"
-          cat slack_message.txt
-
-          echo "::endgroup::"
-
       - name: Verify messages were created
         id: verify
         run: |
@@ -518,10 +419,7 @@ jobs:
           else
             echo "❌ Main message not found"
             echo "message_exists=false" >> $GITHUB_OUTPUT
-            # Only fail for non-push events (push uses basic message)
-            if [[ "${{ github.event_name }}" != "push" ]]; then
-              exit 1
-            fi
+            exit 1
           fi
 
           if [ -f "slack_thread.txt" ]; then
@@ -531,7 +429,7 @@ jobs:
             cat slack_thread.txt
             echo "--- End ---"
           else
-            echo "⚠️ Thread message not found (optional for push events)"
+            echo "⚠️ Thread message not found (optional)"
             echo "thread_exists=false" >> $GITHUB_OUTPUT
           fi
 
