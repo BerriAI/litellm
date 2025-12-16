@@ -1,9 +1,30 @@
-from typing import Any, cast
+from typing import Any, Optional, cast
 import sys
 
 def _get_litellm_globals() -> dict:
     """Helper to get the globals dictionary of the litellm module."""
     return sys.modules["litellm"].__dict__
+
+# Lazy loader for default encoding to avoid importing tiktoken at module import time
+_default_encoding: Optional[Any] = None
+
+
+def _get_default_encoding() -> Any:
+    """
+    Lazily load and cache the default OpenAI encoding.
+    
+    This avoids importing `litellm.litellm_core_utils.default_encoding` (and thus tiktoken)
+    at `litellm` import time. The encoding is cached after the first import.
+    
+    This is used internally by utils.py functions that need the encoding but shouldn't
+    trigger its import during module load.
+    """
+    global _default_encoding
+    if _default_encoding is None:
+        from litellm.litellm_core_utils.default_encoding import encoding
+
+        _default_encoding = encoding
+    return _default_encoding
 
 # Cost calculator names that support lazy loading via _lazy_import_cost_calculator
 COST_CALCULATOR_NAMES = (
