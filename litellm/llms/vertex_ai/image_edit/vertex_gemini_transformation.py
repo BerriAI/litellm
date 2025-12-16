@@ -114,19 +114,24 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         """
         Get the complete URL for Vertex AI Gemini generateContent API
         """
-        vertex_project = self._resolve_vertex_project()
-        vertex_location = self._resolve_vertex_location()
+        vertex_project = (
+            litellm_params.get("vertex_project") or self._resolve_vertex_project()
+        )
+        vertex_location = (
+            litellm_params.get("vertex_location") or self._resolve_vertex_location()
+        )
 
         if not vertex_project or not vertex_location:
             raise ValueError("vertex_project and vertex_location are required for Vertex AI")
 
-        # Use the model name as provided, handling vertex_ai prefix
         model_name = model
         if model.startswith("vertex_ai/"):
             model_name = model.replace("vertex_ai/", "")
 
         if api_base:
             base_url = api_base.rstrip("/")
+        elif vertex_location == "global":
+            base_url = "https://aiplatform.googleapis.com"
         else:
             base_url = f"https://{vertex_location}-aiplatform.googleapis.com"
 
