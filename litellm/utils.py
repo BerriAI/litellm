@@ -810,7 +810,12 @@ def function_setup(  # noqa: PLR0915
             or call_type == CallTypes.responses.value
         ):
             # Handle both 'input' (standard Responses API) and 'messages' (Cursor chat format)
-            messages = args[0] if len(args) > 0 else kwargs.get("input") or kwargs.get("messages", "default-message-value")
+            messages = (
+                args[0]
+                if len(args) > 0
+                else kwargs.get("input")
+                or kwargs.get("messages", "default-message-value")
+            )
         else:
             messages = "default-message-value"
         stream = False
@@ -6875,6 +6880,36 @@ def has_tool_call_blocks(messages: List[AllMessageValues]) -> bool:
     return False
 
 
+def last_assistant_with_tool_calls_has_no_thinking_blocks(
+    messages: List[AllMessageValues],
+) -> bool:
+    """
+    Returns true if the last assistant message with tool_calls has no thinking_blocks.
+
+    This is used to detect when thinking param should be dropped to avoid
+    Anthropic error: "Expected thinking or redacted_thinking, but found tool_use"
+
+    When thinking is enabled, assistant messages with tool_calls must include thinking_blocks.
+    If the client didn't preserve thinking_blocks, we need to drop the thinking param.
+
+    Related issues: https://github.com/BerriAI/litellm/issues/14194, https://github.com/BerriAI/litellm/issues/9020
+    """
+    # Find the last assistant message with tool_calls
+    last_assistant_with_tools = None
+    for message in messages:
+        if message.get("role") == "assistant" and message.get("tool_calls") is not None:
+            last_assistant_with_tools = message
+
+    if last_assistant_with_tools is None:
+        return False
+
+    # Check if it has thinking_blocks
+    thinking_blocks = last_assistant_with_tools.get("thinking_blocks")
+    return thinking_blocks is None or (
+        hasattr(thinking_blocks, "__len__") and len(thinking_blocks) == 0
+    )
+
+
 def add_dummy_tool(custom_llm_provider: str) -> List[ChatCompletionToolParam]:
     """
     Prevent Anthropic from raising error when tool_use block exists but no tools are provided.
@@ -7004,7 +7039,9 @@ def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
                         for item in user_content:
                             if isinstance(item, dict):
                                 if item.get("type") not in ValidUserMessageContentTypes:
-                                    raise Exception(f"invalid content type={item.get('type')}")
+                                    raise Exception(
+                                        f"invalid content type={item.get('type')}"
+                                    )
         except Exception as e:
             if isinstance(e, KeyError):
                 raise Exception(
@@ -7848,9 +7885,7 @@ class ProviderConfigManager:
 
             return GeminiVideoConfig()
         elif LlmProviders.VERTEX_AI == provider:
-            from litellm.llms.vertex_ai.videos.transformation import (
-                VertexAIVideoConfig,
-            )
+            from litellm.llms.vertex_ai.videos.transformation import VertexAIVideoConfig
 
             return VertexAIVideoConfig()
         elif LlmProviders.RUNWAYML == provider:
