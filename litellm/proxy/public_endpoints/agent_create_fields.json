@@ -144,6 +144,28 @@
     "litellm_params_template": {
       "custom_llm_provider": "azure_ai"
     }
+  },
+  {
+    "agent_type": "pydantic_ai_agents",
+    "agent_type_display_name": "Pydantic AI",
+    "description": "Connect to Pydantic AI agents via A2A protocol (with fake streaming support)",
+    "logo_url": "/ui/assets/logos/pydantic.svg",
+    "use_a2a_form_fields": true,
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "Agent URL",
+        "placeholder": "http://localhost:9999",
+        "tooltip": "The base URL for your Pydantic AI agent server",
+        "required": true,
+        "field_type": "text",
+        "default_value": "http://localhost:9999",
+        "include_in_litellm_params": true
+      }
+    ],
+    "litellm_params_template": {
+      "custom_llm_provider": "pydantic_ai_agents"
+    }
   }
 ]
 
