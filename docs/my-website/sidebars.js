@@ -472,6 +472,7 @@ const sidebars = {
           "generateContent",
           "apply_guardrail",
           "bedrock_invoke",
+          "interactions",
         {
           type: "category",
           label: "/images",
