@@ -716,17 +716,38 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _map_thinking_param(
         thinking_param: AnthropicThinkingParam,
+        model: Optional[str] = None,
     ) -> GeminiThinkingConfig:
         thinking_enabled = thinking_param.get("type") == "enabled"
         thinking_budget = thinking_param.get("budget_tokens")
 
         params: GeminiThinkingConfig = {}
-        if thinking_enabled and not VertexGeminiConfig._is_thinking_budget_zero(
-            thinking_budget
-        ):
-            params["includeThoughts"] = True
-        if thinking_budget is not None and isinstance(thinking_budget, int):
-            params["thinkingBudget"] = thinking_budget
+        
+        # For Gemini 3+ models, use thinkingLevel instead of thinkingBudget
+        if model and VertexGeminiConfig._is_gemini_3_or_newer(model):
+            if thinking_enabled:
+                if thinking_budget is None or thinking_budget == 0:
+                    params["includeThoughts"] = False
+                else:
+                    params["includeThoughts"] = True
+                    if thinking_budget >= 10000:
+                        is_fiercefalcon = "fiercefalcon" in model.lower() or "gemini-3-flash" in model.lower()
+                        params["thinkingLevel"] = "minimal" if is_fiercefalcon else "low"
+                    else:
+                        is_fiercefalcon = "fiercefalcon" in model.lower() or "gemini-3-flash" in model.lower()
+                        params["thinkingLevel"] = "minimal" if is_fiercefalcon else "low"
+            else:
+                # Thinking disabled
+                params["includeThoughts"] = False
+        else:
+            # For older Gemini models, use thinkingBudget
+            if thinking_enabled and not VertexGeminiConfig._is_thinking_budget_zero(
+                thinking_budget
+            ):
+                params["includeThoughts"] = True
+            if thinking_budget is not None and isinstance(thinking_budget, int):
+                params["thinkingBudget"] = thinking_budget
+        
         return params
 
     def map_response_modalities(self, value: list) -> list:
@@ -903,7 +924,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params[
                     "thinkingConfig"
                 ] = VertexGeminiConfig._map_thinking_param(
-                    cast(AnthropicThinkingParam, value)
+                    cast(AnthropicThinkingParam, value),
+                    model=model,
                 )
             elif param == "modalities" and isinstance(value, list):
                 response_modalities = self.map_response_modalities(value)
