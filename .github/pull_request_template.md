@@ -10,6 +10,22 @@
 - [ ] My PR passes all unit tests on [`make test-unit`](https://docs.litellm.ai/docs/extras/contributing_code)
 - [ ] My PR's scope is as isolated as possible, it only solves 1 specific problem
 
+## CI (LiteLLM team)
+
+> **CI status guideline:**
+>
+> - 50-55 passing tests: main is stable with minor issues.
+> - 45-49 passing tests: acceptable but needs attention
+> - <= 40 passing tests: unstable; be careful with your merges and assess the risk.
+
+- [ ] **Branch creation CI run**  
+       Link:
+
+- [ ] **CI run for the last commit**  
+       Link:
+
+- [ ] **Merge / cherry-pick CI run**  
+       Links:
 
 ## Type
 
@@ -24,5 +40,3 @@
 ✅ Test
 
 ## Changes
-
-

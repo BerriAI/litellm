@@ -14,6 +14,7 @@ from typing import (
 )
 
 import httpx
+from openai import Omit
 from openai._legacy_response import (
     HttpxBinaryResponseContent as _HttpxBinaryResponseContent,
 )
@@ -61,6 +62,7 @@ except (ImportError, AttributeError):
         ResponseTextConfigParam as ResponseText,
     )
 
+from openai.types.responses import ResponseFunctionToolCall
 from openai.types.responses.response_create_params import (
     Reasoning,
     ResponseIncludable,
@@ -69,7 +71,7 @@ from openai.types.responses.response_create_params import (
     ToolParam,
 )
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
-from pydantic import BaseModel, ConfigDict, Discriminator, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Discriminator, PrivateAttr
 from typing_extensions import Annotated, Dict, Required, TypedDict, override
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
@@ -346,6 +348,20 @@ class OpenAIFileObject(BaseModel):
 CREATE_FILE_REQUESTS_PURPOSE = Literal["assistants", "batch", "fine-tune"]
 
 
+# File expiration policy
+class FileExpiresAfter(TypedDict):
+    """
+    File expiration policy
+
+    Properties:
+        anchor: Anchor timestamp after which the expiration policy applies. Supported anchors: created_at.
+        seconds: The number of seconds after the anchor time that the file will expire. Must be between 3600 (1 hour) and 2592000 (30 days).
+    """
+
+    anchor: Required[Literal["created_at"]]
+    seconds: Required[int]
+
+
 # OpenAI Files Types
 class CreateFileRequest(TypedDict, total=False):
     """
@@ -357,6 +373,7 @@ class CreateFileRequest(TypedDict, total=False):
         purpose: Literal['assistants', 'batch', 'fine-tune']
 
     Optional Params:
+        expires_after: Optional[FileExpiresAfter] - The expiration policy for a file
         extra_headers: Optional[Dict[str, str]]
         extra_body: Optional[Dict[str, str]] = None
         timeout: Optional[float] = None
@@ -364,6 +381,7 @@ class CreateFileRequest(TypedDict, total=False):
 
     file: Required[FileTypes]
     purpose: Required[CREATE_FILE_REQUESTS_PURPOSE]
+    expires_after: Optional[FileExpiresAfter]
     extra_headers: Optional[Dict[str, str]]
     extra_body: Optional[Dict[str, str]]
     timeout: Optional[float]
@@ -442,6 +460,7 @@ class ListBatchRequest(TypedDict, total=False):
 # OpenAI Batch Result Types
 class OpenAIErrorBody(TypedDict, total=False):
     """Error body in OpenAI batch response format."""
+
     error: Dict[str, str]
 
 
@@ -742,6 +761,68 @@ ValidUserMessageContentTypes = [
     "video_url",
     "file",
 ]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
+
+ValidUserMessageContentTypesLiteral = Literal[
+    "text",
+    "image_url",
+    "input_audio",
+    "audio_url",
+    "document",
+    "guarded_text",
+    "video_url",
+    "file",
+]
+
+ValidUserMessageContentTypes = [
+    "text",
+    "image_url",
+    "input_audio",
+    "audio_url",
+    "document",
+    "guarded_text",
+    "video_url",
+    "file",
+]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
+
+# Assistant message content types (text, thinking, redacted_thinking)
+ValidAssistantMessageContentTypesLiteral = Literal[
+    "text",
+    "thinking",
+    "redacted_thinking",
+]
+
+ValidAssistantMessageContentTypes = [
+    "text",
+    "thinking",
+    "redacted_thinking",
+]
+
+# Combined valid content types for chat completion messages
+ValidChatCompletionMessageContentTypesLiteral = Literal[
+    "text",
+    "image_url",
+    "input_audio",
+    "audio_url",
+    "document",
+    "guarded_text",
+    "video_url",
+    "file",
+    "thinking",
+    "redacted_thinking",
+]
+
+ValidChatCompletionMessageContentTypes = [
+    "text",
+    "image_url",
+    "input_audio",
+    "audio_url",
+    "document",
+    "guarded_text",
+    "video_url",
+    "file",
+    "thinking",
+    "redacted_thinking",
+]
 
 AllMessageValues = Union[
     ChatCompletionUserMessage,
@@ -1074,7 +1155,14 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     object: Optional[str] = None
     output: Union[
         List[Union[ResponseOutputItem, Dict]],
-        List[Union[GenericResponseOutputItem, OutputFunctionToolCall, OutputImageGenerationCall]],
+        List[
+            Union[
+                GenericResponseOutputItem,
+                OutputFunctionToolCall,
+                OutputImageGenerationCall,
+                ResponseFunctionToolCall,
+            ]
+        ],
     ]
     parallel_tool_calls: Optional[bool] = None
     temperature: Optional[float] = None
@@ -1829,6 +1917,7 @@ class OpenAIChatCompletionResponse(TypedDict, total=False):
 # OpenAI Batch Result Types (defined after OpenAIChatCompletionResponse for forward reference)
 class OpenAIBatchResponse(TypedDict, total=False):
     """Response wrapper in OpenAI batch result format."""
+
     status_code: int
     request_id: str
     body: Union[OpenAIChatCompletionResponse, OpenAIErrorBody]
@@ -1836,6 +1925,7 @@ class OpenAIBatchResponse(TypedDict, total=False):
 
 class OpenAIBatchResult(TypedDict, total=False):
     """OpenAI batch result format."""
+
     custom_id: str
     response: OpenAIBatchResponse
 

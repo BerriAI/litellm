@@ -411,7 +411,8 @@ const sidebars = {
           label: "/a2a - A2A Agent Gateway",
           items: [
             "a2a",
-            "a2a_agent_permissions",
+            "a2a_cost_tracking",
+            "a2a_agent_permissions"
           ],
         },
         "assistants",
@@ -737,6 +738,7 @@ const sidebars = {
         "providers/petals",
         "providers/publicai",
         "providers/predibase",
+        "providers/pydantic_ai_agent",
         "providers/ragflow",
         "providers/recraft",
         "providers/replicate",
@@ -756,7 +758,14 @@ const sidebars = {
         "providers/triton-inference-server",
         "providers/v0",
         "providers/vercel_ai_gateway",
-        "providers/vllm",
+        {
+          type: "category",
+          label: "vLLM",
+          items: [
+            "providers/vllm",
+            "providers/vllm_batches",
+          ]
+        },
         "providers/volcano",
         "providers/voyage",
         "providers/wandb_inference",

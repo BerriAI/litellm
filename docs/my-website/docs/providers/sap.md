@@ -5,12 +5,12 @@ import TabItem from '@theme/TabItem';
 
 LiteLLM supports SAP Generative AI Hub's Orchestration Service.
 
-| Property | Details |
-|-------|-------|
-| Description | SAP's Generative AI Hub provides access to foundation models through the AI Core orchestration service. |
-| Provider Route on LiteLLM | `sap/` |
-| Supported Endpoints | `/chat/completions` |
-| API Reference | [SAP AI Core Documentation](https://help.sap.com/docs/sap-ai-core) |
+| Property | Details                                                                                                                                                |
+|-------|--------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Description | SAP's Generative AI Hub provides access to OpenAI, Anthropic, Gemini, Mistral, NVIDIA, Amazon, and SAP LLMs through the AI Core orchestration service. |
+| Provider Route on LiteLLM | `sap/`                                                                                                                                                 |
+| Supported Endpoints | `/chat/completions`, `/embeddings`                                                                                                                                  |
+| API Reference | [SAP AI Core Documentation](https://help.sap.com/docs/sap-ai-core)                                                                                     |
 
 ## Authentication
 
@@ -23,7 +23,14 @@ SAP Generative AI Hub uses service key authentication. You can provide credentia
 import os
 os.environ["AICORE_SERVICE_KEY"] = '{"clientid": "...", "clientsecret": "...", ...}'
 ```
-
+3. **Environment variables** - Set the following list of credentials in .env file
+<pre>
+AICORE_AUTH_URL = "https://* * * .authentication.sap.hana.ondemand.com/oauth/token",
+AICORE_CLIENT_ID  = " *** ",
+AICORE_CLIENT_SECRET = " *** ",
+AICORE_RESOURCE_GROUP = " *** ",
+AICORE_BASE_URL = "https://api.ai.***.cfapps.sap.hana.ondemand.com/v2"
+</pre>
 ## Usage - LiteLLM Python SDK
 
 ```python showLineNumbers title="SAP Chat Completion"
@@ -55,16 +62,33 @@ for chunk in response:
     print(chunk.choices[0].delta.content or "", end="")
 ```
 
+```python showLineNumbers title="SAP Embedding"
+from litellm import embedding
+import os
+
+os.environ["AICORE_SERVICE_KEY"] = '{"clientid": "...", "clientsecret": "...", ...}'
+
+result = embedding(
+    model="sap/text-embedding-3-small", 
+	input="Answer to the ultimate question of life, the universe, and everything is 42")
+print(result.data[0])
+```
+
 ## Usage - LiteLLM Proxy
 
 Add to your LiteLLM Proxy config:
 
 ```yaml showLineNumbers title="config.yaml"
 model_list:
-  - model_name: sap-gpt4
+  - model_name: "sap/*"
     litellm_params:
-      model: sap/gpt-4
-      api_key: os.environ/AICORE_SERVICE_KEY
+      model: "sap/*"
+
+general_settings: 
+  master_key: your-proxy-api-key 
+
+environment_variables:
+  AICORE_SERVICE_KEY: '{"clientid": "...", "clientsecret": "...", ...}'
 ```
 
 Start the proxy:
@@ -81,7 +105,7 @@ curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your-proxy-api-key" \
   -d '{
-    "model": "sap-gpt4",
+    "model": "sap/gpt-4",
     "messages": [{"role": "user", "content": "Hello"}]
   }'
 ```
@@ -98,10 +122,27 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="sap-gpt4",
+    model="sap/gpt-4",
     messages=[{"role": "user", "content": "Hello"}]
 )
 print(response.choices[0].message.content)
+```
+
+</TabItem>
+<TabItem value="litellm-sdk" label="LiteLLM SDK">
+
+```python showLineNumbers title="LiteLLM SDK"
+import os
+import litellm
+os.environ["LITELLM_PROXY_API_KEY"] = "your-proxy-api-key"
+litellm.use_litellm_proxy = True  # it is important to set this parameter
+response = litellm.completion(
+    model="sap/gpt-4o",
+    messages=[{ "content": "Hello, how are you?","role": "user"}],
+    api_base="http://your-proxy-api-base"
+)
+
+print(response)
 ```
 
 </TabItem>

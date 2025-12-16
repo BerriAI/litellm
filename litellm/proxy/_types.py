@@ -247,6 +247,7 @@ class LiteLLMRoutes(enum.Enum):
         "/openai/deployments/{model}/chat/completions",
         "/chat/completions",
         "/v1/chat/completions",
+        "/cursor/chat/completions",
         # completions
         "/engines/{model}/completions",
         "/openai/deployments/{model}/completions",
@@ -1070,6 +1071,8 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     url: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
     mcp_access_groups: List[str] = Field(default_factory=list)
+    allowed_tools: Optional[List[str]] = None
+    extra_headers: Optional[List[str]] = None
     static_headers: Optional[Dict[str, str]] = None
     # Stdio-specific fields
     command: Optional[str] = None
@@ -3685,6 +3688,8 @@ class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
     flat_model_file_ids: List[str]
     created_by: Optional[str]
     updated_by: Optional[str]
+    storage_backend: Optional[str] = None  
+    storage_url: Optional[str] = None 
 
 
 class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
