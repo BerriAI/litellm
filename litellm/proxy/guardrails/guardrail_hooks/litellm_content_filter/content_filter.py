@@ -29,6 +29,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.guardrails import GenericGuardrailAPIInputs
+
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import (
     BlockedWord,
@@ -36,6 +37,9 @@ from litellm.types.guardrails import (
     ContentFilterPattern,
     GuardrailEventHooks,
     Mode,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
+    ContentFilterCategoryConfig,
 )
 from litellm.types.utils import ModelResponseStream
 
@@ -89,7 +93,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         default_on: bool = False,
         pattern_redaction_format: Optional[str] = None,
         keyword_redaction_tag: Optional[str] = None,
-        categories: Optional[List[Dict[str, Any]]] = None,
+        categories: Optional[List[ContentFilterCategoryConfig]] = None,
         severity_threshold: str = "medium",
         **kwargs,
     ):
@@ -184,7 +188,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             f"{len(self.category_keywords)} keywords"
         )
 
-    def _load_categories(self, categories: List[Dict[str, Any]]) -> None:
+    def _load_categories(self, categories: List[ContentFilterCategoryConfig]) -> None:
         """
         Load content categories from configuration.
 

@@ -1,20 +1,37 @@
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import Field
 
+from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
-class ProximityDetectionConfig(GuardrailConfigModel):
-    """Configuration for proximity-based detection of harmful content."""
+class ContentFilterCategoryConfig(BaseLiteLLMOpenAIResponseObject):
+    """
+    category: "harmful_self_harm"
+                  enabled: true
+                  action: "BLOCK"
+                  severity_threshold: "medium"
+                  category_file: "/path/to/custom_file.yaml"  # optional override
+    """
 
-    max_distance: int = Field(
-        default=5,
-        description="Maximum distance (in tokens) between identity keywords and negative modifiers",
+    category: str = Field(
+        description="The category to detect",
     )
-    severity: str = Field(
-        default="high",
-        description="Severity level when proximity match is detected (high, medium, low)",
+    enabled: bool = Field(
+        default=True,
+        description="Whether the category is enabled",
+    )
+    action: Literal["BLOCK", "MASK"] = Field(
+        description="The action to take when the category is detected",
+    )
+    severity_threshold: Literal["high", "medium", "low"] = Field(
+        default="medium",
+        description="The severity threshold to detect the category",
+    )
+    category_file: Optional[str] = Field(
+        default=None,
+        description="Optional override. Use your own category file instead of the default one.",
     )
 
 
@@ -43,37 +60,13 @@ class LitellmContentFilterGuardrailConfigModel(GuardrailConfigModel):
     )
 
     # Category-based detection
-    categories: Optional[List[dict]] = Field(
+    categories: Optional[List[ContentFilterCategoryConfig]] = Field(
         default=None,
         description="List of prebuilt categories to enable (harmful_*, bias_*)",
     )
     severity_threshold: str = Field(
         default="medium",
         description="Minimum severity to block (high, medium, low)",
-    )
-
-    # Proximity-based detection for bias
-    identity_keywords: Optional[List[str]] = Field(
-        default=None,
-        description="List of identity keywords (e.g., 'gay', 'transgender', 'muslim') that are neutral by themselves",
-    )
-    negative_modifiers: Optional[List[str]] = Field(
-        default=None,
-        description="List of negative/harmful modifiers (e.g., 'unnatural', 'disease', 'sin')",
-    )
-    harmful_actions: Optional[List[str]] = Field(
-        default=None,
-        description="List of harmful action verbs (e.g., 'cure', 'fix', 'eliminate')",
-    )
-
-    # Proximity detection configuration
-    identity_plus_negative: Optional[ProximityDetectionConfig] = Field(
-        default=None,
-        description="Config for detecting identity keywords near negative modifiers",
-    )
-    action_plus_identity: Optional[ProximityDetectionConfig] = Field(
-        default=None,
-        description="Config for detecting harmful actions near identity keywords",
     )
 
     # Redaction customization
