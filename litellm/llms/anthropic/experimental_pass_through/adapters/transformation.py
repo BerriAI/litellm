@@ -613,7 +613,14 @@ class LiteLLMAnthropicMessagesAdapter:
                             )
                         )
 
-            # Handle tool calls
+            # Handle text content
+            if choice.message.content is not None:
+                new_content.append(
+                    AnthropicResponseContentBlockText(
+                        type="text", text=choice.message.content
+                    )
+                )
+            # Handle tool calls (in parallel to text content)
             if (
                 choice.message.tool_calls is not None
                 and len(choice.message.tool_calls) > 0
@@ -642,13 +649,6 @@ class LiteLLMAnthropicMessagesAdapter:
                             provider_specific_fields
                         )
                     new_content.append(tool_use_block)
-            # Handle text content
-            elif choice.message.content is not None:
-                new_content.append(
-                    AnthropicResponseContentBlockText(
-                        type="text", text=choice.message.content
-                    )
-                )
 
         return new_content
 

@@ -35,7 +35,8 @@ import AllModelsTab from "@/app/(dashboard)/models-and-endpoints/components/AllM
 import ModelAnalyticsTab from "@/app/(dashboard)/models-and-endpoints/components/ModelAnalyticsTab/ModelAnalyticsTab";
 import ModelRetrySettingsTab from "@/app/(dashboard)/models-and-endpoints/components/ModelRetrySettingsTab";
 import PriceDataManagementTab from "@/app/(dashboard)/models-and-endpoints/components/PriceDataManagementTab";
-import { all_admin_roles } from "@/utils/roles";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
+import { all_admin_roles, internalUserRoles } from "@/utils/roles";
 import HealthCheckComponent from "../../../components/model_dashboard/HealthCheckComponent";
 import ModelGroupAliasSettings from "../../../components/model_group_alias_settings";
 import NotificationsManager from "../../../components/molecules/notifications_manager";
@@ -158,6 +159,10 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
   } = useModelsInfo(accessToken, userID, userRole);
   const { data: credentialsResponse } = useCredentials(accessToken);
   const credentialsList = credentialsResponse?.credentials || [];
+  const { data: uiSettings } = useUISettings(accessToken || "");
+
+  const isInternalUser = userRole && internalUserRoles.includes(userRole);
+  const shouldHideAddModelTab = isInternalUser && uiSettings?.values?.disable_model_add_for_internal_users === true;
 
   const setProviderModelsFn = (provider: Providers) => {
     const _providerModels = getProviderModels(provider, modelMap);
@@ -624,7 +629,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
               <TabList className="flex justify-between mt-2 w-full items-center">
                 <div className="flex">
                   {all_admin_roles.includes(userRole) ? <Tab>All Models</Tab> : <Tab>Your Models</Tab>}
-                  <Tab>Add Model</Tab>
+                  {!shouldHideAddModelTab && <Tab>Add Model</Tab>}
                   {all_admin_roles.includes(userRole) && <Tab>LLM Credentials</Tab>}
                   {all_admin_roles.includes(userRole) && <Tab>Pass-Through Endpoints</Tab>}
                   {all_admin_roles.includes(userRole) && <Tab>Health Status</Tab>}
@@ -656,25 +661,27 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
                   setEditModel={setEditModel}
                   modelData={modelData}
                 />
-                <TabPanel className="h-full">
-                  <AddModelTab
-                    form={addModelForm}
-                    handleOk={handleOk}
-                    selectedProvider={selectedProvider}
-                    setSelectedProvider={setSelectedProvider}
-                    providerModels={providerModels}
-                    setProviderModelsFn={setProviderModelsFn}
-                    getPlaceholder={getPlaceholder}
-                    uploadProps={uploadProps}
-                    showAdvancedSettings={showAdvancedSettings}
-                    setShowAdvancedSettings={setShowAdvancedSettings}
-                    teams={teams}
-                    credentials={credentialsList}
-                    accessToken={accessToken}
-                    userRole={userRole}
-                    premiumUser={premiumUser}
-                  />
-                </TabPanel>
+                {!shouldHideAddModelTab && (
+                  <TabPanel className="h-full">
+                    <AddModelTab
+                      form={addModelForm}
+                      handleOk={handleOk}
+                      selectedProvider={selectedProvider}
+                      setSelectedProvider={setSelectedProvider}
+                      providerModels={providerModels}
+                      setProviderModelsFn={setProviderModelsFn}
+                      getPlaceholder={getPlaceholder}
+                      uploadProps={uploadProps}
+                      showAdvancedSettings={showAdvancedSettings}
+                      setShowAdvancedSettings={setShowAdvancedSettings}
+                      teams={teams}
+                      credentials={credentialsList}
+                      accessToken={accessToken}
+                      userRole={userRole}
+                      premiumUser={premiumUser}
+                    />
+                  </TabPanel>
+                )}
                 <TabPanel>
                   <CredentialsPanel uploadProps={uploadProps} />
                 </TabPanel>

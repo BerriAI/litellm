@@ -21,7 +21,9 @@ from litellm.llms.anthropic.experimental_pass_through.adapters.transformation im
     LiteLLMAnthropicMessagesAdapter,
 )
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
-from litellm.types.guardrails import GenericGuardrailAPIInputs
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+    AnthropicPassthroughLoggingHandler,
+)
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthropicMessagesRequest,
@@ -30,9 +32,15 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolParam,
 )
+from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
+    GenericGuardrailAPIInputs,
+    ModelResponse,
+)
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.llms.anthropic_messages.anthropic_response import (
         AnthropicMessagesResponse,
         AnthropicResponseTextBlock,
@@ -318,6 +326,34 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         Get the string so far, check the apply guardrail to the string so far, and return the list of responses so far.
         """
+        has_ended = self._check_streaming_has_ended(responses_so_far)
+        if has_ended:
+
+            # build the model response from the responses_so_far
+            model_response = cast(
+                ModelResponse,
+                AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+                    all_chunks=responses_so_far,
+                    litellm_logging_obj=cast("LiteLLMLoggingObj", litellm_logging_obj),
+                    model="",
+                ),
+            )
+            tool_calls_list = cast(Optional[List[ChatCompletionMessageToolCall]], model_response.choices[0].message.tool_calls)  # type: ignore
+            string_so_far = model_response.choices[0].message.content  # type: ignore
+            guardrail_inputs = GenericGuardrailAPIInputs()
+            if string_so_far:
+                guardrail_inputs["texts"] = [string_so_far]
+            if tool_calls_list:
+                guardrail_inputs["tool_calls"] = tool_calls_list
+
+            _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(  # allow rejecting the response, if invalid
+                inputs=guardrail_inputs,
+                request_data={},
+                input_type="response",
+                logging_obj=litellm_logging_obj,
+            )
+            return responses_so_far
+
         string_so_far = self.get_streaming_string_so_far(responses_so_far)
         _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(  # allow rejecting the response, if invalid
             inputs={"texts": [string_so_far]},
@@ -411,6 +447,82 @@ class AnthropicMessagesHandler(BaseTranslation):
             verbose_proxy_logger.error(f"Error extracting text from SSE: {e}")
 
         return text
+
+    def _check_streaming_has_ended(self, responses_so_far: List[Any]) -> bool:
+        """
+        Check if streaming response has ended by looking for non-null stop_reason.
+
+        Handles two formats:
+        1. Raw bytes in SSE (Server-Sent Events) format from Anthropic API
+        2. Parsed dict objects (for backwards compatibility)
+
+        SSE format example:
+            b'event: message_delta\\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},...}\\n\\n'
+
+        Dict format example:
+            {
+                "type": "message_delta",
+                "delta": {
+                    "stop_reason": "tool_use",
+                    "stop_sequence": null
+                }
+            }
+
+        Returns:
+            True if stop_reason is set to a non-null value, indicating stream has ended
+        """
+        for response in responses_so_far:
+            # Handle raw bytes in SSE format
+            if isinstance(response, bytes):
+                try:
+                    # Decode bytes to string
+                    sse_string = response.decode("utf-8")
+
+                    # Split by double newline to get individual events
+                    events = sse_string.split("\n\n")
+
+                    for event in events:
+                        if not event.strip():
+                            continue
+
+                        # Parse event lines
+                        lines = event.strip().split("\n")
+                        event_type = None
+                        data_line = None
+
+                        for line in lines:
+                            if line.startswith("event:"):
+                                event_type = line[6:].strip()
+                            elif line.startswith("data:"):
+                                data_line = line[5:].strip()
+
+                        # Check for message_delta event with stop_reason
+                        if event_type == "message_delta" and data_line:
+                            try:
+                                data = json.loads(data_line)
+                                delta = data.get("delta", {})
+                                stop_reason = delta.get("stop_reason")
+                                if stop_reason is not None:
+                                    return True
+                            except json.JSONDecodeError:
+                                verbose_proxy_logger.warning(
+                                    f"Failed to parse JSON from SSE data: {data_line}"
+                                )
+
+                except Exception as e:
+                    verbose_proxy_logger.error(
+                        f"Error checking streaming end in SSE: {e}"
+                    )
+
+            # Handle already-parsed dict format
+            elif isinstance(response, dict):
+                if response.get("type") == "message_delta":
+                    delta = response.get("delta", {})
+                    stop_reason = delta.get("stop_reason")
+                    if stop_reason is not None:
+                        return True
+
+        return False
 
     def _has_text_content(self, response: "AnthropicMessagesResponse") -> bool:
         """

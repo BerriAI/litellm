@@ -29,12 +29,17 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.guardrails import GenericGuardrailAPIInputs, GuardrailEventHooks
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
     EnkryptAIProcessedResult,
     EnkryptAIResponse,
 )
-from litellm.types.utils import CallTypesLiteral, GuardrailStatus, ModelResponseStream
+from litellm.types.utils import (
+    CallTypesLiteral,
+    GenericGuardrailAPIInputs,
+    GuardrailStatus,
+    ModelResponseStream,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj

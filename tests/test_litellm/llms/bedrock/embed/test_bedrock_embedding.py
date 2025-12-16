@@ -608,3 +608,228 @@ def test_bedrock_cohere_v4_embedding_response_parsing():
         assert response.data[1]['object'] == 'embedding'
         assert response.data[1]['embedding'] == [1, 2, 3]
         assert response.data[1]['type'] == 'int8'
+
+
+def test_bedrock_embedding_custom_headers_with_iam_role_and_custom_api_base():
+    """
+    Test that custom headers are correctly forwarded when using IAM role credentials
+    (with session token) and a custom api_base.
+    
+    This test verifies the fix for the issue where custom headers were not being
+    forwarded to Bedrock embeddings endpoint when using:
+    - IAM role authentication (session tokens)
+    - Custom api_base (proxy endpoint)
+    
+    The fix converts HeadersDict to regular dict before passing to httpx, ensuring
+    headers are properly forwarded even with IAM roles and custom endpoints.
+    
+    Relevant Issue: Custom headers not forwarded with IAM roles + custom api_base
+    """
+    litellm.set_verbose = True
+    client = HTTPHandler()
+    
+    # Simulate IAM role credentials with session token
+    aws_access_key_id = "AKIAIOSFODNN7EXAMPLE"
+    aws_secret_access_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    aws_session_token = "AQoEXAMPLEH4aoAH0gNCAPyJxz4BlCFFxWNE1OPTgk5TthT+FvwqnKwRcOIfrRh3c/LTo6UDdyJwOOvEVPvLXCrrrUtdnniCEXAMPLE/IvU1dYUg2RVAJBanLiHb4IgRmpV3ZXrzoB348V+jZfXvYhEXAMPLEEXAMPLE"
+    
+    # Custom api_base (simulating a proxy endpoint)
+    custom_api_base = "https://gateway.example.com/v1/bedrock-runtime/us-east-1"
+    
+    # Custom headers that need to be forwarded
+    custom_headers = {
+        "X-Custom-Header-1": "test-value-1",
+        "X-Custom-Header-2": "test-value-2",
+        "X-Forwarded-For": "192.168.1.1",
+        "X-BYOK-Token": "secret-token-12345",
+    }
+    
+    # Mock response
+    embed_response = {
+        "embedding": [0.1, 0.2, 0.3],
+        "inputTextTokenCount": 10
+    }
+    
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(embed_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+        
+        try:
+            response = litellm.embedding(
+                model="bedrock/amazon.titan-embed-text-v1",
+                input=test_input,
+                client=client,
+                extra_headers=custom_headers,
+                api_base=custom_api_base,
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                aws_session_token=aws_session_token,  # IAM role session token
+                aws_region_name="us-east-1",
+            )
+            
+            assert isinstance(response, litellm.EmbeddingResponse)
+            
+            # Verify that the request was made
+            assert mock_post.called, "HTTP client post should be called"
+            
+            # Get the actual call arguments
+            call_kwargs = mock_post.call_args.kwargs
+            headers = call_kwargs.get("headers", {})
+            
+            # Verify custom headers are present in the request
+            # Note: HeadersDict should be converted to regular dict, so headers should be accessible
+            for header_key, header_value in custom_headers.items():
+                # Check if header exists (case-insensitive for HTTP headers)
+                header_found = any(
+                    k.lower() == header_key.lower() for k in headers.keys()
+                )
+                assert header_found, (
+                    f"Custom header {header_key} should be in request headers. "
+                    f"Found headers: {list(headers.keys())}"
+                )
+                
+                # Verify the value matches
+                header_value_found = None
+                for k, v in headers.items():
+                    if k.lower() == header_key.lower():
+                        header_value_found = v
+                        break
+                
+                assert header_value_found == header_value, (
+                    f"Header {header_key} should have value {header_value}, "
+                    f"but found {header_value_found}"
+                )
+            
+            # Verify AWS signature headers are also present
+            assert "Authorization" in headers, "AWS signature should be present"
+            assert "X-Amz-Date" in headers, "AWS date header should be present"
+            assert "X-Amz-Security-Token" in headers, "Session token header should be present"
+            assert headers["X-Amz-Security-Token"] == aws_session_token, (
+                "Session token should match the provided token"
+            )
+            
+            # Verify the custom api_base was used
+            called_url = call_kwargs.get("url", "")
+            assert custom_api_base in str(called_url), (
+                f"Custom api_base {custom_api_base} should be used. "
+                f"Got URL: {called_url}"
+            )
+            
+            print("✓ Test passed: Custom headers forwarded with IAM role + custom api_base")
+            print(f"  Custom headers found: {[k for k in headers.keys() if k.lower().startswith('x-custom') or k.lower().startswith('x-forwarded')]}")
+            print(f"  AWS headers found: {[k for k in headers.keys() if k.lower().startswith('x-amz') or k.lower() == 'authorization']}")
+            
+        except Exception as e:
+            pytest.fail(f"Failed to forward headers with IAM role + custom api_base: {str(e)}")
+
+
+@pytest.mark.asyncio
+async def test_bedrock_embedding_custom_headers_with_iam_role_and_custom_api_base_async():
+    """
+    Test that custom headers are correctly forwarded in async mode when using IAM role
+    credentials (with session token) and a custom api_base.
+    
+    This is the async version of the test above, verifying the fix works for both
+    sync and async embedding calls.
+    """
+    litellm.set_verbose = True
+    client = AsyncHTTPHandler()
+    
+    # Simulate IAM role credentials with session token
+    aws_access_key_id = "AKIAIOSFODNN7EXAMPLE"
+    aws_secret_access_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    aws_session_token = "AQoEXAMPLEH4aoAH0gNCAPyJxz4BlCFFxWNE1OPTgk5TthT+FvwqnKwRcOIfrRh3c/LTo6UDdyJwOOvEVPvLXCrrrUtdnniCEXAMPLE/IvU1dYUg2RVAJBanLiHb4IgRmpV3ZXrzoB348V+jZfXvYhEXAMPLEEXAMPLE"
+    
+    # Custom api_base (simulating a proxy endpoint)
+    custom_api_base = "https://gateway.example.com/v1/bedrock-runtime/us-west-2"
+    
+    # Custom headers that need to be forwarded
+    custom_headers = {
+        "X-Custom-Header-1": "test-value-1",
+        "X-Custom-Header-2": "test-value-2",
+        "X-Forwarded-For": "192.168.1.1",
+        "X-BYOK-Token": "secret-token-12345",
+    }
+    
+    # Mock response
+    embed_response = {
+        "embedding": [0.1, 0.2, 0.3],
+        "inputTextTokenCount": 10
+    }
+    
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(embed_response)
+        mock_response.json = Mock(return_value=embed_response)
+        mock_post.return_value = mock_response
+        
+        try:
+            response = await litellm.aembedding(
+                model="bedrock/amazon.titan-embed-text-v1",
+                input=test_input,
+                client=client,
+                extra_headers=custom_headers,
+                api_base=custom_api_base,
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                aws_session_token=aws_session_token,  # IAM role session token
+                aws_region_name="us-west-2",
+            )
+            
+            assert isinstance(response, litellm.EmbeddingResponse)
+            
+            # Verify that the request was made
+            assert mock_post.called, "HTTP client post should be called"
+            
+            # Get the actual call arguments
+            call_kwargs = mock_post.call_args.kwargs
+            headers = call_kwargs.get("headers", {})
+            
+            # Verify custom headers are present in the request
+            for header_key, header_value in custom_headers.items():
+                # Check if header exists (case-insensitive for HTTP headers)
+                header_found = any(
+                    k.lower() == header_key.lower() for k in headers.keys()
+                )
+                assert header_found, (
+                    f"Custom header {header_key} should be in request headers. "
+                    f"Found headers: {list(headers.keys())}"
+                )
+                
+                # Verify the value matches
+                header_value_found = None
+                for k, v in headers.items():
+                    if k.lower() == header_key.lower():
+                        header_value_found = v
+                        break
+                
+                assert header_value_found == header_value, (
+                    f"Header {header_key} should have value {header_value}, "
+                    f"but found {header_value_found}"
+                )
+            
+            # Verify AWS signature headers are also present
+            assert "Authorization" in headers, "AWS signature should be present"
+            assert "X-Amz-Date" in headers, "AWS date header should be present"
+            assert "X-Amz-Security-Token" in headers, "Session token header should be present"
+            assert headers["X-Amz-Security-Token"] == aws_session_token, (
+                "Session token should match the provided token"
+            )
+            
+            # Verify the custom api_base was used
+            called_url = call_kwargs.get("url", "")
+            assert custom_api_base in str(called_url), (
+                f"Custom api_base {custom_api_base} should be used. "
+                f"Got URL: {called_url}"
+            )
+            
+            print("✓ Test passed (async): Custom headers forwarded with IAM role + custom api_base")
+            print(f"  Custom headers found: {[k for k in headers.keys() if k.lower().startswith('x-custom') or k.lower().startswith('x-forwarded')]}")
+            print(f"  AWS headers found: {[k for k in headers.keys() if k.lower().startswith('x-amz') or k.lower() == 'authorization']}")
+            
+        except Exception as e:
+            pytest.fail(f"Failed to forward headers with IAM role + custom api_base (async): {str(e)}")

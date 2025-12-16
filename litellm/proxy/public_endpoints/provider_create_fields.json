@@ -2689,8 +2689,8 @@
         "key": "vertex_credentials",
         "label": "Vertex Credentials",
         "placeholder": null,
-        "tooltip": null,
-        "required": true,
+        "tooltip": "Optional - Upload your GCP service account JSON file. If not provided, uses default GCP credentials (ADC).",
+        "required": false,
         "field_type": "upload",
         "options": null,
         "default_value": null

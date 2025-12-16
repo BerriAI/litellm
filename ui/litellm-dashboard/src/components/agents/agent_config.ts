@@ -28,6 +28,7 @@ export const AGENT_FORM_CONFIG: {
   capabilities: SectionConfig;
   optional: SectionConfig;
   litellm: SectionConfig;
+  cost: SectionConfig;
 } = {
   basic: {
     key: "basic",
@@ -146,6 +147,33 @@ export const AGENT_FORM_CONFIG: {
       },
     ],
   },
+  cost: {
+    key: "cost",
+    title: "Cost Configuration",
+    fields: [
+      {
+        name: "cost_per_query",
+        label: "Cost Per Query ($)",
+        type: "text",
+        placeholder: "0.0",
+        tooltip: "Fixed cost per query",
+      },
+      {
+        name: "input_cost_per_token",
+        label: "Input Cost Per Token ($)",
+        type: "text",
+        placeholder: "0.000001",
+        tooltip: "Cost per input token",
+      },
+      {
+        name: "output_cost_per_token",
+        label: "Output Cost Per Token ($)",
+        type: "text",
+        placeholder: "0.000002",
+        tooltip: "Cost per output token",
+      },
+    ],
+  },
 };
 
 export const SKILL_FIELD_CONFIG = {
@@ -229,12 +257,16 @@ export const buildAgentDataFromForm = (values: any, existingAgent?: any) => {
     },
   };
 
-  // Only add litellm_params if there are values
-  if (values.model || values.make_public !== undefined) {
-    agentData.litellm_params = {
-      ...(values.model && { model: values.model }),
-      ...(values.make_public !== undefined && { make_public: values.make_public }),
-    };
+  const params: Record<string, any> = {};
+
+  if (values.model) params.model = values.model;
+  if (values.make_public !== undefined) params.make_public = values.make_public;
+  if (values.cost_per_query) params.cost_per_query = parseFloat(values.cost_per_query);
+  if (values.input_cost_per_token) params.input_cost_per_token = parseFloat(values.input_cost_per_token);
+  if (values.output_cost_per_token) params.output_cost_per_token = parseFloat(values.output_cost_per_token);
+
+  if (Object.keys(params).length > 0) {
+    agentData.litellm_params = params;
   }
 
   return agentData;
@@ -267,5 +299,8 @@ export const parseAgentForForm = (agent: any) => {
     supportsAuthenticatedExtendedCard: agent.agent_card_params?.supportsAuthenticatedExtendedCard,
     model: agent.litellm_params?.model,
     make_public: agent.litellm_params?.make_public,
+    cost_per_query: agent.litellm_params?.cost_per_query,
+    input_cost_per_token: agent.litellm_params?.input_cost_per_token,
+    output_cost_per_token: agent.litellm_params?.output_cost_per_token,
   };
 };

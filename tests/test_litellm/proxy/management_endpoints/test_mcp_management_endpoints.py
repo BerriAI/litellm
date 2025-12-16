@@ -20,6 +20,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     MCPTransport,
     NewMCPServerRequest,
+    UpdateMCPServerRequest,
     UserAPIKeyAuth,
 )
 from litellm.types.mcp import MCPAuth
@@ -1168,3 +1169,94 @@ class TestTemporaryMCPSessionEndpoints:
             token_endpoint_auth_method="client_secret_basic",
             fallback_client_id="server-1",
         )
+
+
+class TestUpdateMCPServer:
+    """Test suite for update MCP server functionality"""
+
+    @pytest.mark.asyncio
+    async def test_update_mcp_server_respects_extra_headers(self):
+        """
+        Test that updating an MCP server with extra_headers properly saves the field.
+        
+        This test ensures that extra_headers field in UpdateMCPServerRequest
+        is properly handled and persisted when updating an MCP server.
+        """
+        # Create an existing server
+        existing_server = generate_mock_mcp_server_db_record(
+            server_id="test-server-1",
+            alias="Test Server",
+            url="https://test.example.com/mcp",
+            transport="http",
+        )
+        existing_server.extra_headers = []  # Initially empty
+
+        # Create update request with extra_headers
+        update_request = UpdateMCPServerRequest(
+            server_id="test-server-1",
+            alias="Updated Test Server",
+            extra_headers=["X-Custom-Header", "X-Another-Header"],
+        )
+
+        # Mock the updated server with extra_headers
+        updated_server = generate_mock_mcp_server_db_record(
+            server_id="test-server-1",
+            alias="Updated Test Server",
+            url="https://test.example.com/mcp",
+            transport="http",
+        )
+        updated_server.extra_headers = ["X-Custom-Header", "X-Another-Header"]
+
+        # Mock dependencies
+        mock_prisma_client = MagicMock()
+        mock_prisma_client.db = MagicMock()
+        mock_prisma_client.db.litellm_mcpservertable = AsyncMock()
+        mock_prisma_client.db.litellm_mcpservertable.find_unique = AsyncMock(
+            return_value=existing_server
+        )
+        mock_prisma_client.db.litellm_mcpservertable.update = AsyncMock(
+            return_value=updated_server
+        )
+
+        mock_user_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        # Mock the update_mcp_server function to capture the call
+        with patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=mock_prisma_client,
+        ), patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
+            MagicMock(),
+        ), patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.update_mcp_server",
+            AsyncMock(return_value=updated_server),
+        ) as update_mock, patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.add_update_server",
+            AsyncMock(),
+        ), patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.reload_servers_from_database",
+            AsyncMock(),
+        ):
+            # Import and call the function
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                edit_mcp_server,
+            )
+
+            result = await edit_mcp_server(
+                payload=update_request, user_api_key_dict=mock_user_auth
+            )
+
+            # Verify that update_mcp_server was called with the correct payload
+            update_mock.assert_awaited_once()
+            call_args = update_mock.call_args
+            # First arg is prisma_client, second is the payload (UpdateMCPServerRequest)
+            called_payload = call_args[0][1]
+            assert called_payload.server_id == "test-server-1"
+            assert called_payload.extra_headers == ["X-Custom-Header", "X-Another-Header"]
+            assert called_payload.alias == "Updated Test Server"
+
+            # Verify the result includes extra_headers
+            assert result.extra_headers == ["X-Custom-Header", "X-Another-Header"]
+            assert result.alias == "Updated Test Server"

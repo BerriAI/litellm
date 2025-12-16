@@ -569,6 +569,7 @@ async def test_ensure_initialize_azure_sdk_client_always_used(call_type):
         or call_type == CallTypes.aretrieve_container
         or call_type == CallTypes.acreate_container
         or call_type == CallTypes.adelete_container
+        or call_type == CallTypes.alist_container_files
     ):
         # Skip container call types as they're not supported for Azure (only OpenAI)
         pytest.skip(f"Skipping {call_type.value} because Azure doesn't support container operations")

@@ -1629,12 +1629,15 @@ async def test_end_user_transactions_reset():
 @pytest.mark.asyncio
 async def test_spend_logs_cleanup_after_error():
     # Setup test data
+    import asyncio
     mock_client = MagicMock()
     mock_client.spend_log_transactions = [
         {"id": 1, "amount": 10.0},
         {"id": 2, "amount": 20.0},
         {"id": 3, "amount": 30.0},
     ]
+    # Add lock for spend_log_transactions (matches real PrismaClient)
+    mock_client._spend_log_transactions_lock = asyncio.Lock()
     # Make the DB operation fail
     mock_client.db.litellm_spendlogs.create_many = AsyncMock(
         side_effect=Exception("DB Error")

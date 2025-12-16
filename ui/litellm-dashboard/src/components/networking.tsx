@@ -195,11 +195,35 @@ export interface ProviderCreateInfo {
   credential_fields: ProviderCredentialFieldMetadata[];
 }
 
+export interface AgentCredentialFieldMetadata {
+  key: string;
+  label: string;
+  placeholder?: string | null;
+  tooltip?: string | null;
+  required?: boolean;
+  field_type?: "text" | "password" | "select" | "upload" | "textarea";
+  options?: string[] | null;
+  default_value?: string | null;
+  include_in_litellm_params?: boolean;
+}
+
+export interface AgentCreateInfo {
+  agent_type: string;
+  agent_type_display_name: string;
+  description?: string | null;
+  logo_url?: string | null;
+  credential_fields: AgentCredentialFieldMetadata[];
+  litellm_params_template?: Record<string, string> | null;
+  model_template?: string | null;
+  use_a2a_form_fields?: boolean;
+}
+
 export interface PublicModelHubInfo {
   docs_title: string;
   custom_docs_description: string | null;
   litellm_version: string;
-  useful_links: Record<string, string>;
+  // Supports both old format (Record<string, string>) and new format (Record<string, {url: string, index: number}>)
+  useful_links: Record<string, string | { url: string; index: number }>;
 }
 
 export interface LiteLLMWellKnownUiConfig {
@@ -252,6 +276,26 @@ export const getProviderCreateMetadata = async (): Promise<ProviderCreateInfo[]>
   }
 
   const jsonData: ProviderCreateInfo[] = await response.json();
+  return jsonData;
+};
+
+export const getAgentCreateMetadata = async (): Promise<AgentCreateInfo[]> => {
+  /**
+   * Fetch agent type metadata from the proxy's public endpoint.
+   * This is used by the UI to dynamically render agent-specific credential fields.
+   */
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/public/agents/fields` : `/public/agents/fields`;
+  const response = await fetch(url, {
+    method: "GET",
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error("Failed to fetch agent create metadata:", response.status, errorText);
+    throw new Error("Failed to load agent configuration");
+  }
+
+  const jsonData: AgentCreateInfo[] = await response.json();
   return jsonData;
 };
 
@@ -1754,6 +1798,25 @@ export const customerDailyActivityCall = async (
   });
 };
 
+export const agentDailyActivityCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  page: number = 1,
+  agentIds: string[] | null = null,
+) => {
+  return fetchDailyActivity({
+    accessToken,
+    endpoint: "/agent/daily/activity",
+    startTime,
+    endTime,
+    page,
+    extraQueryParams: {
+      agent_ids: agentIds,
+    },
+  });
+};
+
 export const getTotalSpendCall = async (accessToken: string) => {
   /**
    * Get all models on proxy
@@ -2301,7 +2364,10 @@ export const modelExceptionsCall = async (
   }
 };
 
-export const updateUsefulLinksCall = async (accessToken: string, useful_links: Record<string, string>) => {
+export const updateUsefulLinksCall = async (
+  accessToken: string,
+  useful_links: Record<string, string | { url: string; index: number }>,
+) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/model_hub/update_useful_links` : `/model_hub/update_useful_links`;
     const response = await fetch(url, {

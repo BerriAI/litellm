@@ -334,3 +334,25 @@ class UnifiedLLMGuardrails(CustomLogger):
                 yield last_item
             else:
                 yield item
+
+        # Stream has ended - do final processing with all collected chunks
+        if (
+            call_type is not None
+            and CallTypes(call_type) in endpoint_guardrail_translation_mappings
+        ):
+            verbose_proxy_logger.debug(
+                "Processing final streaming response with all %s chunks for guardrail %s",
+                len(responses_so_far),
+                guardrail_to_apply.guardrail_name,
+            )
+
+            endpoint_translation = endpoint_guardrail_translation_mappings[
+                CallTypes(call_type)
+            ]()
+
+            await endpoint_translation.process_output_streaming_response(
+                responses_so_far=responses_so_far,
+                guardrail_to_apply=guardrail_to_apply,
+                litellm_logging_obj=request_data.get("litellm_logging_obj"),
+                user_api_key_dict=user_api_key_dict,
+            )

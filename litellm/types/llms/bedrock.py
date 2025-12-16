@@ -216,6 +216,10 @@ class PerformanceConfigBlock(TypedDict):
     latency: Literal["optimized", "throughput"]
 
 
+class ServiceTierBlock(TypedDict):
+    type: Literal["priority", "default", "flex"]
+
+
 class CommonRequestObject(
     TypedDict, total=False
 ):  # common request object across sync + async flows
@@ -226,6 +230,7 @@ class CommonRequestObject(
     toolConfig: ToolConfigBlock
     guardrailConfig: Optional[GuardrailConfigBlock]
     performanceConfig: Optional[PerformanceConfigBlock]
+    serviceTier: Optional[ServiceTierBlock]
     requestMetadata: Optional[Dict[str, str]]
 
 

@@ -346,6 +346,7 @@ def image_generation(  # noqa: PLR0915
             litellm.LlmProviders.AIML,
             litellm.LlmProviders.GEMINI,
             litellm.LlmProviders.FAL_AI,
+            litellm.LlmProviders.STABILITY,
             litellm.LlmProviders.RUNWAYML,
             litellm.LlmProviders.VERTEX_AI,
         ):
@@ -700,6 +701,59 @@ def image_edit(
             model=model or DEFAULT_IMAGE_ENDPOINT_MODEL,
             custom_llm_provider=custom_llm_provider,
         )
+
+        # Check for custom provider
+        if custom_llm_provider in litellm._custom_providers:
+            custom_handler: Optional[CustomLLM] = None
+            for item in litellm.custom_provider_map:
+                if item["provider"] == custom_llm_provider:
+                    custom_handler = item["custom_handler"]
+
+            if custom_handler is None:
+                raise LiteLLMUnknownProvider(
+                    model=model, custom_llm_provider=custom_llm_provider
+                )
+
+            model_response = ImageResponse()
+
+            if _is_async:
+                async_custom_client: Optional[AsyncHTTPHandler] = None
+                if kwargs.get("client") is not None and isinstance(
+                    kwargs.get("client"), AsyncHTTPHandler
+                ):
+                    async_custom_client = kwargs.get("client")
+
+                return custom_handler.aimage_edit(
+                    model=model,
+                    image=images,
+                    prompt=prompt,
+                    model_response=model_response,
+                    api_key=kwargs.get("api_key"),
+                    api_base=kwargs.get("api_base"),
+                    optional_params=kwargs,
+                    logging_obj=litellm_logging_obj,
+                    timeout=timeout,
+                    client=async_custom_client,
+                )
+            else:
+                custom_client: Optional[HTTPHandler] = None
+                if kwargs.get("client") is not None and isinstance(
+                    kwargs.get("client"), HTTPHandler
+                ):
+                    custom_client = kwargs.get("client")
+
+                return custom_handler.image_edit(
+                    model=model,
+                    image=images,
+                    prompt=prompt,
+                    model_response=model_response,
+                    api_key=kwargs.get("api_key"),
+                    api_base=kwargs.get("api_base"),
+                    optional_params=kwargs,
+                    logging_obj=litellm_logging_obj,
+                    timeout=timeout,
+                    client=custom_client,
+                )
 
         # get provider config
         image_edit_provider_config: Optional[BaseImageEditConfig] = (

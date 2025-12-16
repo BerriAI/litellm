@@ -197,6 +197,36 @@ class CustomLLM(BaseLLM):
     ) -> EmbeddingResponse:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
+    def image_edit(
+        self,
+        model: str,
+        image: Any,
+        prompt: str,
+        model_response: ImageResponse,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        optional_params: dict,
+        logging_obj: Any,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[HTTPHandler] = None,
+    ) -> ImageResponse:
+        raise CustomLLMError(status_code=500, message="Not implemented yet!")
+
+    async def aimage_edit(
+        self,
+        model: str,
+        image: Any,
+        prompt: str,
+        model_response: ImageResponse,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        optional_params: dict,
+        logging_obj: Any,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[AsyncHTTPHandler] = None,
+    ) -> ImageResponse:
+        raise CustomLLMError(status_code=500, message="Not implemented yet!")
+
 
 def custom_chat_llm_router(
     async_fn: bool, stream: Optional[bool], custom_llm: CustomLLM

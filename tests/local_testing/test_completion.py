@@ -3118,8 +3118,9 @@ async def test_completion_bedrock_httpx_models(sync_mode, model):
 
 def test_completion_bedrock_titan_null_response():
     try:
+        # amazon.titan-text-lite-v1 is deprecated, using titan-text-express-v1 instead
         response = completion(
-            model="bedrock/amazon.titan-text-lite-v1",
+            model="bedrock/amazon.titan-text-express-v1",
             messages=[
                 {
                     "role": "user",

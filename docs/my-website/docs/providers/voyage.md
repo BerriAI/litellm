@@ -150,3 +150,107 @@ print(f"Processed {len(response.data)} documents")
 | voyage-finance-2 | Financial documents | 32K | $0.12 |
 | voyage-law-2 | Legal documents | 16K | $0.12 |
 | voyage-context-3 | Contextual document embeddings | 32K | $0.18 |
+
+## Rerank
+
+Voyage AI provides reranking models to improve search relevance by reordering documents based on their relevance to a query.
+
+### Quick Start
+
+```python
+from litellm import rerank
+import os
+
+os.environ["VOYAGE_API_KEY"] = "your-api-key"
+
+response = rerank(
+    model="voyage/rerank-2.5",
+    query="What is the capital of France?",
+    documents=[
+        "Paris is the capital of France.",
+        "London is the capital of England.",
+        "Berlin is the capital of Germany.",
+    ],
+    top_n=3,
+)
+
+print(response)
+```
+
+### Async Usage
+
+```python
+from litellm import arerank
+import os
+import asyncio
+
+os.environ["VOYAGE_API_KEY"] = "your-api-key"
+
+async def main():
+    response = await arerank(
+        model="voyage/rerank-2.5-lite",
+        query="Best programming language for beginners?",
+        documents=[
+            "Python is great for beginners due to simple syntax.",
+            "JavaScript runs in browsers and is versatile.",
+            "Rust has a steep learning curve but is very safe.",
+        ],
+        top_n=2,
+    )
+    print(response)
+
+asyncio.run(main())
+```
+
+### LiteLLM Proxy Usage
+
+Add to your `config.yaml`:
+
+```yaml
+model_list:
+  - model_name: rerank-2.5
+    litellm_params:
+      model: voyage/rerank-2.5
+      api_key: os.environ/VOYAGE_API_KEY
+  - model_name: rerank-2.5-lite
+    litellm_params:
+      model: voyage/rerank-2.5-lite
+      api_key: os.environ/VOYAGE_API_KEY
+```
+
+Test with curl:
+
+```bash
+curl http://localhost:4000/rerank \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "rerank-2.5",
+    "query": "What is the capital of France?",
+    "documents": [
+        "Paris is the capital of France.",
+        "London is the capital of England.",
+        "Berlin is the capital of Germany."
+    ],
+    "top_n": 3
+  }'
+```
+
+### Supported Rerank Models
+
+| Model | Context Length | Description | Price/M Tokens |
+|-------|----------------|-------------|----------------|
+| rerank-2.5 | 32K | Best quality, multilingual, instruction-following | $0.05 |
+| rerank-2.5-lite | 32K | Optimized for latency and cost | $0.02 |
+| rerank-2 | 16K | Legacy model | $0.05 |
+| rerank-2-lite | 8K | Legacy model, faster | $0.02 |
+
+### Supported Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `model` | string | Model name (e.g., `voyage/rerank-2.5`) |
+| `query` | string | The search query |
+| `documents` | list | List of documents to rerank |
+| `top_n` | int | Number of top results to return |
+| `return_documents` | bool | Whether to include document text in response |

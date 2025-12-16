@@ -671,3 +671,93 @@ class TestContentFilterGuardrail:
 
         assert exc_info.value.status_code == 400
         assert "danger_word" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_masks_all_regex_pattern_matches(self):
+        """
+        Test that ALL matches of a regex pattern are masked, not just the first one.
+
+        Regression test for GitHub issue #17687:
+        https://github.com/BerriAI/litellm/issues/17687
+
+        Before fix:
+            Regex: Key\\d+
+            Input: "Key1 Key1 Key2"
+            Output: "[CUSTOM_REGEX_REDACTED] [CUSTOM_REGEX_REDACTED] Key2"
+            (only first unique match was replaced)
+
+        After fix:
+            Input: "Key1 Key1 Key2"
+            Output: "[CUSTOM_REGEX_REDACTED] [CUSTOM_REGEX_REDACTED] [CUSTOM_REGEX_REDACTED]"
+            (all matches are replaced)
+        """
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="regex",
+                pattern=r"Key\d+",
+                name="custom_key",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-regex-all-matches",
+            patterns=patterns,
+        )
+
+        # Test case from issue #17687
+        guardrailed_inputs = await guardrail.apply_guardrail(
+            inputs={"texts": ["Key1 Key1 Key2"]},
+            request_data={},
+            input_type="request",
+        )
+        result = guardrailed_inputs.get("texts", [])
+
+        assert result is not None
+        assert len(result) == 1
+        # All matches should be redacted
+        assert result[0] == "[CUSTOM_KEY_REDACTED] [CUSTOM_KEY_REDACTED] [CUSTOM_KEY_REDACTED]"
+        assert "Key1" not in result[0]
+        assert "Key2" not in result[0]
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_masks_multiple_patterns_all_matches(self):
+        """
+        Test that multiple different patterns each mask ALL their matches.
+        """
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="email",
+                action=ContentFilterAction.MASK,
+            ),
+            ContentFilterPattern(
+                pattern_type="regex",
+                pattern=r"Key\d+",
+                name="custom_key",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-multiple-patterns-all",
+            patterns=patterns,
+        )
+
+        guardrailed_inputs = await guardrail.apply_guardrail(
+            inputs={"texts": ["Key1 user@test.com Key2 admin@test.com Key1"]},
+            request_data={},
+            input_type="request",
+        )
+        result = guardrailed_inputs.get("texts", [])
+
+        assert result is not None
+        assert len(result) == 1
+        # All emails should be redacted
+        assert "user@test.com" not in result[0]
+        assert "admin@test.com" not in result[0]
+        assert result[0].count("[EMAIL_REDACTED]") == 2
+        # All Key patterns should be redacted
+        assert "Key1" not in result[0]
+        assert "Key2" not in result[0]
+        assert result[0].count("[CUSTOM_KEY_REDACTED]") == 3
