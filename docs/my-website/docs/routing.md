@@ -832,6 +832,101 @@ asyncio.run(router_acompletion())
 
 ## Basic Reliability
 
+### Deployment Ordering (Priority)
+
+Use the `order` parameter to set the priority of deployments within a model group. Deployments with a lower `order` value are prioritized first. If multiple deployments have the same `order` value, the routing strategy (e.g., `simple-shuffle`) is applied to select among them.
+
+This is useful when you want to:
+- Prefer a primary deployment and use others as fallbacks
+- Implement tiered routing (e.g., use cheaper/faster deployments first)
+- Control the order of deployment selection independent of other routing strategies
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import Router
+
+model_list = [
+    {
+        "model_name": "gpt-4",
+        "litellm_params": {
+            "model": "azure/gpt-4-deployment-1",
+            "api_key": os.getenv("AZURE_API_KEY"),
+            "api_base": os.getenv("AZURE_API_BASE"),
+            "order": 1,  # 👈 Highest priority - will be tried first
+        },
+    },
+    {
+        "model_name": "gpt-4",
+        "litellm_params": {
+            "model": "azure/gpt-4-deployment-2",
+            "api_key": os.getenv("AZURE_API_KEY_2"),
+            "api_base": os.getenv("AZURE_API_BASE_2"),
+            "order": 2,  # 👈 Lower priority - used when order=1 deployments unavailable
+        },
+    },
+    {
+        "model_name": "gpt-4",
+        "litellm_params": {
+            "model": "openai/gpt-4",
+            "api_key": os.getenv("OPENAI_API_KEY"),
+            "order": 2,  # 👈 Same order as above - routing strategy picks between these
+        },
+    },
+]
+
+router = Router(model_list=model_list)
+
+# Requests will always go to azure/gpt-4-deployment-1 first (order=1)
+# If that deployment is unavailable, the router will use simple-shuffle
+# to pick between the two order=2 deployments
+response = await router.acompletion(
+    model="gpt-4",
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: azure/gpt-4-deployment-1
+      api_key: os.environ/AZURE_API_KEY
+      api_base: os.environ/AZURE_API_BASE
+      order: 1  # 👈 Highest priority - will be tried first
+
+  - model_name: gpt-4
+    litellm_params:
+      model: azure/gpt-4-deployment-2
+      api_key: os.environ/AZURE_API_KEY_2
+      api_base: os.environ/AZURE_API_BASE_2
+      order: 2  # 👈 Lower priority - used when order=1 deployments unavailable
+
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4
+      api_key: os.environ/OPENAI_API_KEY
+      order: 2  # 👈 Same order - routing strategy picks between these
+```
+
+</TabItem>
+</Tabs>
+
+**How it works:**
+
+1. The router filters deployments to only include those with the **lowest `order` value** among available/healthy deployments
+2. If multiple deployments share the same lowest `order` value, the configured routing strategy (default: `simple-shuffle`) selects among them
+3. Deployments without an `order` value are treated as having the lowest priority (selected only if all ordered deployments are unavailable)
+
+**Example scenario:**
+- You have 3 deployments with `order: 1`, `order: 2`, and `order: 2`
+- Request comes in → Router selects the `order: 1` deployment
+- If `order: 1` deployment is cooled down → Router uses `simple-shuffle` to pick between the two `order: 2` deployments
+
 ### Weighted Deployments 
 
 Set `weight` on a deployment to pick one deployment more often than others. 
