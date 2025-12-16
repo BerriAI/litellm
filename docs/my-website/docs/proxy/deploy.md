@@ -10,12 +10,39 @@ You can find the Dockerfile to build litellm proxy [here](https://github.com/Ber
 
 ## Quick Start
 
+:::info
+Facing issues with pulling the docker image? Email us at support@berri.ai.
+:::
+
 To start using Litellm, run the following commands in a shell:
 
+<Tabs>
+
+<TabItem value="docker" label="Docker">
+
+```
+docker pull docker.litellm.ai/berriai/litellm:main-latest
+```
+
+[**See all docker images**](https://github.com/orgs/BerriAI/packages)
+
+</TabItem>
+
+<TabItem value="pip" label="LiteLLM CLI (pip package)">
+
+```shell
+$ pip install 'litellm[proxy]'
+```
+
+</TabItem>
+
+<TabItem value="docker-compose" label="Docker Compose (Proxy + DB)">
+
+Use this docker compose to spin up the proxy with a postgres database running locally. 
+
 ```bash
-# Get the code
+# Get the docker compose file
 curl -O https://raw.githubusercontent.com/BerriAI/litellm/main/docker-compose.yml
-curl -O https://raw.githubusercontent.com/BerriAI/litellm/main/prometheus.yml
 
 # Add the master key - you can change this after setup
 echo 'LITELLM_MASTER_KEY="sk-1234"' > .env
@@ -30,6 +57,8 @@ echo 'LITELLM_SALT_KEY="sk-1234"' >> .env
 docker compose up
 ```
 
+</TabItem>
+</Tabs>
 
 ### Docker Run 
 
