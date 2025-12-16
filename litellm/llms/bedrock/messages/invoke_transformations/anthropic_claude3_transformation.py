@@ -175,6 +175,8 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         if beta_set:
             anthropic_messages_request["anthropic_beta"] = list(beta_set)
+        
+        print(f"🔥 [transform_anthropic_messages_request] anthropic_messages_request: {anthropic_messages_request}")
             
         return anthropic_messages_request
 
