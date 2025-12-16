@@ -26,7 +26,6 @@ from typing import (
 )
 from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
 from litellm.types.integrations.datadog import DatadogInitParams
-from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
 from litellm.types.utils import (
     ImageObject,
     BudgetConfig,
@@ -292,7 +291,7 @@ AZURE_DEFAULT_API_VERSION = "2025-02-01-preview"  # this is updated to the lates
 ### DEFAULT WATSONX API VERSION ###
 WATSONX_DEFAULT_API_VERSION = "2024-03-13"
 ### COHERE EMBEDDINGS DEFAULT TYPE ###
-COHERE_DEFAULT_EMBEDDING_INPUT_TYPE: COHERE_EMBEDDING_INPUT_TYPES = "search_document"
+COHERE_DEFAULT_EMBEDDING_INPUT_TYPE: "COHERE_EMBEDDING_INPUT_TYPES" = "search_document"
 ### CREDENTIALS ###
 credential_list: List[CredentialItem] = []
 ### GUARDRAILS ###
@@ -1515,6 +1514,7 @@ if TYPE_CHECKING:
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.caching.caching import Cache
     from litellm.caching.llm_caching_handler import LLMClientCache
+    from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
 
     # Cost calculator functions
     cost_per_token: Callable[..., Tuple[float, float]]
@@ -1568,6 +1568,7 @@ def __getattr__(name: str) -> Any:
         UTILS_NAMES,
         TOKEN_COUNTER_NAMES,
         LLM_CLIENT_CACHE_NAMES,
+        BEDROCK_TYPES_NAMES,
         CACHING_NAMES,
         HTTP_HANDLER_NAMES,
     )
@@ -1591,6 +1592,11 @@ def __getattr__(name: str) -> Any:
     if name in TOKEN_COUNTER_NAMES:
         from ._lazy_imports import _lazy_import_token_counter
         return _lazy_import_token_counter(name)
+    
+    # Lazy load Bedrock type aliases
+    if name in BEDROCK_TYPES_NAMES:
+        from ._lazy_imports import _lazy_import_bedrock_types
+        return _lazy_import_bedrock_types(name)
     
     # Lazy load LLM client cache and its singleton
     if name in LLM_CLIENT_CACHE_NAMES:
