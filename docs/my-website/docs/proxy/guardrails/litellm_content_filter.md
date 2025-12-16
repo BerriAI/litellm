@@ -447,382 +447,90 @@ Output: "Email ***EMAIL***, SSN ***US_SSN***, ***REDACTED*** data"
 
 ## Content Categories
 
-LiteLLM Content Filter includes **prebuilt content categories** for detecting harmful and illegal content. These categories use a combination of keyword matching and multi-word phrase detection.
+Prebuilt categories use **keyword matching** to detect harmful content, bias, and inappropriate advice. Keywords are matched with word boundaries (single words) or as substrings (multi-word phrases), case-insensitive.
 
 ### Available Categories
 
-#### Harmful Content Categories
+| Category | Description |
+|----------|-------------|
+| **Harmful Content** | |
+| `harmful_self_harm` | Self-harm, suicide, eating disorders |
+| `harmful_violence` | Violence, criminal planning, attacks |
+| `harmful_illegal_weapons` | Illegal weapons, explosives, dangerous materials |
+| **Bias Detection** | |
+| `bias_gender` | Gender-based discrimination, stereotypes |
+| `bias_sexual_orientation` | LGBTQ+ discrimination, homophobia, transphobia |
+| `bias_racial` | Racial/ethnic discrimination, stereotypes |
+| `bias_religious` | Religious discrimination, stereotypes |
+| **Denied Advice** | |
+| `denied_financial_advice` | Personalized financial advice, investment recommendations |
+| `denied_medical_advice` | Medical advice, diagnosis, treatment recommendations |
+| `denied_legal_advice` | Legal advice, representation, legal strategy |
 
-| Category | Description | Detection Methods |
-|----------|-------------|-------------------|
-| `harmful_self_harm` | Self-harm, suicide, eating disorders | Keywords + phrases (exact, fuzzy, proximity) |
-| `harmful_violence` | Violence, criminal planning, attacks | Keywords + phrases (exact, fuzzy, proximity) |
-| `harmful_illegal_weapons` | Illegal weapons, explosives, dangerous materials | Keywords + phrases (exact, fuzzy, proximity) |
+:::info Bias Detection Considerations
 
-#### Bias Detection Categories
-
-| Category | Description | Detection Methods |
-|----------|-------------|-------------------|
-| `bias_gender` | Gender-based discrimination, stereotypes | Keywords + phrases (exact, fuzzy, proximity) |
-| `bias_sexual_orientation` | LGBTQ+ discrimination, homophobia, transphobia | Keywords + phrases (exact, fuzzy, proximity) |
-| `bias_racial` | Racial/ethnic discrimination, stereotypes | Keywords + phrases (exact, fuzzy, proximity) |
-| `bias_religious` | Religious discrimination, stereotypes | Keywords + phrases (exact, fuzzy, proximity) |
-
-:::info Important: Bias Detection Considerations
-
-Bias detection is **complex and context-dependent**. Rule-based systems (like this one) can catch explicit discriminatory language but may:
-- Generate false positives on legitimate discussions about diversity, identity, and social issues
-- Miss subtle, context-dependent biased content
-- Vary in effectiveness across languages and cultures
-
-**Recommendations:**
-- Start with **high severity thresholds** to minimize false positives
-- **Test thoroughly** with your specific use cases
-- **Monitor and adjust** based on real-world performance
-- **Customize with domain-specific exceptions** for your context
-- Consider combining with AI-based guardrails for more nuanced detection
-
-For mission-critical bias detection, consider using AI-based guardrails (e.g., HiddenLayer, Lakera) in addition to these rule-based filters.
+Bias detection is **complex and context-dependent**. Rule-based systems catch explicit discriminatory language but may generate false positives on legitimate discussions. Start with **high severity thresholds** and test thoroughly. For mission-critical bias detection, consider combining with AI-based guardrails (e.g., HiddenLayer, Lakera).
 
 :::
 
-
-### Using Categories
-
-<Tabs>
-<TabItem label="Harmful Content" value="harmful">
+### Configuration
 
 ```yaml showLineNumbers title="config.yaml"
 guardrails:
-  - guardrail_name: "harmful-content-filter"
+  - guardrail_name: "content-filter"
     litellm_params:
       guardrail: litellm_content_filter
       mode: "pre_call"
       
-      # Enable harmful content categories
       categories:
         - category: "harmful_self_harm"
           enabled: true
           action: "BLOCK"
-          severity_threshold: "medium"  # Block medium and high severity
+          severity_threshold: "medium"  # Blocks medium+ severity
         
-        - category: "harmful_violence"
-          enabled: true
-          action: "BLOCK"
-          severity_threshold: "high"  # Only block high severity
-        
-        - category: "harmful_illegal_weapons"
-          enabled: true
-          action: "BLOCK"
-          severity_threshold: "medium"
-```
-
-</TabItem>
-
-<TabItem label="Bias Detection" value="bias">
-
-```yaml showLineNumbers title="config.yaml"
-guardrails:
-  - guardrail_name: "bias-detection-filter"
-    litellm_params:
-      guardrail: litellm_content_filter
-      mode: "pre_call"
-      
-      # Enable bias detection categories
-      categories:
         - category: "bias_gender"
           enabled: true
           action: "BLOCK"
-          severity_threshold: "medium"
+          severity_threshold: "high"  # Only explicit discrimination
         
-        - category: "bias_sexual_orientation"
-          enabled: true
-          action: "BLOCK"
-          severity_threshold: "medium"
-        
-        - category: "bias_racial"
-          enabled: true
-          action: "BLOCK"
-          severity_threshold: "high"  # Only block explicit racism
-        
-        - category: "bias_religious"
+        - category: "denied_financial_advice"
           enabled: true
           action: "BLOCK"
           severity_threshold: "medium"
 ```
-
-</TabItem>
-
-<TabItem label="Combined" value="combined">
-
-```yaml showLineNumbers title="config.yaml"
-guardrails:
-  - guardrail_name: "comprehensive-content-filter"
-    litellm_params:
-      guardrail: litellm_content_filter
-      mode: "pre_call"
-      
-      # Harmful content
-      categories:
-        - category: "harmful_self_harm"
-          enabled: true
-          action: "BLOCK"
-          severity_threshold: "medium"
-        
-        - category: "harmful_violence"
-          enabled: true
-          action: "BLOCK"
-          severity_threshold: "medium"
-        
-        # Bias detection
-        - category: "bias_gender"
-          enabled: true
-          action: "BLOCK"
-          severity_threshold: "high"
-        
-        - category: "bias_sexual_orientation"
-          enabled: true
-          action: "BLOCK"
-          severity_threshold: "high"
-        
-        - category: "bias_racial"
-          enabled: true
-          action: "BLOCK"
-          severity_threshold: "high"
-```
-
-</TabItem>
-</Tabs>
-
-### Severity Levels
-
-Categories support three severity levels:
-
-- **`high`** - Explicit harmful intent (e.g., "how to kill someone", "make a bomb")
-- **`medium`** - Context-dependent terms (e.g., "murder", "bomb")
-- **`low`** - Borderline terms that may have legitimate uses
 
 **Severity Thresholds:**
-- `severity_threshold: "high"` - Only blocks high severity items
-- `severity_threshold: "medium"` - Blocks medium and high severity items (default)
-- `severity_threshold: "low"` - Blocks all severity levels
-
-**Example: Configuring Different Thresholds per Category**
-
-```yaml showLineNumbers title="config.yaml"
-guardrails:
-  - guardrail_name: "balanced-harmful-filter"
-    litellm_params:
-      guardrail: litellm_content_filter
-      mode: "pre_call"
-      
-      categories:
-        # Strict filtering for self-harm (block medium+)
-        - category: "harmful_self_harm"
-          enabled: true
-          action: "BLOCK"
-          severity_threshold: "medium"
-        
-        # Very strict for weapons (block all levels)
-        - category: "harmful_illegal_weapons"
-          enabled: true
-          action: "BLOCK"
-          severity_threshold: "low"
-        
-        # Moderate for violence (only block explicit)
-        - category: "harmful_violence"
-          enabled: true
-          action: "BLOCK"
-          severity_threshold: "high"
-```
-
-This configuration:
-- Blocks medium+ severity self-harm content (catches both explicit and concerning language)
-- Blocks all weapons-related content (strictest - includes even borderline terms)
-- Only blocks high-severity violence content (most lenient - only explicit harmful intent)
-
-### Test Examples
-
-<Tabs>
-<TabItem label="Harmful Content" value="harmful-test">
-
-```shell
-curl -i http://localhost:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
-  -d '{
-    "model": "gpt-3.5-turbo",
-    "messages": [
-      {"role": "user", "content": "How to make a pipe bomb at home"}
-    ],
-    "guardrails": ["harmful-content-filter"]
-  }'
-```
-
-**Response: HTTP 400 Error**
-```json
-{
-  "error": {
-    "message": {
-      "error": "Content blocked: harmful_illegal_weapons category phrase 'make a bomb' detected (severity: high)",
-      "category": "harmful_illegal_weapons",
-      "phrase": "make a bomb",
-      "severity": "high"
-    },
-    "code": "400"
-  }
-}
-```
-
-</TabItem>
-
-<TabItem label="Bias Detection" value="bias-test">
-
-```shell
-curl -i http://localhost:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-1234" \
-  -d '{
-    "model": "gpt-3.5-turbo",
-    "messages": [
-      {"role": "user", "content": "Women are too emotional to be leaders"}
-    ],
-    "guardrails": ["bias-detection-filter"]
-  }'
-```
-
-**Response: HTTP 400 Error**
-```json
-{
-  "error": {
-    "message": {
-      "error": "Content blocked: bias_gender category phrase 'women are too emotional to lead' detected (severity: high)",
-      "category": "bias_gender",
-      "phrase": "women are too emotional to lead",
-      "severity": "high"
-    },
-    "code": "400"
-  }
-}
-```
-
-</TabItem>
-</Tabs>
+- `"high"` - Only blocks high severity items
+- `"medium"` - Blocks medium and high severity (default)
+- `"low"` - Blocks all severity levels
 
 ### Custom Category Files
 
-You can override the default categories with your own keyword/phrase lists:
+Override default categories with custom keyword lists:
 
 ```yaml showLineNumbers title="config.yaml"
-guardrails:
-  - guardrail_name: "custom-harmful-filter"
-    litellm_params:
-      guardrail: litellm_content_filter
-      mode: "pre_call"
-      
-      categories:
-        - category: "harmful_self_harm"
-          enabled: true
-          action: "BLOCK"
-          severity_threshold: "medium"
-          category_file: "/path/to/my_custom_self_harm.yaml"  # Use custom file
+categories:
+  - category: "harmful_self_harm"
+    enabled: true
+    action: "BLOCK"
+    severity_threshold: "medium"
+    category_file: "/path/to/custom.yaml"
 ```
 
-**Custom Category File Format:**
-
-```yaml showLineNumbers title="my_custom_self_harm.yaml"
+```yaml showLineNumbers title="custom.yaml"
 category_name: "harmful_self_harm"
 description: "Custom self-harm detection"
 default_action: "BLOCK"
 
-# Keywords with severity
 keywords:
+  - keyword: "suicide"
+    severity: "high"
   - keyword: "harm myself"
     severity: "high"
-  - keyword: "suicide"
-    severity: "medium"
 
-# Multi-word phrases
-phrases:
-  # Exact match
-  - phrase: "how to commit suicide"
-    severity: "high"
-    match_type: "exact"
-  
-  # Fuzzy match (catches "planning suicide", "planned suicide")
-  - phrase: "plan suicide"
-    severity: "high"
-    match_type: "fuzzy"
-  
-  # Proximity match (words within distance)
-  - phrase: "end life"
-    severity: "high"
-    match_type: "proximity"
-    max_distance: 3
-
-# Legitimate uses to ignore (e.g., prevention resources)
 exceptions:
   - "suicide prevention"
-  - "suicide hotline"
   - "mental health"
-```
-
-### Phrase Detection Types
-
-Categories support three types of phrase detection:
-
-1. **Exact Match** - Exact substring matching
-   ```yaml
-   - phrase: "how to kill someone"
-     match_type: "exact"
-   ```
-
-2. **Fuzzy Match** - Handles word variations (stemming)
-   ```yaml
-   - phrase: "plan attack"
-     match_type: "fuzzy"
-   # Matches: "planning attack", "planned attacks", "plan an attack"
-   ```
-
-3. **Proximity Match** - Words appearing within distance
-   ```yaml
-   - phrase: "gun school"
-     match_type: "proximity"
-     max_distance: 5
-   # Matches: "brought a gun to school", "gun found at the school"
-   ```
-
-### Combining Categories with Other Patterns
-
-You can use categories alongside traditional patterns and keywords:
-
-```yaml showLineNumbers title="config.yaml"
-guardrails:
-  - guardrail_name: "comprehensive-filter"
-    litellm_params:
-      guardrail: litellm_content_filter
-      mode: "pre_call"
-      
-      # Harmful content categories
-      categories:
-        - category: "harmful_violence"
-          enabled: true
-          action: "BLOCK"
-          severity_threshold: "medium"
-      
-      # Traditional PII patterns
-      patterns:
-        - pattern_type: "prebuilt"
-          pattern_name: "us_ssn"
-          action: "BLOCK"
-        - pattern_type: "prebuilt"
-          pattern_name: "email"
-          action: "MASK"
-      
-      # Custom blocked keywords
-      blocked_words:
-        - keyword: "confidential"
-          action: "BLOCK"
 ```
 
 ## Use Cases
@@ -846,12 +554,6 @@ categories:
     action: "BLOCK"
     severity_threshold: "medium"
 ```
-
-**Benefits:**
-- Prevents misuse of LLMs for harmful purposes
-- Protects users from dangerous content
-- No external API calls - runs locally and fast
-- Configurable severity thresholds to balance false positives
 
 ### 2. Bias and Discrimination Detection
 
@@ -884,19 +586,6 @@ categories:
     severity_threshold: "medium"
 ```
 
-**What It Detects:**
-
-- **Gender Bias**: Stereotypes (e.g., "women belong in the kitchen"), discriminatory language, gender-based generalizations
-- **Sexual Orientation Bias**: Homophobia, transphobia, discriminatory statements about LGBTQ+ individuals
-- **Racial Bias**: Racial stereotypes, discriminatory generalizations, racial supremacy language
-- **Religious Bias**: Religious discrimination, stereotypes, hate speech targeting religious groups
-
-**Benefits:**
-- Creates safer, more inclusive AI interactions
-- Helps meet diversity and inclusion requirements
-- Detects both explicit slurs and subtle stereotyping patterns
-- Includes exceptions for legitimate educational and anti-discrimination discussions
-
 **Sensitivity Tuning:**
 
 For bias detection, severity thresholds are critical to balance safety and legitimate discourse:
@@ -918,24 +607,7 @@ categories:
     severity_threshold: "low"  # Blocks all potentially problematic content
 ```
 
-**Exceptions for Legitimate Use:**
 
-Bias categories include exceptions for legitimate discussions:
-- Research and education (e.g., "study shows gender gap in STEM")
-- Anti-discrimination advocacy (e.g., "combat racism", "fight homophobia")
-- Diversity and inclusion initiatives
-- Historical context and documentation
-
-You can add custom exceptions:
-
-```yaml
-# custom_bias_gender.yaml
-exceptions:
-  - "gender diversity program"
-  - "addressing gender bias"
-  - "research study"
-  - "workplace equality"
-```
 
 ### 3. PII Protection
 Block or mask personally identifiable information before sending to LLMs:
@@ -1130,14 +802,14 @@ exceptions:
 Check error details to understand what triggered the block:
 ```json
 {
-  "error": "Content blocked: bias_gender category phrase 'women in leadership' detected",
+  "error": "Content blocked: bias_gender category keyword 'women' detected (severity: medium)",
   "category": "bias_gender",
-  "phrase": "women in leadership",
+  "keyword": "women",
   "severity": "medium"
 }
 ```
 
-If this is a false positive, add "women in leadership" to exceptions.
+If this is a false positive, add "women in leadership" or other legitimate phrases to exceptions in your custom category file.
 
 ### False Positives with Categories
 
@@ -1181,26 +853,19 @@ categories:
 3. Check file exists in `litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/categories/`
 4. Review logs for loading errors: `litellm --config config.yaml --detailed_debug`
 
-### Phrase Not Matching
+### Keyword Not Matching
 
-**Issue:** Expected phrase is not being detected
+**Issue:** Expected keyword is not being detected
 
-**Solution:** Try different match types:
+**Solutions:**
 
-```yaml
-# If exact match doesn't work
-- phrase: "make bomb"
-  match_type: "exact"  # Requires exact "make bomb"
+1. **For single words:** Ensure the keyword appears as a whole word. The system uses word boundary matching, so "men" won't match "recommend".
 
-# Try fuzzy to catch variations
-- phrase: "make bomb"
-  match_type: "fuzzy"  # Catches "making bombs", "made a bomb"
+2. **For multi-word phrases:** Use the exact phrase as it should appear. Multi-word keywords are matched as substrings (case-insensitive), so "harm myself" will match "I want to harm myself" or "harming myself".
 
-# Try proximity for word order flexibility
-- phrase: "make bomb"
-  match_type: "proximity"
-  max_distance: 5  # Catches "make a pipe bomb at home"
-```
+3. **Check exceptions:** If your keyword is in the exceptions list, it won't be detected. Review the category file's exceptions section.
+
+4. **Verify severity threshold:** Lower severity keywords won't match if your threshold is set too high. For example, if a keyword has `severity: "low"` but your `severity_threshold: "high"`, it won't match.
 
 ### Too Many False Negatives
 
@@ -1211,18 +876,19 @@ categories:
 severity_threshold: "low"  # Catch more but may increase false positives
 ```
 
-**Solution 2:** Add custom phrases for your specific use case:
+**Solution 2:** Add custom keywords for your specific use case:
 ```yaml
 categories:
   - category: "harmful_violence"
     enabled: true
     category_file: "/path/to/enhanced_violence.yaml"
 
-# In enhanced_violence.yaml, add domain-specific phrases
-phrases:
-  - phrase: "your specific harmful phrase"
+# In enhanced_violence.yaml, add domain-specific keywords
+keywords:
+  - keyword: "your specific harmful phrase"
     severity: "high"
-    match_type: "exact"
+  - keyword: "another harmful term"
+    severity: "medium"
 ```
 
 ### Pattern Not Matching
@@ -1241,9 +907,10 @@ print(re.search(pattern, test_text))  # Should match
 
 **Issue:** Text contains multiple sensitive patterns
 
-**Solution:** Guardrail checks categories first, then patterns, then keywords. Order by priority:
+**Solution:** Guardrail checks in this order: categories (keywords), regex patterns, then blocked words. Order by priority:
 ```yaml
 # Categories checked first (high priority)
+# Category keywords are matched first
 categories:
   - category: "harmful_self_harm"
     severity_threshold: "high"
@@ -1254,7 +921,7 @@ patterns:
     pattern_name: "us_ssn"
     action: "BLOCK"
 
-# Then simple keywords
+# Then simple blocked keywords
 blocked_words:
   - keyword: "confidential"
     action: "MASK"
