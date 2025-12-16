@@ -892,12 +892,6 @@ class GenerateKeyResponse(KeyRequestBase):
     updated_by: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-    rotated_key_id: Optional[str] = Field(
-        default=None,
-        description="The hashed token ID of the old key that was rotated. "
-        "Only present when key regeneration was done with a grace period. "
-        "The old key remains active until its expiry time.",
-    )
 
     @model_validator(mode="before")
     @classmethod
