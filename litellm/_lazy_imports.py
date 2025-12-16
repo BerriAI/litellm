@@ -26,6 +26,30 @@ def _get_default_encoding() -> Any:
         _default_encoding = encoding
     return _default_encoding
 
+
+# Lazy loader for get_modified_max_tokens to avoid importing token_counter at module import time
+_get_modified_max_tokens_func: Optional[Any] = None
+
+
+def _get_modified_max_tokens() -> Any:
+    """
+    Lazily load and cache the get_modified_max_tokens function.
+    
+    This avoids importing `litellm.litellm_core_utils.token_counter` at `litellm` import time.
+    The function is cached after the first import.
+    
+    This is used internally by utils.py functions that need the token counter but shouldn't
+    trigger its import during module load.
+    """
+    global _get_modified_max_tokens_func
+    if _get_modified_max_tokens_func is None:
+        from litellm.litellm_core_utils.token_counter import (
+            get_modified_max_tokens as _get_modified_max_tokens_imported,
+        )
+
+        _get_modified_max_tokens_func = _get_modified_max_tokens_imported
+    return _get_modified_max_tokens_func
+
 # Cost calculator names that support lazy loading via _lazy_import_cost_calculator
 COST_CALCULATOR_NAMES = (
     "completion_cost",
