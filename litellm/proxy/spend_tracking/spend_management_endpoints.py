@@ -1680,7 +1680,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     ),
 ):
     """
-    View spend logs with pagination support
+    View spend logs with pagination support.
     Available at both `/spend/logs/v2` (public API) and `/spend/logs/ui` (internal UI).
 
     Returns paginated response with data, total, page, page_size, and total_pages.

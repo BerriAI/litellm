@@ -2664,6 +2664,9 @@ class SpendLogsMetadata(TypedDict):
     cold_storage_object_key: Optional[
         str
     ]  # S3/GCS object key for cold storage retrieval
+    litellm_overhead_time_ms: Optional[
+        float
+    ]  # LiteLLM overhead time in milliseconds
 
 
 class SpendLogsPayload(TypedDict):
