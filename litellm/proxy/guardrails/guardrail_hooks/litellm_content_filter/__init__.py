@@ -22,6 +22,8 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         Initialized ContentFilterGuardrail instance
     """
     guardrail_name = guardrail.get("guardrail_name")
+    from litellm.proxy.proxy_server import llm_router
+
     if not guardrail_name:
         raise ValueError("Content Filter: guardrail_name is required")
 
@@ -34,6 +36,8 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         default_on=litellm_params.default_on or False,
         categories=getattr(litellm_params, "categories", None),
         severity_threshold=getattr(litellm_params, "severity_threshold", "medium"),
+        llm_router=llm_router,
+        image_model=getattr(litellm_params, "image_model", None),
     )
 
     litellm.logging_callback_manager.add_litellm_callback(content_filter_guardrail)
