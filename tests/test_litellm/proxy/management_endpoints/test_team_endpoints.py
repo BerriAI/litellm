@@ -2144,7 +2144,12 @@ async def test_new_team_org_scoped_budget_bypasses_user_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import NewTeamRequest, UserAPIKeyAuth, LiteLLM_UserTable, LiteLLM_OrganizationTable
+    from litellm.proxy._types import (
+        LiteLLM_OrganizationTable,
+        LiteLLM_UserTable,
+        NewTeamRequest,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import new_team
 
     # Create non-admin user with very restrictive personal budget ($3)
@@ -2269,7 +2274,12 @@ async def test_new_team_org_scoped_models_bypasses_user_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import NewTeamRequest, UserAPIKeyAuth, LiteLLM_UserTable, LiteLLM_OrganizationTable
+    from litellm.proxy._types import (
+        LiteLLM_OrganizationTable,
+        LiteLLM_UserTable,
+        NewTeamRequest,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import new_team
 
     # Create non-admin user with restrictive personal models
@@ -2455,7 +2465,12 @@ async def test_new_team_standalone_validates_against_user_budget():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import NewTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_UserTable
+    from litellm.proxy._types import (
+        LiteLLM_UserTable,
+        NewTeamRequest,
+        ProxyException,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import new_team
 
     # Create non-admin user with restrictive personal budget
@@ -2522,7 +2537,13 @@ async def test_new_team_org_scoped_budget_exceeds_org_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import NewTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_OrganizationTable, LiteLLM_BudgetTable
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_OrganizationTable,
+        NewTeamRequest,
+        ProxyException,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import new_team
 
     # Create user (org admin)
@@ -2593,7 +2614,13 @@ async def test_new_team_org_scoped_models_not_in_org_models():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import NewTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_OrganizationTable, LiteLLM_BudgetTable
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_OrganizationTable,
+        NewTeamRequest,
+        ProxyException,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import new_team
 
     # Create user (org admin)
@@ -2662,7 +2689,12 @@ async def test_update_team_standalone_budget_exceeds_user_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import UpdateTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_UserTable
+    from litellm.proxy._types import (
+        LiteLLM_UserTable,
+        ProxyException,
+        UpdateTeamRequest,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     # Create non-admin user with restrictive personal budget
@@ -2733,7 +2765,13 @@ async def test_update_team_org_scoped_budget_exceeds_org_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import UpdateTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_OrganizationTable, LiteLLM_BudgetTable
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_OrganizationTable,
+        ProxyException,
+        UpdateTeamRequest,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     # Create user (org admin)
@@ -2809,7 +2847,7 @@ async def test_update_team_standalone_models_exceeds_user_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import UpdateTeamRequest, ProxyException, UserAPIKeyAuth
+    from litellm.proxy._types import ProxyException, UpdateTeamRequest, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     # Create non-admin user with restrictive personal models
@@ -2874,7 +2912,13 @@ async def test_update_team_org_scoped_budget_bypasses_user_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import UpdateTeamRequest, UserAPIKeyAuth, LiteLLM_UserTable, LiteLLM_OrganizationTable, LiteLLM_BudgetTable
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_OrganizationTable,
+        LiteLLM_UserTable,
+        UpdateTeamRequest,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     # Create user with very restrictive personal budget ($3)
@@ -2973,7 +3017,11 @@ async def test_update_team_org_scoped_models_bypasses_user_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import UpdateTeamRequest, UserAPIKeyAuth, LiteLLM_OrganizationTable
+    from litellm.proxy._types import (
+        LiteLLM_OrganizationTable,
+        UpdateTeamRequest,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     # Create user with very restrictive personal models
@@ -3061,7 +3109,12 @@ async def test_update_team_org_scoped_models_not_in_org_models():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import UpdateTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_OrganizationTable
+    from litellm.proxy._types import (
+        LiteLLM_OrganizationTable,
+        ProxyException,
+        UpdateTeamRequest,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     # Create user (org admin)
@@ -3133,7 +3186,7 @@ async def test_update_team_tpm_limit_exceeds_user_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import UpdateTeamRequest, ProxyException, UserAPIKeyAuth
+    from litellm.proxy._types import ProxyException, UpdateTeamRequest, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     # Create non-admin user with TPM limit
@@ -3195,7 +3248,7 @@ async def test_update_team_rpm_limit_exceeds_user_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import UpdateTeamRequest, ProxyException, UserAPIKeyAuth
+    from litellm.proxy._types import ProxyException, UpdateTeamRequest, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     # Create non-admin user with RPM limit
@@ -3257,7 +3310,13 @@ async def test_new_team_org_scoped_tpm_exceeds_org_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import NewTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_OrganizationTable, LiteLLM_BudgetTable
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_OrganizationTable,
+        NewTeamRequest,
+        ProxyException,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import new_team
 
     # Create user (with restrictive personal TPM limit that should be bypassed)
@@ -3327,7 +3386,13 @@ async def test_new_team_org_scoped_rpm_exceeds_org_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import NewTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_OrganizationTable, LiteLLM_BudgetTable
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_OrganizationTable,
+        NewTeamRequest,
+        ProxyException,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import new_team
 
     # Create user (with restrictive personal RPM limit that should be bypassed)
@@ -3398,7 +3463,13 @@ async def test_new_team_org_scoped_tpm_rpm_bypasses_user_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import NewTeamRequest, UserAPIKeyAuth, LiteLLM_OrganizationTable, LiteLLM_BudgetTable, LiteLLM_TeamTable
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_OrganizationTable,
+        LiteLLM_TeamTable,
+        NewTeamRequest,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import new_team
 
     # Create user with restrictive personal limits
@@ -3493,7 +3564,13 @@ async def test_update_team_org_scoped_tpm_exceeds_org_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import UpdateTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_OrganizationTable, LiteLLM_BudgetTable
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_OrganizationTable,
+        ProxyException,
+        UpdateTeamRequest,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     # Create user (with restrictive personal TPM limit that should be bypassed)
@@ -3569,7 +3646,13 @@ async def test_update_team_org_scoped_rpm_exceeds_org_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import UpdateTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_OrganizationTable, LiteLLM_BudgetTable
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_OrganizationTable,
+        ProxyException,
+        UpdateTeamRequest,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     # Create user (with restrictive personal RPM limit that should be bypassed)
@@ -3646,7 +3729,13 @@ async def test_update_team_org_scoped_tpm_rpm_bypasses_user_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import UpdateTeamRequest, UserAPIKeyAuth, LiteLLM_OrganizationTable, LiteLLM_BudgetTable, LiteLLM_TeamTable
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_OrganizationTable,
+        LiteLLM_TeamTable,
+        UpdateTeamRequest,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     # Create user with restrictive personal limits
@@ -3727,3 +3816,145 @@ async def test_update_team_org_scoped_tpm_rpm_bypasses_user_limit():
 
         # Verify team was updated
         assert result["team_id"] == "org-team-update-bypass-123"
+
+
+@pytest.mark.asyncio
+async def test_update_team_guardrails_with_org_id():
+    """
+    Test that updating team guardrails works when team has an organization_id.
+    The fix ensures 'teams' field is included when fetching organization data.
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        LiteLLM_OrganizationTable,
+        LiteLLM_TeamTable,
+        UpdateTeamRequest,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    # Create user (org admin)
+    org_admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="org-admin-guardrails-test",
+        models=[],
+    )
+
+    # Update request to add guardrails to team
+    update_request = UpdateTeamRequest(
+        team_id="team-guardrails-123",
+        guardrails=["aporia-pre-call", "aporia-post-call"],
+        organization_id="test-org-guardrails",  # Changing org triggers fetch_and_validate_organization
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    # Mock organization with all required fields including teams (the fix)
+    from datetime import datetime
+    mock_org = MagicMock(spec=LiteLLM_OrganizationTable)
+    mock_org.organization_id = "test-org-guardrails"
+    mock_org.models = ["gpt-4", "gpt-3.5-turbo"]
+    mock_org.budget_id = "budget-123"
+    mock_org.created_by = "admin"
+    mock_org.updated_by = "admin"
+    mock_org.created_at = datetime(2024, 1, 1)
+    mock_org.updated_at = datetime(2024, 1, 1)
+    mock_org.litellm_budget_table = None
+    mock_org.members = []
+    mock_org.teams = []  # Must be a list, not None
+    mock_org.model_dump.return_value = {
+        "organization_id": "test-org-guardrails",
+        "models": ["gpt-4", "gpt-3.5-turbo"],
+        "budget_id": "budget-123",
+        "created_by": "admin",
+        "updated_by": "admin",
+        "created_at": datetime(2024, 1, 1),
+        "updated_at": datetime(2024, 1, 1),
+        "litellm_budget_table": None,
+        "members": [],
+        "teams": [],
+    }
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ) as mock_cache, patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
+    ), patch(
+        "litellm.proxy.proxy_server.premium_user", True  # Required for guardrails feature
+    ):
+        # Mock existing team - must have compatible models with organization
+        mock_existing_team = MagicMock()
+        mock_existing_team.team_id = "team-guardrails-123"
+        mock_existing_team.organization_id = None
+        mock_existing_team.metadata = {}
+        mock_existing_team.model_id = None
+        mock_existing_team.models = ["gpt-4"]  # Subset of org models to pass validation
+        mock_existing_team.max_budget = None
+        mock_existing_team.tpm_limit = None
+        mock_existing_team.rpm_limit = None
+        mock_existing_team.model_dump.return_value = {
+            "team_id": "team-guardrails-123",
+            "organization_id": None,
+            "metadata": {},
+            "models": ["gpt-4"],
+            "max_budget": None,
+            "tpm_limit": None,
+            "rpm_limit": None,
+        }
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=mock_existing_team
+        )
+        mock_cache.async_set_cache = AsyncMock()
+
+        # Mock organization fetch - this is where the bug occurred
+        # The fix ensures 'teams: True' is in the include clause
+        mock_prisma.db.litellm_organizationtable.find_unique = AsyncMock(
+            return_value=mock_org
+        )
+
+        # Mock team update
+        mock_updated_team = MagicMock(spec=LiteLLM_TeamTable)
+        mock_updated_team.team_id = "team-guardrails-123"
+        mock_updated_team.organization_id = "test-org-guardrails"
+        mock_updated_team.metadata = {"guardrails": ["aporia-pre-call", "aporia-post-call"]}
+        mock_updated_team.litellm_model_table = None
+        mock_updated_team.model_dump.return_value = {
+            "team_id": "team-guardrails-123",
+            "organization_id": "test-org-guardrails",
+            "metadata": {"guardrails": ["aporia-pre-call", "aporia-post-call"]},
+        }
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(
+            return_value=mock_updated_team
+        )
+        mock_prisma.jsonify_team_object = MagicMock(side_effect=lambda db_data: db_data)
+
+        # Mock llm_router
+        mock_router = MagicMock()
+        with patch("litellm.proxy.proxy_server.llm_router", mock_router):
+            # This should succeed without Pydantic validation error
+            result = await update_team(
+                data=update_request,
+                http_request=dummy_request,
+                user_api_key_dict=org_admin_user,
+            )
+
+            # Verify the team was updated successfully with guardrails
+            assert result is not None
+            assert result["data"].organization_id == "test-org-guardrails"
+            assert result["data"].metadata["guardrails"] == ["aporia-pre-call", "aporia-post-call"]
+
+            # Verify that organization fetch was called with proper include clause
+            # The function is called twice: once by fetch_and_validate_organization (with include)
+            # and once by get_org_object (without include). We verify the first call has 'teams'.
+            assert mock_prisma.db.litellm_organizationtable.find_unique.call_count >= 1
+            
+            # Get the first call (from fetch_and_validate_organization)
+            first_call_kwargs = mock_prisma.db.litellm_organizationtable.find_unique.call_args_list[0].kwargs
+            
+            # Verify that 'teams' is included in the fetch
+            assert "include" in first_call_kwargs
+            assert "teams" in first_call_kwargs["include"]
+            assert first_call_kwargs["include"]["teams"] is True

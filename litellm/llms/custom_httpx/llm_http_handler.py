@@ -3965,12 +3965,24 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = sync_httpx_client.post(
-                url=api_base,
-                headers=headers,
-                json=data,
-                timeout=timeout,
-            )
+            # Check if provider requires multipart/form-data (e.g., Stability AI)
+            if image_generation_provider_config.use_multipart_form_data():
+                # Use form-data: pass files={} to force multipart encoding
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=data,
+                    files={"none": ""},  # Forces multipart/form-data
+                    timeout=timeout,
+                )
+            else:
+                # Use JSON (default)
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=data,
+                    timeout=timeout,
+                )
 
         except Exception as e:
             raise self._handle_error(
@@ -4063,12 +4075,24 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = await async_httpx_client.post(
-                url=api_base,
-                headers=headers,
-                json=data,
-                timeout=timeout,
-            )
+            # Check if provider requires multipart/form-data (e.g., Stability AI)
+            if image_generation_provider_config.use_multipart_form_data():
+                # Use form-data: pass files={} to force multipart encoding
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=data,
+                    files={"none": ""},  # Forces multipart/form-data
+                    timeout=timeout,
+                )
+            else:
+                # Use JSON (default)
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=data,
+                    timeout=timeout,
+                )
 
         except Exception as e:
             raise self._handle_error(
@@ -7311,6 +7335,7 @@ class BaseLLMHTTPHandler:
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
+        system_instruction: Optional[Any] = None,
     ) -> Any:
         """
         Handles Google GenAI generate content requests.
@@ -7336,6 +7361,7 @@ class BaseLLMHTTPHandler:
                 client=client if isinstance(client, AsyncHTTPHandler) else None,
                 stream=stream,
                 litellm_metadata=litellm_metadata,
+                system_instruction=system_instruction,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -7365,6 +7391,7 @@ class BaseLLMHTTPHandler:
             contents=contents,
             tools=tools,
             generate_content_config_dict=generate_content_config_dict,
+            system_instruction=system_instruction,
         )
 
         if extra_body:
@@ -7435,6 +7462,7 @@ class BaseLLMHTTPHandler:
         client: Optional[AsyncHTTPHandler] = None,
         stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
+        system_instruction: Optional[Any] = None,
     ) -> Any:
         """
         Async version of the generate content handler.
@@ -7472,6 +7500,7 @@ class BaseLLMHTTPHandler:
             contents=contents,
             tools=tools,
             generate_content_config_dict=generate_content_config_dict,
+            system_instruction=system_instruction,
         )
 
         if extra_body:

@@ -20,7 +20,7 @@ from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import LLMResponseTypes
+from litellm.types.utils import Choices, LLMResponseTypes, ModelResponse
 
 
 class GraySwanGuardrailMissingSecrets(Exception):
@@ -256,19 +256,22 @@ class GraySwanGuardrail(CustomGuardrail):
                 )
 
                 # Handle ModelResponse (OpenAI-style chat/text completions)
-                if hasattr(response, "choices") and response.choices:
+                # Use isinstance to narrow the type for mypy
+                if isinstance(response, ModelResponse) and response.choices:
                     verbose_proxy_logger.debug(
                         "Gray Swan Guardrail: Replacing response content in ModelResponse format"
                     )
                     for choice in response.choices:
                         # Handle chat completion format (message.content)
-                        if hasattr(choice, "message") and hasattr(
+                        # Choices has message attribute, StreamingChoices has delta
+                        if isinstance(choice, Choices) and hasattr(choice, "message") and hasattr(
                             choice.message, "content"
                         ):
                             choice.message.content = violation_message
                         # Handle text completion format (text)
+                        # Text attribute might be set dynamically, use setattr
                         elif hasattr(choice, "text"):
-                            choice.text = violation_message
+                            setattr(choice, "text", violation_message)
 
                         # Update finish_reason to indicate content filtering
                         if hasattr(choice, "finish_reason"):

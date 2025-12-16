@@ -26,9 +26,6 @@ from typing import (
 )
 from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
 from litellm.types.integrations.datadog import DatadogInitParams
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.caching.caching import Cache, DualCache, RedisCache, InMemoryCache
-from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
 from litellm.types.utils import (
     ImageObject,
@@ -159,6 +156,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "anthropic_cache_control_hook",
     "generic_api",
     "resend_email",
+    "sendgrid_email",
     "smtp_email",
     "deepeval",
     "s3_v2",
@@ -286,7 +284,7 @@ disable_token_counter: bool = False
 disable_add_transform_inline_image_block: bool = False
 disable_add_user_agent_to_request_tags: bool = False
 extra_spend_tag_headers: Optional[List[str]] = None
-in_memory_llm_clients_cache: LLMClientCache = LLMClientCache()
+in_memory_llm_clients_cache: "LLMClientCache"
 safe_memory_mode: bool = False
 enable_azure_ad_token_refresh: Optional[bool] = False
 ### DEFAULT AZURE API VERSION ###
@@ -332,7 +330,7 @@ caching: bool = (
 caching_with_models: bool = (
     False  # # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 )
-cache: Optional[Cache] = (
+cache: Optional["Cache"] = (
     None  # cache object <- use this - https://docs.litellm.ai/docs/caching
 )
 default_in_memory_ttl: Optional[float] = None
@@ -398,7 +396,10 @@ disable_copilot_system_to_assistant: bool = (
 public_mcp_servers: Optional[List[str]] = None
 public_model_groups: Optional[List[str]] = None
 public_agent_groups: Optional[List[str]] = None
-public_model_groups_links: Dict[str, str] = {}
+# Supports both old format (Dict[str, str]) and new format (Dict[str, Dict[str, Any]])
+# New format: { "displayName": { "url": "...", "index": 0 } }
+# Old format: { "displayName": "url" } (for backward compatibility)
+public_model_groups_links: Dict[str, Union[str, Dict[str, Any]]] = {}
 #### REQUEST PRIORITIZATION #######
 priority_reservation: Optional[Dict[str, Union[float, PriorityReservationDict]]] = None
 priority_reservation_settings: "PriorityReservationSettings" = (
@@ -418,10 +419,6 @@ disable_aiohttp_trust_env: bool = (
 force_ipv4: bool = (
     False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 )
-module_level_aclient = AsyncHTTPHandler(
-    timeout=request_timeout, client_alias="module level aclient"
-)
-module_level_client = HTTPHandler(timeout=request_timeout)
 
 #### RETRIES ####
 num_retries: Optional[int] = None  # per model endpoint
@@ -1067,7 +1064,6 @@ openai_video_generation_models = ["sora-2"]
 from .timeout import timeout
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
-from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
 # client must be imported immediately as it's used as a decorator at function definition time
 from .utils import client
 # Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py
@@ -1516,6 +1512,9 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
 
 if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo as _ModelInfoType
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+    from litellm.caching.caching import Cache
+    from litellm.caching.llm_caching_handler import LLMClientCache
 
     # Cost calculator functions
     cost_per_token: Callable[..., Tuple[float, float]]
@@ -1556,47 +1555,59 @@ if TYPE_CHECKING:
     # Response types - truly lazy loaded only (not in main.py or elsewhere)
     ModelResponseListIterator: Type[Any]
 
+    # HTTP handler singletons (created lazily via __getattr__ at runtime)
+    module_level_aclient: AsyncHTTPHandler
+    module_level_client: HTTPHandler
+
 
 def __getattr__(name: str) -> Any:
-    """Lazy import handler for cost_calculator and litellm_logging functions."""
-    # Lazy load cost_calculator functions
-    _cost_calculator_names = (
-        "completion_cost",
-        "cost_per_token",
-        "response_cost_calculator",
+    """Lazy import handler"""
+    from ._lazy_imports import (
+        COST_CALCULATOR_NAMES,
+        LITELLM_LOGGING_NAMES,
+        UTILS_NAMES,
+        TOKEN_COUNTER_NAMES,
+        LLM_CLIENT_CACHE_NAMES,
+        CACHING_NAMES,
+        HTTP_HANDLER_NAMES,
     )
-    if name in _cost_calculator_names:
+    
+    # Lazy load cost_calculator functions
+    if name in COST_CALCULATOR_NAMES:
         from ._lazy_imports import _lazy_import_cost_calculator
         return _lazy_import_cost_calculator(name)
 
     # Lazy load litellm_logging functions
-    _litellm_logging_names = (
-        "Logging",
-        "modify_integration",
-    )
-    if name in _litellm_logging_names:
+    if name in LITELLM_LOGGING_NAMES:
         from ._lazy_imports import _lazy_import_litellm_logging
         return _lazy_import_litellm_logging(name)
 
     # Lazy load utils functions
-    _utils_names = (
-        "exception_type", "get_optional_params", "get_response_string", "token_counter",
-        "create_pretrained_tokenizer", "create_tokenizer", "supports_function_calling",
-        "supports_web_search", "supports_url_context", "supports_response_schema",
-        "supports_parallel_function_calling", "supports_vision", "supports_audio_input",
-        "supports_audio_output", "supports_system_messages", "supports_reasoning",
-        "get_litellm_params", "acreate", "get_max_tokens", "get_model_info",
-        "register_prompt_template", "validate_environment", "check_valid_key",
-        "register_model", "encode", "decode", "_calculate_retry_after", "_should_retry",
-        "get_supported_openai_params", "get_api_base", "get_first_chars_messages",
-        "ModelResponse", "ModelResponseStream", "EmbeddingResponse", "ImageResponse",
-        "TranscriptionResponse", "TextCompletionResponse", "get_provider_fields",
-        "ModelResponseListIterator", "get_valid_models",
-    )
-    if name in _utils_names:
+    if name in UTILS_NAMES:
         from ._lazy_imports import _lazy_import_utils
         return _lazy_import_utils(name)
     
+    # Lazy load token counter utilities
+    if name in TOKEN_COUNTER_NAMES:
+        from ._lazy_imports import _lazy_import_token_counter
+        return _lazy_import_token_counter(name)
+    
+    # Lazy load LLM client cache and its singleton
+    if name in LLM_CLIENT_CACHE_NAMES:
+        from ._lazy_imports import _lazy_import_llm_client_cache
+        return _lazy_import_llm_client_cache(name)
+    
+    # Lazy load caching classes
+    if name in CACHING_NAMES:
+        from ._lazy_imports import _lazy_import_caching
+        return _lazy_import_caching(name)
+    
+    # Lazy-load HTTP handler singletons used across the codebase
+    if name in HTTP_HANDLER_NAMES:
+        from ._lazy_imports import _lazy_import_http_handlers
+
+        return _lazy_import_http_handlers(name)
+
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
