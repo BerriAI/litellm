@@ -210,17 +210,15 @@ jobs:
             # === B. RELEASE CONTEXT ===
             echo "::group::Release Context"
 
-            # Release JSON metadata
-            cat << 'RELEASE_EOF' > /tmp/release_meta.json
-            {
-              "tag": "${{ github.event.release.tag_name }}",
-              "name": "${{ github.event.release.name }}",
-              "author": "${{ github.event.release.author.login }}",
-              "url": "${{ github.event.release.html_url }}",
-              "prerelease": ${{ github.event.release.prerelease }},
-              "draft": ${{ github.event.release.draft }}
-            }
-            RELEASE_EOF
+            # Release JSON metadata (using printf to avoid heredoc indentation issues)
+            printf '%s\n' '{' \
+              "  \"tag\": \"${{ github.event.release.tag_name }}\"," \
+              "  \"name\": \"${{ github.event.release.name }}\"," \
+              "  \"author\": \"${{ github.event.release.author.login }}\"," \
+              "  \"url\": \"${{ github.event.release.html_url }}\"," \
+              "  \"prerelease\": ${{ github.event.release.prerelease || 'false' }}," \
+              "  \"draft\": ${{ github.event.release.draft || 'false' }}" \
+              '}' > /tmp/release_meta.json
 
             # Recent releases
             gh release list --limit 5 > /tmp/recent_releases.txt 2>/dev/null || echo "" > /tmp/recent_releases.txt
