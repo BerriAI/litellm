@@ -2751,7 +2751,6 @@ class ProxyConfig:
         
         # Ensure proxy_logging_obj.alerting is set for all alerting types
         _alerting_value = general_settings.get("alerting", None)
-        print("ALERTING VALUES", _alerting_value)
         verbose_proxy_logger.debug(f"_load_alerting_settings: Calling update_values with alerting={_alerting_value}")
         proxy_logging_obj.update_values(
             alerting=_alerting_value,
@@ -3252,7 +3251,6 @@ class ProxyConfig:
                     item for item in _general_settings["alerting"] 
                     if item not in general_settings["alerting"]
                 ]
-                print("_add_general_settings_from_db_config: MERGING alerting from", general_settings.get("alerting"), "and", _general_settings["alerting"], "to", _merged_alerting)
                 verbose_proxy_logger.debug(
                     f"Merging alerting values: YAML={general_settings['alerting']}, DB={_general_settings['alerting']}, Merged={_merged_alerting}"
                 )
