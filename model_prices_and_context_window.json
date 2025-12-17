@@ -17469,6 +17469,8 @@
         "output_cost_per_image_token": 3.2e-05,
         "output_cost_per_token": 1e-05,
         "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
             "/v1/images/generations",
             "/v1/images/edits"
         ]
@@ -17483,6 +17485,8 @@
         "output_cost_per_image_token": 3.2e-05,
         "output_cost_per_token": 1e-05,
         "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
             "/v1/images/generations",
             "/v1/images/edits"
         ]
