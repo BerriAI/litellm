@@ -62,10 +62,6 @@ AZURE_SENTINEL_TENANT_ID="your-tenant-id"                            # Azure Ten
 AZURE_SENTINEL_CLIENT_ID="your-client-id"                            # Application (client) ID
 AZURE_SENTINEL_CLIENT_SECRET="your-client-secret"                    # Client secret value
 
-# Alternative: You can also use generic Azure env vars
-# AZURE_TENANT_ID="your-tenant-id"
-# AZURE_CLIENT_ID="your-client-id"
-# AZURE_CLIENT_SECRET="your-client-secret"
 ```
 
 **Note**: The `AZURE_SENTINEL_ENDPOINT` should be the DCR's logs ingestion endpoint (found in the DCR Overview page), NOT the Data Collection Endpoint (DCE). The DCR endpoint is associated with your specific DCR and looks like: `https://your-dcr-endpoint.{region}-1.ingest.monitor.azure.com`
@@ -109,6 +105,10 @@ LiteLLM_CL
 | project TimeGenerated, model, status, total_tokens, response_cost
 | order by TimeGenerated desc
 ```
+
+You should see following logs in Azure Workspace.
+
+<Image img={require('../../img/sentinel.png')} />
 
 ## Environment Variables
 
