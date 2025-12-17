@@ -215,6 +215,7 @@ export interface AgentCreateInfo {
   credential_fields: AgentCredentialFieldMetadata[];
   litellm_params_template?: Record<string, string> | null;
   model_template?: string | null;
+  use_a2a_form_fields?: boolean;
 }
 
 export interface PublicModelHubInfo {

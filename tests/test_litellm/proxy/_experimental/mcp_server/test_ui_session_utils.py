@@ -1,6 +1,8 @@
-import pytest
+import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+
+import pytest
 
 from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from litellm.proxy._types import UserAPIKeyAuth
@@ -90,3 +92,27 @@ async def test_build_effective_auth_contexts_returns_original_when_no_resolution
     assert contexts == [user_auth]
     mock_resolve.assert_awaited_once_with(user_auth)
 
+
+@pytest.mark.asyncio
+async def test_build_effective_auth_contexts_handles_unpicklable_parent_span(monkeypatch):
+    class DummySpan:
+        def __init__(self) -> None:
+            self._lock = threading.RLock()
+
+    parent_span = DummySpan()
+    user_auth = UserAPIKeyAuth(
+        team_id=UI_SESSION_TOKEN_TEAM_ID,
+        user_id="user-span",
+        parent_otel_span=parent_span,
+    )
+
+    mock_resolve = AsyncMock(return_value=["team-span"])
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.ui_session_utils.resolve_ui_session_team_ids",
+        mock_resolve,
+    )
+
+    contexts = await build_effective_auth_contexts(user_auth)
+
+    assert contexts[0].team_id == "team-span"
+    assert contexts[0].parent_otel_span is parent_span

@@ -63,6 +63,10 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         headers["Content-Type"] = "application/json"
         return headers
 
+    def use_multipart_form_data(self) -> bool:
+        """Gemini uses JSON requests, not multipart/form-data."""
+        return False
+
     def get_complete_url(
         self,
         model: str,

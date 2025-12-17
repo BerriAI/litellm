@@ -108,6 +108,27 @@ class AmazonAnthropicClaudeMessagesConfig(
             stream=stream,
         )
 
+    def _remove_ttl_from_cache_control(
+        self, anthropic_messages_request: Dict
+    ) -> None:
+        """
+        Remove `ttl` field from cache_control in messages.
+        Bedrock doesn't support the ttl field in cache_control.
+        
+        Args:
+            anthropic_messages_request: The request dictionary to modify in-place
+        """
+        if "messages" in anthropic_messages_request:
+            for message in anthropic_messages_request["messages"]:
+                if isinstance(message, dict) and "content" in message:
+                    content = message["content"]
+                    if isinstance(content, list):
+                        for item in content:
+                            if isinstance(item, dict) and "cache_control" in item:
+                                cache_control = item["cache_control"]
+                                if isinstance(cache_control, dict) and "ttl" in cache_control:
+                                    cache_control.pop("ttl", None)
+
     def transform_anthropic_messages_request(
         self,
         model: str,
@@ -141,8 +162,11 @@ class AmazonAnthropicClaudeMessagesConfig(
         # 3. `model` is not allowed in request body for bedrock invoke
         if "model" in anthropic_messages_request:
             anthropic_messages_request.pop("model", None)
+
+        # 4. Remove `ttl` field from cache_control in messages (Bedrock doesn't support it)
+        self._remove_ttl_from_cache_control(anthropic_messages_request)
             
-        # 4. AUTO-INJECT beta headers based on features used
+        # 5. AUTO-INJECT beta headers based on features used
         anthropic_model_info = AnthropicModelInfo()
         tools = anthropic_messages_optional_request_params.get("tools")
         messages_typed = cast(List[AllMessageValues], messages)
@@ -175,6 +199,7 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         if beta_set:
             anthropic_messages_request["anthropic_beta"] = list(beta_set)
+        
             
         return anthropic_messages_request
 

@@ -1101,3 +1101,91 @@ async def test_bedrock_apply_guardrail_with_only_tool_calls_response():
         # Verify that the Bedrock API was NOT called since there's no text to process
         mock_api_request.assert_not_called()
         print("✅ apply_guardrail with tool_calls test passed - no API call made")
+
+
+@pytest.mark.asyncio
+async def test_bedrock_guardrail_blocked_content_with_masking_enabled():
+    """Test that BLOCKED content raises exception even when masking is enabled
+    
+    This test verifies the bug fix where previously mask_request_content=True or
+    mask_response_content=True would bypass all BLOCKED content checks. Now it
+    properly distinguishes between BLOCKED (raise exception) and ANONYMIZED (apply masking).
+    """
+    
+    # Create guardrail with masking enabled
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        mask_request_content=True,  # Masking enabled
+        mask_response_content=True,  # Masking enabled
+    )
+    
+    # Mock Bedrock response with BLOCKED content (hate speech)
+    blocked_response = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [
+            {
+                "contentPolicy": {
+                    "filters": [
+                        {
+                            "type": "HATE",
+                            "confidence": "HIGH",
+                            "action": "BLOCKED",  # Should raise exception
+                        }
+                    ]
+                },
+                "sensitiveInformationPolicy": {
+                    "piiEntities": [
+                        {
+                            "type": "NAME",
+                            "match": "John Doe",
+                            "action": "ANONYMIZED",  # Should be masked
+                        }
+                    ]
+                },
+            }
+        ],
+        "outputs": [{"text": "Content blocked due to policy violation"}],
+    }
+    
+    mock_bedrock_response = MagicMock()
+    mock_bedrock_response.status_code = 200
+    mock_bedrock_response.json.return_value = blocked_response
+    
+    # Mock credentials
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+    
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [
+            {"role": "user", "content": "Test message with PII and hate speech"},
+        ],
+    }
+    
+    # Mock AWS-related methods
+    with patch.object(
+        guardrail.async_handler, "post", new_callable=AsyncMock
+    ) as mock_post, patch.object(
+        guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+    ), patch.object(
+        guardrail, "_prepare_request", return_value=MagicMock()
+    ):
+        mock_post.return_value = mock_bedrock_response
+        
+        # Should raise HTTPException for BLOCKED content
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.make_bedrock_api_request(
+                source="INPUT",
+                messages=request_data.get("messages"),
+                request_data=request_data,
+            )
+        
+        # Verify exception details
+        assert exc_info.value.status_code == 400
+        assert "Violated guardrail policy" in str(exc_info.value.detail)
+        
+        print("✅ BLOCKED content with masking enabled raises exception correctly")
+

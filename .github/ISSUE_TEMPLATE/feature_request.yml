@@ -23,6 +23,18 @@ body:
     validations:
       required: true
   - type: dropdown
+    id: component
+    attributes:
+      label: What part of LiteLLM is this about?
+      options:
+        - "SDK (litellm Python package)"
+        - "Proxy"
+        - "UI Dashboard"
+        - "Docs"
+        - "Other"
+    validations:
+      required: true
+  - type: dropdown
     id: hiring-interest
     attributes:
       label: LiteLLM is hiring a founding backend engineer, are you interested in joining us and shipping to all our users?

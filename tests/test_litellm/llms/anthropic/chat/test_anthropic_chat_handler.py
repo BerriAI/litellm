@@ -1,11 +1,11 @@
 from unittest.mock import MagicMock
 
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
 )
-from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 
 
 def test_redacted_thinking_content_block_delta():
@@ -779,3 +779,195 @@ def test_web_search_tool_result_captured_in_provider_specific_fields():
     assert (
         web_search_results[0]["content"][0]["title"] == "Fun Otter Facts"
     ), "First result title should match"
+
+
+def test_container_in_provider_specific_fields_streaming():
+    """
+    Test that container is captured in provider_specific_fields for streaming responses.
+    
+    When container with skills is used, the container field should be present in
+    the provider_specific_fields of the message_delta chunk.
+    """
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+
+    # Simulate streaming chunks
+    chunks = [
+        # 1. message_start
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_123",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 98976, "output_tokens": 1},
+            },
+        },
+        # 2. content_block_start for text
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "text",
+                "text": "",
+            },
+        },
+        # 3. content_block_delta with text
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "Hello, this is a response"},
+        },
+        # 4. content_block_stop for text
+        {"type": "content_block_stop", "index": 0},
+        # 5. message_delta with container - THIS IS WHAT WE'RE TESTING
+        {
+            "type": "message_delta",
+            "delta": {
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "container": {
+                    "id": "container_011CW9hA9zpZ8xD3bjjShy4p",
+                    "expires_at": "2025-12-16T04:57:16.913181Z",
+                    "skills": [
+                        {
+                            "type": "anthropic",
+                            "skill_id": "pptx",
+                            "version": "20251013",
+                        }
+                    ],
+                },
+            },
+            "usage": {
+                "input_tokens": 98976,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": 931,
+                "server_tool_use": {"web_search_requests": 0},
+            },
+        },
+    ]
+
+    container_field = None
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        if (
+            parsed.choices
+            and parsed.choices[0].delta.provider_specific_fields
+            and "container" in parsed.choices[0].delta.provider_specific_fields
+        ):
+            container_field = parsed.choices[0].delta.provider_specific_fields[
+                "container"
+            ]
+
+    # Verify container was captured
+    assert container_field is not None, "container should be captured in provider_specific_fields"
+    assert (
+        container_field["id"] == "container_011CW9hA9zpZ8xD3bjjShy4p"
+    ), "container id should match"
+    assert (
+        container_field["expires_at"] == "2025-12-16T04:57:16.913181Z"
+    ), "expires_at should match"
+    assert len(container_field["skills"]) == 1, "Should have 1 skill"
+    assert (
+        container_field["skills"][0]["skill_id"] == "pptx"
+    ), "skill_id should be pptx"
+    assert (
+        container_field["skills"][0]["version"] == "20251013"
+    ), "version should match"
+
+
+def test_container_in_provider_specific_fields_non_streaming():
+    """
+    Test that container is captured in provider_specific_fields for non-streaming responses.
+    
+    When container with skills is used in non-streaming, the container field should be
+    present in the provider_specific_fields of the response.
+    """
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=False, json_mode=False
+    )
+
+    # Simulate a message_delta chunk with container (as it would appear in non-streaming)
+    message_delta_chunk = {
+        "type": "message_delta",
+        "delta": {
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "container": {
+                "id": "container_abc123xyz",
+                "expires_at": "2025-12-20T10:30:00.000000Z",
+                "skills": [
+                    {
+                        "type": "anthropic",
+                        "skill_id": "code_execution",
+                        "version": "latest",
+                    },
+                    {
+                        "type": "anthropic",
+                        "skill_id": "pptx",
+                        "version": "20251013",
+                    },
+                ],
+            },
+        },
+        "usage": {
+            "input_tokens": 1000,
+            "output_tokens": 200,
+        },
+    }
+
+    model_response = iterator.chunk_parser(message_delta_chunk)
+
+    # Verify container is in provider_specific_fields
+    assert model_response.choices[0].delta.provider_specific_fields is not None
+    assert "container" in model_response.choices[0].delta.provider_specific_fields
+    container_field = model_response.choices[0].delta.provider_specific_fields[
+        "container"
+    ]
+
+    assert container_field["id"] == "container_abc123xyz", "container id should match"
+    assert (
+        container_field["expires_at"] == "2025-12-20T10:30:00.000000Z"
+    ), "expires_at should match"
+    assert len(container_field["skills"]) == 2, "Should have 2 skills"
+    assert (
+        container_field["skills"][0]["skill_id"] == "code_execution"
+    ), "First skill_id should be code_execution"
+    assert (
+        container_field["skills"][1]["skill_id"] == "pptx"
+    ), "Second skill_id should be pptx"
+
+
+def test_container_absent_when_not_provided():
+    """
+    Test that container is not added to provider_specific_fields when not provided.
+    
+    This ensures we don't add empty or None container fields.
+    """
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=False, json_mode=False
+    )
+
+    # message_delta without container
+    message_delta_chunk = {
+        "type": "message_delta",
+        "delta": {
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+        },
+        "usage": {
+            "input_tokens": 1000,
+            "output_tokens": 200,
+        },
+    }
+
+    model_response = iterator.chunk_parser(message_delta_chunk)
+
+    # Verify container is NOT in provider_specific_fields when not provided
+    if model_response.choices[0].delta.provider_specific_fields:
+        assert (
+            "container" not in model_response.choices[0].delta.provider_specific_fields
+        ), "container should not be present when not provided in delta"
