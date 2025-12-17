@@ -1134,6 +1134,8 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
     env: Dict[str, str] = Field(default_factory=dict)
+    # SSL verification settings
+    ssl_verify: Optional[Union[bool, str]] = None
 
 
 class MakeMCPServersPublicRequest(LiteLLMPydanticObjectBase):

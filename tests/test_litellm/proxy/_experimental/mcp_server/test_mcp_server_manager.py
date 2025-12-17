@@ -1714,6 +1714,77 @@ class TestMCPServerManager:
         assert resolved_server.name == "Test Server Name"  # name is different
         assert resolved_server.server_name == "test_server"  # server_name matches
 
+    @pytest.mark.asyncio
+    async def test_ssl_verify_passed_to_mcp_client(self):
+        """Test that ssl_verify configuration is passed from MCPServer to MCPClient"""
+        manager = MCPServerManager()
+
+        # Test 1: ssl_verify=False should be passed through
+        server_with_ssl_disabled = MCPServer(
+            server_id="test_ssl_disabled",
+            name="test_server",
+            url="https://example.com",
+            transport=MCPTransport.sse,
+            ssl_verify=False,
+        )
+
+        client = manager._create_mcp_client(server=server_with_ssl_disabled)
+        assert client.ssl_verify is False
+
+        # Test 2: ssl_verify with custom path should be passed through
+        custom_ca_path = "/custom/path/ca-bundle.crt"
+        server_with_custom_ca = MCPServer(
+            server_id="test_ssl_custom",
+            name="test_server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            ssl_verify=custom_ca_path,
+        )
+
+        client = manager._create_mcp_client(server=server_with_custom_ca)
+        assert client.ssl_verify == custom_ca_path
+
+        # Test 3: ssl_verify=None (default) should be passed through
+        server_with_default_ssl = MCPServer(
+            server_id="test_ssl_default",
+            name="test_server",
+            url="https://example.com",
+            transport=MCPTransport.sse,
+        )
+
+        client = manager._create_mcp_client(server=server_with_default_ssl)
+        assert client.ssl_verify is None
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_with_ssl_verify(self):
+        """Test that ssl_verify is loaded from config"""
+        manager = MCPServerManager()
+
+        mcp_servers_config = {
+            "test_server": {
+                "url": "https://example.com",
+                "transport": "sse",
+                "ssl_verify": False,
+            },
+            "test_server_with_custom_ca": {
+                "url": "https://example.com",
+                "transport": "http",
+                "ssl_verify": "/etc/ssl/certs/ca-certificates.crt",
+            },
+        }
+
+        await manager.load_servers_from_config(mcp_servers_config)
+
+        registry = manager.get_registry()
+        assert len(registry) == 2
+
+        # Verify ssl_verify was loaded correctly
+        for server in registry.values():
+            if "custom_ca" in server.name.lower():
+                assert server.ssl_verify == "/etc/ssl/certs/ca-certificates.crt"
+            else:
+                assert server.ssl_verify is False
+
 
 if __name__ == "__main__":
     pytest.main([__file__])

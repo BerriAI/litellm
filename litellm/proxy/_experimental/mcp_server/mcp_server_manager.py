@@ -257,6 +257,7 @@ class MCPServerManager:
                 allowed_params=server_config.get("allowed_params", None),
                 access_groups=server_config.get("access_groups", None),
                 static_headers=server_config.get("static_headers", None),
+                ssl_verify=server_config.get("ssl_verify", None),
             )
             self.config_mcp_servers[server_id] = new_server
 
@@ -543,6 +544,7 @@ class MCPServerManager:
             access_groups=getattr(mcp_server, "mcp_access_groups", None),
             allowed_tools=getattr(mcp_server, "allowed_tools", None),
             disallowed_tools=getattr(mcp_server, "disallowed_tools", None),
+            ssl_verify=getattr(mcp_server, "ssl_verify", None),
         )
         return new_server
 
@@ -706,6 +708,7 @@ class MCPServerManager:
                 timeout=60.0,
                 stdio_config=stdio_config,
                 extra_headers=extra_headers,
+                ssl_verify=server.ssl_verify,
             )
         else:
             # For HTTP/SSE transports
@@ -717,6 +720,7 @@ class MCPServerManager:
                 auth_value=mcp_auth_header or server.authentication_token,
                 timeout=60.0,
                 extra_headers=extra_headers,
+                ssl_verify=server.ssl_verify,
             )
 
     async def _get_tools_from_server(

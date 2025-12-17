@@ -208,6 +208,8 @@ model LiteLLM_MCPServerTable {
   command      String?
   args         String[]       @default([])
   env          Json?          @default("{}")
+  // SSL verification settings
+  ssl_verify   String?        // Can be "false" to disable, or path to CA bundle
 }
 
 // Generate Tokens for Proxy

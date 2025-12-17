@@ -1,0 +1,104 @@
+# Example LiteLLM Proxy Configuration with MCP SSL Settings
+# This demonstrates how to configure SSL verification for MCP servers
+
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4
+      api_key: os.environ/OPENAI_API_KEY
+
+# MCP Server Configuration with SSL Settings
+mcp_servers:
+  # Example 1: MCP server with SSL verification disabled (development only!)
+  # Use this for testing with self-signed certificates or when troubleshooting
+  dev_mcp_server:
+    url: "https://dev-mcp.example.com/sse"
+    transport: "sse"
+    auth_type: "bearer_token"
+    authentication_token: "your-token-here"
+    ssl_verify: false  # ⚠️ WARNING: Only use in development!
+    description: "Development MCP server with SSL verification disabled"
+  
+  # Example 2: MCP server with custom CA bundle
+  # Use this when connecting to servers with custom or internal CAs
+  internal_mcp_server:
+    url: "https://internal-mcp.example.com/mcp"
+    transport: "http"
+    auth_type: "api_key"
+    authentication_token: "your-api-key"
+    ssl_verify: "/etc/ssl/certs/ca-certificates.crt"  # Path to CA bundle
+    description: "Internal MCP server with custom CA bundle"
+  
+  # Example 3: MCP server with default SSL verification
+  # When ssl_verify is not specified, uses system defaults (recommended for production)
+  prod_mcp_server:
+    url: "https://mcp.example.com/sse"
+    transport: "sse"
+    auth_type: "bearer_token"
+    authentication_token: "os.environ/MCP_TOKEN"
+    # ssl_verify not specified - uses system default CA bundle (secure)
+    description: "Production MCP server with default SSL verification"
+  
+  # Example 4: MCP server in Docker/Kubernetes with mounted certificates
+  k8s_mcp_server:
+    url: "https://k8s-mcp.example.com"
+    transport: "http"
+    auth_type: "authorization"
+    authentication_token: "Bearer your-token"
+    ssl_verify: "/app/certs/ca-bundle.crt"  # Mounted from ConfigMap/Secret
+    description: "Kubernetes MCP server with mounted CA certificates"
+  
+  # Example 5: Public MCP server (e.g., Zapier, Jira)
+  # Public services typically work with default SSL verification
+  zapier_mcp_server:
+    url: "https://actions.zapier.com/mcp/YOUR_KEY/sse"
+    transport: "sse"
+    auth_type: "api_key"
+    authentication_token: "os.environ/ZAPIER_API_KEY"
+    # No ssl_verify needed - uses system defaults which work with public CAs
+    description: "Zapier MCP server with default SSL"
+
+# General proxy settings
+litellm_settings:
+  success_callback: ["langfuse"]
+  failure_callback: ["langfuse"]
+  
+# Alternative: Use environment variable for SSL configuration
+# If you don't want to set ssl_verify per server, you can set it globally:
+# 
+# Environment variables (set these in your environment or .env file):
+# export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+# 
+# This will be used as a fallback for any MCP server that doesn't have
+# ssl_verify explicitly set in its configuration.
+
+# Docker Compose Example:
+# services:
+#   litellm:
+#     image: ghcr.io/berriai/litellm:latest
+#     volumes:
+#       - ./config.yaml:/app/config.yaml
+#       - /etc/ssl/certs:/etc/ssl/certs:ro  # Mount system certificates
+#     environment:
+#       - SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+#     command: --config /app/config.yaml
+
+# Kubernetes ConfigMap Example:
+# apiVersion: v1
+# kind: ConfigMap
+# metadata:
+#   name: litellm-ca-bundle
+# data:
+#   ca-bundle.crt: |
+#     -----BEGIN CERTIFICATE-----
+#     ... your CA certificate ...
+#     -----END CERTIFICATE-----
+#
+# Then mount in deployment:
+# volumeMounts:
+#   - name: ca-bundle
+#     mountPath: /app/certs
+# volumes:
+#   - name: ca-bundle
+#     configMap:
+#       name: litellm-ca-bundle

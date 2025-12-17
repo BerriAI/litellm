@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, ConfigDict
 
@@ -47,4 +47,6 @@ class MCPServer(BaseModel):
     args: Optional[List[str]] = None
     env: Optional[Dict[str, str]] = None
     access_groups: Optional[List[str]] = None
+    # SSL verification settings
+    ssl_verify: Optional[Union[bool, str]] = None  # Can be False to disable, or path to CA bundle
     model_config = ConfigDict(arbitrary_types_allowed=True)
