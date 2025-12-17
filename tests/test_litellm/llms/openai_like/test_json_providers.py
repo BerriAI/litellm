@@ -52,6 +52,7 @@ class TestJSONProviderLoader:
         from litellm.llms.openai_like.dynamic_config import create_config_class
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
+        # Test PublicAI
         provider = JSONProviderRegistry.get("publicai")
         config_class = create_config_class(provider)
         config = config_class()
@@ -65,6 +66,22 @@ class TestJSONProviderLoader:
             "https://custom.api.com", "test-key"
         )
         assert api_base == "https://custom.api.com"
+        assert api_key == "test-key"
+
+        # Test AI Badgr
+        provider = JSONProviderRegistry.get("aibadgr")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        # Test API info resolution
+        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        assert api_base == "https://aibadgr.com/api/v1"
+
+        # Test with custom base
+        api_base, api_key = config._get_openai_compatible_provider_info(
+            "https://custom-aibadgr.com/api/v1", "test-key"
+        )
+        assert api_base == "https://custom-aibadgr.com/api/v1"
         assert api_key == "test-key"
 
     def test_parameter_mapping(self):
@@ -161,12 +178,21 @@ class TestJSONProviderLoader:
         from litellm import LlmProviders
         from litellm.utils import ProviderConfigManager
 
+        # Test PublicAI
         config = ProviderConfigManager.get_provider_chat_config(
             model="gpt-4", provider=LlmProviders.PUBLICAI
         )
 
         assert config is not None
         assert config.custom_llm_provider == "publicai"
+
+        # Test AI Badgr
+        config = ProviderConfigManager.get_provider_chat_config(
+            model="premium", provider=LlmProviders.AIBADGR
+        )
+
+        assert config is not None
+        assert config.custom_llm_provider == "aibadgr"
 
 
 class TestPublicAIIntegration:
@@ -325,9 +351,9 @@ if __name__ == "__main__":
     test_loader.test_parameter_mapping()
     print("   ✓ Parameter mapping works")
     
-    print("\n4. Testing excluded params...")
-    test_loader.test_excluded_params()
-    print("   ✓ Excluded params work")
+    print("\n4. Testing supported params...")
+    test_loader.test_supported_params()
+    print("   ✓ Supported params work")
     
     print("\n5. Testing provider resolution...")
     test_loader.test_provider_resolution()
