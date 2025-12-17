@@ -106,7 +106,7 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
       type: "text",
     },
     {
-      name: "embedding_model",
+      name: "litellm_embedding_model",
       label: "Embedding Model",
       tooltip: "Select the embedding model to use",
       placeholder: "text-embedding-3-small",
