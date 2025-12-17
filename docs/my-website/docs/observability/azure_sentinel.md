@@ -21,7 +21,7 @@ We will use the `--config` to set `litellm.callbacks = ["azure_sentinel"]` this 
 
 **Step 1**: Create a `config.yaml` file and set `litellm_settings`: `callbacks`
 
-```yaml
+```yaml showLineNumbers title="config.yaml"
 model_list:
  - model_name: gpt-3.5-turbo
     litellm_params:
@@ -51,7 +51,7 @@ For detailed setup instructions, see the [Microsoft documentation on Logs Ingest
 
 Set the following environment variables with your Azure credentials:
 
-```shell
+```shell showLineNumbers title="Environment Variables"
 # Required: Data Collection Rule (DCR) configuration
 AZURE_SENTINEL_DCR_IMMUTABLE_ID="dcr-xxxxxxxxxxxxxxxxxxxxxxxxxxxxx"  # DCR Immutable ID from Azure portal
 AZURE_SENTINEL_STREAM_NAME="Custom-LiteLLM_CL_CL"                    # Stream name from your DCR
@@ -74,13 +74,13 @@ AZURE_SENTINEL_CLIENT_SECRET="your-client-secret"                    # Client se
 
 Start proxy
 
-```shell
+```shell showLineNumbers title="Start Proxy"
 litellm --config config.yaml --debug
 ```
 
 Test Request
 
-```shell
+```shell showLineNumbers title="Test Request"
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data '{
@@ -103,7 +103,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 2. Go to "Logs" and query your custom table (e.g., `LiteLLM_CL`)
 3. Run a query like:
 
-```kusto
+```kusto showLineNumbers title="KQL Query"
 LiteLLM_CL
 | where TimeGenerated > ago(1h)
 | project TimeGenerated, model, status, total_tokens, response_cost
