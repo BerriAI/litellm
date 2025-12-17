@@ -5,7 +5,7 @@ import TabItem from '@theme/TabItem';
 
 ## Pre-Requisites
 ```shell
-!pip install litellm langchain
+!pip install -U langchain-litellm
 ```
 ## Quick Start
 
@@ -14,7 +14,7 @@ import TabItem from '@theme/TabItem';
 
 ```python
 import os
-from langchain_community.chat_models import ChatLiteLLM
+from langchain_litellm import ChatLiteLLM
 from langchain_core.prompts import (
     ChatPromptTemplate,
     SystemMessagePromptTemplate,
@@ -39,7 +39,7 @@ chat.invoke(messages)
 
 ```python
 import os
-from langchain_community.chat_models import ChatLiteLLM
+from langchain_litellm import ChatLiteLLM
 from langchain_core.prompts import (
     ChatPromptTemplate,
     SystemMessagePromptTemplate,
@@ -64,7 +64,7 @@ chat.invoke(messages)
 
 ```python
 import os
-from langchain_community.chat_models import ChatLiteLLM
+from langchain_litellm import ChatLiteLLM
 from langchain_core.prompts.chat import (
     ChatPromptTemplate,
     SystemMessagePromptTemplate,
@@ -89,7 +89,7 @@ chat.invoke(messages)
 
 ```python
 import os
-from langchain_community.chat_models import ChatLiteLLM
+from langchain_litellm import ChatLiteLLM
 from langchain_core.prompts import (
     ChatPromptTemplate,
     SystemMessagePromptTemplate,
@@ -127,7 +127,7 @@ Once the auto-tracing is enabled, you can invoke `ChatLiteLLM` and see recorded 
 
 ```python
 import os
-from langchain.chat_models import ChatLiteLLM
+from langchain_litellm import ChatLiteLLM
 
 os.environ['OPENAI_API_KEY']="sk-..."
 
@@ -138,7 +138,7 @@ chat.invoke("Hi!")
 ## Use Langchain ChatLiteLLM with Lunary
 ```python
 import os
-from langchain.chat_models import ChatLiteLLM
+from langchain_litellm import ChatLiteLLM
 from langchain.schema import HumanMessage
 import litellm
 
