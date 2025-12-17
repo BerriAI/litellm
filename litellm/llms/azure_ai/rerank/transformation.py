@@ -38,8 +38,12 @@ class AzureAIRerankConfig(CohereRerankConfig):
         if normalized_path.endswith("/v1/rerank") or normalized_path.endswith("/v2/rerank"):
             return str(original_url.copy_with(path=normalized_path or "/"))
 
-        # If callers pass just the version path (e.g. ".../v2"), append "/rerank"
-        if normalized_path.endswith("/v1") or normalized_path.endswith("/v2"):
+        # If callers pass just the version path (e.g. ".../v2" or ".../providers/cohere/v2"), append "/rerank"
+        if (
+            normalized_path.endswith("/v1")
+            or normalized_path.endswith("/v2")
+            or normalized_path.endswith("/providers/cohere/v2")
+        ):
             return _add_path_to_api_base(
                 api_base=str(original_url.copy_with(path=normalized_path or "/")),
                 ending_path="/rerank",
