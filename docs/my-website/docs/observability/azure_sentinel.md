@@ -52,8 +52,8 @@ Set the following environment variables with your Azure credentials:
 ```shell
 # Required: Data Collection Rule (DCR) configuration
 AZURE_SENTINEL_DCR_IMMUTABLE_ID="dcr-xxxxxxxxxxxxxxxxxxxxxxxxxxxxx"  # DCR Immutable ID from Azure portal
-AZURE_SENTINEL_STREAM_NAME="Custom-LiteLLM"                          # Stream name from your DCR (default: "Custom-LiteLLM")
-AZURE_SENTINEL_ENDPOINT="https://your-dce.eastus-1.ingest.monitor.azure.com"  # DCE endpoint or DCR ingestion endpoint
+AZURE_SENTINEL_STREAM_NAME="Custom-LiteLLM_CL_CL"                    # Stream name from your DCR
+AZURE_SENTINEL_ENDPOINT="https://your-dcr-endpoint.eastus-1.ingest.monitor.azure.com"  # DCR logs ingestion endpoint (NOT the DCE endpoint)
 
 # Required: OAuth2 Authentication (App Registration)
 AZURE_SENTINEL_TENANT_ID="your-tenant-id"                            # Azure Tenant ID
@@ -66,9 +66,7 @@ AZURE_SENTINEL_CLIENT_SECRET="your-client-secret"                    # Client se
 # AZURE_CLIENT_SECRET="your-client-secret"
 ```
 
-**Note**: The `AZURE_SENTINEL_ENDPOINT` can be either:
-- A Data Collection Endpoint (DCE) URL: `https://your-dce.eastus-1.ingest.monitor.azure.com`
-- A DCR ingestion endpoint (if your DCR has one configured)
+**Note**: The `AZURE_SENTINEL_ENDPOINT` should be the DCR's logs ingestion endpoint (found in the DCR Overview page), NOT the Data Collection Endpoint (DCE). The DCR endpoint is associated with your specific DCR and looks like: `https://your-dcr-endpoint.{region}-1.ingest.monitor.azure.com`
 
 **Step 4**: Start the proxy and make a test request
 
@@ -115,8 +113,8 @@ LiteLLM_CL
 | Environment Variable | Description | Default Value | Required |
 |---------------------|-------------|---------------|----------|
 | `AZURE_SENTINEL_DCR_IMMUTABLE_ID` | Data Collection Rule (DCR) Immutable ID | None | ✅ Yes |
-| `AZURE_SENTINEL_ENDPOINT` | Data Collection Endpoint (DCE) or DCR ingestion endpoint URL | None | ✅ Yes |
-| `AZURE_SENTINEL_STREAM_NAME` | Stream name from DCR (e.g., "Custom-LiteLLM") | "Custom-LiteLLM" | ❌ No |
+| `AZURE_SENTINEL_ENDPOINT` | DCR logs ingestion endpoint URL (from DCR Overview page) | None | ✅ Yes |
+| `AZURE_SENTINEL_STREAM_NAME` | Stream name from DCR (e.g., "Custom-LiteLLM_CL_CL") | "Custom-LiteLLM" | ❌ No |
 | `AZURE_SENTINEL_TENANT_ID` | Azure Tenant ID for OAuth2 authentication | None (falls back to `AZURE_TENANT_ID`) | ✅ Yes |
 | `AZURE_SENTINEL_CLIENT_ID` | Application (client) ID for OAuth2 authentication | None (falls back to `AZURE_CLIENT_ID`) | ✅ Yes |
 | `AZURE_SENTINEL_CLIENT_SECRET` | Client secret for OAuth2 authentication | None (falls back to `AZURE_CLIENT_SECRET`) | ✅ Yes |
