@@ -1,14 +1,17 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchAvailableModelsForTeamOrKey } from "./key_team_helpers/fetch_available_models_team_key";
-import { teamCreateCall } from "./networking";
+import { fetchMCPAccessGroups, getGuardrailsList, teamCreateCall } from "./networking";
 import OldTeams from "./OldTeams";
+
+const mockTeamInfoView = vi.fn();
 
 vi.mock("./networking", () => ({
   teamCreateCall: vi.fn(),
   teamDeleteCall: vi.fn(),
   fetchMCPAccessGroups: vi.fn(),
   v2TeamListCall: vi.fn(),
+  getGuardrailsList: vi.fn(),
 }));
 
 vi.mock("./common_components/fetch_teams", () => ({
@@ -46,9 +49,21 @@ vi.mock("./key_team_helpers/fetch_available_models_team_key", () => ({
   }),
 }));
 
+vi.mock("@/components/team/team_info", () => ({
+  __esModule: true,
+  default: (props: any) => {
+    mockTeamInfoView(props);
+    return <div data-testid="team-info-view" />;
+  },
+}));
+
 describe("OldTeams - handleCreate organization handling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockTeamInfoView.mockClear();
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue([]);
+    vi.mocked(fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });
   });
 
   it("should not include organization_id when it's an empty string", async () => {
@@ -487,6 +502,56 @@ describe("OldTeams - helper functions", () => {
 
       expect(isAdmin || isOrgAdmin).toBe(false);
     });
+  });
+});
+
+describe("OldTeams - premium props", () => {
+  beforeEach(() => {
+    mockTeamInfoView.mockClear();
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue([]);
+    vi.mocked(fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });
+  });
+
+  it("passes premiumUser flag to TeamInfoView", async () => {
+    render(
+      <OldTeams
+        teams={[
+          {
+            team_id: "team-123456789",
+            team_alias: "Premium Team",
+            organization_id: "org-123",
+            models: ["gpt-4"],
+            max_budget: 100,
+            budget_duration: "1d",
+            tpm_limit: 1000,
+            rpm_limit: 1000,
+            created_at: new Date().toISOString(),
+            keys: [],
+            members_with_roles: [],
+          },
+        ]}
+        searchParams={{}}
+        accessToken="test-token"
+        setTeams={vi.fn()}
+        userID="user-123"
+        userRole="Admin"
+        organizations={[]}
+        premiumUser={true}
+      />,
+    );
+
+    const truncatedTeamId = "team-123456789".slice(0, 7);
+    const teamButton = await screen.findByRole("button", {
+      name: new RegExp(`${truncatedTeamId}\\.\\.\\.`),
+    });
+    act(() => {
+      fireEvent.click(teamButton);
+    });
+
+    await waitFor(() => expect(mockTeamInfoView).toHaveBeenCalled());
+
+    expect(mockTeamInfoView).toHaveBeenLastCalledWith(expect.objectContaining({ premiumUser: true }));
   });
 });
 
