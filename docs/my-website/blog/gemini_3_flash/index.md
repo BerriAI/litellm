@@ -1,7 +1,7 @@
 ---
 slug: gemini_3_flash
 title: "DAY 0 Support: Gemini 3 Flash on LiteLLM"
-date: 2025-11-19T10:00:00
+date: 2025-12-17T10:00:00
 authors:
   - name: Sameer Kankute
     title: SWE @ LiteLLM (LLM Translation)
@@ -25,7 +25,7 @@ import TabItem from '@theme/TabItem';
 
 # Gemini 3 Flash Day 0 Support 
 
-LiteLLM now supports `gemini-3-flash` and all the new API changes along with it.
+LiteLLM now supports `gemini-3-flash-preview` and all the new API changes along with it.
 
 ## What's New
 
@@ -73,7 +73,7 @@ from litellm import completion
 
 # No need to make any changes to your code as we map openai reasoning param to thinkingLevel
 response = completion(
-    model="gemini-3-flash",
+    model="gemini/gemini-3-flash-preview",
     messages=[{"role": "user", "content": "Solve this complex math problem: 25 * 4 + 10"}],
     reasoning_effort="medium",  # NEW: MEDIUM thinking level
 )
@@ -91,7 +91,7 @@ print(response.choices[0].message.content)
 model_list:
   - model_name: gemini-3-flash
     litellm_params:
-      model: gemini/gemini-3-flash
+      model: gemini/gemini-3-flash-preview
       api_key: os.environ/GEMINI_API_KEY
 ```
 
@@ -104,15 +104,15 @@ litellm --config /path/to/config.yaml
 **3. Call with MEDIUM thinking**
 
 ```bash
-curl http://localhost:4000/v1/chat/completions \
+curl -X POST http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
   -d '{
-    "model": "gemini-3-flash-reasoning",
+    "model": "gemini-3-flash",
     "messages": [{"role": "user", "content": "Complex reasoning task"}],
     "reasoning_effort": "medium"
   }'
-```
+``'
 
 </TabItem>
 </Tabs>
@@ -130,7 +130,7 @@ curl http://localhost:4000/v1/chat/completions \
 from litellm import completion
 
 response = completion(
-    model="gemini-3-flash",
+    model="gemini/gemini-3-flash-preview",
     messages=[{"role": "user", "content": "What's 2+2?"}],
     reasoning_effort="minimal",
 )
@@ -144,7 +144,7 @@ response = completion(
 
 ```python
 response = completion(
-    model="gemini-3-flash",
+    model="gemini/gemini-3-flash-preview",
     messages=[{"role": "user", "content": "Write a haiku about coding"}],
     reasoning_effort="low",
 )
@@ -158,7 +158,7 @@ response = completion(
 
 ```python
 response = completion(
-    model="gemini-3-flash",
+    model="gemini/gemini-3-flash-preview",
     messages=[{"role": "user", "content": "Analyze this dataset and find patterns"}],
     reasoning_effort="medium",  # NEW!
 )
@@ -172,7 +172,7 @@ response = completion(
 
 ```python
 response = completion(
-    model="gemini-3-flash",
+    model="gemini/gemini-3-flash-preview",
     messages=[{"role": "user", "content": "Prove this mathematical theorem"}],
     reasoning_effort="high",
 )
@@ -203,7 +203,7 @@ import litellm
 from litellm import completion
 
 response = completion(
-    model="gemini-3-flash",
+    model="gemini/gemini-3-flash-preview",
     messages=[{"role": "user", "content": "Your question here"}],
     reasoning_effort="medium",  # Use MEDIUM thinking
 )

@@ -1231,7 +1231,7 @@ def test_anthropic_thinking_param_to_gemini_3_thinkingLevel():
     Test that Anthropic thinking parameters are correctly transformed to Gemini 3 thinkingLevel
     instead of thinkingBudget.
     
-    For Gemini 3+ models (gemini-3-flash, gemini-3-pro, fiercefalcon):
+    For Gemini 3+ models (gemini-3-flash, gemini-3-pro, gemini-3-flash-preview):
     - Should use thinkingLevel instead of thinkingBudget
     - budget_tokens should map to thinkingLevel
     
@@ -1288,14 +1288,14 @@ def test_anthropic_thinking_param_to_gemini_3_thinkingLevel():
     assert "thinkingLevel" not in result_zero or result_zero.get("thinkingLevel") is None
     
     # Test 4: Fiercefalcon model (Gemini 3 Flash checkpoint) should use thinkingLevel
-    result_fiercefalcon = VertexGeminiConfig._map_thinking_param(
+    result_gemini3flashpreview = VertexGeminiConfig._map_thinking_param(
         thinking_param=thinking_param,
-        model="fiercefalcon",
+        model="gemini-3-flash-preview",
     )
     
-    assert "thinkingLevel" in result_fiercefalcon, "Should have thinkingLevel for fiercefalcon"
-    assert "thinkingBudget" not in result_fiercefalcon, "Should NOT have thinkingBudget for fiercefalcon"
-    assert result_fiercefalcon["includeThoughts"] is True
+    assert "thinkingLevel" in result_gemini3flashpreview, "Should have thinkingLevel for gemini-3-flash-preview"
+    assert "thinkingBudget" not in result_gemini3flashpreview, "Should NOT have thinkingBudget for gemini-3-flash-preview"
+    assert result_gemini3flashpreview["includeThoughts"] is True
 
 
 def test_anthropic_thinking_param_to_gemini_2_thinkingBudget():
