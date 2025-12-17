@@ -967,6 +967,30 @@ Control the processing tier for your Bedrock requests using `serviceTier`. Valid
 
 [Bedrock ServiceTier API Reference](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ServiceTier.html)
 
+### OpenAI-compatible `service_tier` parameter
+
+LiteLLM also supports the OpenAI-style `service_tier` parameter, which is automatically translated to Bedrock's native `serviceTier` format:
+
+| OpenAI `service_tier` | Bedrock `serviceTier` |
+|-----------------------|----------------------|
+| `"priority"` | `{"type": "priority"}` |
+| `"default"` | `{"type": "default"}` |
+| `"flex"` | `{"type": "flex"}` |
+| `"auto"` | `{"type": "default"}` |
+
+```python
+from litellm import completion
+
+# Using OpenAI-style service_tier parameter
+response = completion(
+    model="bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
+    messages=[{"role": "user", "content": "Hello!"}],
+    service_tier="priority"  # Automatically translated to serviceTier={"type": "priority"}
+)
+```
+
+### Native Bedrock `serviceTier` parameter
+
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
