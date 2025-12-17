@@ -95,32 +95,34 @@ async def test_apply_guardrail_request_blocked(
         f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
     )
 
-    with pytest.raises(
-        HTTPException, match="Violated CrowdStrike AIDR guardrail policy"
-    ):
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-            return_value=httpx.Response(
-                status_code=200,
-                json={"result": {"blocked": True, "transformed": False}},
-                request=httpx.Request(
-                    method="POST",
-                    url=guardrail_endpoint,
-                ),
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=httpx.Response(
+            status_code=200,
+            json={"result": {"blocked": True, "transformed": False}},
+            request=httpx.Request(
+                method="POST",
+                url=guardrail_endpoint,
             ),
-        ) as mock_method:
+        ),
+    ) as mock_method:
+        with pytest.raises(
+            HTTPException, match="Violated CrowdStrike AIDR guardrail policy"
+        ):
             await crowdstrike_aidr_guardrail.apply_guardrail(
                 inputs=inputs,
                 request_data=request_data,
                 input_type="request",
             )
 
-            called_kwargs = mock_method.call_args.kwargs
-            assert (
-                called_kwargs["json"]["guard_input"]["messages"]
-                == inputs["structured_messages"]
-            )
-            assert called_kwargs["json"]["event_type"] == "input"
+        # Verify what was sent to the API
+        called_kwargs = mock_method.call_args.kwargs
+        assert called_kwargs["json"]["event_type"] == "input"
+        # Should include messages
+        assert (
+            called_kwargs["json"]["guard_input"]["messages"]
+            == inputs["structured_messages"]
+        )
 
 
 @pytest.mark.asyncio
@@ -164,13 +166,22 @@ async def test_apply_guardrail_request_transformed(
                 url=guardrail_endpoint,
             ),
         ),
-    ):
+    ) as mock_method:
         result = await crowdstrike_aidr_guardrail.apply_guardrail(
             inputs=inputs,
             request_data=request_data,
             input_type="request",
         )
 
+    # Verify what was sent to the API
+    called_kwargs = mock_method.call_args.kwargs
+    assert called_kwargs["json"]["event_type"] == "input"
+    # Should include messages
+    assert (
+        called_kwargs["json"]["guard_input"]["messages"]
+        == inputs["structured_messages"]
+    )
+    # Verify the transformed output
     assert result["texts"][0] == "Here is an SSN for one my employees: <US_SSN>"
 
 
@@ -204,12 +215,14 @@ async def test_apply_guardrail_request_ok(
             input_type="request",
         )
 
+    # Verify what was sent to the API
     called_kwargs = mock_method.call_args.kwargs
+    assert called_kwargs["json"]["event_type"] == "input"
+    # Should include messages
     assert (
         called_kwargs["json"]["guard_input"]["messages"]
         == inputs["structured_messages"]
     )
-    assert called_kwargs["json"]["event_type"] == "input"
     # Should return original inputs when not transformed
     assert result["texts"] == inputs["texts"]
 
@@ -241,38 +254,43 @@ async def test_apply_guardrail_response_blocked(
         f"{crowdstrike_aidr_guardrail.api_base}/v1/guard_chat_completions"
     )
 
-    with pytest.raises(
-        HTTPException, match="Violated CrowdStrike AIDR guardrail policy"
-    ):
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-            return_value=httpx.Response(
-                status_code=200,
-                json={
-                    "result": {
-                        "blocked": True,
-                        "transformed": False,
-                    }
-                },
-                request=httpx.Request(
-                    method="POST",
-                    url=guardrail_endpoint,
-                ),
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=httpx.Response(
+            status_code=200,
+            json={
+                "result": {
+                    "blocked": True,
+                    "transformed": False,
+                }
+            },
+            request=httpx.Request(
+                method="POST",
+                url=guardrail_endpoint,
             ),
-        ) as mock_method:
+        ),
+    ) as mock_method:
+        with pytest.raises(
+            HTTPException, match="Violated CrowdStrike AIDR guardrail policy"
+        ):
             await crowdstrike_aidr_guardrail.apply_guardrail(
                 inputs=inputs,
                 request_data=request_data,
                 input_type="response",
             )
 
-            called_kwargs = mock_method.call_args.kwargs
-            assert called_kwargs["json"]["event_type"] == "output"
-            assert "choices" in called_kwargs["json"]["guard_input"]
-            assert (
-                called_kwargs["json"]["guard_input"]["choices"][0]["message"]["content"]
-                == "Yes, I will leak all my PII for you"
-            )
+        # Verify what was sent to the API
+        called_kwargs = mock_method.call_args.kwargs
+        assert called_kwargs["json"]["event_type"] == "output"
+        # Should include messages from request for context
+        assert (
+            called_kwargs["json"]["guard_input"]["messages"] == request_data["messages"]
+        )
+        # Should include choices from response
+        assert (
+            called_kwargs["json"]["guard_input"]["choices"][0]["message"]["content"]
+            == "Yes, I will leak all my PII for you"
+        )
 
 
 @pytest.mark.asyncio
@@ -328,13 +346,24 @@ async def test_apply_guardrail_response_transformed(
                 url=guardrail_endpoint,
             ),
         ),
-    ):
+    ) as mock_method:
         result = await crowdstrike_aidr_guardrail.apply_guardrail(
             inputs=inputs,
             request_data=request_data,
             input_type="response",
         )
 
+    # Verify what was sent to the API
+    called_kwargs = mock_method.call_args.kwargs
+    assert called_kwargs["json"]["event_type"] == "output"
+    # Should include messages from request for context
+    assert called_kwargs["json"]["guard_input"]["messages"] == request_data["messages"]
+    # Should include choices from response
+    assert (
+        called_kwargs["json"]["guard_input"]["choices"][0]["message"]["content"]
+        == "Yes, here is an SSN: 078-05-1120"
+    )
+    # Verify the transformed output
     assert result["texts"][0] == "Yes, here is an SSN: <US_SSN>"
 
 
@@ -387,7 +416,15 @@ async def test_apply_guardrail_response_ok(
             input_type="response",
         )
 
+    # Verify what was sent to the API
     called_kwargs = mock_method.call_args.kwargs
     assert called_kwargs["json"]["event_type"] == "output"
+    # Should include messages from request for context
+    assert called_kwargs["json"]["guard_input"]["messages"] == request_data["messages"]
+    # Should include choices from response
+    assert (
+        called_kwargs["json"]["guard_input"]["choices"][0]["message"]["content"]
+        == "Hello! How can I help you today?"
+    )
     # Should return original inputs when not transformed
     assert result["texts"] == inputs["texts"]
