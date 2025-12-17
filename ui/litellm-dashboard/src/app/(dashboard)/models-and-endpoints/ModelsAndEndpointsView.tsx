@@ -571,6 +571,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
           userModels={all_models_on_proxy}
           editTeam={false}
           onUpdate={handleRefreshClick}
+          premiumUser={premiumUser}
         />
       </div>
     );
