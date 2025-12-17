@@ -13,6 +13,7 @@ from litellm import ModelResponse, completion
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
+from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.types.llms.vertex_ai import UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, Usage
 
@@ -2226,3 +2227,15 @@ def test_partial_json_chunk_on_first_chunk():
     assert result is None, "Partial first chunk should return None"
     assert iterator.chunk_type == "accumulated_json", "Should switch to accumulated_json mode"
 
+
+
+def test_google_ai_studio_presence_penalty_supported():
+    """
+    Test that presence_penalty is supported for Google AI Studio Gemini.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/14753
+    """
+    config = GoogleAIStudioGeminiConfig()
+    supported_params = config.get_supported_openai_params(model="gemini-2.0-flash")
+
+    assert "presence_penalty" in supported_params
