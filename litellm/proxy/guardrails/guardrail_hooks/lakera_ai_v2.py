@@ -300,6 +300,66 @@ class LakeraAIGuardrail(CustomGuardrail):
 
         return data
 
+    async def async_post_call_success_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        response,
+    ):
+        """
+        Post-call hook for Lakera guardrail.
+        """
+        from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_to_applied_guardrails_header,
+        )
+
+        event_type: GuardrailEventHooks = GuardrailEventHooks.post_call
+        if self.should_run_guardrail(data=data, event_type=event_type) is not True:
+            return response
+
+        original_messages: Optional[List[AllMessageValues]] = data.get("messages", [])
+        if original_messages is None:
+            original_messages = []
+
+        # Extract assistant messages from the response
+        response_messages: List[AllMessageValues] = []
+        response_dict = (
+            response.model_dump() if hasattr(response, "model_dump") else {}
+        )
+        for choice in response_dict.get("choices", []):
+            msg = choice.get("message")
+            if msg:
+                response_messages.append(msg)
+
+        post_call_messages = original_messages + response_messages
+
+        # Call Lakera guardrail
+        lakera_guardrail_response, _ = await self.call_v2_guard(
+            messages=post_call_messages,
+            request_data=data,
+        )
+
+        # Handle flagged content
+        if lakera_guardrail_response.get("flagged") is True:
+            action = getattr(self, "on_flagged", "block")
+            if action == "monitor":
+                verbose_proxy_logger.warning(
+                    "Lakera Guardrail: Post-call violation detected in monitor mode"
+                )
+                # Allow response to proceed
+            else:
+                # Default/block behavior
+                raise self._get_http_exception_for_blocked_guardrail(
+                    lakera_guardrail_response
+                )
+
+        # Record applied guardrail
+        add_guardrail_to_applied_guardrails_header(
+            request_data=data, guardrail_name=self.guardrail_name
+        )
+
+        return response
+
     def _is_only_pii_violation(
         self, lakera_response: Optional[LakeraAIResponse]
     ) -> bool:
