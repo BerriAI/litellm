@@ -84,3 +84,27 @@ SOFT_BUDGET_ALERT_EMAIL_TEMPLATE = """
                     Best, <br />
                     The LiteLLM team <br />
 """
+
+MAX_BUDGET_ALERT_EMAIL_TEMPLATE = """
+                    <img src="{email_logo_url}" alt="LiteLLM Logo" width="150" height="50" />
+
+                    <p> Hi {recipient_email}, <br/>
+
+                    Your LiteLLM API key has reached <b>{percentage}% of its maximum budget</b>. <br /> <br />
+
+                    <b>Current Spend:</b> {spend} <br />
+                    <b>Maximum Budget:</b> {max_budget} <br />
+                    <b>Alert Threshold:</b> {alert_threshold} ({percentage}%) <br />
+
+                    <p style="color: #dc2626; font-weight: 500;">
+                    ⚠️ Warning: You are approaching your maximum budget limit. 
+                    Once you reach your maximum budget of {max_budget}, all API requests will be rejected.
+                    </p>
+
+                    You can view your usage and manage your budget in the <a href="{base_url}">LiteLLM Dashboard</a>. <br /> <br />
+
+                    If you have any questions, please send an email to {email_support_contact} <br /> <br />
+
+                    Best, <br />
+                    The LiteLLM team <br />
+"""

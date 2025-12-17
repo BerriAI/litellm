@@ -1195,6 +1195,7 @@ class ProxyLogging:
             "token_budget",
             "user_budget",
             "soft_budget",
+            "max_budget_alert",
             "team_budget",
             "organization_budget",
             "proxy_budget",
