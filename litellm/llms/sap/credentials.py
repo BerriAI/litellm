@@ -30,6 +30,8 @@ def _get_home() -> str:
 
 def _get_nested(d: Dict[str, Any], path: Sequence[str]) -> Any:
     cur: Any = d
+    if isinstance(cur, str):
+        cur = json.loads(cur)
     for k in path:
         if not isinstance(cur, dict) or k not in cur:
             raise KeyError(".".join(path))
@@ -170,7 +172,7 @@ def _resolve_value(
     # 4) service-like source (AICORE_SERVICE_KEY first, else VCAP)
     if service_like and cred.vcap_key:
         try:
-            val = _get_nested(service_like, ("credentials",) + cred.vcap_key)
+            val = _get_nested(service_like, cred.vcap_key)
             if val is not None:
                 return val
         except KeyError:
