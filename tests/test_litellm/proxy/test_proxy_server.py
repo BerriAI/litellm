@@ -2636,6 +2636,30 @@ async def test_init_sso_settings_in_db_empty_settings():
         assert uppercased_settings == {}
 
 
+def test_update_config_fields_uppercases_env_vars(monkeypatch):
+    """
+    Ensure environment variables pulled from DB are uppercased when applied so
+    integrations like Datadog that expect uppercase env keys can read them.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    for key in ["DD_API_KEY", "DD_SITE", "dd_api_key", "dd_site"]:
+        monkeypatch.delenv(key, raising=False)
+
+    proxy_config = ProxyConfig()
+    updated_config = proxy_config._update_config_fields(
+        current_config={},
+        param_name="environment_variables",
+        db_param_value={"dd_api_key": "test-api-key", "dd_site": "us5.datadoghq.com"},
+    )
+
+    env_vars = updated_config.get("environment_variables", {})
+    assert env_vars["DD_API_KEY"] == "test-api-key"
+    assert env_vars["DD_SITE"] == "us5.datadoghq.com"
+    assert os.environ.get("DD_API_KEY") == "test-api-key"
+    assert os.environ.get("DD_SITE") == "us5.datadoghq.com"
+
+
 def test_get_prompt_spec_for_db_prompt_with_versions():
     """
     Test that _get_prompt_spec_for_db_prompt correctly converts database prompts
