@@ -36,9 +36,13 @@ Gemini 3 Flash introduces granular thinking control with `thinkingLevel` instead
 - **MEDIUM**: Balanced thinking for complex reasoning  
 - **HIGH**: Maximum reasoning depth
 
+LiteLLM automatically maps the OpenAI `reasoning_effort` parameter to Gemini's `thinkingLevel`, so you can use familiar `reasoning_effort` values (`minimal`, `low`, `medium`, `high`) without changing your code!
+
 ### 2. Thought Signatures
 
 Like `gemini-3-pro`, this model also includes thought signatures for tool calls. LiteLLM handles signature extraction and embedding internally. [Learn more about thought signatures](../gemini_3/index.md#thought-signatures).
+
+**Edge Case Handling**: If thought signatures are missing in the request, LiteLLM adds a dummy signature ensuring the API call doesn't break
 
 ---
 ## Supported Endpoints
@@ -48,7 +52,7 @@ LiteLLM provides **full end-to-end support** for Gemini 3 Flash on:
 - ✅ `/v1/chat/completions` - OpenAI-compatible chat completions endpoint
 - ✅ `/v1/responses` - OpenAI Responses API endpoint (streaming and non-streaming)
 - ✅ [`/v1/messages`](../../docs/anthropic_unified) - Anthropic-compatible messages endpoint
-- ✅ `/v1/generateContent` – [Google Gemini API](https://cloud.google.com/vertex-ai/docs/generative-ai/model-reference/gemini#rest) compatible endpoint (for code, see: `client.models.generate_content(...)`)
+- ✅ `/v1/generateContent` – [Google Gemini API](../../docs/generateContent.md) compatible endpoint (for code, see: `client.models.generate_content(...)`)
 
 All endpoints support:
 - Streaming and non-streaming responses
