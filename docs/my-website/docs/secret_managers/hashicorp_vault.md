@@ -197,3 +197,24 @@ When a Virtual Key is Created / Deleted on LiteLLM, LiteLLM will automatically c
 LiteLLM stores secret under the `prefix_for_stored_virtual_keys` path (default: `litellm/`)
 
 <Image img={require('../../img/hcorp_virtual_key.png')} />
+
+### Team-specific overrides (proxy)
+
+When running the LiteLLM proxy you can override the Vault location per team. Set
+`Secret Manager Settings` on the team with the following structure:
+
+```json
+{
+  "namespace": "teams/team-a",
+  "mount": "kv-prod",
+  "path_prefix": "virtual-keys",
+  "data": "password"
+}
+```
+
+- `namespace` – overrides the `X-Vault-Namespace` header.
+- `mount` – which KV engine mount to use (defaults to `secret`).
+- `path_prefix` – additional path segments between the mount and the secret name.
+- `data` – the field name inside the KV payload (defaults to `key`).
+
+Whenever LiteLLM stores or deletes virtual keys for that team, these overrides are applied so you can keep each team’s credentials in its own namespace, mount, or field layout without changing the global Vault configuration.
