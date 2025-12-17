@@ -616,6 +616,14 @@ def get_model_from_request(
         if match:
             model = match.group(1)
 
+    # If still not found, extract from Vertex AI passthrough route
+    # Pattern: /vertex_ai/.../models/{model_id}:*
+    # Example: /vertex_ai/v1/.../models/gemini-1.5-pro:generateContent
+    if model is None and "/vertex" in route.lower():
+        vertex_match = re.search(r"/models/([^/:]+)", route)
+        if vertex_match:
+            model = vertex_match.group(1)
+
     return model
 
 
