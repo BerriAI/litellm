@@ -137,15 +137,30 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             "https://litellm8397336933.openai.azure.com"
             OR
             "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
-        - model: Model name.
-        - optional_params: Additional query parameters, including "api_version".
-        - stream: If streaming is required (optional).
+            OR (configured for Chat Completions - will be sanitized)
+            "https://litellm8397336933.openai.azure.com/openai/deployments/gpt-4o/chat/completions"
+        - litellm_params: LiteLLM parameters including api_version.
 
         Returns:
         - A complete URL string, e.g.,
         "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
+
+        Note: Unlike Chat Completions API which uses /openai/deployments/{deployment-id}/chat/completions,
+        the Responses API uses /openai/responses and the model is specified in the request body.
+        This method strips any deployment-specific paths from api_base.
         """
+        import re
+
         from litellm.constants import AZURE_DEFAULT_RESPONSES_API_VERSION
+
+        # Sanitize api_base: strip deployment-specific paths
+        # The Responses API uses /openai/responses, not /openai/deployments/{name}/...
+        # The model is specified in the request body, not in the URL path
+        if api_base:
+            # Pattern matches /openai/deployments/{name} with optional suffix
+            # e.g., /openai/deployments/gpt-4o or /openai/deployments/gpt-4o/chat/completions
+            api_base = re.sub(r"/openai/deployments/[^/]+(/.*)?$", "", api_base)
+            api_base = api_base.rstrip("/")
 
         return BaseAzureLLM._get_base_azure_url(
             api_base=api_base,
