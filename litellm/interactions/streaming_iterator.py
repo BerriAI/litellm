@@ -20,7 +20,9 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.interactions.transformation import BaseInteractionsAPIConfig
-from litellm.types.interactions import InteractionsAPIStreamingResponse
+from litellm.types.interactions import (
+    InteractionsAPIStreamingResponse,
+)
 from litellm.utils import CustomStreamWrapper
 
 

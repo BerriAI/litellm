@@ -3408,8 +3408,17 @@ class ProxyConfig:
             decrypted_env_vars = self._decrypt_and_set_db_env_variables(
                 db_param_value, return_original_value=True
             )
+            # Normalize keys when loading from DB so services expecting uppercase
+            # (e.g. Datadog) can read them even if stored in lowercase.
+            merged_env_vars: dict = {}
+            for key, value in decrypted_env_vars.items():
+                merged_env_vars[key] = value
+                upper_key = key.upper()
+                merged_env_vars[upper_key] = value
+                os.environ[upper_key] = value
+
             current_config.setdefault("environment_variables", {}).update(
-                decrypted_env_vars
+                merged_env_vars
             )
             return current_config
         elif param_name == "litellm_settings" and isinstance(db_param_value, dict):

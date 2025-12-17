@@ -1126,6 +1126,91 @@ async def get_ui_settings(request: Request):
     }
 
 
+@router.get(
+    "/sso/readiness",
+    tags=["experimental"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def sso_readiness():
+    """
+    Health endpoint for checking SSO readiness.
+    Checks if the configured SSO provider has all required environment variables set in memory.
+    """
+    microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
+    google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
+    generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
+
+    # Determine which SSO provider is configured
+    configured_provider = None
+    if google_client_id is not None:
+        configured_provider = "google"
+    elif microsoft_client_id is not None:
+        configured_provider = "microsoft"
+    elif generic_client_id is not None:
+        configured_provider = "generic"
+
+    # If no SSO is configured, return healthy (SSO is optional)
+    if configured_provider is None:
+        return {
+            "status": "healthy",
+            "sso_configured": False,
+            "message": "No SSO provider configured",
+        }
+
+    # Check required environment variables for the configured provider
+    missing_vars = []
+
+    if configured_provider == "google":
+        google_client_secret = os.getenv("GOOGLE_CLIENT_SECRET", None)
+        if google_client_secret is None:
+            missing_vars.append("GOOGLE_CLIENT_SECRET")
+
+    elif configured_provider == "microsoft":
+        microsoft_client_secret = os.getenv("MICROSOFT_CLIENT_SECRET", None)
+        microsoft_tenant = os.getenv("MICROSOFT_TENANT", None)
+        if microsoft_client_secret is None:
+            missing_vars.append("MICROSOFT_CLIENT_SECRET")
+        if microsoft_tenant is None:
+            missing_vars.append("MICROSOFT_TENANT")
+
+    elif configured_provider == "generic":
+        generic_client_secret = os.getenv("GENERIC_CLIENT_SECRET", None)
+        generic_authorization_endpoint = os.getenv(
+            "GENERIC_AUTHORIZATION_ENDPOINT", None
+        )
+        generic_token_endpoint = os.getenv("GENERIC_TOKEN_ENDPOINT", None)
+        generic_userinfo_endpoint = os.getenv("GENERIC_USERINFO_ENDPOINT", None)
+        if generic_client_secret is None:
+            missing_vars.append("GENERIC_CLIENT_SECRET")
+        if generic_authorization_endpoint is None:
+            missing_vars.append("GENERIC_AUTHORIZATION_ENDPOINT")
+        if generic_token_endpoint is None:
+            missing_vars.append("GENERIC_TOKEN_ENDPOINT")
+        if generic_userinfo_endpoint is None:
+            missing_vars.append("GENERIC_USERINFO_ENDPOINT")
+
+    # If all required variables are present, return healthy
+    if len(missing_vars) == 0:
+        return {
+            "status": "healthy",
+            "sso_configured": True,
+            "provider": configured_provider,
+            "message": f"{configured_provider.capitalize()} SSO is properly configured",
+        }
+
+    # If some variables are missing, return unhealthy
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "status": "unhealthy",
+            "sso_configured": True,
+            "provider": configured_provider,
+            "missing_environment_variables": missing_vars,
+            "message": f"{configured_provider.capitalize()} SSO is configured but missing required environment variables: {', '.join(missing_vars)}",
+        },
+    )
+
+
 class SSOAuthenticationHandler:
     """
     Handler for SSO Authentication across all SSO providers
@@ -1149,7 +1234,7 @@ class SSOAuthenticationHandler:
             generic_client_id (Optional[str], optional): The Generic Client ID. Defaults to None.
 
         Returns:
-            RedirectResponse: The redirect response from the SSO provider
+            RedirectResponse: The redirect response from the SSO provider.
         """
         # Google SSO Auth
         if google_client_id is not None:
