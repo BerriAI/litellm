@@ -4457,35 +4457,22 @@ def embedding(  # noqa: PLR0915
         ):
             # For JSON providers like aibadgr, api_base and api_key are already resolved by get_llm_provider()
             # For other providers, use standard OpenAI env vars
-            if custom_llm_provider == "aibadgr":
+            if api_base is None:
                 api_base = (
-                    api_base
-                    or litellm.api_base
-                    or get_secret_str("AIBADGR_BASE_URL")
-                    or "https://aibadgr.com/api/v1"
-                )
-                api_key = (
-                    api_key
-                    or litellm.api_key
-                    or get_secret_str("AIBADGR_API_KEY")
-                )
-            else:
-                api_base = (
-                    api_base
-                    or litellm.api_base
+                    litellm.api_base
                     or get_secret_str("OPENAI_BASE_URL")
                     or get_secret_str("OPENAI_API_BASE")
                     or "https://api.openai.com/v1"
                 )
-                openai.organization = (
-                    litellm.organization
-                    or get_secret_str("OPENAI_ORGANIZATION")
-                    or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
-                )
-                # set API KEY
+            openai.organization = (
+                litellm.organization
+                or get_secret_str("OPENAI_ORGANIZATION")
+                or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
+            )
+            # set API KEY (only if not already set by get_llm_provider)
+            if api_key is None:
                 api_key = (
-                    api_key
-                    or litellm.api_key
+                    litellm.api_key
                     or litellm.openai_key
                     or get_secret_str("OPENAI_API_KEY")
                 )
