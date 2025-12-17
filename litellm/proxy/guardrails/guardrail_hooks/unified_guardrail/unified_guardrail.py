@@ -128,7 +128,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             endpoint_guardrail_translation_mappings = (
                 load_guardrail_translation_mappings()
             )
-        if CallTypes(call_type) not in endpoint_guardrail_translation_mappings:
+        if call_type is not None and CallTypes(call_type) not in endpoint_guardrail_translation_mappings:
             return data
 
         endpoint_translation = endpoint_guardrail_translation_mappings[
