@@ -15,16 +15,14 @@ For batching specific details see CustomBatchLogger class
 import asyncio
 import os
 import traceback
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
-import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.types.integrations.azure_sentinel import AzureSentinelInitParams
 from litellm.types.utils import StandardLoggingPayload
 
 
