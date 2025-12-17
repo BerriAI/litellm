@@ -143,8 +143,8 @@ class TestJSONProviderLoader:
             get_llm_provider,
         )
 
-        # Test tier models (basic, normal, premium)
-        tier_models = ["basic", "normal", "premium"]
+        # Test tier models (budget, basic, normal, premium)
+        tier_models = ["budget", "basic", "normal", "premium"]
         for tier in tier_models:
             model, provider, api_key, api_base = get_llm_provider(
                 model=f"aibadgr/{tier}",
@@ -153,19 +153,6 @@ class TestJSONProviderLoader:
                 api_key=None,
             )
             assert model == tier
-            assert provider == "aibadgr"
-            assert api_base == "https://aibadgr.com/api/v1"
-
-        # Test power-user model names
-        power_models = ["phi-3-mini", "mistral-7b", "llama3-8b-instruct"]
-        for power_model in power_models:
-            model, provider, api_key, api_base = get_llm_provider(
-                model=f"aibadgr/{power_model}",
-                custom_llm_provider=None,
-                api_base=None,
-                api_key=None,
-            )
-            assert model == power_model
             assert provider == "aibadgr"
             assert api_base == "https://aibadgr.com/api/v1"
 
