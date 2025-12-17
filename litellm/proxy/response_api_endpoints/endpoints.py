@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
+from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.types.responses.main import DeleteResponseResult
 
@@ -169,6 +170,43 @@ async def responses_api(
             user_api_base=user_api_base,
             version=version,
         )
+    except ModifyResponseException as e:
+        # Guardrail flagged content in passthrough mode - return 200 with violation message
+        import uuid
+        from litellm.types.llms.openai import ResponsesAPIResponse
+        from litellm.types.responses.main import GenericResponseOutputItem, OutputText
+
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=e.request_data,
+        )
+
+        # Create OpenAI Responses API formatted response with violation message
+        _responses_api_response = ResponsesAPIResponse(
+            id=f"resp_{str(uuid.uuid4())}",
+            created_at=int(__import__('time').time()),
+            model=e.model,
+            object="response",
+            output=[
+                GenericResponseOutputItem(
+                    type="message",
+                    id=f"msg_{str(uuid.uuid4())}",
+                    role="assistant",
+                    status="completed",
+                    content=[
+                        OutputText(
+                            type="output_text",
+                            text=e.message,
+                            annotations=[],
+                        )
+                    ],
+                )
+            ],
+            status="completed",
+        )
+
+        return _responses_api_response
     except Exception as e:
         raise await processor._handle_llm_api_exception(
             e=e,
