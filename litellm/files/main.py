@@ -17,6 +17,7 @@ import litellm
 from litellm import get_secret_str
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic.files.handler import AnthropicFilesHandler
 from litellm.llms.azure.files.handler import AzureOpenAIFilesAPI
 from litellm.llms.bedrock.files.handler import BedrockFilesHandler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -26,6 +27,7 @@ from litellm.llms.vertex_ai.files.handler import VertexAIFilesHandler
 from litellm.types.llms.openai import (
     CreateFileRequest,
     FileContentRequest,
+    FileExpiresAfter,
     FileTypes,
     HttpxBinaryResponseContent,
     OpenAIFileObject,
@@ -49,6 +51,7 @@ openai_files_instance = OpenAIFilesAPI()
 azure_files_instance = AzureOpenAIFilesAPI()
 vertex_ai_files_instance = VertexAIFilesHandler()
 bedrock_files_instance = BedrockFilesHandler()
+anthropic_files_instance = AnthropicFilesHandler()
 #################################################
 
 
@@ -56,6 +59,7 @@ bedrock_files_instance = BedrockFilesHandler()
 async def acreate_file(
     file: FileTypes,
     purpose: Literal["assistants", "batch", "fine-tune"],
+    expires_after: Optional[FileExpiresAfter] = None,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -73,6 +77,7 @@ async def acreate_file(
         call_args = {
             "file": file,
             "purpose": purpose,
+            "expires_after": expires_after,
             "custom_llm_provider": custom_llm_provider,
             "extra_headers": extra_headers,
             "extra_body": extra_body,
@@ -81,7 +86,6 @@ async def acreate_file(
 
         # Use a partial function to pass your keyword arguments
         func = partial(create_file, **call_args)
-
         # Add the context to the function
         ctx = contextvars.copy_context()
         func_with_context = partial(ctx.run, func)
@@ -100,6 +104,7 @@ async def acreate_file(
 def create_file(
     file: FileTypes,
     purpose: Literal["assistants", "batch", "fine-tune"],
+    expires_after: Optional[FileExpiresAfter] = None,
     custom_llm_provider: Optional[Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -139,12 +144,21 @@ def create_file(
         elif timeout is None:
             timeout = 600.0
 
-        _create_file_request = CreateFileRequest(
-            file=file,
-            purpose=purpose,
-            extra_headers=extra_headers,
-            extra_body=extra_body,
-        )
+        if expires_after is not None:
+            _create_file_request = CreateFileRequest(
+                file=file,
+                purpose=purpose,
+                expires_after=expires_after,
+                extra_headers=extra_headers,
+                extra_body=extra_body,
+            )
+        else:
+            _create_file_request = CreateFileRequest(
+                file=file,
+                purpose=purpose,
+                extra_headers=extra_headers,
+                extra_body=extra_body,
+            )
 
         provider_config = ProviderConfigManager.get_provider_files_config(
             model="",
@@ -757,7 +771,7 @@ def file_list(
 @client
 async def afile_content(
     file_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -802,7 +816,7 @@ def file_content(
     file_id: str,
     model: Optional[str] = None,
     custom_llm_provider: Optional[
-        Union[Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"], str]
+        Union[Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic"], str]
     ] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -848,6 +862,18 @@ def file_content(
         )
 
         _is_async = kwargs.pop("afile_content", False) is True
+
+        # Check if this is an Anthropic batch results request
+        if custom_llm_provider == "anthropic":
+            response = anthropic_files_instance.file_content(
+                _is_async=_is_async,
+                file_content_request=_file_content_request,
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+            )
+            return response
 
         if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there

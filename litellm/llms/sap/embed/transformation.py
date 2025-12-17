@@ -2,7 +2,7 @@
 Translates from OpenAI's `/v1/embeddings` to IBM's `/text/embeddings` route.
 """
 
-from typing import Optional, List, Dict, Literal
+from typing import Optional, List, Dict, Literal, Union
 from pydantic import BaseModel, Field
 from functools import cached_property
 
@@ -55,7 +55,7 @@ class EmbeddingsModules(BaseModel):
 
 
 class EmbeddingInput(BaseModel):
-    text: str | List[str]
+    text: Union[str, List[str]]
     type: Literal["text", "document", "query"] = "text"
 
 
