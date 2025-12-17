@@ -111,6 +111,16 @@ class LiteLLMCompletionResponsesConfig:
         """
         Transform a Responses API request into a Chat Completion request
         """
+        from litellm._logging import verbose_logger
+
+        # TRACE 1: Log incoming Responses API request
+        verbose_logger.debug("=" * 80)
+        verbose_logger.debug("TRACE 1: INCOMING RESPONSES API REQUEST")
+        verbose_logger.debug(f"Model: {model}")
+        verbose_logger.debug(f"Input: {json.dumps(input, indent=2, default=str)}")
+        verbose_logger.debug(f"Responses API request params: {json.dumps(responses_api_request, indent=2, default=str)}")
+        verbose_logger.debug("=" * 80)
+
         tools, web_search_options = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
             responses_api_request.get("tools") or []  # type: ignore
         )
@@ -122,13 +132,18 @@ class LiteLLMCompletionResponsesConfig:
                 text_param
             )
 
+        # Default tool_choice to "auto" when tools are present
+        tool_choice_value = responses_api_request.get("tool_choice")
+        if tool_choice_value is None and tools:
+            tool_choice_value = "auto"
+
         litellm_completion_request: dict = {
             "messages": LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input,
                 responses_api_request=responses_api_request,
             ),
             "model": model,
-            "tool_choice": responses_api_request.get("tool_choice"),
+            "tool_choice": tool_choice_value,
             "tools": tools,
             "top_p": responses_api_request.get("top_p"),
             "user": responses_api_request.get("user"),
@@ -161,6 +176,12 @@ class LiteLLMCompletionResponsesConfig:
         litellm_completion_request = {
             k: v for k, v in litellm_completion_request.items() if v is not None
         }
+
+        # TRACE 2: Log outgoing Chat Completion request (what we send to Snowflake)
+        verbose_logger.debug("=" * 80)
+        verbose_logger.debug("TRACE 2: CHAT COMPLETION REQUEST TO SNOWFLAKE")
+        verbose_logger.debug(f"Request: {json.dumps(litellm_completion_request, indent=2, default=str)}")
+        verbose_logger.debug("=" * 80)
 
         return litellm_completion_request
 
@@ -211,35 +232,64 @@ class LiteLLMCompletionResponsesConfig:
     ) -> dict:
         """
         Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
-        
+
         PATCH: Added Redis-first lookup to fix conversation context timing issues
         """
+        from litellm._logging import verbose_logger
+
+        verbose_logger.debug("=" * 80)
+        verbose_logger.debug("SESSION HANDLER: Loading conversation history")
+        verbose_logger.debug(f"previous_response_id: {previous_response_id}")
+        verbose_logger.debug(f"Current messages in request: {len(litellm_completion_request.get('messages', []))}")
+        verbose_logger.debug("=" * 80)
 
         # PATCH: Try Redis first for immediate availability
         redis_session = await LiteLLMCompletionResponsesConfig._patch_get_session_from_redis(previous_response_id)
+        verbose_logger.debug(f"Redis session found: {redis_session is not None}")
         if redis_session:
             _messages = litellm_completion_request.get("messages") or []
             session_messages = redis_session.get("messages") or []
+            verbose_logger.debug(f"Redis: Loaded {len(session_messages)} session messages (before filtering)")
+
+            # FILTER: Remove empty assistant messages (safety check for Redis)
+            session_messages = LiteLLMCompletionResponsesConfig._filter_empty_assistant_messages(session_messages)
+            verbose_logger.debug(f"Redis: {len(session_messages)} messages after filtering")
+            verbose_logger.debug(f"Redis: Adding {len(_messages)} new messages")
+
             litellm_completion_request["messages"] = session_messages + _messages
+            verbose_logger.debug(f"Redis: Total messages after merge: {len(litellm_completion_request['messages'])}")
             litellm_completion_request["litellm_trace_id"] = redis_session.get("session_id")
             return litellm_completion_request
 
         # PATCH: Fallback to existing enterprise/database logic
+        verbose_logger.debug(f"Enterprise handler available: {_ENTERPRISE_ResponsesSessionHandler is not None}")
         if _ENTERPRISE_ResponsesSessionHandler is not None:
             chat_completion_session = ChatCompletionSession(
                 messages=[], litellm_session_id=None
             )
             if previous_response_id:
+                verbose_logger.debug("Calling enterprise session handler...")
                 chat_completion_session = await _ENTERPRISE_ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
                     previous_response_id=previous_response_id
                 )
+                verbose_logger.debug(f"Enterprise: Loaded {len(chat_completion_session.get('messages', []))} session messages (before filtering)")
             _messages = litellm_completion_request.get("messages") or []
             session_messages = chat_completion_session.get("messages") or []
+
+            # FILTER: Remove empty assistant messages (safety check for enterprise/spend logs)
+            session_messages = LiteLLMCompletionResponsesConfig._filter_empty_assistant_messages(session_messages)
+            verbose_logger.debug(f"Enterprise: {len(session_messages)} messages after filtering")
+            verbose_logger.debug(f"Enterprise: Adding {len(_messages)} new messages")
+
             litellm_completion_request["messages"] = session_messages + _messages
+            verbose_logger.debug(f"Enterprise: Total messages after merge: {len(litellm_completion_request['messages'])}")
             litellm_completion_request[
                 "litellm_trace_id"
             ] = chat_completion_session.get("litellm_session_id")
 
+        verbose_logger.debug("=" * 80)
+        verbose_logger.debug(f"SESSION HANDLER: Final message count: {len(litellm_completion_request.get('messages', []))}")
+        verbose_logger.debug("=" * 80)
         return litellm_completion_request
 
     @staticmethod
@@ -686,6 +736,14 @@ class LiteLLMCompletionResponsesConfig:
         """
         Transform a Chat Completion response into a Responses API response
         """
+        from litellm._logging import verbose_logger
+
+        # TRACE 5: Log incoming Chat Completion response from Snowflake
+        verbose_logger.debug("=" * 80)
+        verbose_logger.debug("TRACE 5: CHAT COMPLETION RESPONSE FROM SNOWFLAKE")
+        verbose_logger.debug(f"Response: {json.dumps(chat_completion_response, indent=2, default=str)}")
+        verbose_logger.debug("=" * 80)
+
         if isinstance(chat_completion_response, dict):
             chat_completion_response = ModelResponse(**chat_completion_response)
         # Get finish_reason from the first choice to determine overall status
@@ -733,6 +791,13 @@ class LiteLLMCompletionResponsesConfig:
             ),
             user=getattr(chat_completion_response, "user", None),
         )
+
+        # TRACE 6: Log final Responses API response
+        verbose_logger.debug("=" * 80)
+        verbose_logger.debug("TRACE 6: FINAL RESPONSES API RESPONSE")
+        verbose_logger.debug(f"Response: {json.dumps(responses_api_response, indent=2, default=str)}")
+        verbose_logger.debug("=" * 80)
+
         return responses_api_response
 
     @staticmethod
@@ -944,16 +1009,51 @@ class LiteLLMCompletionResponsesConfig:
 # =============================================================================
 
     @staticmethod
+    def _filter_empty_assistant_messages(messages: List[Dict]) -> List[Dict]:
+        """
+        Filter out empty assistant messages that have no content and no tool_calls.
+
+        These are artifacts from Snowflake/Claude starting a response then only calling tools,
+        which creates two consecutive assistant messages (first empty, second with tool_calls).
+
+        Args:
+            messages: List of message dicts to filter
+
+        Returns:
+            Filtered list with empty assistant messages removed
+        """
+        from litellm._logging import verbose_logger
+
+        filtered_messages = []
+        for msg in messages:
+            # Skip assistant messages that have both:
+            # 1. content is None or empty
+            # 2. no tool_calls
+            if (msg.get("role") == "assistant" and
+                (msg.get("content") is None or msg.get("content") == "") and
+                not msg.get("tool_calls")):
+                verbose_logger.debug(f"FILTER: Removing empty assistant message: {msg}")
+                continue
+            filtered_messages.append(msg)
+
+        return filtered_messages
+
+    @staticmethod
     async def _patch_store_session_in_redis(response_id: str, session_id: str, messages: List[Dict]):
         """PATCH: Store session immediately in Redis to avoid batch processing delay"""
         try:
             import litellm
+            from litellm._logging import verbose_logger
 
             if litellm.cache is None or not hasattr(litellm.cache, 'cache') or not hasattr(litellm.cache.cache, 'init_async_client'):
                 return  # No Redis - graceful fallback to existing logic
 
+            # FILTER: Remove empty assistant messages
+            filtered_messages = LiteLLMCompletionResponsesConfig._filter_empty_assistant_messages(messages)
+            verbose_logger.debug(f"REDIS STORAGE: Storing {len(filtered_messages)} messages (filtered from {len(messages)})")
+
             session_data = {
-                "messages": messages,
+                "messages": filtered_messages,
                 "session_id": session_id,
                 "timestamp": datetime.utcnow().isoformat()
             }

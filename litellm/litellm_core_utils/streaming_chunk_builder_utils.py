@@ -1,7 +1,9 @@
 import base64
 import time
+from json import JSONDecoder, JSONDecodeError
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
+from litellm._logging import verbose_logger
 from litellm.types.llms.openai import (
     ChatCompletionAssistantContentValue,
     ChatCompletionAudioDelta,
@@ -29,6 +31,51 @@ if TYPE_CHECKING:
         ChatCompletionRedactedThinkingBlock,
         ChatCompletionThinkingBlock,
     )
+
+
+# Module-level decoder instance (reusable, avoids recreation overhead)
+_json_decoder = JSONDecoder()
+
+
+def _validate_and_repair_tool_arguments(raw_arguments: str) -> str:
+    """
+    Validates and repairs tool call arguments using JSONDecoder.raw_decode().
+
+    Uses CPython's C-optimized JSON parser for O(n) single-pass extraction
+    of the first valid JSON object from potentially concatenated chunks.
+
+    This handles the case where streaming providers like Gemini send
+    duplicate/overlapping JSON chunks, resulting in malformed strings like:
+    '{"address":"School"}{"address":"School"}'
+
+    Args:
+        raw_arguments: The raw joined argument string
+
+    Returns:
+        A valid JSON string, or the original string with a warning if unrecoverable
+    """
+    if not raw_arguments:
+        return "{}"
+
+    try:
+        # raw_decode returns (obj, end_index) - single pass, C-optimized
+        # It extracts the first valid JSON object and tells us where it ends
+        _, end_idx = _json_decoder.raw_decode(raw_arguments)
+        result = raw_arguments[:end_idx]
+
+        # Log warning if extra data was truncated (indicates concatenation bug)
+        if end_idx < len(raw_arguments):
+            verbose_logger.warning(
+                f"Repaired malformed tool call arguments. "
+                f"Original length: {len(raw_arguments)}, Repaired length: {end_idx}"
+            )
+
+        return result
+    except JSONDecodeError:
+        verbose_logger.warning(
+            f"Failed to parse tool call arguments: {raw_arguments[:100]}..."
+        )
+        return raw_arguments or "{}"
 
 
 class ChunkProcessor:
@@ -161,7 +208,8 @@ class ChunkProcessor:
         for index in sorted(tool_call_map.keys()):
             tool_call_data = tool_call_map[index]
             if tool_call_data["id"] and tool_call_data["name"]:
-                combined_arguments = "".join(tool_call_data["arguments"]) or "{}"
+                raw_arguments = "".join(tool_call_data["arguments"])
+                combined_arguments = _validate_and_repair_tool_arguments(raw_arguments)
                 tool_calls_list.append(
                     ChatCompletionMessageToolCall(
                         id=tool_call_data["id"],
@@ -195,7 +243,8 @@ class ChunkProcessor:
                     arguments = function_call.arguments
                     argument_list.append(arguments)
 
-        combined_arguments = "".join(argument_list)
+        raw_arguments = "".join(argument_list)
+        combined_arguments = _validate_and_repair_tool_arguments(raw_arguments)
 
         return FunctionCall(
             name=function_call_name,
