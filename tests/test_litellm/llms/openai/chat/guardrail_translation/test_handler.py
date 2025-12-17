@@ -21,11 +21,11 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.openai.chat.guardrail_translation.handler import (
     OpenAIChatCompletionsHandler,
 )
-from litellm.types.guardrails import GenericGuardrailAPIInputs
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Choices,
     Function,
+    GenericGuardrailAPIInputs,
     Message,
     ModelResponse,
 )

@@ -1,11 +1,16 @@
 import asyncio
+import time
+from typing import Any, AsyncIterator, cast
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from litellm._logging import verbose_proxy_logger
+from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.responses.main import DeleteResponseResult
 
 router = APIRouter()
@@ -80,7 +85,9 @@ async def responses_api(
     data = await _read_request_body(request=request)
     
     # Check if polling via cache should be used for this request
-    from litellm.proxy.response_polling.polling_handler import should_use_polling_for_request
+    from litellm.proxy.response_polling.polling_handler import (
+        should_use_polling_for_request,
+    )
     
     should_use_polling = should_use_polling_for_request(
         background_mode=data.get("background", False),
@@ -92,11 +99,11 @@ async def responses_api(
     
     # If polling is enabled, use polling mode
     if should_use_polling:
-        from litellm.proxy.response_polling.polling_handler import (
-            ResponsePollingHandler,
-        )
         from litellm.proxy.response_polling.background_streaming import (
             background_streaming_task,
+        )
+        from litellm.proxy.response_polling.polling_handler import (
+            ResponsePollingHandler,
         )
         
         verbose_proxy_logger.info(
@@ -166,6 +173,28 @@ async def responses_api(
             user_api_base=user_api_base,
             version=version,
         )
+    except ModifyResponseException as e:
+        # Guardrail passthrough: return violation message in Responses API format (200)
+        _data = e.request_data
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=_data,
+        )
+
+        violation_text = e.message
+        response_obj = ResponsesAPIResponse(
+            id=f"resp_{uuid4()}",
+            object="response",
+            created_at=int(time.time()),
+            model=e.model or data.get("model"),
+            output=cast(Any, [{"content": [{"type": "text", "text": violation_text}]}]),
+            status="completed",
+            usage=ResponseAPIUsage(
+                input_tokens=0, output_tokens=0, total_tokens=0
+            ),
+        )
+        return response_obj
     except Exception as e:
         raise await processor._handle_llm_api_exception(
             e=e,
@@ -222,8 +251,15 @@ async def cursor_chat_completions(
     )
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
     from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.utils import ModelResponse
 
     data = await _read_request_body(request=request)
+    
+    # Convert 'messages' to 'input' for Responses API compatibility
+    # Cursor sends 'messages' but Responses API expects 'input'
+    if "messages" in data and "input" not in data:
+        data["input"] = data.pop("messages")
+    
     processor = ProxyBaseLLMRequestProcessing(data=data)
 
     def cursor_data_generator(response, user_api_key_dict, request_data):
@@ -244,8 +280,9 @@ async def cursor_chat_completions(
         # If response is a BaseResponsesAPIStreamingIterator, transform it first
         if isinstance(response, BaseResponsesAPIStreamingIterator):
             # Transform Responses API iterator to chat completion iterator
+            # Cast to AsyncIterator[str] since BaseResponsesAPIStreamingIterator implements __aiter__/__anext__
             completion_stream = responses_api_bridge.transformation_handler.get_model_response_iterator(
-                streaming_response=response,
+                streaming_response=cast(AsyncIterator[str], response),
                 sync_stream=False,
                 json_mode=False,
             )
@@ -296,8 +333,8 @@ async def cursor_chat_completions(
             transformed_response = responses_api_bridge.transformation_handler.transform_response(
                 model=processor.data.get("model", ""),
                 raw_response=response,
-                model_response=None,
-                logging_obj=logging_obj,
+                model_response=ModelResponse(),
+                logging_obj=cast(Any, logging_obj),
                 request_data=processor.data,
                 messages=processor.data.get("input", []),
                 optional_params={},
@@ -375,7 +412,7 @@ async def get_response(
         version,
     )
     from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
-    
+
     # Check if this is a polling ID
     if ResponsePollingHandler.is_polling_id(response_id):
         # Handle polling response
@@ -483,7 +520,7 @@ async def delete_response(
         version,
     )
     from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
-    
+
     # Check if this is a polling ID
     if ResponsePollingHandler.is_polling_id(response_id):
         # Handle polling response deletion
@@ -675,7 +712,7 @@ async def cancel_response(
         version,
     )
     from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
-    
+
     # Check if this is a polling ID
     if ResponsePollingHandler.is_polling_id(response_id):
         # Handle polling response cancellation

@@ -3768,13 +3768,24 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = sync_httpx_client.post(
-                url=api_base,
-                headers=headers,
-                data=data,
-                files=files,
-                timeout=timeout,
-            )
+            # Check if provider uses multipart/form-data or JSON
+            if image_edit_provider_config.use_multipart_form_data():
+                # Use form-data (OpenAI style)
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=data,
+                    files=files,
+                    timeout=timeout,
+                )
+            else:
+                # Use JSON (Gemini style)
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=data,
+                    timeout=timeout,
+                )
 
         except Exception as e:
             raise self._handle_error(
@@ -3853,13 +3864,24 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = await async_httpx_client.post(
-                url=api_base,
-                headers=headers,
-                data=data,
-                files=files,
-                timeout=timeout,
-            )
+            # Check if provider uses multipart/form-data or JSON
+            if image_edit_provider_config.use_multipart_form_data():
+                # Use form-data (OpenAI style)
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=data,
+                    files=files,
+                    timeout=timeout,
+                )
+            else:
+                # Use JSON (Gemini style)
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=data,
+                    timeout=timeout,
+                )
 
         except Exception as e:
             raise self._handle_error(
@@ -3965,12 +3987,24 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = sync_httpx_client.post(
-                url=api_base,
-                headers=headers,
-                json=data,
-                timeout=timeout,
-            )
+            # Check if provider requires multipart/form-data (e.g., Stability AI)
+            if image_generation_provider_config.use_multipart_form_data():
+                # Use form-data: pass files={} to force multipart encoding
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=data,
+                    files={"none": ""},  # Forces multipart/form-data
+                    timeout=timeout,
+                )
+            else:
+                # Use JSON (default)
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=data,
+                    timeout=timeout,
+                )
 
         except Exception as e:
             raise self._handle_error(
@@ -4063,12 +4097,24 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = await async_httpx_client.post(
-                url=api_base,
-                headers=headers,
-                json=data,
-                timeout=timeout,
-            )
+            # Check if provider requires multipart/form-data (e.g., Stability AI)
+            if image_generation_provider_config.use_multipart_form_data():
+                # Use form-data: pass files={} to force multipart encoding
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=data,
+                    files={"none": ""},  # Forces multipart/form-data
+                    timeout=timeout,
+                )
+            else:
+                # Use JSON (default)
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=data,
+                    timeout=timeout,
+                )
 
         except Exception as e:
             raise self._handle_error(
