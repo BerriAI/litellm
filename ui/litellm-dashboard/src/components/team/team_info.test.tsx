@@ -330,7 +330,7 @@ describe("TeamInfoView", () => {
     const editButton = await screen.findByRole("button", { name: "Edit Settings" });
     act(() => fireEvent.click(editButton));
 
-    const secretField = await screen.findByPlaceholderText('{"provider": "aws", "secret_id": "example"}');
+    const secretField = await screen.findByPlaceholderText('{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}');
     expect(secretField).toBeDisabled();
     expect(secretField).toHaveValue(JSON.stringify(teamResponse.team_info.metadata.secret_manager_settings, null, 2));
   }, 10000);
@@ -391,7 +391,7 @@ describe("TeamInfoView", () => {
     const editButton = await screen.findByRole("button", { name: "Edit Settings" });
     act(() => fireEvent.click(editButton));
 
-    const secretField = await screen.findByPlaceholderText('{"provider": "aws", "secret_id": "example"}');
+    const secretField = await screen.findByPlaceholderText('{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}');
     expect(secretField).not.toBeDisabled();
 
     act(() => {
