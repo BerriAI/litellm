@@ -930,6 +930,12 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
               <span className="font-medium w-1/3">Duration:</span>
               <span>{row.original.duration} s.</span>
             </div>
+            {row.original.metadata?.litellm_overhead_time_ms !== undefined && (
+              <div className="flex">
+                <span className="font-medium w-1/3">LiteLLM Overhead:</span>
+                <span>{row.original.metadata.litellm_overhead_time_ms} ms</span>
+              </div>
+            )}
           </div>
         </div>
       </div>

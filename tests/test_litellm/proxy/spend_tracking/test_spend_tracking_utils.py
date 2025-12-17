@@ -24,7 +24,12 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _sanitize_request_body_for_spend_logs_payload,
     get_logging_payload,
 )
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import (
+    StandardLoggingHiddenParams,
+    StandardLoggingMetadata,
+    StandardLoggingModelInformation,
+    StandardLoggingPayload,
+)
 
 
 def test_sanitize_request_body_for_spend_logs_payload_basic():
@@ -631,4 +636,217 @@ def test_get_logging_payload_includes_agent_id_from_kwargs():
     )
 
     assert payload["agent_id"] == test_agent_id, f"Expected agent_id '{test_agent_id}', got '{payload.get('agent_id')}'"
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_includes_overhead_in_spend_logs_metadata():
+    """
+    Test that get_logging_payload extracts litellm_overhead_time_ms from hidden_params
+    and stores it in spend_logs_metadata within the metadata JSON.
+    """
+    test_overhead_ms = 123.45
+
+    # Create StandardLoggingPayload with hidden_params containing overhead
+    standard_logging_payload = StandardLoggingPayload(
+        id="test-id-123",
+        call_type="completion",
+        stream=False,
+        response_cost=0.001,
+        status="success",
+        total_tokens=100,
+        prompt_tokens=50,
+        completion_tokens=50,
+        startTime=1234567890.0,
+        endTime=1234567891.0,
+        completionStartTime=None,
+        model_map_information=StandardLoggingModelInformation(
+            model_map_key="gpt-3.5-turbo", model_map_value=None
+        ),
+        model="gpt-3.5-turbo",
+        model_id="model-123",
+        model_group="openai",
+        custom_llm_provider="openai",
+        api_base="https://api.openai.com",
+        metadata=StandardLoggingMetadata(
+            user_api_key_hash="test_hash",
+            user_api_key_alias=None,
+            user_api_key_team_id=None,
+            user_api_key_org_id=None,
+            user_api_key_user_id=None,
+            user_api_key_team_alias=None,
+            spend_logs_metadata=None,
+            requester_ip_address=None,
+            requester_metadata=None,
+            user_api_key_end_user_id=None,
+        ),
+        cache_hit=False,
+        cache_key=None,
+        saved_cache_cost=0.0,
+        request_tags=[],
+        end_user=None,
+        requester_ip_address=None,
+        messages=[],
+        response={},
+        error_str=None,
+        model_parameters={},
+        hidden_params=StandardLoggingHiddenParams(
+            model_id="model-123",
+            cache_key=None,
+            api_base="https://api.openai.com",
+            response_cost="0.001",
+            litellm_overhead_time_ms=test_overhead_ms,
+            additional_headers=None,
+            batch_models=None,
+            litellm_model_name=None,
+            usage_object=None,
+        ),
+    )
+
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "sk-test-key",
+            }
+        },
+        "standard_logging_object": standard_logging_payload,
+    }
+
+    response_obj = {
+        "id": "test-response-123",
+        "choices": [{"message": {"content": "Hello!"}}],
+        "usage": {
+            "total_tokens": 100,
+            "prompt_tokens": 50,
+            "completion_tokens": 50,
+        },
+    }
+
+    start_time = datetime.datetime.now(timezone.utc)
+    end_time = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    # Parse the metadata JSON string
+    metadata_json = payload.get("metadata")
+    assert metadata_json is not None, "metadata should not be None"
+    
+    metadata = json.loads(metadata_json)
+    
+    # Verify overhead is stored directly in metadata
+    assert (
+        metadata.get("litellm_overhead_time_ms") == test_overhead_ms
+    ), f"Expected overhead '{test_overhead_ms}', got '{metadata.get('litellm_overhead_time_ms')}'"
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_handles_missing_overhead_gracefully():
+    """
+    Test that get_logging_payload handles missing overhead gracefully
+    (backward compatibility - when overhead is not present, it should not break).
+    """
+    # Create StandardLoggingPayload WITHOUT overhead in hidden_params
+    standard_logging_payload = StandardLoggingPayload(
+        id="test-id-456",
+        call_type="completion",
+        stream=False,
+        response_cost=0.001,
+        status="success",
+        total_tokens=100,
+        prompt_tokens=50,
+        completion_tokens=50,
+        startTime=1234567890.0,
+        endTime=1234567891.0,
+        completionStartTime=None,
+        model_map_information=StandardLoggingModelInformation(
+            model_map_key="gpt-3.5-turbo", model_map_value=None
+        ),
+        model="gpt-3.5-turbo",
+        model_id="model-123",
+        model_group="openai",
+        custom_llm_provider="openai",
+        api_base="https://api.openai.com",
+        metadata=StandardLoggingMetadata(
+            user_api_key_hash="test_hash",
+            user_api_key_alias=None,
+            user_api_key_team_id=None,
+            user_api_key_org_id=None,
+            user_api_key_user_id=None,
+            user_api_key_team_alias=None,
+            spend_logs_metadata=None,
+            requester_ip_address=None,
+            requester_metadata=None,
+            user_api_key_end_user_id=None,
+        ),
+        cache_hit=False,
+        cache_key=None,
+        saved_cache_cost=0.0,
+        request_tags=[],
+        end_user=None,
+        requester_ip_address=None,
+        messages=[],
+        response={},
+        error_str=None,
+        model_parameters={},
+        hidden_params=StandardLoggingHiddenParams(
+            model_id="model-123",
+            cache_key=None,
+            api_base="https://api.openai.com",
+            response_cost="0.001",
+            litellm_overhead_time_ms=None,  # No overhead
+            additional_headers=None,
+            batch_models=None,
+            litellm_model_name=None,
+            usage_object=None,
+        ),
+    )
+
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "sk-test-key",
+            }
+        },
+        "standard_logging_object": standard_logging_payload,
+    }
+
+    response_obj = {
+        "id": "test-response-456",
+        "choices": [{"message": {"content": "Hello!"}}],
+        "usage": {
+            "total_tokens": 100,
+            "prompt_tokens": 50,
+            "completion_tokens": 50,
+        },
+    }
+
+    start_time = datetime.datetime.now(timezone.utc)
+    end_time = datetime.datetime.now(timezone.utc)
+
+    # Should not raise an exception
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    # Parse the metadata JSON string
+    metadata_json = payload.get("metadata")
+    assert metadata_json is not None, "metadata should not be None"
+    
+    metadata = json.loads(metadata_json)
+    
+    # When overhead is None, litellm_overhead_time_ms should be None or not present
+    assert (
+        metadata.get("litellm_overhead_time_ms") is None
+    ), "litellm_overhead_time_ms should be None when overhead is not provided"
 

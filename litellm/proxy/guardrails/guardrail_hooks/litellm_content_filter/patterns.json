@@ -317,6 +317,55 @@
       "category": "PII Patterns",
       "action": "MASK",
       "description": "Detects Dutch BSN numbers with contextual keywords"
+    },
+    {
+      "name": "br_cpf",
+      "display_name": "CPF - Brazilian Personal Tax ID (Formatted)",
+      "pattern": "\\d{3}\\.\\d{3}\\.\\d{3}(-|/)\\d{2}",
+      "category": "Brazilian PII Patterns",
+      "description": "Detects Brazilian CPF numbers (XXX.XXX.XXX-XX or XXX.XXX.XXX/XX format)"
+    },
+    {
+      "name": "br_cpf_unformatted",
+      "display_name": "CPF - Brazilian Personal Tax ID (Unformatted)",
+      "pattern": "\\b\\d{11}\\b",
+      "category": "Brazilian PII Patterns",
+      "description": "Detects Brazilian CPF numbers without formatting (11 digits)"
+    },
+    {
+      "name": "br_phone_landline",
+      "display_name": "Brazilian Phone Number (Landline)",
+      "pattern": "(?:\\(?\\d{2}\\)?\\s?)?(?:9\\d{4}|\\d{4})-?\\d{4}",
+      "category": "Brazilian PII Patterns",
+      "description": "Detects Brazilian landline phone numbers with optional area code"
+    },
+    {
+      "name": "br_phone_mobile",
+      "display_name": "Brazilian Mobile Phone Number",
+      "pattern": "(?:\\+\\d{1,3}\\s?)?(?:\\(?\\d{2}\\)?\\s?)?9\\d{4}-?\\d{4}",
+      "category": "Brazilian PII Patterns",
+      "description": "Detects Brazilian mobile phone numbers (9 prefix for mobile)"
+    },
+    {
+      "name": "br_cep",
+      "display_name": "CEP - Brazilian Zip / Postal Code",
+      "pattern": "\\b\\d{5}-?\\d{3}\\b",
+      "category": "Brazilian PII Patterns",
+      "description": "Detects Brazilian CEP postal codes (XXXXX-XXX or XXXXXXXX format)"
+    },
+    {
+      "name": "br_cnpj",
+      "display_name": "CNPJ - Brazilian Company Tax ID",
+      "pattern": "\\d{2}\\.\\d{3}\\.\\d{3}/\\d{4}-\\d{2}",
+      "category": "Brazilian PII Patterns",
+      "description": "Detects Brazilian CNPJ company registration numbers (XX.XXX.XXX/XXXX-XX format)"
+    },
+    {
+      "name": "br_rg",
+      "display_name": "RG - Brazilian National Identity Card (SP, RJ, MG)",
+      "pattern": "\\b\\d{1,2}\\.\\d{3}\\.\\d{3}-[\\dXx]\\b",
+      "category": "Brazilian PII Patterns",
+      "description": "Detects Brazilian RG identity card numbers (common pattern for SP, RJ, MG states)"
     }
   ]
 }

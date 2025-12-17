@@ -1,7 +1,11 @@
 import asyncio
 import contextvars
+import importlib
 from functools import partial
-from typing import Any, Coroutine, Dict, List, Literal, Optional, Union, cast, overload
+from typing import TYPE_CHECKING, Any, Coroutine, Dict, List, Literal, Optional, Union, cast, overload
+
+if TYPE_CHECKING:
+    from litellm.images.utils import ImageEditRequestUtils
 
 import httpx
 
@@ -50,7 +54,20 @@ from litellm.utils import (
     get_optional_params_image_gen,
 )
 
-from .utils import ImageEditRequestUtils
+# Cache for ImageEditRequestUtils to avoid repeated __getattr__ calls
+_ImageEditRequestUtils_cache: Optional["ImageEditRequestUtils"] = None
+
+
+def _get_ImageEditRequestUtils() -> "ImageEditRequestUtils":
+    """Get ImageEditRequestUtils, loading it lazily if needed."""
+    global _ImageEditRequestUtils_cache
+    if _ImageEditRequestUtils_cache is None:
+        # Access via module to trigger __getattr__ if not cached
+        module = importlib.import_module(__name__)
+        _ImageEditRequestUtils_cache = module.ImageEditRequestUtils
+    assert _ImageEditRequestUtils_cache is not None  # Type narrowing for type checker
+    return _ImageEditRequestUtils_cache
+
 
 
 ##### Image Generation #######################
@@ -702,6 +719,59 @@ def image_edit(
             custom_llm_provider=custom_llm_provider,
         )
 
+        # Check for custom provider
+        if custom_llm_provider in litellm._custom_providers:
+            custom_handler: Optional[CustomLLM] = None
+            for item in litellm.custom_provider_map:
+                if item["provider"] == custom_llm_provider:
+                    custom_handler = item["custom_handler"]
+
+            if custom_handler is None:
+                raise LiteLLMUnknownProvider(
+                    model=model, custom_llm_provider=custom_llm_provider
+                )
+
+            model_response = ImageResponse()
+
+            if _is_async:
+                async_custom_client: Optional[AsyncHTTPHandler] = None
+                if kwargs.get("client") is not None and isinstance(
+                    kwargs.get("client"), AsyncHTTPHandler
+                ):
+                    async_custom_client = kwargs.get("client")
+
+                return custom_handler.aimage_edit(
+                    model=model,
+                    image=images,
+                    prompt=prompt,
+                    model_response=model_response,
+                    api_key=kwargs.get("api_key"),
+                    api_base=kwargs.get("api_base"),
+                    optional_params=kwargs,
+                    logging_obj=litellm_logging_obj,
+                    timeout=timeout,
+                    client=async_custom_client,
+                )
+            else:
+                custom_client: Optional[HTTPHandler] = None
+                if kwargs.get("client") is not None and isinstance(
+                    kwargs.get("client"), HTTPHandler
+                ):
+                    custom_client = kwargs.get("client")
+
+                return custom_handler.image_edit(
+                    model=model,
+                    image=images,
+                    prompt=prompt,
+                    model_response=model_response,
+                    api_key=kwargs.get("api_key"),
+                    api_base=kwargs.get("api_base"),
+                    optional_params=kwargs,
+                    logging_obj=litellm_logging_obj,
+                    timeout=timeout,
+                    client=custom_client,
+                )
+
         # get provider config
         image_edit_provider_config: Optional[BaseImageEditConfig] = (
             ProviderConfigManager.get_provider_image_edit_config(
@@ -716,12 +786,12 @@ def image_edit(
         local_vars.update(kwargs)
         # Get ImageEditOptionalRequestParams with only valid parameters
         image_edit_optional_params: ImageEditOptionalRequestParams = (
-            ImageEditRequestUtils.get_requested_image_edit_optional_param(local_vars)
+            _get_ImageEditRequestUtils().get_requested_image_edit_optional_param(local_vars)
         )
 
         # Get optional parameters for the responses API
         image_edit_request_params: Dict = (
-            ImageEditRequestUtils.get_optional_params_image_edit(
+            _get_ImageEditRequestUtils().get_optional_params_image_edit(
                 model=model,
                 image_edit_provider_config=image_edit_provider_config,
                 image_edit_optional_params=image_edit_optional_params,
@@ -845,3 +915,15 @@ async def aimage_edit(
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
+
+
+def __getattr__(name: str) -> Any:
+    """Lazy import handler for images.main module"""
+    if name == "ImageEditRequestUtils":
+        # Lazy load ImageEditRequestUtils to avoid heavy import from images.utils at module load time
+        from .utils import ImageEditRequestUtils as _ImageEditRequestUtils
+        # Cache it in the module's __dict__ for subsequent accesses
+        module = importlib.import_module(__name__)
+        module.__dict__["ImageEditRequestUtils"] = _ImageEditRequestUtils
+        return _ImageEditRequestUtils
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

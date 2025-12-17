@@ -1,14 +1,15 @@
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
-from typing_extensions import TypedDict
+from typing_extensions import TYPE_CHECKING, TypedDict
 
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.llms.openai import (
+    AllMessageValues,
     ChatCompletionToolCallChunk,
     ChatCompletionToolParam,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+from litellm.types.utils import ChatCompletionMessageToolCall
 
 
 class GenericGuardrailAPIMetadata(TypedDict, total=False):
@@ -60,7 +61,9 @@ class GenericGuardrailAPIRequest(BaseModel):
     texts: Optional[List[str]]
     request_data: GenericGuardrailAPIMetadata
     additional_provider_specific_params: Optional[Dict[str, Any]]
-    tool_calls: Optional[List[ChatCompletionToolCallChunk]]
+    tool_calls: Optional[
+        Union[List[ChatCompletionToolCallChunk], List[ChatCompletionMessageToolCall]]
+    ]
 
 
 class GenericGuardrailAPIResponse:

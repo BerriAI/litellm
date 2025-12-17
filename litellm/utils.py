@@ -1,3 +1,6 @@
+# from __future__ import annotations must be the first non-comment statement
+from __future__ import annotations
+
 # +-----------------------------------------------+
 # |                                               |
 # |           Give Feedback / Get Help            |
@@ -96,10 +99,14 @@ from litellm.litellm_core_utils.core_helpers import (
     process_response_headers,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
-from litellm.litellm_core_utils.default_encoding import encoding
 from litellm.litellm_core_utils.dot_notation_indexing import (
     delete_nested_value,
     is_nested_path,
+)
+from litellm._lazy_imports import (
+    _get_default_encoding,
+    _get_modified_max_tokens,
+    _get_token_counter_new,
 )
 from litellm.litellm_core_utils.exception_mapping_utils import (
     _get_response_headers,
@@ -144,7 +151,6 @@ from litellm.litellm_core_utils.redact_messages import (
 )
 from litellm.litellm_core_utils.rules import Rules
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
 from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
@@ -249,7 +255,6 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     update_response_metadata,
 )
 from litellm.litellm_core_utils.thread_pool_executor import executor
-from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -260,12 +265,17 @@ from litellm.llms.base_llm.base_utils import (
     BaseLLMModelInfo,
     type_to_response_format_param,
 )
+
+if TYPE_CHECKING:
+    # Heavy types that are only needed for type checking; avoid importing
+    # their modules at runtime during `litellm` import.
+    from litellm.llms.base_llm.files.transformation import BaseFilesConfig
+    from litellm.proxy._types import AllowedModelRegion
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
-from litellm.llms.base_llm.files.transformation import BaseFilesConfig
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
@@ -293,6 +303,7 @@ from .caching.caching import (
     RedisSemanticCache,
     S3Cache,
 )
+
 from .exceptions import (
     APIConnectionError,
     APIError,
@@ -310,7 +321,6 @@ from .exceptions import (
     UnprocessableEntityError,
     UnsupportedParamsError,
 )
-from .proxy._types import AllowedModelRegion, KeyManagementSystem
 from .types.llms.openai import (
     ChatCompletionDeltaToolCallChunk,
     ChatCompletionToolCallChunk,
@@ -810,7 +820,12 @@ def function_setup(  # noqa: PLR0915
             or call_type == CallTypes.responses.value
         ):
             # Handle both 'input' (standard Responses API) and 'messages' (Cursor chat format)
-            messages = args[0] if len(args) > 0 else kwargs.get("input") or kwargs.get("messages", "default-message-value")
+            messages = (
+                args[0]
+                if len(args) > 0
+                else kwargs.get("input")
+                or kwargs.get("messages", "default-message-value")
+            )
         else:
             messages = "default-message-value"
         stream = False
@@ -1239,7 +1254,7 @@ def client(original_function):  # noqa: PLR0915
                     elif kwargs.get("messages", None):
                         messages = kwargs["messages"]
                     user_max_tokens = kwargs.get("max_tokens")
-                    modified_max_tokens = get_modified_max_tokens(
+                    modified_max_tokens = _get_modified_max_tokens()(
                         model=model,
                         base_model=base_model,
                         messages=messages,
@@ -1476,7 +1491,7 @@ def client(original_function):  # noqa: PLR0915
                     elif kwargs.get("messages", None):
                         messages = kwargs["messages"]
                     user_max_tokens = kwargs.get("max_tokens")
-                    modified_max_tokens = get_modified_max_tokens(
+                    modified_max_tokens = _get_modified_max_tokens()(
                         model=model,
                         base_model=base_model,
                         messages=messages,
@@ -1747,7 +1762,7 @@ def _select_tokenizer_helper(model: str) -> SelectTokenizerResponse:
 
 
 def _return_openai_tokenizer(model: str) -> SelectTokenizerResponse:
-    return {"type": "openai_tokenizer", "tokenizer": encoding}
+    return {"type": "openai_tokenizer", "tokenizer": _get_default_encoding()}
 
 
 def _return_huggingface_tokenizer(model: str) -> Optional[SelectTokenizerResponse]:
@@ -1867,7 +1882,7 @@ def token_counter(
     if litellm.disable_token_counter is True:
         return 0
 
-    return token_counter_new(
+    return _get_token_counter_new()(
         model,
         custom_tokenizer,
         text,
@@ -5837,7 +5852,7 @@ def prompt_token_calculator(model, messages):
         anthropic_obj = Anthropic()
         num_tokens = anthropic_obj.count_tokens(text)  # type: ignore
     else:
-        num_tokens = len(encoding.encode(text))
+        num_tokens = len(_get_default_encoding().encode(text))
     return num_tokens
 
 
@@ -6875,6 +6890,36 @@ def has_tool_call_blocks(messages: List[AllMessageValues]) -> bool:
     return False
 
 
+def last_assistant_with_tool_calls_has_no_thinking_blocks(
+    messages: List[AllMessageValues],
+) -> bool:
+    """
+    Returns true if the last assistant message with tool_calls has no thinking_blocks.
+
+    This is used to detect when thinking param should be dropped to avoid
+    Anthropic error: "Expected thinking or redacted_thinking, but found tool_use"
+
+    When thinking is enabled, assistant messages with tool_calls must include thinking_blocks.
+    If the client didn't preserve thinking_blocks, we need to drop the thinking param.
+
+    Related issues: https://github.com/BerriAI/litellm/issues/14194, https://github.com/BerriAI/litellm/issues/9020
+    """
+    # Find the last assistant message with tool_calls
+    last_assistant_with_tools = None
+    for message in messages:
+        if message.get("role") == "assistant" and message.get("tool_calls") is not None:
+            last_assistant_with_tools = message
+
+    if last_assistant_with_tools is None:
+        return False
+
+    # Check if it has thinking_blocks
+    thinking_blocks = last_assistant_with_tools.get("thinking_blocks")
+    return thinking_blocks is None or (
+        hasattr(thinking_blocks, "__len__") and len(thinking_blocks) == 0
+    )
+
+
 def add_dummy_tool(custom_llm_provider: str) -> List[ChatCompletionToolParam]:
     """
     Prevent Anthropic from raising error when tool_use block exists but no tools are provided.
@@ -7004,7 +7049,9 @@ def validate_chat_completion_user_messages(messages: List[AllMessageValues]):
                         for item in user_content:
                             if isinstance(item, dict):
                                 if item.get("type") not in ValidUserMessageContentTypes:
-                                    raise Exception(f"invalid content type={item.get('type')}")
+                                    raise Exception(
+                                        f"invalid content type={item.get('type')}"
+                                    )
         except Exception as e:
             if isinstance(e, KeyError):
                 raise Exception(
@@ -7839,9 +7886,7 @@ class ProviderConfigManager:
 
             return GeminiVideoConfig()
         elif LlmProviders.VERTEX_AI == provider:
-            from litellm.llms.vertex_ai.videos.transformation import (
-                VertexAIVideoConfig,
-            )
+            from litellm.llms.vertex_ai.videos.transformation import VertexAIVideoConfig
 
             return VertexAIVideoConfig()
         elif LlmProviders.RUNWAYML == provider:
@@ -8152,9 +8197,6 @@ def extract_duration_from_srt_or_vtt(srt_or_vtt_content: str) -> Optional[float]
     return max(durations) if durations else None
 
 
-import httpx
-
-
 def _add_path_to_api_base(api_base: str, ending_path: str) -> str:
     """
     Adds an ending path to an API base URL while preventing duplicate path segments.
@@ -8351,3 +8393,17 @@ def should_run_mock_completion(
     if mock_response or mock_tool_calls or mock_timeout:
         return True
     return False
+
+
+# Re-export encoding from main.py for backward compatibility
+# This allows tests to import: from litellm.utils import encoding
+# We use a lazy import to avoid loading main.py at utils.py import time
+def __getattr__(name: str) -> Any:
+    """Lazy import handler for utils module"""
+    if name == "encoding":
+        from litellm.main import encoding as _encoding
+        # Cache it in the module's __dict__ for subsequent accesses
+        import sys
+        sys.modules[__name__].__dict__["encoding"] = _encoding
+        return _encoding
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
