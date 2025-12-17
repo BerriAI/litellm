@@ -140,6 +140,31 @@ class TestVertexAIGeminiImageEditTransformation:
                 headers={},
             )
 
+    def test_validate_environment_with_litellm_params(self) -> None:
+        """Test validate_environment uses credentials from litellm_params"""
+        with patch.object(
+            self.config, "_ensure_access_token", return_value=("test-token", "test-expiry")
+        ) as mock_token:
+            with patch.object(self.config, "set_headers", return_value={"Authorization": "Bearer test-token"}) as mock_headers:
+                litellm_params = {
+                    "vertex_ai_project": "custom-project",
+                    "vertex_ai_credentials": "/path/to/custom/credentials.json",
+                }
+
+                result = self.config.validate_environment(
+                    headers={"X-Custom": "header"},
+                    model=self.model,
+                    litellm_params=litellm_params,
+                    api_base=None,
+                )
+
+                # Verify that safe_get_vertex_ai_project and safe_get_vertex_ai_credentials were used
+                mock_token.assert_called_once()
+                call_kwargs = mock_token.call_args[1]
+                assert call_kwargs["credentials"] == "/path/to/custom/credentials.json"
+                assert call_kwargs["project_id"] == "custom-project"
+                assert result == {"Authorization": "Bearer test-token"}
+
 
 class TestVertexAIImagenImageEditTransformation:
     def setup_method(self) -> None:
