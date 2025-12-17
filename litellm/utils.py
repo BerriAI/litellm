@@ -7258,6 +7258,8 @@ class ProviderConfigManager:
                 return litellm.AzureOpenAIGPT5Config()
             return litellm.AzureOpenAIConfig()
         elif litellm.LlmProviders.AZURE_AI == provider:
+            if "claude" in model.lower():
+                return litellm.AzureAnthropicConfig()
             return litellm.AzureAIStudioConfig()
         elif litellm.LlmProviders.AZURE_TEXT == provider:
             return litellm.AzureOpenAITextConfig()
