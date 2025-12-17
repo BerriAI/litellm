@@ -242,7 +242,10 @@ class TestBlackForestLabsImageEditTransformation:
             "result": {"sample": "https://example.com/image.png"},
         }
 
-        with patch("httpx.get", return_value=mock_response):
+        mock_client = MagicMock()
+        mock_client.get.return_value = mock_response
+
+        with patch("litellm.llms.black_forest_labs.image_edit.transformation._get_httpx_client", return_value=mock_client):
             result = self.config._poll_for_result(
                 polling_url="https://api.bfl.ai/v1/get_result?id=123",
                 api_key="test-key",
@@ -266,7 +269,10 @@ class TestBlackForestLabsImageEditTransformation:
             "result": {"sample": "https://example.com/image.png"},
         }
 
-        with patch("httpx.get", side_effect=[pending_response, ready_response]):
+        mock_client = MagicMock()
+        mock_client.get.side_effect = [pending_response, ready_response]
+
+        with patch("litellm.llms.black_forest_labs.image_edit.transformation._get_httpx_client", return_value=mock_client):
             result = self.config._poll_for_result(
                 polling_url="https://api.bfl.ai/v1/get_result?id=123",
                 api_key="test-key",
@@ -282,7 +288,10 @@ class TestBlackForestLabsImageEditTransformation:
         mock_response.status_code = 200
         mock_response.json.return_value = {"status": "Error"}
 
-        with patch("httpx.get", return_value=mock_response):
+        mock_client = MagicMock()
+        mock_client.get.return_value = mock_response
+
+        with patch("litellm.llms.black_forest_labs.image_edit.transformation._get_httpx_client", return_value=mock_client):
             with pytest.raises(BlackForestLabsError) as exc_info:
                 self.config._poll_for_result(
                     polling_url="https://api.bfl.ai/v1/get_result?id=123",
@@ -300,7 +309,10 @@ class TestBlackForestLabsImageEditTransformation:
         mock_response.status_code = 200
         mock_response.json.return_value = {"status": "Content Moderated"}
 
-        with patch("httpx.get", return_value=mock_response):
+        mock_client = MagicMock()
+        mock_client.get.return_value = mock_response
+
+        with patch("litellm.llms.black_forest_labs.image_edit.transformation._get_httpx_client", return_value=mock_client):
             with pytest.raises(BlackForestLabsError) as exc_info:
                 self.config._poll_for_result(
                     polling_url="https://api.bfl.ai/v1/get_result?id=123",
@@ -318,7 +330,10 @@ class TestBlackForestLabsImageEditTransformation:
         mock_response.status_code = 200
         mock_response.json.return_value = {"status": "Pending"}
 
-        with patch("httpx.get", return_value=mock_response):
+        mock_client = MagicMock()
+        mock_client.get.return_value = mock_response
+
+        with patch("litellm.llms.black_forest_labs.image_edit.transformation._get_httpx_client", return_value=mock_client):
             with pytest.raises(BlackForestLabsError) as exc_info:
                 self.config._poll_for_result(
                     polling_url="https://api.bfl.ai/v1/get_result?id=123",
@@ -336,7 +351,10 @@ class TestBlackForestLabsImageEditTransformation:
         mock_response.status_code = 500
         mock_response.text = "Internal Server Error"
 
-        with patch("httpx.get", return_value=mock_response):
+        mock_client = MagicMock()
+        mock_client.get.return_value = mock_response
+
+        with patch("litellm.llms.black_forest_labs.image_edit.transformation._get_httpx_client", return_value=mock_client):
             with pytest.raises(BlackForestLabsError) as exc_info:
                 self.config._poll_for_result(
                     polling_url="https://api.bfl.ai/v1/get_result?id=123",
@@ -369,7 +387,10 @@ class TestBlackForestLabsImageEditTransformation:
             "result": {"sample": "https://example.com/edited-image.png"},
         }
 
-        with patch("httpx.get", return_value=poll_response):
+        mock_client = MagicMock()
+        mock_client.get.return_value = poll_response
+
+        with patch("litellm.llms.black_forest_labs.image_edit.transformation._get_httpx_client", return_value=mock_client):
             result = self.config.transform_image_edit_response(
                 model=self.model,
                 raw_response=mock_response,

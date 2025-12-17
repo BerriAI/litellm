@@ -15,6 +15,7 @@ import httpx
 from httpx._types import RequestFiles
 
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
+from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
@@ -247,12 +248,12 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         Raises BlackForestLabsError on failure.
         """
         start_time = time.time()
+        httpx_client = _get_httpx_client()
 
         while time.time() - start_time < max_wait:
-            response = httpx.get(
+            response = httpx_client.get(
                 polling_url,
                 headers={"x-key": api_key},
-                timeout=30.0,
             )
 
             if response.status_code != 200:
