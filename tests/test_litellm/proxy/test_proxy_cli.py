@@ -180,7 +180,7 @@ class TestProxyInitializationHelpers:
         test_env = {
             "DATABASE_HOST": "localhost:5432",
             "DATABASE_USERNAME": "user@with+special",
-            "DATABASE_PASSWORD": "pass&word!@#$%",
+            "DATABASE_PASSWORD": "test-password-special-chars",
             "DATABASE_NAME": "db_name/test",
         }
 
@@ -381,7 +381,7 @@ class TestProxyInitializationHelpers:
         test_env_special = {
             "DATABASE_HOST": "localhost:5432",
             "DATABASE_USERNAME": "user@with+special",
-            "DATABASE_PASSWORD": "pass&word!@#$%",
+            "DATABASE_PASSWORD": "test-password-special-chars",
             "DATABASE_NAME": "db_name/test",
         }
 
