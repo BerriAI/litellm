@@ -170,6 +170,21 @@ class BedrockImageGeneration(BaseAWSLLM):
         )
         return model_response
 
+    def _extract_headers_from_optional_params(self, optional_params: dict) -> dict:
+        """
+        Extract guardrail parameters from optional_params and convert them to headers.
+        """
+        headers = {}
+        guardrail_identifier = optional_params.pop("guardrailIdentifier", None)
+        guardrail_version = optional_params.pop("guardrailVersion", None)
+        
+        if guardrail_identifier is not None:
+            headers["x-amz-bedrock-guardrail-identifier"] = guardrail_identifier
+        if guardrail_version is not None:
+            headers["x-amz-bedrock-guardrail-version"] = guardrail_version
+            
+        return headers
+
     def _prepare_request(
         self,
         model: str,
@@ -227,6 +242,10 @@ class BedrockImageGeneration(BaseAWSLLM):
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
+
+        # Extract guardrail parameters and add them as headers
+        guardrail_headers = self._extract_headers_from_optional_params(optional_params)
+        headers.update(guardrail_headers)
 
         prepped = self.get_request_headers(
             credentials=boto3_credentials_info.credentials,
