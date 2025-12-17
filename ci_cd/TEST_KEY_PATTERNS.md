@@ -4,8 +4,9 @@ Standard patterns for test/mock keys and credentials in the LiteLLM codebase. Al
 
 ## Standard Patterns
 
-- **Prefix patterns**: `test-*`, `mock-*`, `fake-*`, `example-*`
+- **Prefix patterns**: `test-*`, `mock-*`, `fake-*`, `example-*`, `dummy-*`
 - **API key patterns**: `sk-test-*`, `sk-mock-*`, `sk-fake-*`
+- **Simple test values**: `sk-1234`, `sk-12345`, `postgres`
 - **Environment variable references**: `os.environ/KEY_NAME`, `os.environ['KEY_NAME']`
 
 ## GitGuardian Dashboard Configuration
@@ -20,13 +21,18 @@ These patterns are configured in GitGuardian dashboard under "Secrets" → "Patt
 ^sk-test-.*$
 ^sk-mock-.*$
 ^sk-fake-.*$
+^sk-1234$
+^sk-12345$
+^dummy-.*$
+^postgres$
 ^os\.environ.*
 ```
 
 ## Usage
 
-- **Test files**: Use `test-*`, `mock-*`, or `sk-test-*` patterns
+- **Test files**: Use `test-*`, `mock-*`, `sk-test-*`, or simple values like `sk-1234`
 - **Documentation**: Use `example-*` prefix for example tokens
+- **CI/CD configs**: Use `postgres` for test database credentials
 - **Configuration files**: Use `os.environ/KEY_NAME` for environment variable references
 
 ## Examples
