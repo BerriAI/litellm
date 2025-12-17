@@ -93,8 +93,8 @@
       {
         "key": "api_base",
         "label": "Azure AI API Base",
-        "placeholder": "https://your-project.services.ai.azure.com",
-        "tooltip": "The base URL for your Azure AI Foundry project endpoint",
+        "placeholder": "https://your-resource.services.ai.azure.com/api/projects/your-project",
+        "tooltip": "The base URL for your Azure AI Foundry project endpoint (e.g., https://your-resource.services.ai.azure.com/api/projects/your-project)",
         "required": true,
         "field_type": "text",
         "default_value": null,
@@ -102,10 +102,40 @@
       },
       {
         "key": "api_key",
-        "label": "Azure AI API Key",
+        "label": "Azure AD Token",
         "placeholder": null,
-        "tooltip": "API key for authenticating with your Azure AI Foundry project",
-        "required": true,
+        "tooltip": "Azure AD Bearer token for authentication. Optional if using Service Principal credentials below. Get via: az account get-access-token --resource https://ai.azure.com",
+        "required": false,
+        "field_type": "password",
+        "default_value": null,
+        "include_in_litellm_params": true
+      },
+      {
+        "key": "tenant_id",
+        "label": "Azure Tenant ID",
+        "placeholder": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+        "tooltip": "Azure AD Tenant ID for Service Principal authentication. Find in Azure Portal > Azure Active Directory > Overview",
+        "required": false,
+        "field_type": "text",
+        "default_value": null,
+        "include_in_litellm_params": true
+      },
+      {
+        "key": "client_id",
+        "label": "Azure Client ID",
+        "placeholder": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+        "tooltip": "Application (client) ID of your Service Principal. Find in Azure Portal > App registrations > your app",
+        "required": false,
+        "field_type": "text",
+        "default_value": null,
+        "include_in_litellm_params": true
+      },
+      {
+        "key": "client_secret",
+        "label": "Azure Client Secret",
+        "placeholder": null,
+        "tooltip": "Client secret for your Service Principal. Create in Azure Portal > App registrations > your app > Certificates & secrets",
+        "required": false,
         "field_type": "password",
         "default_value": null,
         "include_in_litellm_params": true
@@ -113,6 +143,51 @@
     ],
     "litellm_params_template": {
       "custom_llm_provider": "azure_ai"
+    }
+  },
+  {
+    "agent_type": "pydantic_ai_agents",
+    "agent_type_display_name": "Pydantic AI",
+    "description": "Connect to Pydantic AI agents via A2A protocol (with fake streaming support)",
+    "logo_url": "/ui/assets/logos/pydantic.svg",
+    "use_a2a_form_fields": true,
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "Agent URL",
+        "placeholder": "http://localhost:9999",
+        "tooltip": "The base URL for your Pydantic AI agent server",
+        "required": true,
+        "field_type": "text",
+        "default_value": "http://localhost:9999",
+        "include_in_litellm_params": true
+      }
+    ],
+    "litellm_params_template": {
+      "custom_llm_provider": "pydantic_ai_agents"
+    }
+  },
+  {
+    "agent_type": "vertex_agent_engine",
+    "agent_type_display_name": "Vertex AI Agent Engine",
+    "description": "Connect to Google Cloud Vertex AI Reasoning Engines",
+    "logo_url": "/ui/assets/logos/google.svg",
+    "inherit_credentials_from_provider": "Vertex_AI",
+    "model_template": "vertex_ai/agent_engine/{reasoning_engine_id}",
+    "credential_fields": [
+      {
+        "key": "reasoning_engine_id",
+        "label": "Reasoning Engine Resource ID",
+        "placeholder": "projects/123456789/locations/us-central1/reasoningEngines/987654321",
+        "tooltip": "The full resource ID of your Vertex AI Reasoning Engine. Find this in Google Cloud Console under Vertex AI > Agent Builder > Your Agent.",
+        "required": true,
+        "field_type": "text",
+        "default_value": null,
+        "include_in_litellm_params": false
+      }
+    ],
+    "litellm_params_template": {
+      "custom_llm_provider": "vertex_ai"
     }
   }
 ]

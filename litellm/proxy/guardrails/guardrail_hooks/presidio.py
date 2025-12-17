@@ -29,7 +29,7 @@ import aiohttp
 import litellm  # noqa: E401
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
-from litellm.types.guardrails import GenericGuardrailAPIInputs
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -724,6 +724,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         )
 
         for choice in response.choices:
+            # Type narrowing: StreamingChoices doesn't have .message attribute
+            if not hasattr(choice, "message"):
+                continue
             content = getattr(choice.message, "content", None)
             if content is None:
                 continue

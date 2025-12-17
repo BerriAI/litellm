@@ -4,6 +4,7 @@ Handles transforming from Responses API -> LiteLLM completion  (Chat Completion 
 
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
+from openai.types.responses import ResponseFunctionToolCall
 from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
 
@@ -22,7 +23,6 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolMessage,
     ChatCompletionToolParam,
-    ChatCompletionToolParamFunctionChunk,
     ChatCompletionUserMessage,
     GenericChatCompletionMessage,
     InputTokensDetails,
@@ -36,6 +36,8 @@ from litellm.types.llms.openai import (
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
     ResponsesAPIStatus,
+    ValidChatCompletionMessageContentTypes,
+    ValidChatCompletionMessageContentTypesLiteral,
 )
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
@@ -88,6 +90,7 @@ class LiteLLMCompletionResponsesConfig:
             "metadata",
             "parallel_tool_calls",
             "previous_response_id",
+            "reasoning",
             "stream",
             "temperature",
             "text",
@@ -96,6 +99,58 @@ class LiteLLMCompletionResponsesConfig:
             "top_p",
             "user",
         ]
+
+    @staticmethod
+    def _transform_tool_choice(
+        tool_choice: Any,
+    ) -> Optional[Union[str, Dict[str, Any]]]:
+        """
+        Transform tool_choice from various formats to OpenAI Chat Completion format.
+
+        Handles:
+        - String values: "auto", "none", "required" -> pass through as-is
+        - Dict with type only (Cursor IDE format):
+            - {"type": "auto"} -> "auto"
+            - {"type": "none"} -> "none"
+            - {"type": "required"} -> "required"
+            - {"type": "tool"} -> "required" (force tool use without specific tool)
+        - Dict with function (OpenAI format):
+            - {"type": "function", "function": {"name": "..."}} -> pass through as-is
+
+        This normalization is needed because some clients (like Cursor IDE) send
+        tool_choice in a dict format like {"type": "tool"} which is not valid for
+        providers like Anthropic that require a tool name when forcing tool use.
+        """
+        if tool_choice is None:
+            return None
+
+        if isinstance(tool_choice, str):
+            return tool_choice
+
+        if isinstance(tool_choice, dict):
+            tool_choice_type = tool_choice.get("type")
+
+            # If it has a function with name, it's standard OpenAI format - pass through
+            if tool_choice.get("function") and tool_choice.get("function", {}).get(
+                "name"
+            ):
+                return tool_choice
+
+            # Handle Cursor IDE dict formats without function name
+            if tool_choice_type == "auto":
+                return "auto"
+            elif tool_choice_type == "none":
+                return "none"
+            elif tool_choice_type in ["required", "tool", "any"]:
+                # "tool" without a specific function name means "use any tool"
+                # which is equivalent to "required" in OpenAI format
+                return "required"
+            elif tool_choice_type == "function":
+                # function type without name - fall back to required
+                return "required"
+
+        # Return as-is for unknown formats
+        return tool_choice
 
     @staticmethod
     def transform_responses_api_request_to_chat_completion_request(
@@ -124,13 +179,26 @@ class LiteLLMCompletionResponsesConfig:
                 text_param
             )
 
+        # Extract reasoning_effort from reasoning parameter
+        reasoning_effort = None
+        reasoning_param = responses_api_request.get("reasoning")
+        if reasoning_param:
+            if isinstance(reasoning_param, dict):
+                # reasoning can be {"effort": "low|medium|high"}
+                reasoning_effort = reasoning_param.get("effort")
+            elif isinstance(reasoning_param, str):
+                # reasoning could be a string directly
+                reasoning_effort = reasoning_param
+
         litellm_completion_request: dict = {
             "messages": LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input,
                 responses_api_request=responses_api_request,
             ),
             "model": model,
-            "tool_choice": responses_api_request.get("tool_choice"),
+            "tool_choice": LiteLLMCompletionResponsesConfig._transform_tool_choice(
+                responses_api_request.get("tool_choice")
+            ),
             "tools": tools,
             "top_p": responses_api_request.get("top_p"),
             "user": responses_api_request.get("user"),
@@ -142,6 +210,7 @@ class LiteLLMCompletionResponsesConfig:
             "service_tier": kwargs.get("service_tier"),
             "web_search_options": web_search_options,
             "response_format": response_format,
+            "reasoning_effort": reasoning_effort,
             # litellm specific params
             "custom_llm_provider": custom_llm_provider,
             "extra_headers": extra_headers,
@@ -163,7 +232,6 @@ class LiteLLMCompletionResponsesConfig:
         litellm_completion_request = {
             k: v for k, v in litellm_completion_request.items() if v is not None
         }
-
         return litellm_completion_request
 
     @staticmethod
@@ -352,6 +420,7 @@ class LiteLLMCompletionResponsesConfig:
             "function_call_output",
             "web_search_call",
             "computer_call_output",
+            "tool_result",  # Anthropic/MCP format
         ]
 
     @staticmethod
@@ -511,7 +580,7 @@ class LiteLLMCompletionResponsesConfig:
     ) -> Union[str, List[Union[str, Dict[str, Any]]]]:
         """
         Transform a Responses API content into a Chat Completion content
-        
+
         Note: This function should not be called with None content.
         Callers should check for None before calling this function.
         """
@@ -542,12 +611,16 @@ class LiteLLMCompletionResponsesConfig:
                             )
                         )
                     else:
+                        # Skip text blocks with None text to avoid downstream errors
+                        text_value = item.get("text")
+                        if text_value is None:
+                            continue
                         content_list.append(
                             {
                                 "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
                                     item.get("type") or "text"
                                 ),
-                                "text": item.get("text"),
+                                "text": text_value,
                             }
                         )
             return content_list
@@ -555,15 +628,37 @@ class LiteLLMCompletionResponsesConfig:
             raise ValueError(f"Invalid content type: {type(content)}")
 
     @staticmethod
-    def _get_chat_completion_request_content_type(content_type: str) -> str:
+    def _get_chat_completion_request_content_type(
+        content_type: str,
+    ) -> ValidChatCompletionMessageContentTypesLiteral:
         """
-        Get the Chat Completion request content type
+        Transform Responses API content type to valid Chat Completion content type.
+
+        Returns one of ValidChatCompletionMessageContentTypes:
+        - User: "text", "image_url", "input_audio", "audio_url", "document",
+                "guarded_text", "video_url", "file"
+        - Assistant: "text", "thinking", "redacted_thinking"
         """
         # Responses API content has `input_` prefix, if it exists, remove it
         if content_type.startswith("input_"):
-            return content_type[len("input_") :]
-        else:
-            return content_type
+            stripped = content_type[len("input_") :]
+            # Validate stripped type is valid, otherwise default to "text"
+            if stripped in ValidChatCompletionMessageContentTypes:
+                return stripped  # type: ignore
+            # Handle input_audio -> input_audio (it's already valid)
+            if stripped == "audio":
+                return "input_audio"
+            return "text"
+
+        # Map Responses API specific types to valid Chat Completion types
+        if content_type in ["tool_result", "output_text"]:
+            return "text"
+
+        # Return as-is if it's a valid type, otherwise default to "text"
+        if content_type in ValidChatCompletionMessageContentTypes:
+            return content_type  # type: ignore
+
+        return "text"
 
     @staticmethod
     def transform_instructions_to_system_message(
@@ -608,25 +703,40 @@ class LiteLLMCompletionResponsesConfig:
                     search_context_size=_search_context_size,
                     user_location=_user_location,
                 )
-            else:
+            elif tool.get("type") == "function":
                 typed_tool = cast(FunctionToolParam, tool)
+                # Ensure parameters has "type": "object" as required by providers like Anthropic
+                parameters = dict(typed_tool.get("parameters", {}) or {})
+                if not parameters or "type" not in parameters:
+                    parameters["type"] = "object"
+                chat_completion_tool: Dict[str, Any] = {
+                    "type": "function",
+                    "function": {
+                        "name": typed_tool.get("name") or "",
+                        "description": typed_tool.get("description") or "",
+                        "parameters": parameters,
+                        "strict": typed_tool.get("strict", False) or False,
+                    }
+                }
+                if tool.get("cache_control"):
+                    chat_completion_tool["cache_control"] = tool.get("cache_control")  # type: ignore
+                if tool.get("defer_loading"):
+                    chat_completion_tool["defer_loading"] = tool.get("defer_loading")  # type: ignore
+                if tool.get("allowed_callers"):
+                    chat_completion_tool["allowed_callers"] = tool.get("allowed_callers")  # type: ignore
+                if tool.get("input_examples"):
+                    chat_completion_tool["input_examples"] = tool.get("input_examples")  # type: ignore
                 chat_completion_tools.append(
-                    ChatCompletionToolParam(
-                        type="function",
-                        function=ChatCompletionToolParamFunctionChunk(
-                            name=typed_tool.get("name") or "",
-                            description=typed_tool.get("description") or "",
-                            parameters=dict(typed_tool.get("parameters", {}) or {}),
-                            strict=typed_tool.get("strict", False) or False,
-                        ),
-                    )
+                    cast(ChatCompletionToolParam, chat_completion_tool)
                 )
+            else:
+                chat_completion_tools.append(cast(Union[ChatCompletionToolParam, OpenAIMcpServerTool], tool))
         return chat_completion_tools, web_search_options
 
     @staticmethod
     def transform_chat_completion_tools_to_responses_tools(
         chat_completion_response: ModelResponse,
-    ) -> List[OutputFunctionToolCall]:
+    ) -> List[ResponseFunctionToolCall]:
         """
         Transform a Chat Completion tools into a Responses API tools
         """
@@ -641,7 +751,7 @@ class LiteLLMCompletionResponsesConfig:
                             value=tool_call,
                         )
 
-        responses_tools: List[OutputFunctionToolCall] = []
+        responses_tools: List[ResponseFunctionToolCall] = []
         for tool in all_chat_completion_tools:
             if tool.type == "function":
                 function_definition = tool.function
@@ -669,7 +779,7 @@ class LiteLLMCompletionResponsesConfig:
                             else {}
                         )
 
-                output_tool_call: OutputFunctionToolCall = OutputFunctionToolCall(
+                output_tool_call: ResponseFunctionToolCall = ResponseFunctionToolCall(
                     name=function_definition.name or "",
                     arguments=function_definition.get("arguments") or "",
                     call_id=tool.id or "",
@@ -833,9 +943,21 @@ class LiteLLMCompletionResponsesConfig:
     def _transform_chat_completion_choices_to_responses_output(
         chat_completion_response: ModelResponse,
         choices: List[Choices],
-    ) -> List[Union[GenericResponseOutputItem, OutputFunctionToolCall, OutputImageGenerationCall]]:
+    ) -> List[
+        Union[
+            GenericResponseOutputItem,
+            OutputFunctionToolCall,
+            OutputImageGenerationCall,
+            ResponseFunctionToolCall,
+        ]
+    ]:
         responses_output: List[
-            Union[GenericResponseOutputItem, OutputFunctionToolCall, OutputImageGenerationCall]
+            Union[
+                GenericResponseOutputItem,
+                OutputFunctionToolCall,
+                OutputImageGenerationCall,
+                ResponseFunctionToolCall,
+            ]
         ] = []
 
         responses_output.extend(
@@ -909,14 +1031,18 @@ class LiteLLMCompletionResponsesConfig:
         """
         image_generation_items: List[OutputImageGenerationCall] = []
 
-        images = getattr(choice.message, 'images', [])
+        images = getattr(choice.message, "images", [])
         if not images:
             return image_generation_items
 
         for idx, image_item in enumerate(images):
             # Extract base64 from data URL
-            image_url = image_item.get('image_url', {}).get('url', '')
-            base64_data = LiteLLMCompletionResponsesConfig._extract_base64_from_data_url(image_url)
+            image_url = image_item.get("image_url", {}).get("url", "")
+            base64_data = (
+                LiteLLMCompletionResponsesConfig._extract_base64_from_data_url(
+                    image_url
+                )
+            )
 
             if base64_data:
                 image_generation_items.append(
@@ -966,9 +1092,9 @@ class LiteLLMCompletionResponsesConfig:
             return None
 
         # Check if it's a data URL with prefix
-        if data_url.startswith('data:'):
+        if data_url.startswith("data:"):
             # Split by comma to separate prefix from base64 data
-            parts = data_url.split(',', 1)
+            parts = data_url.split(",", 1)
             if len(parts) == 2:
                 return parts[1]  # Return the base64 part
             return None
@@ -981,10 +1107,12 @@ class LiteLLMCompletionResponsesConfig:
         chat_completion_response: ModelResponse,
         choices: List[Choices],
     ) -> List[Union[GenericResponseOutputItem, OutputImageGenerationCall]]:
-        message_output_items: List[Union[GenericResponseOutputItem, OutputImageGenerationCall]] = []
+        message_output_items: List[
+            Union[GenericResponseOutputItem, OutputImageGenerationCall]
+        ] = []
         for choice in choices:
             # Check if message has images (image generation)
-            if hasattr(choice.message, 'images') and choice.message.images:
+            if hasattr(choice.message, "images") and choice.message.images:
                 # Extract image generation output
                 image_generation_items = LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
                     chat_completion_response=chat_completion_response,
@@ -1134,34 +1262,61 @@ class LiteLLMCompletionResponsesConfig:
             setattr(response_usage, "cost", usage.cost)
 
         # Translate prompt_tokens_details to input_tokens_details
-        if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details is not None:
+        if (
+            hasattr(usage, "prompt_tokens_details")
+            and usage.prompt_tokens_details is not None
+        ):
             prompt_details = usage.prompt_tokens_details
             input_details_dict: Dict[str, Optional[int]] = {}
-            
-            if hasattr(prompt_details, "cached_tokens") and prompt_details.cached_tokens is not None:
+
+            if (
+                hasattr(prompt_details, "cached_tokens")
+                and prompt_details.cached_tokens is not None
+            ):
                 input_details_dict["cached_tokens"] = prompt_details.cached_tokens
-            
-            if hasattr(prompt_details, "text_tokens") and prompt_details.text_tokens is not None:
+
+            if (
+                hasattr(prompt_details, "text_tokens")
+                and prompt_details.text_tokens is not None
+            ):
                 input_details_dict["text_tokens"] = prompt_details.text_tokens
-            
-            if hasattr(prompt_details, "audio_tokens") and prompt_details.audio_tokens is not None:
+
+            if (
+                hasattr(prompt_details, "audio_tokens")
+                and prompt_details.audio_tokens is not None
+            ):
                 input_details_dict["audio_tokens"] = prompt_details.audio_tokens
-            
+
             if input_details_dict:
-                response_usage.input_tokens_details = InputTokensDetails(**input_details_dict)
+                response_usage.input_tokens_details = InputTokensDetails(
+                    **input_details_dict
+                )
 
         # Translate completion_tokens_details to output_tokens_details
-        if hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details is not None:
+        if (
+            hasattr(usage, "completion_tokens_details")
+            and usage.completion_tokens_details is not None
+        ):
             completion_details = usage.completion_tokens_details
             output_details_dict: Dict[str, Optional[int]] = {}
-            if hasattr(completion_details, "reasoning_tokens") and completion_details.reasoning_tokens is not None:
-                output_details_dict["reasoning_tokens"] = completion_details.reasoning_tokens
-            
-            if hasattr(completion_details, "text_tokens") and completion_details.text_tokens is not None:
+            if (
+                hasattr(completion_details, "reasoning_tokens")
+                and completion_details.reasoning_tokens is not None
+            ):
+                output_details_dict["reasoning_tokens"] = (
+                    completion_details.reasoning_tokens
+                )
+
+            if (
+                hasattr(completion_details, "text_tokens")
+                and completion_details.text_tokens is not None
+            ):
                 output_details_dict["text_tokens"] = completion_details.text_tokens
-            
+
             if output_details_dict:
-                response_usage.output_tokens_details = OutputTokensDetails(**output_details_dict)
+                response_usage.output_tokens_details = OutputTokensDetails(
+                    **output_details_dict
+                )
 
         return response_usage
 

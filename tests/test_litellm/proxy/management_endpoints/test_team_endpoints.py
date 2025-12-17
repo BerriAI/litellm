@@ -2144,7 +2144,12 @@ async def test_new_team_org_scoped_budget_bypasses_user_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import NewTeamRequest, UserAPIKeyAuth, LiteLLM_UserTable, LiteLLM_OrganizationTable
+    from litellm.proxy._types import (
+        LiteLLM_OrganizationTable,
+        LiteLLM_UserTable,
+        NewTeamRequest,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import new_team
 
     # Create non-admin user with very restrictive personal budget ($3)
@@ -2269,7 +2274,12 @@ async def test_new_team_org_scoped_models_bypasses_user_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import NewTeamRequest, UserAPIKeyAuth, LiteLLM_UserTable, LiteLLM_OrganizationTable
+    from litellm.proxy._types import (
+        LiteLLM_OrganizationTable,
+        LiteLLM_UserTable,
+        NewTeamRequest,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import new_team
 
     # Create non-admin user with restrictive personal models
@@ -2455,7 +2465,12 @@ async def test_new_team_standalone_validates_against_user_budget():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import NewTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_UserTable
+    from litellm.proxy._types import (
+        LiteLLM_UserTable,
+        NewTeamRequest,
+        ProxyException,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import new_team
 
     # Create non-admin user with restrictive personal budget
@@ -2522,7 +2537,13 @@ async def test_new_team_org_scoped_budget_exceeds_org_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import NewTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_OrganizationTable, LiteLLM_BudgetTable
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_OrganizationTable,
+        NewTeamRequest,
+        ProxyException,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import new_team
 
     # Create user (org admin)
@@ -2593,7 +2614,13 @@ async def test_new_team_org_scoped_models_not_in_org_models():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import NewTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_OrganizationTable, LiteLLM_BudgetTable
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_OrganizationTable,
+        NewTeamRequest,
+        ProxyException,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import new_team
 
     # Create user (org admin)
@@ -2662,7 +2689,12 @@ async def test_update_team_standalone_budget_exceeds_user_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import UpdateTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_UserTable
+    from litellm.proxy._types import (
+        LiteLLM_UserTable,
+        ProxyException,
+        UpdateTeamRequest,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     # Create non-admin user with restrictive personal budget
@@ -2733,7 +2765,13 @@ async def test_update_team_org_scoped_budget_exceeds_org_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import UpdateTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_OrganizationTable, LiteLLM_BudgetTable
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_OrganizationTable,
+        ProxyException,
+        UpdateTeamRequest,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     # Create user (org admin)
@@ -2809,7 +2847,7 @@ async def test_update_team_standalone_models_exceeds_user_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import UpdateTeamRequest, ProxyException, UserAPIKeyAuth
+    from litellm.proxy._types import ProxyException, UpdateTeamRequest, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     # Create non-admin user with restrictive personal models
@@ -2874,7 +2912,13 @@ async def test_update_team_org_scoped_budget_bypasses_user_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import UpdateTeamRequest, UserAPIKeyAuth, LiteLLM_UserTable, LiteLLM_OrganizationTable, LiteLLM_BudgetTable
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_OrganizationTable,
+        LiteLLM_UserTable,
+        UpdateTeamRequest,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     # Create user with very restrictive personal budget ($3)
@@ -2973,7 +3017,11 @@ async def test_update_team_org_scoped_models_bypasses_user_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import UpdateTeamRequest, UserAPIKeyAuth, LiteLLM_OrganizationTable
+    from litellm.proxy._types import (
+        LiteLLM_OrganizationTable,
+        UpdateTeamRequest,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     # Create user with very restrictive personal models
@@ -3061,7 +3109,12 @@ async def test_update_team_org_scoped_models_not_in_org_models():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import UpdateTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_OrganizationTable
+    from litellm.proxy._types import (
+        LiteLLM_OrganizationTable,
+        ProxyException,
+        UpdateTeamRequest,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     # Create user (org admin)
@@ -3133,7 +3186,7 @@ async def test_update_team_tpm_limit_exceeds_user_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import UpdateTeamRequest, ProxyException, UserAPIKeyAuth
+    from litellm.proxy._types import ProxyException, UpdateTeamRequest, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     # Create non-admin user with TPM limit
@@ -3195,7 +3248,7 @@ async def test_update_team_rpm_limit_exceeds_user_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import UpdateTeamRequest, ProxyException, UserAPIKeyAuth
+    from litellm.proxy._types import ProxyException, UpdateTeamRequest, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     # Create non-admin user with RPM limit
@@ -3257,7 +3310,13 @@ async def test_new_team_org_scoped_tpm_exceeds_org_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import NewTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_OrganizationTable, LiteLLM_BudgetTable
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_OrganizationTable,
+        NewTeamRequest,
+        ProxyException,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import new_team
 
     # Create user (with restrictive personal TPM limit that should be bypassed)
@@ -3327,7 +3386,13 @@ async def test_new_team_org_scoped_rpm_exceeds_org_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import NewTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_OrganizationTable, LiteLLM_BudgetTable
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_OrganizationTable,
+        NewTeamRequest,
+        ProxyException,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import new_team
 
     # Create user (with restrictive personal RPM limit that should be bypassed)
@@ -3398,7 +3463,13 @@ async def test_new_team_org_scoped_tpm_rpm_bypasses_user_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import NewTeamRequest, UserAPIKeyAuth, LiteLLM_OrganizationTable, LiteLLM_BudgetTable, LiteLLM_TeamTable
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_OrganizationTable,
+        LiteLLM_TeamTable,
+        NewTeamRequest,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import new_team
 
     # Create user with restrictive personal limits
@@ -3493,7 +3564,13 @@ async def test_update_team_org_scoped_tpm_exceeds_org_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import UpdateTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_OrganizationTable, LiteLLM_BudgetTable
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_OrganizationTable,
+        ProxyException,
+        UpdateTeamRequest,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     # Create user (with restrictive personal TPM limit that should be bypassed)
@@ -3569,7 +3646,13 @@ async def test_update_team_org_scoped_rpm_exceeds_org_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import UpdateTeamRequest, ProxyException, UserAPIKeyAuth, LiteLLM_OrganizationTable, LiteLLM_BudgetTable
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_OrganizationTable,
+        ProxyException,
+        UpdateTeamRequest,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     # Create user (with restrictive personal RPM limit that should be bypassed)
@@ -3646,7 +3729,13 @@ async def test_update_team_org_scoped_tpm_rpm_bypasses_user_limit():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import UpdateTeamRequest, UserAPIKeyAuth, LiteLLM_OrganizationTable, LiteLLM_BudgetTable, LiteLLM_TeamTable
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_OrganizationTable,
+        LiteLLM_TeamTable,
+        UpdateTeamRequest,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     # Create user with restrictive personal limits
@@ -3737,7 +3826,12 @@ async def test_update_team_guardrails_with_org_id():
     """
     from fastapi import Request
 
-    from litellm.proxy._types import UpdateTeamRequest, UserAPIKeyAuth, LiteLLM_OrganizationTable, LiteLLM_TeamTable
+    from litellm.proxy._types import (
+        LiteLLM_OrganizationTable,
+        LiteLLM_TeamTable,
+        UpdateTeamRequest,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     # Create user (org admin)
@@ -3788,6 +3882,8 @@ async def test_update_team_guardrails_with_org_id():
         "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
     ), patch(
         "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
+    ), patch(
+        "litellm.proxy.proxy_server.premium_user", True  # Required for guardrails feature
     ):
         # Mock existing team - must have compatible models with organization
         mock_existing_team = MagicMock()

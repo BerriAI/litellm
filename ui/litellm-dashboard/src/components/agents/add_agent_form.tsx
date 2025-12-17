@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Modal, Form, message, Select } from "antd";
+import { Modal, Form, message, Select, Input } from "antd";
 import { Button } from "@tremor/react";
 import { createAgentCall, getAgentCreateMetadata, AgentCreateInfo } from "../networking";
 import AgentFormFields from "./agent_form_fields";
@@ -57,6 +57,26 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
 
       if (agentType === "a2a") {
         agentData = buildAgentDataFromForm(values);
+      } else if (selectedAgentTypeInfo?.use_a2a_form_fields) {
+        // A2A-compatible agents use the standard A2A form builder
+        // but need to add litellm_params from the agent type config
+        agentData = buildAgentDataFromForm(values);
+        
+        // Merge litellm_params_template
+        if (selectedAgentTypeInfo.litellm_params_template) {
+          agentData.litellm_params = {
+            ...agentData.litellm_params,
+            ...selectedAgentTypeInfo.litellm_params_template,
+          };
+        }
+        
+        // Add credential fields to litellm_params
+        for (const field of selectedAgentTypeInfo.credential_fields) {
+          const value = values[field.key];
+          if (value && field.include_in_litellm_params !== false) {
+            agentData.litellm_params[field.key] = value;
+          }
+        }
       } else if (selectedAgentTypeInfo) {
         agentData = buildDynamicAgentData(values, selectedAgentTypeInfo);
       }
@@ -167,6 +187,35 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
           <div className="mt-6">
             {agentType === "a2a" ? (
               <AgentFormFields showAgentName={true} />
+            ) : selectedAgentTypeInfo?.use_a2a_form_fields ? (
+              // A2A-compatible agents (like Pydantic AI) use full A2A form fields
+              // plus any additional credential fields
+              <>
+                <AgentFormFields showAgentName={true} />
+                {selectedAgentTypeInfo.credential_fields.length > 0 && (
+                  <div className="mt-4 p-4 border border-gray-200 rounded-lg">
+                    <h4 className="text-sm font-medium text-gray-700 mb-3">
+                      {selectedAgentTypeInfo.agent_type_display_name} Settings
+                    </h4>
+                    {selectedAgentTypeInfo.credential_fields.map((field) => (
+                      <Form.Item
+                        key={field.key}
+                        label={field.label}
+                        name={field.key}
+                        rules={field.required ? [{ required: true, message: `Please enter ${field.label}` }] : undefined}
+                        tooltip={field.tooltip}
+                        initialValue={field.default_value}
+                      >
+                        {field.field_type === "password" ? (
+                          <Input.Password placeholder={field.placeholder || ""} />
+                        ) : (
+                          <Input placeholder={field.placeholder || ""} />
+                        )}
+                      </Form.Item>
+                    ))}
+                  </div>
+                )}
+              </>
             ) : selectedAgentTypeInfo ? (
               <DynamicAgentFormFields agentTypeInfo={selectedAgentTypeInfo} />
             ) : null}

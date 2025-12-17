@@ -5,10 +5,8 @@ Translates from OpenAI's `/v1/embeddings` to IBM's `/text/embeddings` route.
 from typing import Optional, List, Dict, Literal, Union
 from pydantic import BaseModel, Field
 from functools import cached_property
-from typing import Dict, List, Literal, Optional, Union
 
 import httpx
-from pydantic import BaseModel, Field
 
 from litellm.llms.base_llm.embedding.transformation import (
     BaseEmbeddingConfig,
