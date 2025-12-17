@@ -229,15 +229,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         Gemini 3 models include:
         - gemini-3-pro-preview
         - gemini-3-flash
-        - fiercefalcon (Gemini 3 Flash checkpoint)
+        - gemini-3-flash-preview (Gemini 3 Flash)
         - Any future Gemini 3.x models
         """
         # Check for Gemini 3 models
         if "gemini-3" in model:
             return True
         
-        # Check for fiercefalcon (Gemini 3 Flash checkpoint) # TODO: remove
-        if "fiercefalcon" in model.lower():  # TODO : Remove this once we have the official name of the model
+        # Check for gemini-3-flash-preview
+        if "gemini-3-flash-preview" in model.lower():
             return True
 
         return False
@@ -692,19 +692,19 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             GeminiThinkingConfig with thinkingLevel and includeThoughts
         """
         # Check if this is gemini-3-flash which supports MINIMAL thinking level
-        is_fiercefalcon= model and (
-            "fiercefalcon" in model.lower() or "gemini-3-flash" in model.lower()
+        is_gemini3flash= model and (
+            "gemini-3-flash-preview" in model.lower() or "gemini-3-flash" in model.lower()
         )
         if reasoning_effort == "minimal":
-            if is_fiercefalcon:
+            if is_gemini3flash:
                 return {"thinkingLevel": "minimal", "includeThoughts": True}
             else:
                 return {"thinkingLevel": "low", "includeThoughts": True}
         elif reasoning_effort == "low":
             return {"thinkingLevel": "low", "includeThoughts": True}
         elif reasoning_effort == "medium":
-            # For fiercefalcon, medium maps to "medium", otherwise "high"
-            if is_fiercefalcon:
+            # For gemini-3-flash-preview, medium maps to "medium", otherwise "high"
+            if is_gemini3flash:
                 return {"thinkingLevel": "medium", "includeThoughts": True}
             else:
                 return {
@@ -714,14 +714,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         elif reasoning_effort == "high":
             return {"thinkingLevel": "high", "includeThoughts": True}
         elif reasoning_effort == "disable":
-            # Gemini 3 cannot fully disable thinking, so we use "minimal" for fiercefalcon, "low" for others
-            if is_fiercefalcon:
+            # Gemini 3 cannot fully disable thinking, so we use "minimal" for gemini-3-flash-preview, "low" for others
+            if is_gemini3flash:
                 return {"thinkingLevel": "minimal", "includeThoughts": False}
             else:
                 return {"thinkingLevel": "low", "includeThoughts": False}
         elif reasoning_effort == "none":
-            # For fiercefalcon, use "minimal" instead of "low"
-            if is_fiercefalcon:
+            # For gemini-3-flash-preview, use "minimal" instead of "low"
+            if is_gemini3flash:
                 return {"thinkingLevel": "minimal", "includeThoughts": False}
             else:
                 return {"thinkingLevel": "low", "includeThoughts": False}
@@ -790,11 +790,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 else:
                     params["includeThoughts"] = True
                     if thinking_budget >= 10000:
-                        is_fiercefalcon = "fiercefalcon" in model.lower() or "gemini-3-flash" in model.lower()
-                        params["thinkingLevel"] = "minimal" if is_fiercefalcon else "low"
+                        is_gemini3flash = "gemini-3-flash-preview" in model.lower() or "gemini-3-flash" in model.lower()
+                        params["thinkingLevel"] = "minimal" if is_gemini3flash else "low"
                     else:
-                        is_fiercefalcon = "fiercefalcon" in model.lower() or "gemini-3-flash" in model.lower()
-                        params["thinkingLevel"] = "minimal" if is_fiercefalcon else "low"
+                        is_gemini3flash = "gemini-3-flash-preview" in model.lower() or "gemini-3-flash" in model.lower()
+                        params["thinkingLevel"] = "minimal" if is_gemini3flash else "low"
             else:
                 # Thinking disabled
                 params["includeThoughts"] = False
@@ -1016,10 +1016,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     "thinkingLevel" not in thinking_config
                     and "thinkingBudget" not in thinking_config
                 ):
-                    # For fiercefalcon, default to "minimal" to match Gemini 2.5 Flash behavior
+                    # For gemini-3-flash-preview, default to "minimal" to match Gemini 2.5 Flash behavior
                     # For other Gemini 3 models, default to "low"
-                    is_fiercefalcon = "fiercefalcon" in model.lower() or "gemini-3-flash" in model.lower()
-                    thinking_config["thinkingLevel"] = "minimal" if is_fiercefalcon else "low"
+                    is_gemini3flash = "gemini-3-flash-preview" in model.lower() or "gemini-3-flash" in model.lower()
+                    thinking_config["thinkingLevel"] = "minimal" if is_gemini3flash else "low"
                     optional_params["thinkingConfig"] = thinking_config
 
         return optional_params

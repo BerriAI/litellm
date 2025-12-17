@@ -33,7 +33,7 @@ def test_map_generate_content_optional_params_response_json_schema_camelcase():
     
     result = config.map_generate_content_optional_params(
         generate_content_config_dict=generate_content_config_dict,
-        model="gemini/fiercefalcon"
+        model="gemini/gemini-3-flash-preview"
     )
     
     # responseJsonSchema should be in the result (camelCase format for Google GenAI API)
@@ -59,7 +59,7 @@ def test_map_generate_content_optional_params_response_schema_snakecase():
     
     result = config.map_generate_content_optional_params(
         generate_content_config_dict=generate_content_config_dict,
-        model="gemini/fiercefalcon"
+        model="gemini/gemini-3-flash-preview"
     )
     
     # response_schema should be converted to responseJsonSchema (camelCase)
@@ -82,7 +82,7 @@ def test_map_generate_content_optional_params_thinking_config_camelcase():
     
     result = config.map_generate_content_optional_params(
         generate_content_config_dict=generate_content_config_dict,
-        model="gemini/fiercefalcon"
+        model="gemini/gemini-3-flash-preview"
     )
     
     # thinkingConfig should be in the result (camelCase format for Google GenAI API)
@@ -106,7 +106,7 @@ def test_map_generate_content_optional_params_thinking_config_snakecase():
     
     result = config.map_generate_content_optional_params(
         generate_content_config_dict=generate_content_config_dict,
-        model="gemini/fiercefalcon"
+        model="gemini/gemini-3-flash-preview"
     )
     
     # thinking_config should be converted to thinkingConfig (camelCase)
@@ -138,7 +138,7 @@ def test_map_generate_content_optional_params_mixed_formats():
     
     result = config.map_generate_content_optional_params(
         generate_content_config_dict=generate_content_config_dict,
-        model="gemini/fiercefalcon"
+        model="gemini/gemini-3-flash-preview"
     )
     
     # All parameters should be converted to camelCase
@@ -165,7 +165,7 @@ def test_map_generate_content_optional_params_response_mime_type():
     
     result = config.map_generate_content_optional_params(
         generate_content_config_dict=generate_content_config_dict,
-        model="gemini/fiercefalcon"
+        model="gemini/gemini-3-flash-preview"
     )
     
     # responseMimeType should be passed through (it's already camelCase)
