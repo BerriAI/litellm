@@ -109,6 +109,8 @@ class ArizePhoenixLogger(OpenTelemetry):
             endpoint=endpoint,
             project_name=project_name,
         )
+    
+    ## cannot suppress additional proxy server spans, removed previous methods.
 
     async def async_health_check(self):
 
