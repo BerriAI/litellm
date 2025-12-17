@@ -692,12 +692,17 @@ class ModelResponseIterator:
                     text = content_block_start["content_block"]["text"]
                 elif content_block_start["content_block"]["type"] == "tool_use" or content_block_start["content_block"]["type"] == "server_tool_use":
                     self.tool_index += 1
+                    # Get initial input - use empty string if input is empty dict or not present
+                    # This prevents str({}) = '{}' from being prepended to actual arguments
+                    # that come in subsequent input_json_delta events
+                    _initial_input = content_block_start["content_block"].get("input", {})
+                    _arguments = "" if _initial_input == {} else str(_initial_input)
                     tool_use = ChatCompletionToolCallChunk(
                         id=content_block_start["content_block"]["id"],
                         type="function",
                         function=ChatCompletionToolCallFunctionChunk(
                             name=content_block_start["content_block"]["name"],
-                            arguments=str(content_block_start["content_block"]["input"]),
+                            arguments=_arguments,
                         ),
                         index=self.tool_index,
                     )
@@ -723,6 +728,19 @@ class ModelResponseIterator:
                     # Capture web_search_tool_result for multi-turn reconstruction
                     # The full content comes in content_block_start, not in deltas
                     # See: https://github.com/BerriAI/litellm/issues/17737
+                    self.web_search_results.append(
+                        content_block_start["content_block"]
+                    )
+                    provider_specific_fields["web_search_results"] = (
+                        self.web_search_results
+                    )
+                elif (
+                    content_block_start["content_block"]["type"]
+                    == "web_fetch_tool_result"
+                ):
+                    # Capture web_fetch_tool_result for multi-turn reconstruction
+                    # The full content comes in content_block_start, not in deltas
+                    # Fixes: https://github.com/BerriAI/litellm/issues/18137
                     self.web_search_results.append(
                         content_block_start["content_block"]
                     )
