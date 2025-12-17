@@ -147,3 +147,78 @@ def test_service_tier_with_other_config_blocks():
     assert result["serviceTier"]["type"] == "priority"
     assert "performanceConfig" in result
     assert result["performanceConfig"]["latency"] == "optimized"
+
+
+# Tests for OpenAI-compatible service_tier parameter translation
+
+
+def test_service_tier_in_supported_openai_params():
+    """Test that service_tier is in the list of supported OpenAI params."""
+    config = AmazonConverseConfig()
+    supported_params = config.get_supported_openai_params(
+        model="anthropic.claude-3-sonnet-20240229-v1:0"
+    )
+    assert "service_tier" in supported_params
+
+
+def test_map_openai_service_tier_priority():
+    """Test that OpenAI service_tier='priority' maps to Bedrock serviceTier."""
+    config = AmazonConverseConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"service_tier": "priority"},
+        optional_params={},
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        drop_params=False,
+    )
+
+    assert "serviceTier" in result
+    assert result["serviceTier"] == {"type": "priority"}
+
+
+def test_map_openai_service_tier_default():
+    """Test that OpenAI service_tier='default' maps to Bedrock serviceTier."""
+    config = AmazonConverseConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"service_tier": "default"},
+        optional_params={},
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        drop_params=False,
+    )
+
+    assert "serviceTier" in result
+    assert result["serviceTier"] == {"type": "default"}
+
+
+def test_map_openai_service_tier_flex():
+    """Test that OpenAI service_tier='flex' maps to Bedrock serviceTier."""
+    config = AmazonConverseConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"service_tier": "flex"},
+        optional_params={},
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        drop_params=False,
+    )
+
+    assert "serviceTier" in result
+    assert result["serviceTier"] == {"type": "flex"}
+
+
+def test_map_openai_service_tier_auto_maps_to_default():
+    """Test that OpenAI service_tier='auto' maps to Bedrock serviceTier='default'.
+
+    Bedrock doesn't support 'auto', so we map it to 'default'.
+    """
+    config = AmazonConverseConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"service_tier": "auto"},
+        optional_params={},
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        drop_params=False,
+    )
+
+    assert "serviceTier" in result
+    assert result["serviceTier"] == {"type": "default"}
