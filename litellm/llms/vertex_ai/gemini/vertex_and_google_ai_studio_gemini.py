@@ -235,11 +235,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         # Check for Gemini 3 models
         if "gemini-3" in model:
             return True
-        
-        # Check for gemini-3-flash-preview
-        if "gemini-3-flash-preview" in model.lower():
-            return True
-
         return False
 
     def _supports_penalty_parameters(self, model: str) -> bool:
