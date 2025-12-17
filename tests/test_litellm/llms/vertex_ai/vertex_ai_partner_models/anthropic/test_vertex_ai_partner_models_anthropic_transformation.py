@@ -9,6 +9,7 @@ sys.path.insert(
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
     VertexAIAnthropicConfig,
 )
+from litellm.types.llms.openai import AllMessageValues
 
 
 @pytest.mark.parametrize(
@@ -115,3 +116,114 @@ def test_vertex_ai_anthropic_structured_output_header_not_added():
         "Non-Vertex request SHOULD have anthropic-beta header for structured output"
     assert result_non_vertex["anthropic-beta"] == "structured-outputs-2025-11-13", \
         f"Expected 'structured-outputs-2025-11-13', got: {result_non_vertex.get('anthropic-beta')}"
+
+
+def test_vertex_ai_anthropic_user_beta_headers_preserved():
+    """Test that user-provided anthropic-beta headers are preserved and combined with auto-detected ones"""
+    config = VertexAIAnthropicConfig()
+    
+    # Test with user-provided beta header
+    headers = {
+        "anthropic-beta": "custom-feature-1,custom-feature-2"
+    }
+    
+    messages = [
+        {"role": "user", "content": "Hello"}
+    ]
+    
+    optional_params = {
+        "tools": [{"type": "computer_20250124", "name": "computer"}]
+    }
+    
+    litellm_params = {}
+    
+    result = config.transform_request(
+        model="claude-3-5-sonnet",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        headers=headers,
+    )
+    
+    # Check that anthropic_beta is in the result
+    assert "anthropic_beta" in result, "anthropic_beta should be in the result"
+    
+    # Check that user headers are preserved
+    assert "custom-feature-1" in result["anthropic_beta"], \
+        f"User header 'custom-feature-1' should be preserved, got: {result['anthropic_beta']}"
+    assert "custom-feature-2" in result["anthropic_beta"], \
+        f"User header 'custom-feature-2' should be preserved, got: {result['anthropic_beta']}"
+    
+    # Check that auto-detected beta (computer-use) is also added
+    assert "computer-use-2025-01-24" in result["anthropic_beta"], \
+        f"Auto-detected 'computer-use-2025-01-24' should be added, got: {result['anthropic_beta']}"
+
+
+def test_vertex_ai_anthropic_prompt_caching_disabled():
+    """Test that prompt caching beta header is NOT added for Vertex AI even when cache_control is set"""
+    config = VertexAIAnthropicConfig()
+    
+    # Messages with cache_control set
+    messages: list[AllMessageValues] = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Hello",
+                    "cache_control": {"type": "ephemeral"}
+                }
+            ]
+        }
+    ]
+    
+    optional_params = {}
+    litellm_params = {}
+    headers = {}
+    
+    result = config.transform_request(
+        model="claude-3-5-sonnet",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        headers=headers,
+    )
+    
+    # Check that prompt caching beta header is NOT added
+    if "anthropic_beta" in result:
+        assert "prompt-caching-2024-07-31" not in result["anthropic_beta"], \
+            f"Prompt caching beta header should NOT be added for Vertex AI, got: {result['anthropic_beta']}"
+
+
+def test_vertex_ai_anthropic_tool_search_beta_header():
+    """Test that tool search adds the correct beta header for Vertex AI"""
+    config = VertexAIAnthropicConfig()
+    
+    messages = [
+        {"role": "user", "content": "Search for something"}
+    ]
+    
+    optional_params = {
+        "tools": [
+            {
+                "type": "tool_search_tool_regex_20251119",
+                "name": "tool_search",
+            }
+        ]
+    }
+    
+    litellm_params = {}
+    headers = {}
+    
+    result = config.transform_request(
+        model="claude-3-5-sonnet",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        headers=headers,
+    )
+    
+    # Check that tool search beta header is added
+    assert "anthropic_beta" in result, "anthropic_beta should be in the result"
+    assert "tool-search-tool-2025-10-19" in result["anthropic_beta"], \
+        f"Tool search beta header should be added for Vertex AI, got: {result['anthropic_beta']}"
