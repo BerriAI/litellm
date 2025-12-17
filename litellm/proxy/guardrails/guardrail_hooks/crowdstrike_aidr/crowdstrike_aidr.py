@@ -13,7 +13,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
 )
-from litellm.types.guardrails import GenericGuardrailAPIInputs
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
