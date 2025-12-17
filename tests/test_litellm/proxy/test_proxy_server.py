@@ -15,6 +15,7 @@ import httpx
 import pytest
 import yaml
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 
 sys.path.insert(
@@ -194,6 +195,32 @@ def test_restructure_ui_html_files_handles_nested_routes(tmp_path):
         (ui_root / "litellm-asset-prefix" / "ignore.html").read_text()
         == "asset"
     )
+
+
+def test_ui_extensionless_route_requires_restructure(tmp_path):
+    """Regression for non-root fallback: /ui/login expects login/index.html."""
+
+    from litellm.proxy import proxy_server
+
+    ui_root = tmp_path / "ui"
+    ui_root.mkdir()
+    (ui_root / "index.html").write_text("index")
+    (ui_root / "login.html").write_text("login")
+
+    fastapi_app = FastAPI()
+    fastapi_app.mount(
+        "/ui", StaticFiles(directory=str(ui_root), html=True), name="ui"
+    )
+    client = TestClient(fastapi_app)
+
+    assert client.get("/ui/login.html").status_code == 200
+    assert client.get("/ui/login").status_code == 404
+
+    proxy_server._restructure_ui_html_files(str(ui_root))
+
+    response = client.get("/ui/login")
+    assert response.status_code == 200
+    assert "login" in response.text
 
 
 @pytest.mark.asyncio
