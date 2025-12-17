@@ -3594,7 +3594,7 @@ class ProxyConfig:
 
     async def _check_and_reload_model_cost_map(self, prisma_client: PrismaClient):
         """
-        Check if model cost map needs to be reloaded based on database configuration.
+        Check if model cost map needs to be reloaded based on database configuration
         This function runs every 10 seconds as part of _init_non_llm_objects_in_db.
         """
         try:
