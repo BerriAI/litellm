@@ -416,7 +416,7 @@ print(response)
 </TabItem>
 </Tabs>
 
-## Content Policy Violation Fallback
+### Content Policy Violation Fallback
 
 Key change: 
 
@@ -480,7 +480,7 @@ litellm --config /path/to/config.yaml
 </TabItem>
 </Tabs>
 
-## Context Window Exceeded Fallback
+### Context Window Exceeded Fallback
 
 Key change: 
 
