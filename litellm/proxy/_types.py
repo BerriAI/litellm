@@ -1945,6 +1945,75 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map'. If not set, all objects are loaded (default behavior).",
     )
+    key_management_settings: Optional[Dict] = Field(
+        None, description="Key management configuration settings"
+    )
+    user_api_key_cache_ttl: Optional[float] = Field(
+        None, description="TTL in seconds for in-memory user API key cache"
+    )
+    store_model_in_db: Optional[bool] = Field(
+        None, description="Feature flag for /model/new endpoint to store models in database"
+    )
+    custom_key_generate: Optional[str] = Field(
+        None, description="Path to custom key generation function"
+    )
+    custom_sso: Optional[str] = Field(
+        None, description="Path to custom SSO authentication function"
+    )
+    custom_ui_sso_sign_in_handler: Optional[str] = Field(
+        None, description="Path to custom UI SSO sign-in handler function"
+    )
+    allowed_ips: Optional[List[str]] = Field(
+        None, description="IP whitelist for proxy access (Enterprise feature)"
+    )
+    proxy_budget_rescheduler_min_time: Optional[int] = Field(
+        None, description="Minimum time in seconds to wait before checking database for budget resets"
+    )
+    proxy_budget_rescheduler_max_time: Optional[int] = Field(
+        None, description="Maximum time in seconds to wait before checking database for budget resets"
+    )
+    proxy_batch_polling_interval: Optional[int] = Field(
+        None, description="Time in seconds to wait before polling a batch to check if it's completed"
+    )
+    proxy_batch_write_at: Optional[int] = Field(
+        None, description="Time in seconds to wait before batch writing spend logs to the database"
+    )
+    disable_spend_logs: Optional[bool] = Field(
+        None, description="Disable spend logging for performance improvement"
+    )
+    use_shared_health_check: Optional[bool] = Field(
+        None, description="Enable shared health check state across pods (requires Redis)"
+    )
+    health_check_details: Optional[bool] = Field(
+        None, description="Include detailed information in health check responses"
+    )
+    role_permissions: Optional[Dict] = Field(
+        None, description="RBAC role permissions configuration"
+    )
+    enforced_params: Optional[Dict] = Field(
+        None, description="Enforced parameters for all requests (Enterprise feature)"
+    )
+    disable_retry_on_max_parallel_request_limit_error: Optional[bool] = Field(
+        None, description="Disable retry when max parallel request limit is reached"
+    )
+    litellm_jwtauth: Optional[Dict] = Field(
+        None, description="JWT authentication configuration"
+    )
+    disable_reset_budget: Optional[bool] = Field(
+        None, description="Disable automatic budget reset functionality"
+    )
+    spend_report_frequency: Optional[str] = Field(
+        None, description="Frequency for spend reports (e.g., '7d' for 7 days, '30d' for 30 days)"
+    )
+    maximum_spend_logs_retention_period: Optional[int] = Field(
+        None, description="Maximum retention period in days for spend logs"
+    )
+    moderation_model: Optional[str] = Field(
+        None, description="Default model to use for moderation requests"
+    )
+    auth_header_name: Optional[str] = Field(
+        None, description="Custom authentication header name"
+    )
 
 
 class ConfigYAML(LiteLLMPydanticObjectBase):

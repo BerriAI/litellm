@@ -23,7 +23,49 @@ class LiteLLMPydanticObjectBase(BaseModel):
             # if using pydantic v1
             return self.__fields_set__
 
-    model_config = ConfigDict(protected_namespaces=())
+    def get(self, key: str, default: Any = None) -> Any:
+        """Dict-style get() for backward compatibility"""
+        value = getattr(self, key, default)
+        # Return default if value is None (matches dict behavior for missing keys)
+        return default if value is None else value
+
+    def __getitem__(self, key: str) -> Any:
+        """Dict-style ['key'] access"""
+        try:
+            return getattr(self, key)
+        except AttributeError:
+            raise KeyError(key)
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        """Dict-style ['key'] = value assignment"""
+        setattr(self, key, value)
+
+    def __contains__(self, key: str) -> bool:
+        """Dict-style 'key in settings' checks"""
+        # Match dict behavior: return False if value is None (like missing key)
+        try:
+            value = getattr(self, key)
+            return value is not None
+        except AttributeError:
+            return False
+
+    def keys(self):
+        """Dict-style .keys() method"""
+        return self.model_fields.keys()
+
+    def items(self):
+        """Dict-style .items() method"""
+        return self.model_dump().items()
+
+    def update(self, other: Any) -> None:
+        """Dict-style .update() method"""
+        if isinstance(other, dict):
+            for key, value in other.items():
+                setattr(self, key, value)
+        else:
+            raise TypeError(f"update() argument must be dict, not {type(other).__name__}")
+
+    model_config = ConfigDict(protected_namespaces=(), extra="allow")
 
 
 class BaseLiteLLMOpenAIResponseObject(BaseModel):
