@@ -2671,3 +2671,61 @@ async def test_update_config_success_callback_normalization():
     assert "sQs" not in callbacks
     # Existing callback should still be present
     assert "langfuse" in callbacks
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {
+            "model": {
+                "model_name": "azure/gpt-4.1-mini",
+                "litellm_params": {"model": "azure/gpt-4.1-mini"},
+                "model_info": {"base_model": "gpt-4.1-mini"},
+            },
+            "expected": "gpt-4.1-mini",
+        },
+        {
+            "model": {
+                "model_name": "openai/gpt-4.1-mini",
+                "litellm_params": {"model": "openai/gpt-4.1-mini"},
+            },
+            "expected": "openai/gpt-4.1-mini",
+        },
+        {
+            "model": {
+                "model_name": "openai/gpt-4.1-mini",
+                "litellm_params": {"model": "openai/gpt-4.1-mini"},
+                "model_info": {"base_model": "gpt-4.1-mini"},
+            },
+            "expected": "gpt-4.1-mini",
+        },
+        {
+            "model": {
+                "model_name": "claude-sonnet-4-5-20250929",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5@20250929"},
+                "model_info": {"base_model": "anthropic/claude-sonnet-4-5-20250929"},
+            },
+            "expected": "anthropic/claude-sonnet-4-5-20250929",
+        },
+        {
+            "model": {
+                "model_name": "gemini-2.5-flash-001",
+                "litellm_params": {"model": "gemini/gemini-2.5-flash@001"},
+                "model_info": {"base_model": "gemini-2.5-flash-001"},
+            },
+            "expected": "gemini-2.5-flash-001",
+        },
+    ],
+)
+def test_get_litellm_model_info(data):
+    from litellm.proxy.proxy_server import get_litellm_model_info
+
+    model = data["model"]
+    get_info_mock = MagicMock()
+
+    with mock.patch(
+        "litellm.get_model_info",
+        new=get_info_mock,
+    ):
+        get_litellm_model_info(model=model)
+        get_info_mock.assert_called_once_with(data["expected"])
