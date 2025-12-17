@@ -1,7 +1,7 @@
 import asyncio
 import time
-import uuid
 from typing import Any, AsyncIterator, cast
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
@@ -10,7 +10,7 @@ from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.responses.main import DeleteResponseResult
 
 router = APIRouter()
@@ -184,13 +184,15 @@ async def responses_api(
 
         violation_text = e.message
         response_obj = ResponsesAPIResponse(
-            id=f"resp_{uuid.uuid4()}",
+            id=f"resp_{uuid4()}",
             object="response",
             created_at=int(time.time()),
             model=e.model or data.get("model"),
-            output=[{"content": [{"type": "text", "text": violation_text}]}],
+            output=cast(Any, [{"content": [{"type": "text", "text": violation_text}]}]),
             status="completed",
-            usage={"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+            usage=ResponseAPIUsage(
+                input_tokens=0, output_tokens=0, total_tokens=0
+            ),
         )
         return response_obj
     except Exception as e:

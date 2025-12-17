@@ -30,6 +30,7 @@ Output: response.output is List[GenericResponseOutputItem] where each has:
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
+from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
