@@ -8,6 +8,3 @@ litellm_settings:
   priority_reservation:
     "prod": 0.9 # 90% reserved for production
     "dev": 0.1 # 10% reserved for development
-
-general_settings:
-  alerting: ["email"]
