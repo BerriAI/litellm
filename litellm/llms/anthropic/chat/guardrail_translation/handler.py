@@ -254,10 +254,12 @@ class AnthropicMessagesHandler(BaseTranslation):
         # Track (content_index, None) for each text
 
         # Handle both dict and object responses
-        if hasattr(response, "get"):
-            response_content = response.get("content", [])
+        response_content: List[Any] = []
+        if isinstance(response, dict):
+            response_content = response.get("content", []) or []
         elif hasattr(response, "content"):
-            response_content = response.content or []
+            content = getattr(response, "content", None)
+            response_content = content or []
         else:
             response_content = []
 
@@ -267,9 +269,10 @@ class AnthropicMessagesHandler(BaseTranslation):
         # Step 1: Extract all text content and tool calls from response
         for content_idx, content_block in enumerate(response_content):
             # Handle both dict and Pydantic object content blocks
+            block_dict: Dict[str, Any] = {}
             if isinstance(content_block, dict):
                 block_type = content_block.get("type")
-                block_dict = content_block
+                block_dict = cast(Dict[str, Any], content_block)
             elif hasattr(content_block, "type"):
                 block_type = getattr(content_block, "type", None)
                 # Convert Pydantic object to dict for processing
@@ -282,7 +285,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
             if block_type in ["text", "tool_use"]:
                 self._extract_output_text_and_images(
-                    content_block=cast(Dict[str, Any], block_dict),
+                    content_block=block_dict,
                     content_idx=content_idx,
                     texts_to_check=texts_to_check,
                     images_to_check=images_to_check,
@@ -546,7 +549,11 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         Override this method to customize text content detection.
         """
-        response_content = response.get("content", [])
+        if isinstance(response, dict):
+            response_content = response.get("content", [])
+        else:
+            response_content = getattr(response, "content", None) or []
+        
         if not response_content:
             return False
         for content_block in response_content:
@@ -607,10 +614,12 @@ class AnthropicMessagesHandler(BaseTranslation):
             content_idx = cast(int, mapping[0])
 
             # Handle both dict and object responses
-            if hasattr(response, "get"):
-                response_content = response.get("content", [])
+            response_content: List[Any] = []
+            if isinstance(response, dict):
+                response_content = response.get("content", []) or []
             elif hasattr(response, "content"):
-                response_content = response.content or []
+                content = getattr(response, "content", None)
+                response_content = content or []
             else:
                 continue
 
@@ -627,7 +636,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             # Handle both dict and Pydantic object content blocks
             if isinstance(content_block, dict):
                 if content_block.get("type") == "text":
-                    content_block["text"] = guardrail_response
+                    cast(Dict[str, Any], content_block)["text"] = guardrail_response
             elif hasattr(content_block, "type") and getattr(content_block, "type", None) == "text":
                 # Update Pydantic object's text attribute
                 if hasattr(content_block, "text"):
