@@ -917,9 +917,11 @@ class Logging(LiteLLMLoggingBaseClass):
                                 raw_request_body=self._get_raw_request_body(
                                     additional_args.get("complete_input_dict", {})
                                 ),
+                                # NOTE: setting ignore_sensitive_headers to True will cause
+                                # the Authorization header to be leaked when calls to the health
+                                # endpoint are made and fail.
                                 raw_request_headers=self._get_masked_headers(
                                     additional_args.get("headers", {}) or {},
-                                    ignore_sensitive_headers=True,
                                 ),
                                 error=None,
                             )
