@@ -9,8 +9,7 @@ from litellm.proxy.guardrails.guardrail_hooks.crowdstrike_aidr.crowdstrike_aidr 
     CrowdStrikeAIDRHandler,
 )
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
-from litellm.types.guardrails import GenericGuardrailAPIInputs
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import GenericGuardrailAPIInputs, ModelResponse
 
 
 @pytest.fixture
