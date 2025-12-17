@@ -4,6 +4,8 @@ import TabItem from '@theme/TabItem';
 
 # Azure Sentinel
 
+<Image img={require('../../img/sentinel.png')} />
+
 LiteLLM supports logging to Azure Sentinel via the Azure Monitor Logs Ingestion API. Azure Sentinel uses Log Analytics workspaces for data storage, so logs sent to the workspace will be available in Sentinel for security monitoring and analysis.
 
 ## Azure Sentinel Integration
