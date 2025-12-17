@@ -15,6 +15,7 @@ import httpx
 import pytest
 import yaml
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 
 sys.path.insert(
@@ -194,6 +195,32 @@ def test_restructure_ui_html_files_handles_nested_routes(tmp_path):
         (ui_root / "litellm-asset-prefix" / "ignore.html").read_text()
         == "asset"
     )
+
+
+def test_ui_extensionless_route_requires_restructure(tmp_path):
+    """Regression for non-root fallback: /ui/login expects login/index.html."""
+
+    from litellm.proxy import proxy_server
+
+    ui_root = tmp_path / "ui"
+    ui_root.mkdir()
+    (ui_root / "index.html").write_text("index")
+    (ui_root / "login.html").write_text("login")
+
+    fastapi_app = FastAPI()
+    fastapi_app.mount(
+        "/ui", StaticFiles(directory=str(ui_root), html=True), name="ui"
+    )
+    client = TestClient(fastapi_app)
+
+    assert client.get("/ui/login.html").status_code == 200
+    assert client.get("/ui/login").status_code == 404
+
+    proxy_server._restructure_ui_html_files(str(ui_root))
+
+    response = client.get("/ui/login")
+    assert response.status_code == 200
+    assert "login" in response.text
 
 
 @pytest.mark.asyncio
@@ -2607,6 +2634,30 @@ async def test_init_sso_settings_in_db_empty_settings():
 
         # Verify empty dictionary
         assert uppercased_settings == {}
+
+
+def test_update_config_fields_uppercases_env_vars(monkeypatch):
+    """
+    Ensure environment variables pulled from DB are uppercased when applied so
+    integrations like Datadog that expect uppercase env keys can read them.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    for key in ["DD_API_KEY", "DD_SITE", "dd_api_key", "dd_site"]:
+        monkeypatch.delenv(key, raising=False)
+
+    proxy_config = ProxyConfig()
+    updated_config = proxy_config._update_config_fields(
+        current_config={},
+        param_name="environment_variables",
+        db_param_value={"dd_api_key": "test-api-key", "dd_site": "us5.datadoghq.com"},
+    )
+
+    env_vars = updated_config.get("environment_variables", {})
+    assert env_vars["DD_API_KEY"] == "test-api-key"
+    assert env_vars["DD_SITE"] == "us5.datadoghq.com"
+    assert os.environ.get("DD_API_KEY") == "test-api-key"
+    assert os.environ.get("DD_SITE") == "us5.datadoghq.com"
 
 
 def test_get_prompt_spec_for_db_prompt_with_versions():

@@ -340,7 +340,7 @@ class AnthropicChatCompletion(BaseLLM):
         data = config.transform_request(
             model=model,
             messages=messages,
-            optional_params=optional_params,
+            optional_params={**optional_params, "is_vertex_request": is_vertex_request},
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -690,14 +690,14 @@ class ModelResponseIterator:
                 self.current_content_block_type = content_block_start["content_block"]["type"]
                 if content_block_start["content_block"]["type"] == "text":
                     text = content_block_start["content_block"]["text"]
-                elif content_block_start["content_block"]["type"] == "tool_use":
+                elif content_block_start["content_block"]["type"] == "tool_use" or content_block_start["content_block"]["type"] == "server_tool_use":
                     self.tool_index += 1
                     tool_use = ChatCompletionToolCallChunk(
                         id=content_block_start["content_block"]["id"],
                         type="function",
                         function=ChatCompletionToolCallFunctionChunk(
                             name=content_block_start["content_block"]["name"],
-                            arguments="",
+                            arguments=str(content_block_start["content_block"]["input"]),
                         ),
                         index=self.tool_index,
                     )
@@ -706,18 +706,6 @@ class ModelResponseIterator:
                         caller_data = content_block_start["content_block"]["caller"]
                         if caller_data:
                             tool_use["caller"] = cast(Dict[str, Any], caller_data)  # type: ignore[typeddict-item]
-                elif content_block_start["content_block"]["type"] == "server_tool_use":
-                    # Handle server tool use (for tool search)
-                    self.tool_index += 1
-                    tool_use = ChatCompletionToolCallChunk(
-                        id=content_block_start["content_block"]["id"],
-                        type="function",
-                        function=ChatCompletionToolCallFunctionChunk(
-                            name=content_block_start["content_block"]["name"],
-                            arguments="",
-                        ),
-                        index=self.tool_index,
-                    )
                 elif (
                     content_block_start["content_block"]["type"] == "redacted_thinking"
                 ):
@@ -765,7 +753,9 @@ class ModelResponseIterator:
                 # These are automatically handled by Anthropic API, we just pass them through
                 pass
             elif type_chunk == "message_delta":
-                finish_reason, usage = self._handle_message_delta(chunk)
+                finish_reason, usage, container = self._handle_message_delta(chunk)
+                if container:
+                    provider_specific_fields["container"] = container
             elif type_chunk == "message_start":
                 """
                 Anthropic
@@ -881,15 +871,15 @@ class ModelResponseIterator:
 
         return text, tool_use
 
-    def _handle_message_delta(self, chunk: dict) -> Tuple[str, Optional[Usage]]:
+    def _handle_message_delta(self, chunk: dict) -> Tuple[str, Optional[Usage], Optional[Dict[str, Any]]]:
         """
-        Handle message_delta event for finish_reason and usage.
+        Handle message_delta event for finish_reason, usage, and container.
 
         Args:
             chunk: The message_delta chunk
 
         Returns:
-            Tuple of (finish_reason, usage)
+            Tuple of (finish_reason, usage, container)
         """
         message_delta = MessageBlockDelta(**chunk)  # type: ignore
         finish_reason = map_finish_reason(
@@ -900,7 +890,8 @@ class ModelResponseIterator:
         if self.converted_response_format_tool:
             finish_reason = "stop"
         usage = self._handle_usage(anthropic_usage_chunk=message_delta["usage"])
-        return finish_reason, usage
+        container = message_delta["delta"].get("container")
+        return finish_reason, usage, container
 
     def _handle_accumulated_json_chunk(
         self, data_str: str

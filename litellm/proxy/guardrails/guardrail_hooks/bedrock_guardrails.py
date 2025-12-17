@@ -605,12 +605,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """
         Only raise exception for "BLOCKED" actions, not for "ANONYMIZED" actions.
 
-        If `self.mask_request_content` or `self.mask_response_content` is set to `True`, then use the output from the guardrail to mask the request or response content.
+        If `self.mask_request_content` or `self.mask_response_content` is set to `True`, 
+        then use the output from the guardrail to mask the request or response content.
+        
+        However, even with masking enabled, content with action="BLOCKED" should still 
+        raise an exception, only content with action="ANONYMIZED" should be masked.
         """
-
-        # if user opted into masking, return False. since we'll use the masked output from the guardrail
-        if self.mask_request_content or self.mask_response_content:
-            return False
 
         # if no intervention, return False
         if response.get("action") != "GUARDRAIL_INTERVENED":

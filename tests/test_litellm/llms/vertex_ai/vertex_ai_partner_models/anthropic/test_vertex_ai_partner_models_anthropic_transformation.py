@@ -72,3 +72,46 @@ def test_vertex_ai_anthropic_web_search_header_in_completion():
     # because Anthropic doesn't require it
     assert "anthropic-beta" not in headers_non_vertex or "web-search" not in headers_non_vertex.get("anthropic-beta", ""), \
         "anthropic-beta with web-search should not be present for non-Vertex requests"
+
+
+def test_vertex_ai_anthropic_structured_output_header_not_added():
+    """Test that structured output beta headers are NOT added for Vertex AI requests"""
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+    
+    config = AnthropicConfig()
+    
+    # Test case 1: Vertex request with output_format should NOT add beta header
+    headers_vertex = {}
+    optional_params_vertex = {
+        'output_format': {
+            'type': 'json_schema',
+            'json_schema': {
+                'name': 'MathResult',
+                'schema': {'properties': {'result': {'type': 'integer'}}}
+            }
+        },
+        'is_vertex_request': True
+    }
+    result_vertex = config.update_headers_with_optional_anthropic_beta(headers_vertex, optional_params_vertex)
+    
+    assert "anthropic-beta" not in result_vertex, \
+        f"Vertex request should NOT have anthropic-beta header for structured output, got: {result_vertex.get('anthropic-beta')}"
+    
+    # Test case 2: Non-Vertex request with output_format SHOULD add beta header
+    headers_non_vertex = {}
+    optional_params_non_vertex = {
+        'output_format': {
+            'type': 'json_schema',
+            'json_schema': {
+                'name': 'MathResult',
+                'schema': {'properties': {'result': {'type': 'integer'}}}
+            }
+        },
+        'is_vertex_request': False
+    }
+    result_non_vertex = config.update_headers_with_optional_anthropic_beta(headers_non_vertex, optional_params_non_vertex)
+    
+    assert "anthropic-beta" in result_non_vertex, \
+        "Non-Vertex request SHOULD have anthropic-beta header for structured output"
+    assert result_non_vertex["anthropic-beta"] == "structured-outputs-2025-11-13", \
+        f"Expected 'structured-outputs-2025-11-13', got: {result_non_vertex.get('anthropic-beta')}"

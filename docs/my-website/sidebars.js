@@ -472,6 +472,7 @@ const sidebars = {
           "generateContent",
           "apply_guardrail",
           "bedrock_invoke",
+          "interactions",
         {
           type: "category",
           label: "/images",
@@ -632,6 +633,7 @@ const sidebars = {
             "providers/vertex_speech",
             "providers/vertex_batch",
             "providers/vertex_ocr",
+            "providers/vertex_ai_agent_engine",
           ]
         },
         {
@@ -738,6 +740,7 @@ const sidebars = {
         "providers/petals",
         "providers/publicai",
         "providers/predibase",
+        "providers/pydantic_ai_agent",
         "providers/ragflow",
         "providers/recraft",
         "providers/replicate",

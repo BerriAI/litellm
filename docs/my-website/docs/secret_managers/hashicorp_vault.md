@@ -47,6 +47,8 @@ HCP_VAULT_TOKEN="hvs.CAESIG52gL6ljBSdmq*****"
 
 # OPTIONAL
 HCP_VAULT_REFRESH_INTERVAL="86400" # defaults to 86400, frequency of cache refresh for Hashicorp Vault
+HCP_VAULT_MOUNT_NAME="secret" # OPTIONAL. defaults to "secret", set this if your KV engine is mounted elsewhere
+HCP_VAULT_PATH_PREFIX="litellm" # OPTIONAL. defaults to None, set this if your secrets live under a custom prefix like secret/data/litellm/OPENAI_API_KEY
 ```
 
 **Step 2.** Add to proxy config.yaml
@@ -151,18 +153,20 @@ export HCP_VAULT_TOKEN="hvs.CAESIG52gL6ljBSdmq*****"
 
 LiteLLM reads secrets from Hashicorp Vault's KV v2 engine using the following URL format:
 ```
-{VAULT_ADDR}/v1/{NAMESPACE}/secret/data/{SECRET_NAME}
+{VAULT_ADDR}/v1/{NAMESPACE}/{MOUNT_NAME}/data/{PATH_PREFIX}/{SECRET_NAME}
 ```
 
 For example, if you have:
 - `HCP_VAULT_ADDR="https://vault.example.com:8200"`
 - `HCP_VAULT_NAMESPACE="admin"`
+- `HCP_VAULT_MOUNT_NAME="secret"`
+- `HCP_VAULT_PATH_PREFIX="litellm"`
 - Secret name: `AZURE_API_KEY`
 
 
 LiteLLM will look up:
 ```
-https://vault.example.com:8200/v1/admin/secret/data/AZURE_API_KEY
+https://vault.example.com:8200/v1/admin/secret/data/litellm/AZURE_API_KEY
 ```
 
 ### Expected Secret Format
@@ -193,4 +197,3 @@ When a Virtual Key is Created / Deleted on LiteLLM, LiteLLM will automatically c
 LiteLLM stores secret under the `prefix_for_stored_virtual_keys` path (default: `litellm/`)
 
 <Image img={require('../../img/hcorp_virtual_key.png')} />
-

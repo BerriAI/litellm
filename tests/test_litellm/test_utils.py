@@ -2603,6 +2603,7 @@ class TestIsCachedMessage:
         message = {"role": "user", "content": []}
         assert is_cached_message(message) is False
 
+
 @pytest.mark.asyncio
 class TestProxyLoggingBudgetAlerts:
     """Test budget_alerts method in ProxyLogging class."""
@@ -2727,3 +2728,30 @@ class TestProxyLoggingBudgetAlerts:
         proxy_logging.email_logging_instance.budget_alerts.assert_called_once_with(
             type=alert_type, user_info=user_info
         )
+
+
+def test_azure_ai_claude_provider_config():
+    """Test that Azure AI Claude models return AzureAnthropicConfig for proper tool transformation."""
+    from litellm import AzureAnthropicConfig, AzureAIStudioConfig
+    from litellm.utils import ProviderConfigManager
+
+    # Claude models should return AzureAnthropicConfig
+    config = ProviderConfigManager.get_provider_chat_config(
+        model="claude-sonnet-4-5",
+        provider=LlmProviders.AZURE_AI,
+    )
+    assert isinstance(config, AzureAnthropicConfig)
+
+    # Test case-insensitive matching
+    config = ProviderConfigManager.get_provider_chat_config(
+        model="Claude-Opus-4",
+        provider=LlmProviders.AZURE_AI,
+    )
+    assert isinstance(config, AzureAnthropicConfig)
+
+    # Non-Claude models should return AzureAIStudioConfig
+    config = ProviderConfigManager.get_provider_chat_config(
+        model="mistral-large",
+        provider=LlmProviders.AZURE_AI,
+    )
+    assert isinstance(config, AzureAIStudioConfig)

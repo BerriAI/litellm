@@ -541,3 +541,28 @@ def test_amazon_titan_image_gen():
     print(f"response cost: {response._hidden_params['response_cost']}")
 
     assert response._hidden_params["response_cost"] > 0
+
+
+def test_extract_headers_from_optional_params_with_guardrails():
+    """Test that guardrail parameters are correctly extracted from optional_params and converted to headers"""
+    handler = BedrockImageGeneration()
+    
+    # Test with both guardrail parameters
+    optional_params = {
+        "guardrailIdentifier": "4cf5knqaeq15",
+        "guardrailVersion": "1",
+        "someOtherParam": "value",
+    }
+    
+    headers = handler._extract_headers_from_optional_params(optional_params)
+    
+    # Verify headers are correctly set
+    assert headers["x-amz-bedrock-guardrail-identifier"] == "4cf5knqaeq15"
+    assert headers["x-amz-bedrock-guardrail-version"] == "1"
+    
+    # Verify guardrail params are removed from optional_params
+    assert "guardrailIdentifier" not in optional_params
+    assert "guardrailVersion" not in optional_params
+    
+    # Verify other params remain in optional_params
+    assert optional_params["someOtherParam"] == "value"

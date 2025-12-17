@@ -418,6 +418,13 @@ class LiteLLMRoutes(enum.Enum):
         "/models/{model_name}:countTokens",
         "/models/{model_name}:generateContent",
         "/models/{model_name}:streamGenerateContent",
+        # Google Interactions API
+        "/interactions",
+        "/v1beta/interactions",
+        "/interactions/{interaction_id}",
+        "/v1beta/interactions/{interaction_id}",
+        "/interactions/{interaction_id}/cancel",
+        "/v1beta/interactions/{interaction_id}/cancel",
     ]
 
     apply_guardrail_routes = [
@@ -2664,6 +2671,9 @@ class SpendLogsMetadata(TypedDict):
     cold_storage_object_key: Optional[
         str
     ]  # S3/GCS object key for cold storage retrieval
+    litellm_overhead_time_ms: Optional[
+        float
+    ]  # LiteLLM overhead time in milliseconds
 
 
 class SpendLogsPayload(TypedDict):
