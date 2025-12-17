@@ -4453,26 +4453,42 @@ def embedding(  # noqa: PLR0915
             or custom_llm_provider == "together_ai"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "litellm_proxy"
+            or custom_llm_provider == "aibadgr"
         ):
-            api_base = (
-                api_base
-                or litellm.api_base
-                or get_secret_str("OPENAI_BASE_URL")
-                or get_secret_str("OPENAI_API_BASE")
-                or "https://api.openai.com/v1"
-            )
-            openai.organization = (
-                litellm.organization
-                or get_secret_str("OPENAI_ORGANIZATION")
-                or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
-            )
-            # set API KEY
-            api_key = (
-                api_key
-                or litellm.api_key
-                or litellm.openai_key
-                or get_secret_str("OPENAI_API_KEY")
-            )
+            # For JSON providers like aibadgr, api_base and api_key are already resolved by get_llm_provider()
+            # For other providers, use standard OpenAI env vars
+            if custom_llm_provider == "aibadgr":
+                api_base = (
+                    api_base
+                    or litellm.api_base
+                    or get_secret_str("AIBADGR_BASE_URL")
+                    or "https://aibadgr.com/api/v1"
+                )
+                api_key = (
+                    api_key
+                    or litellm.api_key
+                    or get_secret_str("AIBADGR_API_KEY")
+                )
+            else:
+                api_base = (
+                    api_base
+                    or litellm.api_base
+                    or get_secret_str("OPENAI_BASE_URL")
+                    or get_secret_str("OPENAI_API_BASE")
+                    or "https://api.openai.com/v1"
+                )
+                openai.organization = (
+                    litellm.organization
+                    or get_secret_str("OPENAI_ORGANIZATION")
+                    or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
+                )
+                # set API KEY
+                api_key = (
+                    api_key
+                    or litellm.api_key
+                    or litellm.openai_key
+                    or get_secret_str("OPENAI_API_KEY")
+                )
 
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
@@ -5060,32 +5076,6 @@ def embedding(  # noqa: PLR0915
                 or litellm.api_base
                 or get_secret_str("OVHCLOUD_API_BASE")
                 or "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
-            )
-            response = base_llm_http_handler.embedding(
-                model=model,
-                input=input,
-                custom_llm_provider=custom_llm_provider,
-                api_base=api_base,
-                api_key=api_key,
-                logging_obj=logging,
-                timeout=timeout,
-                model_response=EmbeddingResponse(),
-                optional_params=optional_params,
-                client=client,
-                aembedding=aembedding,
-                litellm_params={},
-            )
-        elif custom_llm_provider == "aibadgr":
-            api_key = (
-                api_key
-                or litellm.api_key
-                or get_secret_str("AIBADGR_API_KEY")
-            )
-            api_base = (
-                api_base
-                or litellm.api_base
-                or get_secret_str("AIBADGR_BASE_URL")
-                or "https://aibadgr.com/api/v1"
             )
             response = base_llm_http_handler.embedding(
                 model=model,
