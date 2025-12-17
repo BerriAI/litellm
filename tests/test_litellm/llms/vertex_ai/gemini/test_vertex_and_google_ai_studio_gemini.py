@@ -534,6 +534,57 @@ def test_vertex_ai_usage_metadata_response_token_count():
     assert result.completion_tokens_details.text_tokens == 74
 
 
+def test_vertex_ai_usage_metadata_with_image_input_tokens():
+    """Test promptTokensDetails with IMAGE modality (issue #14285)
+
+    When sending an image as input, Gemini returns promptTokensDetails with both
+    TEXT and IMAGE modalities. Image tokens should be included in text_tokens
+    for cost calculation since they are priced the same.
+
+    Ref: https://github.com/BerriAI/litellm/issues/14285
+    Ref: https://ai.google.dev/gemini-api/docs/pricing
+    """
+    v = VertexGeminiConfig()
+    usage_metadata = {
+        "promptTokenCount": 262,  # 4 text + 258 image
+        "candidatesTokenCount": 10,
+        "totalTokenCount": 272,
+        "promptTokensDetails": [
+            {"modality": "TEXT", "tokenCount": 4},
+            {"modality": "IMAGE", "tokenCount": 258},
+        ],
+    }
+    usage_metadata = UsageMetadata(**usage_metadata)
+    result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
+
+    assert result.prompt_tokens == 262
+    # Image tokens should be added to text_tokens (same pricing)
+    assert result.prompt_tokens_details.text_tokens == 262  # 4 + 258
+
+
+def test_vertex_ai_usage_metadata_with_image_input_tokens_reverse_order():
+    """Test promptTokensDetails with IMAGE before TEXT (order shouldn't matter)
+
+    The API may return modalities in any order. Ensure IMAGE tokens are
+    correctly added to text_tokens regardless of order.
+    """
+    v = VertexGeminiConfig()
+    usage_metadata = {
+        "promptTokenCount": 262,
+        "candidatesTokenCount": 10,
+        "totalTokenCount": 272,
+        "promptTokensDetails": [
+            {"modality": "IMAGE", "tokenCount": 258},  # IMAGE first
+            {"modality": "TEXT", "tokenCount": 4},
+        ],
+    }
+    usage_metadata = UsageMetadata(**usage_metadata)
+    result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
+
+    assert result.prompt_tokens == 262
+    assert result.prompt_tokens_details.text_tokens == 262  # 258 + 4
+
+
 def test_vertex_ai_usage_metadata_with_image_tokens():
     """Test candidatesTokensDetails with IMAGE modality (e.g., Imagen models)
 

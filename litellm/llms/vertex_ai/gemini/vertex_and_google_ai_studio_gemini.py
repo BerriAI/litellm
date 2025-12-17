@@ -1480,8 +1480,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             for detail in usage_metadata["promptTokensDetails"]:
                 if detail["modality"] == "AUDIO":
                     audio_tokens = detail.get("tokenCount", 0)
-                elif detail["modality"] == "TEXT":
-                    text_tokens = detail.get("tokenCount", 0)
+                elif detail["modality"] in ("TEXT", "IMAGE"):
+                    # Image tokens are priced the same as text tokens for Gemini
+                    # https://ai.google.dev/gemini-api/docs/pricing
+                    text_tokens = (text_tokens or 0) + detail.get("tokenCount", 0)
         if "thoughtsTokenCount" in usage_metadata:
             reasoning_tokens = usage_metadata["thoughtsTokenCount"]
             # Also add reasoning tokens to response_tokens_details
