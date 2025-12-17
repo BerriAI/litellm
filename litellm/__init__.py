@@ -134,6 +134,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "weave_otel",
     "pagerduty",
     "humanloop",
+    "azure_sentinel",
     "gcs_pubsub",
     "agentops",
     "anthropic_cache_control_hook",
