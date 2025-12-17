@@ -228,10 +228,16 @@ class LakeraAIGuardrail(CustomGuardrail):
                     "Lakera AI: Masked PII in messages instead of blocking request"
                 )
             else:
-                # If there are other violations or not set to mask PII, raise exception
-                raise self._get_http_exception_for_blocked_guardrail(
-                    lakera_guardrail_response
-                )
+                action = getattr(self, "on_flagged", "block")
+                if action == "monitor":
+                    verbose_proxy_logger.warning(
+                        "Lakera Guardrail: Monitoring mode - violation detected but allowing request"
+                    )
+                else:
+                    # Default/block behavior
+                    raise self._get_http_exception_for_blocked_guardrail(
+                        lakera_guardrail_response
+                    )
 
         #########################################################
         ########## 3. Add the guardrail to the applied guardrails header ##########
@@ -286,10 +292,16 @@ class LakeraAIGuardrail(CustomGuardrail):
                     "Lakera AI: Masked PII in messages instead of blocking request"
                 )
             else:
-                # If there are other violations or not set to mask PII, raise exception
-                raise self._get_http_exception_for_blocked_guardrail(
-                    lakera_guardrail_response
-                )
+                action = getattr(self, "on_flagged", "block")
+                if action == "monitor":
+                    verbose_proxy_logger.warning(
+                        "Lakera Guardrail: Monitoring mode - violation detected but allowing request"
+                    )
+                else:
+                    # Default/block behavior
+                    raise self._get_http_exception_for_blocked_guardrail(
+                        lakera_guardrail_response
+                    )
 
         #########################################################
         ########## 3. Add the guardrail to the applied guardrails header ##########
@@ -321,15 +333,19 @@ class LakeraAIGuardrail(CustomGuardrail):
         if original_messages is None:
             original_messages = []
 
-        # Extract assistant messages from the response
+        # Extract assistant messages from the response, keeping only role/content
         response_messages: List[AllMessageValues] = []
         response_dict = (
             response.model_dump() if hasattr(response, "model_dump") else {}
         )
         for choice in response_dict.get("choices", []):
             msg = choice.get("message")
-            if msg:
-                response_messages.append(msg)
+            if not msg:
+                continue
+            role = msg.get("role")
+            content = msg.get("content")
+            if role and content:
+                response_messages.append({"role": role, "content": content})
 
         post_call_messages = original_messages + response_messages
 
@@ -341,6 +357,23 @@ class LakeraAIGuardrail(CustomGuardrail):
 
         # Handle flagged content
         if lakera_guardrail_response.get("flagged") is True:
+            # If only PII violations exist, mask the PII in the response and allow
+            if self._is_only_pii_violation(lakera_guardrail_response):
+                masked_entity_count: Dict = {}
+                masked_messages = self._mask_pii_in_messages(
+                    messages=post_call_messages,
+                    lakera_response=lakera_guardrail_response,
+                    masked_entity_count=masked_entity_count,
+                )
+                assistant_messages = masked_messages[len(original_messages) :]
+                for idx, msg in enumerate(assistant_messages):
+                    if idx < len(response_dict.get("choices", [])):
+                        response_dict["choices"][idx]["message"] = {
+                            "role": msg.get("role", "assistant"),
+                            "content": msg.get("content", ""),
+                        }
+                return response_dict
+
             action = getattr(self, "on_flagged", "block")
             if action == "monitor":
                 verbose_proxy_logger.warning(
