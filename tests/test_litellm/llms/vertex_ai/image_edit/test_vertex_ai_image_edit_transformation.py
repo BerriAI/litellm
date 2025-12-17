@@ -140,6 +140,55 @@ class TestVertexAIGeminiImageEditTransformation:
                 headers={},
             )
 
+    def test_get_complete_url_from_litellm_params(self) -> None:
+        """Test vertex_project/vertex_location read from litellm_params first"""
+        url = self.config.get_complete_url(
+            model="gemini-2.5-flash",
+            api_base=None,
+            litellm_params={
+                "vertex_project": "params-project",
+                "vertex_location": "us-east1",
+            },
+        )
+        assert "params-project" in url
+        assert "us-east1" in url
+
+    def test_get_complete_url_global_location(self) -> None:
+        """Test global location uses correct base URL without region prefix"""
+        url = self.config.get_complete_url(
+            model="gemini-2.5-flash",
+            api_base=None,
+            litellm_params={
+                "vertex_project": "test-project",
+                "vertex_location": "global",
+            },
+        )
+        assert "aiplatform.googleapis.com" in url
+        assert "global-aiplatform.googleapis.com" not in url
+        assert "/locations/global/" in url
+
+    def test_get_complete_url_litellm_params_overrides_env(self) -> None:
+        """Test litellm_params takes precedence over environment variables"""
+        with patch.dict(
+            os.environ,
+            {
+                "VERTEXAI_PROJECT": "env-project",
+                "VERTEXAI_LOCATION": "us-central1",
+            },
+        ):
+            url = self.config.get_complete_url(
+                model="gemini-2.5-flash",
+                api_base=None,
+                litellm_params={
+                    "vertex_project": "params-project",
+                    "vertex_location": "eu-west1",
+                },
+            )
+            assert "params-project" in url
+            assert "eu-west1" in url
+            assert "env-project" not in url
+            assert "us-central1" not in url
+
 
 class TestVertexAIImagenImageEditTransformation:
     def setup_method(self) -> None:
