@@ -21,13 +21,19 @@ router = APIRouter()
 
 class CredentialHelperUtils:
     @staticmethod
-    def encrypt_credential_values(credential: CredentialItem) -> CredentialItem:
+    def encrypt_credential_values(credential: CredentialItem, new_encryption_key: Optional[str] = None) -> CredentialItem:
         """Encrypt values in credential.credential_values and add to DB"""
         encrypted_credential_values = {}
-        for key, value in credential.credential_values.items():
-            encrypted_credential_values[key] = encrypt_value_helper(value)
-        credential.credential_values = encrypted_credential_values
-        return credential
+        for key, value in (credential.credential_values or {}).items():
+            encrypted_credential_values[key] = encrypt_value_helper(value, new_encryption_key)
+
+        # Return a new object to avoid mutating the caller's credential, which
+        # is kept in memory and should remain unencrypted.
+        return CredentialItem(
+            credential_name=credential.credential_name,
+            credential_values=encrypted_credential_values,
+            credential_info=credential.credential_info or {},
+        )
 
 
 @router.post(
@@ -240,7 +246,7 @@ async def delete_credential(
 
 
 def update_db_credential(
-    db_credential: CredentialItem, updated_patch: CredentialItem
+    db_credential: CredentialItem, updated_patch: CredentialItem, new_encryption_key: Optional[str] = None
 ) -> CredentialItem:
     """
     Update a credential in the DB.
@@ -252,7 +258,8 @@ def update_db_credential(
     )
 
     encrypted_credential = CredentialHelperUtils.encrypt_credential_values(
-        updated_patch
+        updated_patch,
+        new_encryption_key,
     )
     # update model name
     if encrypted_credential.credential_name:

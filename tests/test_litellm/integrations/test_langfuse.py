@@ -1,8 +1,7 @@
-import asyncio
 import datetime
-import json
 import os
 import sys
+import types
 import unittest
 from typing import Optional
 from unittest.mock import MagicMock, patch
@@ -48,7 +47,13 @@ class TestLangfuseUsageDetails(unittest.TestCase):
 
         # Setup the trace and generation chain
         self.mock_langfuse_trace.generation.return_value = self.mock_langfuse_generation
-        self.mock_langfuse_client.trace.return_value = self.mock_langfuse_trace
+        self.last_trace_kwargs = {}
+
+        def _trace_side_effect(*args, **kwargs):
+            self.last_trace_kwargs = kwargs
+            return self.mock_langfuse_trace
+
+        self.mock_langfuse_client.trace.side_effect = _trace_side_effect
 
         # Mock the langfuse module that's imported locally in methods
         self.langfuse_module_patcher = patch.dict(
@@ -108,8 +113,6 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             )
 
         # Bind the method to the instance
-        import types
-
         self.logger.log_event_on_langfuse = types.MethodType(
             log_event_on_langfuse, self.logger
         )
@@ -342,6 +345,108 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             self.assertEqual(usage_details_arg["cache_read_input_tokens"], 0)
 
             mock_add_prompt_params.assert_called_once()
+
+    def _build_standard_logging_payload(self, trace_id: Optional[str] = None):
+        payload = {
+            "id": "payload-id",
+            "call_type": "completion",
+            "response_cost": 0.0,
+            "status": "success",
+            "total_tokens": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "startTime": 0.0,
+            "endTime": 0.0,
+            "completionStartTime": 0.0,
+            "model": "gpt-4",
+            "model_id": "model-123",
+            "model_group": "openai",
+            "api_base": "https://api.openai.com",
+            "metadata": {
+                "user_api_key_end_user_id": None,
+                "prompt_management_metadata": None,
+                "session_id": None,
+                "trace_name": None,
+                "trace_version": None,
+                "headers": None,
+                "endpoint": None,
+                "caching_groups": None,
+                "previous_models": None,
+            },
+            "hidden_params": {},
+            "request_tags": [],
+            "messages": [],
+            "response": {"id": "resp"},
+            "model_parameters": {},
+            "guardrail_information": None,
+            "standard_built_in_tools_params": None,
+        }
+        if trace_id is not None:
+            payload["trace_id"] = trace_id
+        return payload
+
+    def _build_langfuse_kwargs(self, standard_logging_payload):
+        return {
+            "standard_logging_object": standard_logging_payload,
+            "model": standard_logging_payload["model"],
+            "call_type": standard_logging_payload["call_type"],
+            "cache_hit": False,
+            "messages": [],
+        }
+
+    def test_log_langfuse_v2_uses_standard_trace_id_when_available(self):
+        payload = self._build_standard_logging_payload(trace_id="std-trace-id")
+        kwargs = self._build_langfuse_kwargs(payload)
+        self.last_trace_kwargs = {}
+
+        with patch(
+            "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
+            side_effect=lambda generation_params, **kwargs: generation_params,
+            create=True,
+        ):
+            self.logger._log_langfuse_v2(
+                user_id="user-1",
+                metadata={},
+                litellm_params={"metadata": {}},
+                output=None,
+                start_time=datetime.datetime.utcnow(),
+                end_time=datetime.datetime.utcnow(),
+                kwargs=kwargs,
+                optional_params={},
+                input=None,
+                response_obj=None,
+                level="INFO",
+                litellm_call_id="call-id-xyz",
+            )
+
+        assert self.last_trace_kwargs.get("id") == "std-trace-id"
+
+    def test_log_langfuse_v2_defaults_to_call_id_without_standard_trace_id(self):
+        payload = self._build_standard_logging_payload()
+        kwargs = self._build_langfuse_kwargs(payload)
+        self.last_trace_kwargs = {}
+
+        with patch(
+            "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
+            side_effect=lambda generation_params, **kwargs: generation_params,
+            create=True,
+        ):
+            self.logger._log_langfuse_v2(
+                user_id="user-1",
+                metadata={},
+                litellm_params={"metadata": {}},
+                output=None,
+                start_time=datetime.datetime.utcnow(),
+                end_time=datetime.datetime.utcnow(),
+                kwargs=kwargs,
+                optional_params={},
+                input=None,
+                response_obj=None,
+                level="INFO",
+                litellm_call_id="call-id-xyz",
+            )
+
+        assert self.last_trace_kwargs.get("id") == "call-id-xyz"
 
 
 def test_max_langfuse_clients_limit():

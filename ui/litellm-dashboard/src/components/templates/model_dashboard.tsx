@@ -660,7 +660,7 @@ const OldModelDashboard: React.FC<ModelDashboardProps> = ({
     }
 
     const fetchModelMap = async () => {
-      const data = await modelCostMap(accessToken);
+      const data = await modelCostMap();
       console.log(`received model cost map data: ${Object.keys(data)}`);
       setModelMap(data);
     };
@@ -1729,7 +1729,7 @@ const OldModelDashboard: React.FC<ModelDashboardProps> = ({
                       onReloadSuccess={() => {
                         // Refresh the model map after successful reload
                         const fetchModelMap = async () => {
-                          const data = await modelCostMap(accessToken);
+                          const data = await modelCostMap();
                           setModelMap(data);
                         };
                         fetchModelMap();

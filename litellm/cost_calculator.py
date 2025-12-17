@@ -836,6 +836,22 @@ def completion_cost(  # noqa: PLR0915
         if service_tier is None and optional_params is not None:
             service_tier = optional_params.get("service_tier")
 
+        # Extract service_tier from completion_response if not provided
+        if service_tier is None and completion_response is not None:
+            if isinstance(completion_response, BaseModel):
+                service_tier = getattr(completion_response, "service_tier", None)
+            elif isinstance(completion_response, dict):
+                service_tier = completion_response.get("service_tier")
+
+        # Extract service_tier from usage object if not provided
+        if service_tier is None and cost_per_token_usage_object is not None:
+            if isinstance(cost_per_token_usage_object, BaseModel):
+                service_tier = getattr(
+                    cost_per_token_usage_object, "service_tier", None
+                )
+            elif isinstance(cost_per_token_usage_object, dict):
+                service_tier = cost_per_token_usage_object.get("service_tier")
+
         selected_model = _select_model_name_for_cost_calc(
             model=model,
             completion_response=completion_response,
@@ -1539,7 +1555,7 @@ def default_image_cost_calculator(
 
     # gpt-image-1 models use low, medium, high quality. If user did not specify quality, use medium fot gpt-image-1 model family
     model_name_with_v2_quality = (
-        f"{ImageGenerationRequestQuality.MEDIUM.value}/{base_model_name}"
+        f"{ImageGenerationRequestQuality.HIGH.value}/{base_model_name}"
     )
 
     verbose_logger.debug(
@@ -1571,7 +1587,16 @@ def default_image_cost_calculator(
             f"Model not found in cost map. Tried checking {models_to_check}"
         )
 
-    return cost_info["input_cost_per_pixel"] * height * width * n
+    # Priority 1: Use per-image pricing if available (for gpt-image-1 and similar models)
+    if "input_cost_per_image" in cost_info and cost_info["input_cost_per_image"] is not None:
+        return cost_info["input_cost_per_image"] * n
+    # Priority 2: Fall back to per-pixel pricing for backward compatibility
+    elif "input_cost_per_pixel" in cost_info and cost_info["input_cost_per_pixel"] is not None:
+        return cost_info["input_cost_per_pixel"] * height * width * n
+    else:
+        raise Exception(
+            f"No pricing information found for model {model}. Tried checking {models_to_check}"
+        )
 
 
 def default_video_cost_calculator(

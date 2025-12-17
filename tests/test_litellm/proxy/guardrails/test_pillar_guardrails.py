@@ -15,6 +15,9 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, os.path.abspath("../../.."))
 
 # Third-party imports
+import json
+from urllib.parse import unquote
+
 import pytest
 from fastapi.exceptions import HTTPException
 from httpx import Request, Response
@@ -23,10 +26,14 @@ from httpx import Request, Response
 import litellm
 from litellm import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.callback_utils import get_logging_caching_headers
 from litellm.proxy.guardrails.guardrail_hooks.pillar import (
     PillarGuardrail,
     PillarGuardrailAPIError,
     PillarGuardrailMissingSecrets,
+)
+from litellm.proxy.guardrails.guardrail_hooks.pillar.pillar import (
+    build_pillar_response_headers,
 )
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 
@@ -169,6 +176,7 @@ def pillar_clean_response():
                 "pii": False,
                 "toxic_language": False,
             },
+            "evidence": [],
         },
         status_code=200,
         request=Request(
@@ -402,6 +410,133 @@ async def test_pre_call_hook_flagged_content_monitor(
         )
 
     assert result == malicious_request_data
+    assert "metadata" in malicious_request_data
+    metadata = malicious_request_data["metadata"]
+    assert metadata.get("pillar_flagged") is True
+    assert metadata.get("pillar_session_id") == pillar_flagged_response.json()["session_id"]
+    assert metadata.get("pillar_session_id_response") == pillar_flagged_response.json()["session_id"]
+    assert metadata.get("pillar_scanners") == pillar_flagged_response.json().get("scanners", {})
+    assert metadata.get("pillar_evidence") == pillar_flagged_response.json().get("evidence", [])
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_clean_content_returns_scanners_and_evidence(
+    pillar_monitor_guardrail,
+    sample_request_data,
+    user_api_key_dict,
+    dual_cache,
+    pillar_clean_response,
+):
+    """Test that scanners and evidence are returned even when content is not flagged."""
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=pillar_clean_response,
+    ):
+        result = await pillar_monitor_guardrail.async_pre_call_hook(
+            data=sample_request_data,
+            cache=dual_cache,
+            user_api_key_dict=user_api_key_dict,
+            call_type="completion",
+        )
+
+    assert result == sample_request_data
+    assert "metadata" in sample_request_data
+    metadata = sample_request_data["metadata"]
+    # Even when not flagged, we should get scanners and evidence
+    assert metadata.get("pillar_flagged") is False
+    # pillar_session_id preserves existing value, pillar_session_id_response is always from response
+    assert metadata.get("pillar_session_id_response") == pillar_clean_response.json()["session_id"]
+    assert metadata.get("pillar_scanners") == pillar_clean_response.json().get("scanners", {})
+    assert metadata.get("pillar_evidence") == pillar_clean_response.json().get("evidence", [])
+
+    # Verify headers are also built
+    headers = get_logging_caching_headers(sample_request_data)
+    assert headers["x-pillar-flagged"] == "false"
+    assert json.loads(unquote(headers["x-pillar-scanners"])) == pillar_clean_response.json().get("scanners", {})
+
+
+def test_get_logging_caching_headers_pillar_metadata():
+    scanners = {"toxic_language": True, "jailbreak": False}
+    evidence = [{"category": "toxic_language", "evidence": "example"}]
+    request_data = {
+        "metadata": {
+            "pillar_flagged": True,
+            "pillar_scanners": scanners,
+            "pillar_evidence": evidence,
+            "pillar_session_id_response": "test-session-123",
+        }
+    }
+
+    build_pillar_response_headers(request_data["metadata"])
+
+    headers = get_logging_caching_headers(request_data)
+
+    assert headers["x-pillar-flagged"] == "true"
+    assert json.loads(unquote(headers["x-pillar-scanners"])) == scanners
+    assert json.loads(unquote(headers["x-pillar-evidence"])) == evidence
+    assert unquote(headers["x-pillar-session-id"]) == "test-session-123"
+    assert request_data["metadata"]["pillar_response_headers"]["x-pillar-flagged"] == "true"
+
+
+def test_get_logging_caching_headers_truncates_large_evidence():
+    long_text = "悪" * 6000  # multi-byte unicode to test URL encoding and truncation
+    request_data = {
+        "metadata": {
+            "pillar_evidence": [{"category": "unicode", "evidence": long_text}],
+        }
+    }
+
+    build_pillar_response_headers(request_data["metadata"])
+
+    headers = get_logging_caching_headers(request_data)
+    evidence_header = headers["x-pillar-evidence"]
+
+    assert len(evidence_header.encode("utf-8")) <= 8 * 1024
+    decoded_evidence = json.loads(unquote(evidence_header))
+    assert decoded_evidence
+    assert decoded_evidence[0]["evidence"].endswith("...[truncated]")
+    assert decoded_evidence[0].get("evidence_truncated") is True
+    assert request_data["metadata"]["pillar_evidence_truncated"] is True
+    assert request_data["metadata"]["pillar_response_headers"]["x-pillar-evidence"] == evidence_header
+
+
+@pytest.mark.asyncio
+async def test_post_call_hook_flagged_content_monitor_updates_metadata_and_headers(
+    pillar_monitor_guardrail,
+    malicious_request_data,
+    user_api_key_dict,
+    pillar_flagged_response,
+    mock_llm_response,
+):
+    """Ensure post-call monitor verdicts update shared metadata and headers."""
+    request_data = malicious_request_data.copy()
+    request_data["metadata"] = {}
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=pillar_flagged_response,
+    ):
+        response = await pillar_monitor_guardrail.async_post_call_success_hook(
+            data=request_data,
+            user_api_key_dict=user_api_key_dict,
+            response=mock_llm_response,
+        )
+
+    assert response is mock_llm_response
+    metadata = request_data["metadata"]
+    pillar_json = pillar_flagged_response.json()
+    assert metadata.get("pillar_flagged") is True
+    assert metadata.get("pillar_session_id") == pillar_json["session_id"]
+    assert metadata.get("pillar_session_id_response") == pillar_json["session_id"]
+    assert metadata.get("pillar_scanners") == pillar_json.get("scanners", {})
+    assert metadata.get("pillar_evidence") == pillar_json.get("evidence", [])
+
+    headers = get_logging_caching_headers(request_data)
+    assert headers["x-pillar-flagged"] == "true"
+    assert json.loads(unquote(headers["x-pillar-scanners"])) == pillar_json.get("scanners", {})
+    assert json.loads(unquote(headers["x-pillar-evidence"])) == pillar_json.get("evidence", [])
+    assert unquote(headers["x-pillar-session-id"]) == pillar_json["session_id"]
+    assert request_data["metadata"]["pillar_response_headers"]["x-pillar-session-id"] == headers["x-pillar-session-id"]
 
 
 @pytest.mark.asyncio
@@ -1005,6 +1140,305 @@ def test_get_config_model():
     config_model = PillarGuardrail.get_config_model()
     assert config_model is not None
     assert hasattr(config_model, "ui_friendly_name")
+
+
+# ============================================================================
+# MASKING TESTS
+# ============================================================================
+
+
+@pytest.fixture
+def pillar_masked_response():
+    """Fixture providing a Pillar API response with masked messages."""
+    return Response(
+        json={
+            "session_id": "test-session-123",
+            "flagged": True,
+            "masked_session_messages": [
+                {"role": "user", "content": "My email is [MASKED_EMAIL]"}
+            ],
+            "evidence": [
+                {
+                    "category": "pii",
+                    "type": "email",
+                    "evidence": "test@example.com",
+                }
+            ],
+            "scanners": {
+                "jailbreak": False,
+                "prompt_injection": False,
+                "pii": True,
+                "toxic_language": False,
+            },
+        },
+        status_code=200,
+        request=Request(
+            method="POST", url="https://api.pillar.security/api/v1/protect"
+        ),
+    )
+
+
+@pytest.fixture
+def pillar_mask_guardrail(env_setup):
+    """Fixture providing a PillarGuardrail instance in mask mode."""
+    return PillarGuardrail(
+        guardrail_name="pillar-mask",
+        api_key="test-pillar-key",
+        api_base="https://api.pillar.security",
+        on_flagged_action="mask",
+    )
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_masking_mode(
+    pillar_mask_guardrail,
+    sample_request_data,
+    user_api_key_dict,
+    dual_cache,
+    pillar_masked_response,
+):
+    """Test pre-call hook masks content when action is 'mask'."""
+    original_messages = sample_request_data["messages"].copy()
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=pillar_masked_response,
+    ):
+        result = await pillar_mask_guardrail.async_pre_call_hook(
+            data=sample_request_data,
+            cache=dual_cache,
+            user_api_key_dict=user_api_key_dict,
+            call_type="completion",
+        )
+
+    # Messages should be replaced with masked messages
+    assert result["messages"] == pillar_masked_response.json()["masked_session_messages"]
+    assert result["messages"] != original_messages
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_masking_no_masked_messages(
+    pillar_mask_guardrail,
+    sample_request_data,
+    user_api_key_dict,
+    dual_cache,
+):
+    """Test masking mode when API doesn't return masked_session_messages."""
+    response_no_mask = Response(
+        json={
+            "session_id": "test-session-123",
+            "flagged": True,
+            # No masked_session_messages
+        },
+        status_code=200,
+        request=Request(
+            method="POST", url="https://api.pillar.security/api/v1/protect"
+        ),
+    )
+
+    original_messages = sample_request_data["messages"].copy()
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=response_no_mask,
+    ):
+        result = await pillar_mask_guardrail.async_pre_call_hook(
+            data=sample_request_data,
+            cache=dual_cache,
+            user_api_key_dict=user_api_key_dict,
+            call_type="completion",
+        )
+
+    # Messages should remain unchanged if no masked messages provided
+    assert result["messages"] == original_messages
+
+
+# ============================================================================
+# CONDITIONAL EXCEPTION DETAILS TESTS
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_exception_without_scanners(
+    sample_request_data,
+    user_api_key_dict,
+    dual_cache,
+    pillar_flagged_response,
+):
+    """Test exception excludes scanners when include_scanners is False."""
+    guardrail = PillarGuardrail(
+        guardrail_name="pillar-no-scanners",
+        api_key="test-pillar-key",
+        api_base="https://api.pillar.security",
+        on_flagged_action="block",
+        include_scanners=False,
+        include_evidence=True,
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            return_value=pillar_flagged_response,
+        ):
+            await guardrail.async_pre_call_hook(
+                data=sample_request_data,
+                cache=dual_cache,
+                user_api_key_dict=user_api_key_dict,
+                call_type="completion",
+            )
+
+    error_detail = excinfo.value.detail
+    assert "pillar_response" in error_detail
+    assert "scanners" not in error_detail["pillar_response"]
+    assert "evidence" in error_detail["pillar_response"]
+
+
+@pytest.mark.asyncio
+async def test_exception_without_evidence(
+    sample_request_data,
+    user_api_key_dict,
+    dual_cache,
+    pillar_flagged_response,
+):
+    """Test exception excludes evidence when include_evidence is False."""
+    guardrail = PillarGuardrail(
+        guardrail_name="pillar-no-evidence",
+        api_key="test-pillar-key",
+        api_base="https://api.pillar.security",
+        on_flagged_action="block",
+        include_scanners=True,
+        include_evidence=False,
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            return_value=pillar_flagged_response,
+        ):
+            await guardrail.async_pre_call_hook(
+                data=sample_request_data,
+                cache=dual_cache,
+                user_api_key_dict=user_api_key_dict,
+                call_type="completion",
+            )
+
+    error_detail = excinfo.value.detail
+    assert "pillar_response" in error_detail
+    assert "scanners" in error_detail["pillar_response"]
+    assert "evidence" not in error_detail["pillar_response"]
+
+
+@pytest.mark.asyncio
+async def test_exception_without_scanners_or_evidence(
+    sample_request_data,
+    user_api_key_dict,
+    dual_cache,
+    pillar_flagged_response,
+):
+    """Test exception excludes both scanners and evidence when both are False."""
+    guardrail = PillarGuardrail(
+        guardrail_name="pillar-minimal",
+        api_key="test-pillar-key",
+        api_base="https://api.pillar.security",
+        on_flagged_action="block",
+        include_scanners=False,
+        include_evidence=False,
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            return_value=pillar_flagged_response,
+        ):
+            await guardrail.async_pre_call_hook(
+                data=sample_request_data,
+                cache=dual_cache,
+                user_api_key_dict=user_api_key_dict,
+                call_type="completion",
+            )
+
+    error_detail = excinfo.value.detail
+    assert "pillar_response" in error_detail
+    pillar_response = error_detail["pillar_response"]
+    assert "scanners" not in pillar_response
+    assert "evidence" not in pillar_response
+    assert "session_id" in pillar_response  # session_id should always be present
+
+
+# ============================================================================
+# MCP CALL SUPPORT TESTS
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_mcp_call(
+    pillar_guardrail_instance,
+    sample_request_data,
+    user_api_key_dict,
+    dual_cache,
+    pillar_clean_response,
+):
+    """Test pre-call hook works with MCP call type."""
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=pillar_clean_response,
+    ):
+        result = await pillar_guardrail_instance.async_pre_call_hook(
+            data=sample_request_data,
+            cache=dual_cache,
+            user_api_key_dict=user_api_key_dict,
+            call_type="mcp_call",
+        )
+
+    assert result == sample_request_data
+
+
+@pytest.mark.asyncio
+async def test_moderation_hook_mcp_call(
+    pillar_guardrail_instance,
+    sample_request_data,
+    user_api_key_dict,
+    pillar_clean_response,
+):
+    """Test moderation hook works with MCP call type."""
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=pillar_clean_response,
+    ):
+        result = await pillar_guardrail_instance.async_moderation_hook(
+            data=sample_request_data,
+            user_api_key_dict=user_api_key_dict,
+            call_type="mcp_call",
+        )
+
+    assert result == sample_request_data
+
+
+@pytest.mark.asyncio
+async def test_mcp_call_masking(
+    pillar_mask_guardrail,
+    sample_request_data,
+    user_api_key_dict,
+    dual_cache,
+    pillar_masked_response,
+):
+    """Test masking works with MCP call type."""
+    original_messages = sample_request_data["messages"].copy()
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=pillar_masked_response,
+    ):
+        result = await pillar_mask_guardrail.async_pre_call_hook(
+            data=sample_request_data,
+            cache=dual_cache,
+            user_api_key_dict=user_api_key_dict,
+            call_type="mcp_call",
+        )
+
+    # Messages should be replaced with masked messages
+    assert result["messages"] == pillar_masked_response.json()["masked_session_messages"]
+    assert result["messages"] != original_messages
 
 
 if __name__ == "__main__":

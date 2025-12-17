@@ -36,11 +36,21 @@ ROUTE_ENDPOINT_MAPPING = {
     "alist_containers": "/containers",
     "aretrieve_container": "/containers/{container_id}",
     "adelete_container": "/containers/{container_id}",
+    # Auto-generated container file routes
+    "alist_container_files": "/containers/{container_id}/files",
+    "aretrieve_container_file": "/containers/{container_id}/files/{file_id}",
+    "adelete_container_file": "/containers/{container_id}/files/{file_id}",
+    "aretrieve_container_file_content": "/containers/{container_id}/files/{file_id}/content",
     "acreate_skill": "/skills",
     "alist_skills": "/skills",
     "aget_skill": "/skills/{skill_id}",
     "adelete_skill": "/skills/{skill_id}",
     "aingest": "/rag/ingest",
+    # Google Interactions API routes
+    "acreate_interaction": "/interactions",
+    "aget_interaction": "/interactions/{interaction_id}",
+    "adelete_interaction": "/interactions/{interaction_id}",
+    "acancel_interaction": "/interactions/{interaction_id}/cancel",
 }
 
 
@@ -132,12 +142,20 @@ async def route_request(
         "alist_containers",
         "aretrieve_container",
         "adelete_container",
+        "alist_container_files",
+        "aretrieve_container_file",
+        "adelete_container_file",
+        "aretrieve_container_file_content",
         "acreate_skill",
         "alist_skills",
         "aget_skill",
         "adelete_skill",
         "aingest",
         "anthropic_messages",
+        "acreate_interaction",
+        "aget_interaction",
+        "adelete_interaction",
+        "acancel_interaction",
     ],
 ):
     """
@@ -184,6 +202,17 @@ async def route_request(
             "alist_containers",
             "aretrieve_container",
             "adelete_container",
+            "alist_container_files",
+            "aretrieve_container_file",
+            "adelete_container_file",
+            "aretrieve_container_file_content",
+        ]:
+            return getattr(llm_router, f"{route_type}")(**data)
+        # Interactions API: get/delete/cancel don't need model routing
+        if route_type in [
+            "aget_interaction",
+            "adelete_interaction",
+            "acancel_interaction",
         ]:
             return getattr(llm_router, f"{route_type}")(**data)
         if route_type in [
@@ -256,9 +285,24 @@ async def route_request(
                 "alist_containers",
                 "aretrieve_container",
                 "adelete_container",
+                "alist_container_files",
+                "aretrieve_container_file",
+                "adelete_container_file",
+                "aretrieve_container_file_content",
             ]:
-                # moderation endpoint does not require `model` parameter
+                # These endpoints can work with or without model parameter
                 return getattr(llm_router, f"{route_type}")(**data)
+            elif route_type in [
+                "avideo_status",
+                "avideo_content",
+                "avideo_remix",
+            ]:
+                # Video endpoints: If model is provided (e.g., from decoded video_id), try router first
+                try:
+                    return getattr(llm_router, f"{route_type}")(**data)
+                except Exception:
+                    # If router fails (e.g., model not found in router), fall back to direct call
+                    return getattr(litellm, f"{route_type}")(**data)
 
     elif user_model is not None:
         return getattr(litellm, f"{route_type}")(**data)

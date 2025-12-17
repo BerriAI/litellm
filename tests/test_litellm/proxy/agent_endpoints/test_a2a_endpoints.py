@@ -4,6 +4,7 @@ Mock tests for A2A endpoints.
 Tests that invoke_agent_a2a properly integrates with add_litellm_data_to_request.
 """
 
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -67,6 +68,49 @@ async def test_invoke_agent_a2a_adds_litellm_data():
         team_id="test-team",
     )
 
+    # Try to use real a2a.types if available, otherwise create realistic mocks
+    # This test focuses on LiteLLM integration, not A2A protocol correctness,
+    # but we want mocks that behave like the real types to catch usage issues
+    try:
+        from a2a.types import (
+            MessageSendParams,
+            SendMessageRequest,
+            SendStreamingMessageRequest,
+        )
+        # Real types available - use them
+        use_real_types = True
+    except ImportError:
+        # Real types not available - create realistic mocks
+        use_real_types = False
+        
+        def make_mock_pydantic_class(name):
+            """Create a mock class that behaves like a Pydantic model."""
+            class MockPydanticClass:
+                def __init__(self, **kwargs):
+                    self.__dict__.update(kwargs)
+                    # Store kwargs for model_dump() if needed
+                    self._kwargs = kwargs
+                
+                def model_dump(self, mode="json", exclude_none=False):
+                    """Mock model_dump method."""
+                    result = dict(self._kwargs)
+                    if exclude_none:
+                        result = {k: v for k, v in result.items() if v is not None}
+                    return result
+            
+            MockPydanticClass.__name__ = name
+            return MockPydanticClass
+        
+        MessageSendParams = make_mock_pydantic_class("MessageSendParams")
+        SendMessageRequest = make_mock_pydantic_class("SendMessageRequest")
+        SendStreamingMessageRequest = make_mock_pydantic_class("SendStreamingMessageRequest")
+    
+    # Create a mock module for a2a.types
+    mock_a2a_types = MagicMock()
+    mock_a2a_types.MessageSendParams = MessageSendParams
+    mock_a2a_types.SendMessageRequest = SendMessageRequest
+    mock_a2a_types.SendStreamingMessageRequest = SendStreamingMessageRequest
+    
     # Patch at the source modules
     with patch(
         "litellm.proxy.agent_endpoints.a2a_endpoints._get_agent",
@@ -90,6 +134,9 @@ async def test_invoke_agent_a2a_adds_litellm_data():
     ), patch(
         "litellm.proxy.proxy_server.version",
         "1.0.0",
+    ), patch.dict(
+        sys.modules,
+        {"a2a": MagicMock(), "a2a.types": mock_a2a_types},
     ):
         from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
 

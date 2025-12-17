@@ -3,7 +3,7 @@ Transformation logic from OpenAI format to Gemini format.
 
 Why separate file? Make it easy to see how transformation works
 """
-
+import json
 import os
 from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple, Union, cast
 
@@ -418,7 +418,11 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     messages[msg_i], last_message_with_tool_calls  # type: ignore
                 )
                 msg_i += 1
-                tool_call_responses.append(_part)
+                # Handle both single part and list of parts (for Computer Use with images)
+                if isinstance(_part, list):
+                    tool_call_responses.extend(_part)
+                else:
+                    tool_call_responses.append(_part)
             if msg_i < len(messages) and (
                 messages[msg_i]["role"] not in tool_call_message_roles
             ):

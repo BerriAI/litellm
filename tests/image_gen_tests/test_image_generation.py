@@ -172,6 +172,7 @@ class TestOpenAIGPTImage1(BaseImageGenTest):
         return {"model": "gpt-image-1"}
 
 
+@pytest.mark.skip(reason="Recraft image generation API only tested locally")
 class TestRecraftImageGeneration(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "recraft/recraftv3"}
@@ -185,6 +186,7 @@ class TestGoogleImageGen(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "gemini/imagen-4.0-generate-001"}
 
+@pytest.mark.skip(reason="Runwayml image generation API only tested locally")
 class TestRunwaymlImageGeneration(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "runwayml/gen4_image"}

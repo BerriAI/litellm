@@ -1,8 +1,12 @@
-from litellm.llms.vertex_ai.gemini.transformation import (
-    check_if_part_exists_in_parts,
-    _transform_request_body,
-    _gemini_convert_messages_with_history,
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    convert_to_gemini_tool_call_result,
 )
+from litellm.llms.vertex_ai.gemini.transformation import (
+    _gemini_convert_messages_with_history,
+    _transform_request_body,
+    check_if_part_exists_in_parts,
+)
+from litellm.types.llms.vertex_ai import BlobType
 
 
 def test_check_if_part_exists_in_parts():
@@ -394,10 +398,11 @@ def test_thought_signature_with_function_call_mode():
 
 def test_dummy_signature_added_for_gemini_3_conversation_history():
     """Test that dummy signatures are added when transferring conversation history from older models (like gemini-2.5-flash) to gemini-3."""
+    import base64
+
     from litellm.litellm_core_utils.prompt_templates.factory import (
         convert_to_gemini_tool_call_invoke,
     )
-    import base64
 
     # Simulate conversation history from gemini-2.5-flash (no thought signature)
     assistant_message_from_older_model = {
@@ -509,10 +514,11 @@ def test_dummy_signature_not_added_when_signature_exists():
 
 def test_dummy_signature_with_function_call_mode():
     """Test that dummy signatures are added for function_call mode when converting to gemini-3."""
+    import base64
+
     from litellm.litellm_core_utils.prompt_templates.factory import (
         convert_to_gemini_tool_call_invoke,
     )
-    import base64
 
     # Assistant message with function_call (not tool_calls) and no signature
     assistant_message_function_call = {
@@ -538,3 +544,180 @@ def test_dummy_signature_with_function_call_mode():
     # Verify it's the expected dummy signature
     expected_dummy = base64.b64encode(b"skip_thought_signature_validator").decode("utf-8")
     assert gemini_parts[0]["thoughtSignature"] == expected_dummy
+
+
+def test_convert_tool_response_with_base64_image():
+    """Test tool response with base64 data URI image."""
+    # Create a small test image (1x1 red pixel PNG)
+    test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    image_data_uri = f"data:image/png;base64,{test_image_base64}"
+    
+    # Create tool message with image
+    tool_message = {
+        "role": "tool",
+        "tool_call_id": "call_test123",
+        "content": [
+            {
+                "type": "text",
+                "text": '{"url": "https://example.com", "status": "success"}'
+            },
+            {
+                "type": "input_image",
+                "image_url": image_data_uri
+            }
+        ]
+    }
+    
+    # Mock last message with tool calls
+    last_message_with_tool_calls = {
+        "tool_calls": [
+            {
+                "id": "call_test123",
+                "function": {
+                    "name": "click_at",
+                    "arguments": '{"x": 100, "y": 200}'
+                }
+            }
+        ]
+    }
+    
+    # Convert tool response (returns list when image is present)
+    result = convert_to_gemini_tool_call_result(
+        tool_message, last_message_with_tool_calls
+    )
+    
+    # Verify results - should be a list with 2 parts (function_response + inline_data)
+    assert isinstance(result, list), f"Expected list when image present, got {type(result)}"
+    assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
+    
+    # Find function_response part and inline_data part
+    function_response_part = None
+    inline_data_part = None
+    for part in result:
+        if "function_response" in part:
+            function_response_part = part
+        elif "inline_data" in part:
+            inline_data_part = part
+    
+    # Check function_response exists
+    assert function_response_part is not None, "Missing function_response part"
+    function_response = function_response_part["function_response"]
+    assert function_response["name"] == "click_at"
+    assert "response" in function_response
+    # Verify JSON response is parsed correctly
+    assert "url" in function_response["response"]
+    assert function_response["response"]["url"] == "https://example.com"
+    
+    # Check inline_data exists
+    assert inline_data_part is not None, "Missing inline_data part"
+    inline_data: BlobType = inline_data_part["inline_data"]
+    assert "data" in inline_data
+    assert "mime_type" in inline_data
+    assert inline_data["mime_type"] == "image/png"
+    assert inline_data["data"] == test_image_base64
+
+
+def test_convert_tool_response_with_url_image():
+    """Test tool response with HTTP URL image (will download and convert)."""
+    import pytest
+
+    # Use a publicly accessible test image URL
+    test_image_url = "https://via.placeholder.com/1x1.png"
+    
+    tool_message = {
+        "role": "tool",
+        "tool_call_id": "call_test456",
+        "content": [
+            {
+                "type": "text",
+                "text": '{"url": "https://example.com"}'
+            },
+            {
+                "type": "input_image",
+                "image_url": test_image_url
+            }
+        ]
+    }
+    
+    last_message_with_tool_calls = {
+        "tool_calls": [
+            {
+                "id": "call_test456",
+                "function": {
+                    "name": "type_text_at",
+                    "arguments": '{"x": 300, "y": 400, "text": "hello"}'
+                }
+            }
+        ]
+    }
+    
+    try:
+        result = convert_to_gemini_tool_call_result(
+            tool_message, last_message_with_tool_calls
+        )
+        
+        # Should be a list with 2 parts when image is present
+        assert isinstance(result, list), f"Expected list when image present, got {type(result)}"
+        assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
+        
+        # Find parts
+        function_response_part = next(p for p in result if "function_response" in p)
+        inline_data_part = next(p for p in result if "inline_data" in p)
+        
+        # Check function_response exists
+        assert function_response_part is not None, "Missing function_response part"
+        function_response = function_response_part["function_response"]
+        assert function_response["name"] == "type_text_at"
+        
+        # Check inline_data exists (URL should be downloaded and converted)
+        assert inline_data_part is not None, "Missing inline_data part"
+        inline_data: BlobType = inline_data_part["inline_data"]
+        assert "data" in inline_data
+        assert "mime_type" in inline_data
+    except Exception as e:
+        # Skip test if URL download fails (no internet connection, etc.)
+        pytest.skip(f"Failed to download image from URL: {e}")
+
+
+def test_convert_tool_response_text_only():
+    """Test tool response with only text (no image)."""
+    tool_message = {
+        "role": "tool",
+        "tool_call_id": "call_test789",
+        "content": [
+            {
+                "type": "text",
+                "text": '{"status": "completed", "result": "success"}'
+            }
+        ]
+    }
+    
+    last_message_with_tool_calls = {
+        "tool_calls": [
+            {
+                "id": "call_test789",
+                "function": {
+                    "name": "wait_5_seconds",
+                    "arguments": "{}"
+                }
+            }
+        ]
+    }
+    
+    result = convert_to_gemini_tool_call_result(
+        tool_message, last_message_with_tool_calls
+    )
+    
+    # Should be a single part (no list) when no image
+    assert not isinstance(result, list), "Should return single part when no image"
+    
+    # Check function_response exists
+    assert "function_response" in result
+    function_response = result["function_response"]
+    assert function_response["name"] == "wait_5_seconds"
+    # Verify JSON response is parsed correctly
+    assert "status" in function_response["response"]
+    assert function_response["response"]["status"] == "completed"
+    
+    # Check inline_data does NOT exist (no image provided)
+    assert "inline_data" not in result

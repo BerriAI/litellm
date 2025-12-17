@@ -286,11 +286,12 @@ class BedrockEmbedding(BaseAWSLLM):
                     "headers": prepped.headers,
                 },
             )
+            headers_for_request = dict(prepped.headers) if hasattr(prepped, 'headers') else {}
             response = self._make_sync_call(
                 client=client,
                 timeout=timeout,
                 api_base=prepped.url,
-                headers=prepped.headers,  # type: ignore
+                headers=headers_for_request,
                 data=data,
             )
 
@@ -352,11 +353,14 @@ class BedrockEmbedding(BaseAWSLLM):
                     "headers": prepped.headers,
                 },
             )
+            # Convert CaseInsensitiveDict to regular dict for httpx compatibility
+            # This ensures custom headers are properly forwarded, especially with IAM roles and custom api_base
+            headers_for_request = dict(prepped.headers) if hasattr(prepped, 'headers') else {}
             response = await self._make_async_call(
                 client=client,
                 timeout=timeout,
                 api_base=prepped.url,
-                headers=prepped.headers,  # type: ignore
+                headers=headers_for_request,
                 data=data,
             )
 
@@ -562,6 +566,8 @@ class BedrockEmbedding(BaseAWSLLM):
         )
 
         ## ROUTING ##
+        # Convert CaseInsensitiveDict to regular dict for httpx compatibility
+        headers_for_request = dict(prepped.headers) if hasattr(prepped, 'headers') else {}
         return cohere_embedding(
             model=model,
             input=input,
@@ -575,7 +581,7 @@ class BedrockEmbedding(BaseAWSLLM):
             aembedding=aembedding,
             timeout=timeout,
             client=client,
-            headers=prepped.headers,  # type: ignore
+            headers=headers_for_request,
         )
 
     async def _get_async_invoke_status(

@@ -181,7 +181,7 @@ docker run \
     -e USE_DDTRACE=true \
     -e USE_DDPROFILER=true \
     -p 4000:4000 \
-    ghcr.io/berriai/litellm:main-latest \
+    docker.litellm.ai/berriai/litellm:main-latest \
     --config /app/config.yaml --detailed_debug
 ```
 
