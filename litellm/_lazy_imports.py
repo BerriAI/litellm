@@ -1,9 +1,169 @@
-from typing import Any
+from typing import Any, Optional, cast
 import sys
 
 def _get_litellm_globals() -> dict:
     """Helper to get the globals dictionary of the litellm module."""
     return sys.modules["litellm"].__dict__
+
+# Lazy loader for default encoding to avoid importing tiktoken at module import time
+_default_encoding: Optional[Any] = None
+
+
+def _get_default_encoding() -> Any:
+    """
+    Lazily load and cache the default OpenAI encoding.
+    
+    This avoids importing `litellm.litellm_core_utils.default_encoding` (and thus tiktoken)
+    at `litellm` import time. The encoding is cached after the first import.
+    
+    This is used internally by utils.py functions that need the encoding but shouldn't
+    trigger its import during module load.
+    """
+    global _default_encoding
+    if _default_encoding is None:
+        from litellm.litellm_core_utils.default_encoding import encoding
+
+        _default_encoding = encoding
+    return _default_encoding
+
+
+# Lazy loader for get_modified_max_tokens to avoid importing token_counter at module import time
+_get_modified_max_tokens_func: Optional[Any] = None
+
+
+def _get_modified_max_tokens() -> Any:
+    """
+    Lazily load and cache the get_modified_max_tokens function.
+    
+    This avoids importing `litellm.litellm_core_utils.token_counter` at `litellm` import time.
+    The function is cached after the first import.
+    
+    This is used internally by utils.py functions that need the token counter but shouldn't
+    trigger its import during module load.
+    """
+    global _get_modified_max_tokens_func
+    if _get_modified_max_tokens_func is None:
+        from litellm.litellm_core_utils.token_counter import (
+            get_modified_max_tokens as _get_modified_max_tokens_imported,
+        )
+
+        _get_modified_max_tokens_func = _get_modified_max_tokens_imported
+    return _get_modified_max_tokens_func
+
+
+# Lazy loader for token_counter to avoid importing token_counter module at module import time
+_token_counter_new_func: Optional[Any] = None
+
+
+def _get_token_counter_new() -> Any:
+    """
+    Lazily load and cache the token_counter function (aliased as token_counter_new).
+    
+    This avoids importing `litellm.litellm_core_utils.token_counter` at `litellm` import time.
+    The function is cached after the first import.
+    
+    This is used internally by utils.py functions that need the token counter but shouldn't
+    trigger its import during module load.
+    """
+    global _token_counter_new_func
+    if _token_counter_new_func is None:
+        from litellm.litellm_core_utils.token_counter import (
+            token_counter as _token_counter_imported,
+        )
+
+        _token_counter_new_func = _token_counter_imported
+    return _token_counter_new_func
+
+# Cost calculator names that support lazy loading via _lazy_import_cost_calculator
+COST_CALCULATOR_NAMES = (
+    "completion_cost",
+    "cost_per_token",
+    "response_cost_calculator",
+)
+
+# Litellm logging names that support lazy loading via _lazy_import_litellm_logging
+LITELLM_LOGGING_NAMES = (
+    "Logging",
+    "modify_integration",
+)
+
+# Utils names that support lazy loading via _lazy_import_utils
+UTILS_NAMES = (
+    "exception_type", "get_optional_params", "get_response_string", "token_counter",
+    "create_pretrained_tokenizer", "create_tokenizer", "supports_function_calling",
+    "supports_web_search", "supports_url_context", "supports_response_schema",
+    "supports_parallel_function_calling", "supports_vision", "supports_audio_input",
+    "supports_audio_output", "supports_system_messages", "supports_reasoning",
+    "get_litellm_params", "acreate", "get_max_tokens", "get_model_info",
+    "register_prompt_template", "validate_environment", "check_valid_key",
+    "register_model", "encode", "decode", "_calculate_retry_after", "_should_retry",
+    "get_supported_openai_params", "get_api_base", "get_first_chars_messages",
+    "ModelResponse", "ModelResponseStream", "EmbeddingResponse", "ImageResponse",
+    "TranscriptionResponse", "TextCompletionResponse", "get_provider_fields",
+    "ModelResponseListIterator", "get_valid_models",
+)
+
+# Token counter names that support lazy loading via _lazy_import_token_counter
+TOKEN_COUNTER_NAMES = (
+    "get_modified_max_tokens",
+)
+
+# LLM client cache names that support lazy loading via _lazy_import_llm_client_cache
+LLM_CLIENT_CACHE_NAMES = (
+    "LLMClientCache",
+    "in_memory_llm_clients_cache",
+)
+
+# Bedrock type names that support lazy loading via _lazy_import_bedrock_types
+BEDROCK_TYPES_NAMES = (
+    "COHERE_EMBEDDING_INPUT_TYPES",
+)
+
+# Common types from litellm.types.utils that support lazy loading via
+# _lazy_import_types_utils
+TYPES_UTILS_NAMES = (
+    "ImageObject",
+    "BudgetConfig",
+    "all_litellm_params",
+    "_litellm_completion_params",
+    "CredentialItem",
+    "PriorityReservationDict",
+    "StandardKeyGenerationConfig",
+    "SearchProviders",
+    "GenericStreamingChunk",
+)
+
+# Caching / cache classes that support lazy loading via _lazy_import_caching
+CACHING_NAMES = (
+    "Cache",
+    "DualCache",
+    "RedisCache",
+    "InMemoryCache",
+)
+
+# HTTP handler names that support lazy loading via _lazy_import_http_handlers
+HTTP_HANDLER_NAMES = (
+    "module_level_aclient",
+    "module_level_client",
+)
+
+# Dotprompt integration names that support lazy loading via _lazy_import_dotprompt
+DOTPROMPT_NAMES = (
+    "global_prompt_manager",
+    "global_prompt_directory",
+    "set_global_prompt_directory",
+)
+
+# LLM config classes that support lazy loading via _lazy_import_llm_configs
+LLM_CONFIG_NAMES = (
+    "AmazonConverseConfig",
+    "OpenAILikeChatConfig",
+)
+
+# Types that support lazy loading via _lazy_import_types
+TYPES_NAMES = (
+    "GuardrailItem",
+)
 
 # Lazy import for utils module - imports only the requested item by name.
 # Note: PLR0915 (too many statements) is suppressed because the many if statements
@@ -218,42 +378,286 @@ def _lazy_import_utils(name: str) -> Any:  # noqa: PLR0915
 def _lazy_import_cost_calculator(name: str) -> Any:
     """Lazy import for cost_calculator functions."""
     _globals = _get_litellm_globals()
-    from .cost_calculator import (
-        completion_cost as _completion_cost,
-        cost_per_token as _cost_per_token,
-        response_cost_calculator as _response_cost_calculator,
-    )
+    if name == "completion_cost":
+        from .cost_calculator import completion_cost as _completion_cost
+        _globals["completion_cost"] = _completion_cost
+        return _completion_cost
     
-    _cost_functions = {
-        "completion_cost": _completion_cost,
-        "cost_per_token": _cost_per_token,
-        "response_cost_calculator": _response_cost_calculator,
-    }
+    if name == "cost_per_token":
+        from .cost_calculator import cost_per_token as _cost_per_token
+        _globals["cost_per_token"] = _cost_per_token
+        return _cost_per_token
     
-    func = _cost_functions[name]
-    _globals[name] = func
-    return func
+    if name == "response_cost_calculator":
+        from .cost_calculator import response_cost_calculator as _response_cost_calculator
+        _globals["response_cost_calculator"] = _response_cost_calculator
+        return _response_cost_calculator
+    
+    raise AttributeError(f"Cost calculator lazy import: unknown attribute {name!r}")
+
+
+def _lazy_import_token_counter(name: str) -> Any:
+    """Lazy import for token_counter utilities."""
+    _globals = _get_litellm_globals()
+
+    if name == "get_modified_max_tokens":
+        from litellm.litellm_core_utils.token_counter import (
+            get_modified_max_tokens as _get_modified_max_tokens,
+        )
+
+        _globals["get_modified_max_tokens"] = _get_modified_max_tokens
+        return _get_modified_max_tokens
+
+    raise AttributeError(f"Token counter lazy import: unknown attribute {name!r}")
+
+
+def _lazy_import_bedrock_types(name: str) -> Any:
+    """Lazy import for Bedrock type aliases."""
+    _globals = _get_litellm_globals()
+
+    if name == "COHERE_EMBEDDING_INPUT_TYPES":
+        from litellm.types.llms.bedrock import (
+            COHERE_EMBEDDING_INPUT_TYPES as _COHERE_EMBEDDING_INPUT_TYPES,
+        )
+
+        _globals["COHERE_EMBEDDING_INPUT_TYPES"] = _COHERE_EMBEDDING_INPUT_TYPES
+        return _COHERE_EMBEDDING_INPUT_TYPES
+
+    raise AttributeError(f"Bedrock types lazy import: unknown attribute {name!r}")
+
+
+def _lazy_import_types_utils(name: str) -> Any:
+    """Lazy import for common types and constants from litellm.types.utils."""
+    _globals = _get_litellm_globals()
+
+    if name == "ImageObject":
+        from .types.utils import ImageObject as _ImageObject
+
+        _globals["ImageObject"] = _ImageObject
+        return _ImageObject
+
+    if name == "BudgetConfig":
+        from .types.utils import BudgetConfig as _BudgetConfig
+
+        _globals["BudgetConfig"] = _BudgetConfig
+        return _BudgetConfig
+
+    if name == "all_litellm_params":
+        from .types.utils import all_litellm_params as _all_litellm_params
+
+        _globals["all_litellm_params"] = _all_litellm_params
+        return _all_litellm_params
+
+    if name == "_litellm_completion_params":
+        from .types.utils import all_litellm_params as _all_litellm_params
+
+        _globals["_litellm_completion_params"] = _all_litellm_params
+        return _all_litellm_params
+
+    if name == "CredentialItem":
+        from .types.utils import CredentialItem as _CredentialItem
+
+        _globals["CredentialItem"] = _CredentialItem
+        return _CredentialItem
+
+    if name == "PriorityReservationDict":
+        from .types.utils import (
+            PriorityReservationDict as _PriorityReservationDict,
+        )
+
+        _globals["PriorityReservationDict"] = _PriorityReservationDict
+        return _PriorityReservationDict
+
+    if name == "StandardKeyGenerationConfig":
+        from .types.utils import (
+            StandardKeyGenerationConfig as _StandardKeyGenerationConfig,
+        )
+
+        _globals["StandardKeyGenerationConfig"] = _StandardKeyGenerationConfig
+        return _StandardKeyGenerationConfig
+
+    if name == "SearchProviders":
+        from .types.utils import SearchProviders as _SearchProviders
+
+        _globals["SearchProviders"] = _SearchProviders
+        return _SearchProviders
+
+    if name == "GenericStreamingChunk":
+        from .types.utils import (
+            GenericStreamingChunk as _GenericStreamingChunk,
+        )
+
+        _globals["GenericStreamingChunk"] = _GenericStreamingChunk
+        return _GenericStreamingChunk
+
+    raise AttributeError(f"Types utils lazy import: unknown attribute {name!r}")
+
+
+def _lazy_import_caching(name: str) -> Any:
+    """Lazy import for caching module classes."""
+    _globals = _get_litellm_globals()
+
+    if name == "Cache":
+        from litellm.caching.caching import Cache as _Cache
+
+        _globals["Cache"] = _Cache
+        return _Cache
+
+    if name == "DualCache":
+        from litellm.caching.caching import DualCache as _DualCache
+
+        _globals["DualCache"] = _DualCache
+        return _DualCache
+
+    if name == "RedisCache":
+        from litellm.caching.caching import RedisCache as _RedisCache
+
+        _globals["RedisCache"] = _RedisCache
+        return _RedisCache
+
+    if name == "InMemoryCache":
+        from litellm.caching.caching import InMemoryCache as _InMemoryCache
+
+        _globals["InMemoryCache"] = _InMemoryCache
+        return _InMemoryCache
+
+    raise AttributeError(f"Caching lazy import: unknown attribute {name!r}")
+
+
+def _lazy_import_llm_client_cache(name: str) -> Any:
+    """Lazy import for LLM client cache class and singleton."""
+    _globals = _get_litellm_globals()
+
+    if name == "LLMClientCache":
+        from litellm.caching.llm_caching_handler import LLMClientCache as _LLMClientCache
+
+        _globals["LLMClientCache"] = _LLMClientCache
+        return _LLMClientCache
+
+    if name == "in_memory_llm_clients_cache":
+        from litellm.caching.llm_caching_handler import LLMClientCache as _LLMClientCache
+
+        instance = _LLMClientCache()
+        # Only populate the requested singleton name to keep lazy-import
+        # semantics consistent with other helpers (no extra symbols).
+        _globals["in_memory_llm_clients_cache"] = instance
+        return instance
+
+    raise AttributeError(f"LLM client cache lazy import: unknown attribute {name!r}")
 
 
 def _lazy_import_litellm_logging(name: str) -> Any:
     """Lazy import for litellm_logging module."""
     _globals = _get_litellm_globals()
-    try:
-        from litellm.litellm_core_utils.litellm_logging import (
-            Logging as _Logging,
-            modify_integration as _modify_integration,
+    if name == "Logging":
+        from litellm.litellm_core_utils.litellm_logging import Logging as _Logging
+        _globals["Logging"] = _Logging
+        return _Logging
+    
+    if name == "modify_integration":
+        from litellm.litellm_core_utils.litellm_logging import modify_integration as _modify_integration
+        _globals["modify_integration"] = _modify_integration
+        return _modify_integration
+    
+    raise AttributeError(f"Litellm logging lazy import: unknown attribute {name!r}")
+
+
+def _lazy_import_http_handlers(name: str) -> Any:
+    """Lazy import and instantiate module-level HTTP handlers."""
+    _globals = _get_litellm_globals()
+
+    if name == "module_level_aclient":
+        # Use shared async client factory instead of directly instantiating AsyncHTTPHandler
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+
+        timeout = _globals.get("request_timeout")
+        params = {"timeout": timeout, "client_alias": "module level aclient"}
+        # llm_provider is only used for cache keying; use a string identifier but
+        # cast to Any so static type checkers don't complain about the literal.
+        provider_id = cast(Any, "litellm_module_level_client")
+        async_client = get_async_httpx_client(
+            llm_provider=provider_id,
+            params=params,
         )
-        
-        _logging_objects = {
-            "Logging": _Logging,
-            "modify_integration": _modify_integration,
-        }
-        
-        obj = _logging_objects[name]
-        _globals[name] = obj
-        return obj
-    except Exception as e:
-        raise AttributeError(
-            f"module 'litellm' has no attribute {name!r}. "
-            f"Lazy import failed: {e}"
-        ) from e
+        _globals["module_level_aclient"] = async_client
+        return async_client
+
+    if name == "module_level_client":
+        # Import handler type locally to avoid heavy imports at module load time
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        timeout = _globals.get("request_timeout")
+        sync_client = HTTPHandler(timeout=timeout)
+        _globals["module_level_client"] = sync_client
+        return sync_client
+
+    raise AttributeError(f"HTTP handlers lazy import: unknown attribute {name!r}")
+
+
+def _lazy_import_dotprompt(name: str) -> Any:
+    """Lazy import for dotprompt integration globals."""
+    _globals = _get_litellm_globals()
+
+    if name == "global_prompt_manager":
+        from litellm.integrations.dotprompt import (
+            global_prompt_manager as _global_prompt_manager,
+        )
+
+        _globals["global_prompt_manager"] = _global_prompt_manager
+        return _global_prompt_manager
+
+    if name == "global_prompt_directory":
+        from litellm.integrations.dotprompt import (
+            global_prompt_directory as _global_prompt_directory,
+        )
+
+        _globals["global_prompt_directory"] = _global_prompt_directory
+        return _global_prompt_directory
+
+    if name == "set_global_prompt_directory":
+        from litellm.integrations.dotprompt import (
+            set_global_prompt_directory as _set_global_prompt_directory,
+        )
+
+        _globals["set_global_prompt_directory"] = _set_global_prompt_directory
+        return _set_global_prompt_directory
+
+    raise AttributeError(f"Dotprompt lazy import: unknown attribute {name!r}")
+
+
+def _lazy_import_types(name: str) -> Any:
+    """Lazy import for type classes."""
+    _globals = _get_litellm_globals()
+
+    if name == "GuardrailItem":
+        from litellm.types.guardrails import (
+            GuardrailItem as _GuardrailItem,
+        )
+
+        _globals["GuardrailItem"] = _GuardrailItem
+        return _GuardrailItem
+
+    raise AttributeError(f"Types lazy import: unknown attribute {name!r}")
+
+
+def _lazy_import_llm_configs(name: str) -> Any:
+    """Lazy import for LLM config classes."""
+    _globals = _get_litellm_globals()
+
+    if name == "AmazonConverseConfig":
+        from .llms.bedrock.chat.converse_transformation import (
+            AmazonConverseConfig as _AmazonConverseConfig,
+        )
+
+        _globals["AmazonConverseConfig"] = _AmazonConverseConfig
+        return _AmazonConverseConfig
+
+    if name == "OpenAILikeChatConfig":
+        from .llms.openai_like.chat.handler import (
+            OpenAILikeChatConfig as _OpenAILikeChatConfig,
+        )
+
+        _globals["OpenAILikeChatConfig"] = _OpenAILikeChatConfig
+        return _OpenAILikeChatConfig
+
+    raise AttributeError(f"LLM config lazy import: unknown attribute {name!r}")
