@@ -1065,8 +1065,44 @@ class Router:
             litellm.adelete_skill, call_type="adelete_skill"
         )
 
+    def _initialize_interactions_endpoints(self):
+        """Initialize Google Interactions API endpoints."""
+        from litellm.interactions import acancel as acancel_interaction
+        from litellm.interactions import acreate as acreate_interaction
+        from litellm.interactions import adelete as adelete_interaction
+        from litellm.interactions import aget as aget_interaction
+        from litellm.interactions import cancel as cancel_interaction
+        from litellm.interactions import create as create_interaction
+        from litellm.interactions import delete as delete_interaction
+        from litellm.interactions import get as get_interaction
+
+        self.acreate_interaction = self.factory_function(
+            acreate_interaction, call_type="acreate_interaction"
+        )
+        self.create_interaction = self.factory_function(
+            create_interaction, call_type="create_interaction"
+        )
+        self.aget_interaction = self.factory_function(
+            aget_interaction, call_type="aget_interaction"
+        )
+        self.get_interaction = self.factory_function(
+            get_interaction, call_type="get_interaction"
+        )
+        self.adelete_interaction = self.factory_function(
+            adelete_interaction, call_type="adelete_interaction"
+        )
+        self.delete_interaction = self.factory_function(
+            delete_interaction, call_type="delete_interaction"
+        )
+        self.acancel_interaction = self.factory_function(
+            acancel_interaction, call_type="acancel_interaction"
+        )
+        self.cancel_interaction = self.factory_function(
+            cancel_interaction, call_type="cancel_interaction"
+        )
+
     def _initialize_specialized_endpoints(self):
-        """Helper to initialize specialized router endpoints (vector store, OCR, search, video, container, skills)."""
+        """Helper to initialize specialized router endpoints (vector store, OCR, search, video, container, skills, interactions)."""
         self._initialize_vector_store_endpoints()
         self._initialize_vector_store_file_endpoints()
         self._initialize_google_genai_endpoints()
@@ -1074,6 +1110,7 @@ class Router:
         self._initialize_video_endpoints()
         self._initialize_container_endpoints()
         self._initialize_skills_endpoints()
+        self._initialize_interactions_endpoints()
 
     def initialize_router_endpoints(self):
         self._initialize_core_endpoints()
@@ -3858,6 +3895,14 @@ class Router:
             "alist_skills",
             "aget_skill",
             "adelete_skill",
+            "acreate_interaction",
+            "create_interaction",
+            "aget_interaction",
+            "get_interaction",
+            "adelete_interaction",
+            "delete_interaction",
+            "acancel_interaction",
+            "cancel_interaction",
         ] = "assistants",
     ):
         """
@@ -3979,6 +4024,8 @@ class Router:
                 "alist_skills",
                 "aget_skill",
                 "adelete_skill",
+                "acreate_interaction",
+                "create_interaction",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
@@ -4029,6 +4076,16 @@ class Router:
                     original_function=original_function,
                     custom_llm_provider=custom_llm_provider,
                     client=client,
+                    **kwargs,
+                )
+            elif call_type in (
+                "aget_interaction",
+                "adelete_interaction",
+                "acancel_interaction",
+            ):
+                return await self._init_interactions_api_endpoints(
+                    original_function=original_function,
+                    custom_llm_provider=custom_llm_provider,
                     **kwargs,
                 )
 
@@ -4084,6 +4141,25 @@ class Router:
             original_function=original_function,
             **kwargs,
         )
+
+    async def _init_interactions_api_endpoints(
+        self,
+        original_function: Callable,
+        custom_llm_provider: Optional[str] = None,
+        **kwargs,
+    ):
+        """
+        Initialize the Interactions API endpoints on the router.
+
+        GET, DELETE, CANCEL Interactions API Requests don't need model-based routing,
+        so we call the original function directly with the custom_llm_provider.
+        """
+        if custom_llm_provider and "custom_llm_provider" not in kwargs:
+            kwargs["custom_llm_provider"] = custom_llm_provider
+        # Default to gemini for interactions API
+        if "custom_llm_provider" not in kwargs:
+            kwargs["custom_llm_provider"] = "gemini"
+        return await original_function(**kwargs)
 
     async def _pass_through_assistants_endpoint_factory(
         self,
