@@ -164,6 +164,19 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             )
             return None
 
+        # Extract choices from the response
+        if hasattr(response, "choices") and response.choices:
+            guard_input["choices"] = []
+            for choice in response.choices:
+                choice_dict = {}
+                if hasattr(choice, "message"):
+                    message = choice.message
+                    choice_dict["message"] = {
+                        "role": getattr(message, "role", "assistant"),
+                        "content": getattr(message, "content", ""),
+                    }
+                    guard_input["choices"].append(choice_dict)
+
         input_messages = None
         if "body" in request_data:
             input_messages = request_data["body"].get("messages")
