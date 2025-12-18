@@ -42,4 +42,92 @@ class TestRAGOpenAI(BaseRAGTest):
             return search_response
         return None
 
+    @pytest.mark.asyncio
+    async def test_rag_query_basic(self):
+        """Test basic RAG query flow."""
+        import asyncio
+
+        litellm._turn_on_debug()
+
+        # First ingest a document
+        filename, unique_id = self.get_unique_filename("rag_query")
+        text_content = (
+            f"LiteLLM is a unified interface for 100+ LLMs. ID: {unique_id}".encode()
+        )
+
+        ingest_response = await litellm.rag.aingest(
+            ingest_options=self.get_base_ingest_options(),
+            file_data=(filename, text_content, "text/plain"),
+        )
+        vector_store_id = ingest_response["vector_store_id"]
+
+        # Wait for indexing
+        await asyncio.sleep(10)
+
+        # Query with RAG
+        response = await litellm.rag.aquery(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "What is LiteLLM?"}],
+            retrieval_config={
+                "vector_store_id": vector_store_id,
+                "custom_llm_provider": "openai",
+                "top_k": 5,
+            },
+        )
+
+        print(f"RAG Query Response: {response}")
+
+        assert response.choices[0].message.content
+        assert (
+            "search_results" in response.choices[0].message.provider_specific_fields
+        )
+
+    @pytest.mark.asyncio
+    async def test_rag_query_with_rerank(self):
+        """Test RAG query with reranking."""
+        import asyncio
+
+        litellm._turn_on_debug()
+
+        # First ingest a document
+        filename, unique_id = self.get_unique_filename("rag_query_rerank")
+        text_content = (
+            f"LiteLLM is a unified interface for 100+ LLMs. ID: {unique_id}".encode()
+        )
+
+        ingest_response = await litellm.rag.aingest(
+            ingest_options=self.get_base_ingest_options(),
+            file_data=(filename, text_content, "text/plain"),
+        )
+        vector_store_id = ingest_response["vector_store_id"]
+
+        # Wait for indexing
+        await asyncio.sleep(10)
+
+        # Query with RAG and rerank
+        response = await litellm.rag.aquery(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "What is LiteLLM?"}],
+            retrieval_config={
+                "vector_store_id": vector_store_id,
+                "custom_llm_provider": "openai",
+                "top_k": 5,
+            },
+            rerank={
+                "enabled": True,
+                "model": "cohere/rerank-english-v3.0",
+                "top_n": 3,
+            },
+        )
+
+        print(f"RAG Query Response with Rerank: {response}")
+
+        assert response.choices[0].message.content
+        assert (
+            "search_results" in response.choices[0].message.provider_specific_fields
+        )
+        assert (
+            "rerank_results" in response.choices[0].message.provider_specific_fields
+        )
+
     
