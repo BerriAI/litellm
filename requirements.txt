@@ -63,6 +63,7 @@ pydantic>=2.11,<3 # proxy + openai req. + mcp
 jsonschema==4.22.0 # validating json schema
 websockets==13.1.0 # for realtime API
 soundfile==0.12.1 # for audio file processing
+openapi-core==0.21.0 # for OpenAPI compliance tests
 
 ########################
 # LITELLM ENTERPRISE DEPENDENCIES
