@@ -990,7 +990,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     user_obj = None
 
             # Check 3. Check if user is in their team budget
-            if valid_token.team_member_spend is not None:
+            if valid_token.team_id is not None and valid_token.user_id is not None:
 
                 if prisma_client is not None:
                     _cache_key = f"{valid_token.team_id}_{valid_token.user_id}"
@@ -1011,11 +1011,12 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                                 },  # type: ignore
                                 include={"litellm_budget_table": True},
                             )
-                            await user_api_key_cache.async_set_cache(
-                                key=_cache_key,
-                                value=team_member_info,
-                                ttl=5,
-                            )
+                            if team_member_info is not None:
+                                await user_api_key_cache.async_set_cache(
+                                    key=_cache_key,
+                                    value=team_member_info,
+                                    ttl=5,
+                                )
 
                     if (
                         team_member_info is not None
@@ -1024,11 +1025,14 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         team_member_budget = (
                             team_member_info.litellm_budget_table.max_budget
                         )
+                        # Use fresh spend from team_member_info instead of stale valid_token.team_member_spend
+                        team_member_spend = team_member_info.spend or 0.0
                         if team_member_budget is not None and team_member_budget > 0:
-                            if valid_token.team_member_spend > team_member_budget:
+                            if team_member_spend > team_member_budget:
                                 raise litellm.BudgetExceededError(
-                                    current_cost=valid_token.team_member_spend,
+                                    current_cost=team_member_spend,
                                     max_budget=team_member_budget,
+                                    message=f"Budget has been exceeded! User={valid_token.user_id} in Team={valid_token.team_id} Current cost: {team_member_spend}, Max budget: {team_member_budget}",
                                 )
 
             # Check 3. If token is expired
