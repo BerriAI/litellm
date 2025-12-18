@@ -176,33 +176,6 @@ async def common_checks(
             )
 
     ## 4.2 check team member budget, if team key
-    if (
-        team_object is not None
-        and team_object.team_id is not None
-        and valid_token is not None
-        and valid_token.user_id is not None
-        and prisma_client is not None
-    ):
-        # Use get_team_membership function (defined later in this file)
-        team_membership = await get_team_membership(
-            user_id=valid_token.user_id,
-            team_id=team_object.team_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-        )
-        if (
-            team_membership is not None
-            and team_membership.litellm_budget_table is not None
-        ):
-            team_member_budget = team_membership.litellm_budget_table.max_budget
-            team_member_spend = team_membership.spend or 0.0
-            if team_member_budget is not None and team_member_spend > team_member_budget:
-                raise litellm.BudgetExceededError(
-                    current_cost=team_member_spend,
-                    max_budget=team_member_budget,
-                    message=f"Budget has been exceeded! User={valid_token.user_id} in Team={team_object.team_id} Current cost: {team_member_spend}, Max budget: {team_member_budget}",
-                )
-
     # 5. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
     if end_user_object is not None and end_user_object.litellm_budget_table is not None:
         end_user_budget = end_user_object.litellm_budget_table.max_budget

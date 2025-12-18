@@ -869,15 +869,9 @@ class DBSpendUpdateWriter:
             team_member_list_transactions is not None
             and len(team_member_list_transactions.keys()) > 0
         ):
-            # Track team memberships that need cache invalidation (use set to avoid duplicates)
-            team_memberships_to_invalidate = set()
-            
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
-                    # Reset the set for each retry attempt
-                    team_memberships_to_invalidate.clear()
-                    
                     async with prisma_client.db.tx(
                         timeout=timedelta(seconds=60)
                     ) as transaction:
@@ -893,24 +887,6 @@ class DBSpendUpdateWriter:
                                 batcher.litellm_teammembership.update_many(  # 'update_many' prevents error from being raised if no row exists
                                     where={"team_id": team_id, "user_id": user_id},
                                     data={"spend": {"increment": response_cost}},
-                                )
-                                
-                                # Track for cache invalidation
-                                team_memberships_to_invalidate.add((user_id, team_id))
-                    
-                    # Invalidate team membership cache after successful DB update
-                    if team_memberships_to_invalidate:
-                        user_api_key_cache = proxy_logging_obj.call_details.get(
-                            "user_api_key_cache"
-                        )
-                        if user_api_key_cache is not None:
-                            for user_id, team_id in team_memberships_to_invalidate:
-                                cache_key = "team_membership:{}:{}".format(user_id, team_id)
-                                await user_api_key_cache.async_delete_cache(key=cache_key)
-                                verbose_proxy_logger.debug(
-                                    "Invalidated team membership cache for user_id=%s, team_id=%s",
-                                    user_id,
-                                    team_id,
                                 )
                     break
                 except DB_CONNECTION_ERROR_TYPES as e:
