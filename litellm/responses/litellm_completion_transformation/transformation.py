@@ -421,9 +421,11 @@ class LiteLLMCompletionResponsesConfig:
                             # Use the first tool_call's id
                             first_tool_call = tool_calls_raw[0]
                             if isinstance(first_tool_call, dict):
-                                tool_call_id = first_tool_call.get("id", "")
+                                tool_call_id_raw = first_tool_call.get("id", "")
+                                tool_call_id = str(tool_call_id_raw) if tool_call_id_raw is not None else ""
                             elif hasattr(first_tool_call, "id"):
-                                tool_call_id = str(getattr(first_tool_call, "id", ""))
+                                tool_call_id_raw = getattr(first_tool_call, "id", None)
+                                tool_call_id = str(tool_call_id_raw) if tool_call_id_raw is not None else ""
                     
                     # Update the message with the found tool_call_id if we found one
                     if tool_call_id:
