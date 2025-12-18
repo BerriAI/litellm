@@ -4697,6 +4697,25 @@ def _strip_model_name(model: str, custom_llm_provider: Optional[str]) -> str:
         return model
 
 
+def _get_model_cost_key(potential_key: str) -> Optional[str]:
+    """
+    Get the actual key from model_cost, with case-insensitive fallback.
+
+    Returns the key if found (exact match preferred, then case-insensitive), or None if not found.
+    """
+    # Try exact match first (most common case, O(1))
+    if potential_key in litellm.model_cost:
+        return potential_key
+
+    # Fallback to case-insensitive match
+    potential_key_lower = potential_key.lower()
+    for key in litellm.model_cost:
+        if key.lower() == potential_key_lower:
+            return key
+
+    return None
+
+
 def _get_model_info_from_model_cost(key: str) -> dict:
     return litellm.model_cost[key]
 
@@ -4845,10 +4864,10 @@ def _is_potential_model_name_in_model_cost(
     potential_model_names: PotentialModelNamesAndCustomLLMProvider,
 ) -> bool:
     """
-    Check if the potential model name is in the model cost.
+    Check if the potential model name is in the model cost (case-insensitive).
     """
     return any(
-        potential_model_name in litellm.model_cost
+        _get_model_cost_key(potential_model_name) is not None
         for potential_model_name in potential_model_names.values()
     )
 
@@ -4926,44 +4945,51 @@ def _get_model_info_helper(  # noqa: PLR0915
             _model_info: Optional[Dict[str, Any]] = None
             key: Optional[str] = None
 
-            if combined_model_name in litellm.model_cost:
-                key = combined_model_name
+            # Use case-insensitive lookup for all model name checks
+            _matched_key = _get_model_cost_key(combined_model_name)
+            if _matched_key is not None:
+                key = _matched_key
                 _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                 if not _check_provider_match(
                     model_info=_model_info, custom_llm_provider=custom_llm_provider
                 ):
                     _model_info = None
-            if _model_info is None and model in litellm.model_cost:
-                key = model
-                _model_info = _get_model_info_from_model_cost(key=cast(str, key))
-                if not _check_provider_match(
-                    model_info=_model_info, custom_llm_provider=custom_llm_provider
-                ):
-                    _model_info = None
-            if (
-                _model_info is None
-                and combined_stripped_model_name in litellm.model_cost
-            ):
-                key = combined_stripped_model_name
-                _model_info = _get_model_info_from_model_cost(key=cast(str, key))
-                if not _check_provider_match(
-                    model_info=_model_info, custom_llm_provider=custom_llm_provider
-                ):
-                    _model_info = None
-            if _model_info is None and stripped_model_name in litellm.model_cost:
-                key = stripped_model_name
-                _model_info = _get_model_info_from_model_cost(key=cast(str, key))
-                if not _check_provider_match(
-                    model_info=_model_info, custom_llm_provider=custom_llm_provider
-                ):
-                    _model_info = None
-            if _model_info is None and split_model in litellm.model_cost:
-                key = split_model
-                _model_info = _get_model_info_from_model_cost(key=cast(str, key))
-                if not _check_provider_match(
-                    model_info=_model_info, custom_llm_provider=custom_llm_provider
-                ):
-                    _model_info = None
+            if _model_info is None:
+                _matched_key = _get_model_cost_key(model)
+                if _matched_key is not None:
+                    key = _matched_key
+                    _model_info = _get_model_info_from_model_cost(key=cast(str, key))
+                    if not _check_provider_match(
+                        model_info=_model_info, custom_llm_provider=custom_llm_provider
+                    ):
+                        _model_info = None
+            if _model_info is None:
+                _matched_key = _get_model_cost_key(combined_stripped_model_name)
+                if _matched_key is not None:
+                    key = _matched_key
+                    _model_info = _get_model_info_from_model_cost(key=cast(str, key))
+                    if not _check_provider_match(
+                        model_info=_model_info, custom_llm_provider=custom_llm_provider
+                    ):
+                        _model_info = None
+            if _model_info is None:
+                _matched_key = _get_model_cost_key(stripped_model_name)
+                if _matched_key is not None:
+                    key = _matched_key
+                    _model_info = _get_model_info_from_model_cost(key=cast(str, key))
+                    if not _check_provider_match(
+                        model_info=_model_info, custom_llm_provider=custom_llm_provider
+                    ):
+                        _model_info = None
+            if _model_info is None:
+                _matched_key = _get_model_cost_key(split_model)
+                if _matched_key is not None:
+                    key = _matched_key
+                    _model_info = _get_model_info_from_model_cost(key=cast(str, key))
+                    if not _check_provider_match(
+                        model_info=_model_info, custom_llm_provider=custom_llm_provider
+                    ):
+                        _model_info = None
 
             if _model_info is None or key is None:
                 raise ValueError(
