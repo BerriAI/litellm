@@ -714,10 +714,10 @@ class LiteLLMCompletionResponsesConfig:
         ChatCompletionToolMessage is used to indicate the output from a tool call
         """
         call_id = tool_call_output.get("call_id")
-        # If call_id is missing or empty, we'll try to recover it later in _ensure_tool_results_have_corresponding_tool_calls
-        # Don't skip the message here - let the fix handle it
+        # If call_id is missing or empty, skip this message
+        # Empty call_id means we can't create a valid tool message
         if not call_id:
-            call_id = ""
+            return []
         
         tool_output_message = ChatCompletionToolMessage(
             role="tool",

@@ -76,7 +76,7 @@ def test_empty_tool_call_id_in_messages_list_is_removed():
     assert len(tool_messages) == 0, (
         "Tool messages with empty tool_call_id should be removed from the list"
     )
-    print("✓ Empty tool_call_id messages are correctly removed from messages list")
+    print("[OK] Empty tool_call_id messages are correctly removed from messages list")
 
 
 def test_tool_call_id_recovered_from_previous_assistant():
@@ -184,7 +184,7 @@ def test_tool_calls_added_when_missing():
     assert tool_call_id_from_message == tool_call_id, (
         f"Tool call ID should match. Expected: {tool_call_id}, Got: {tool_call_id_from_message}"
     )
-    print(f"✓ Tool calls added to assistant message: {len(tool_calls)} tool_call(s)")
+    print(f"[OK] Tool calls added to assistant message: {len(tool_calls)} tool_call(s)")
 
 
 def test_anthropic_transformation_with_fixed_messages():
