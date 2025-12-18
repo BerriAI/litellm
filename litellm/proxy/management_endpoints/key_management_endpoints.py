@@ -1975,7 +1975,7 @@ def _check_model_access_group(
     models: Optional[List[str]], llm_router: Optional[Router], premium_user: bool
 ) -> Literal[True]:
     """
-    if is_model_access_group is True + is_wildcard_route is True, check if user is a premium user.
+    if is_model_access_group is True + is_wildcard_route is True, check if user is a premium user
 
     Return True if user is a premium user, False otherwise
     """
