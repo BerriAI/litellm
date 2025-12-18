@@ -2310,24 +2310,36 @@ async def _team_key_deletion_check(
     return False
 
 
-async def can_delete_verification_token(
+async def can_modify_verification_token(
     key_info: LiteLLM_VerificationToken,
     user_api_key_cache: DualCache,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
 ) -> bool:
     """
-    - check if user is proxy admin
-    - check if user is team admin and key is a team key
-    - check if key is personal key
+    Check if user has permission to modify (delete/regenerate) a verification token.
+    
+    Rules:
+    - Proxy admin can modify any key
+    - For team keys: only team admin or key owner can modify
+    - For personal keys: only key owner can modify
+    
+    Args:
+        key_info: The verification token to check
+        user_api_key_cache: Cache for user API keys
+        user_api_key_dict: The user making the request
+        prisma_client: Prisma client for database access
+        
+    Returns:
+        True if user can modify the key, False otherwise
     """
     is_team_key = _is_team_key(data=key_info)
     
-    # 1. Proxy admin can delete any key
+    # 1. Proxy admin can modify any key
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return True
     
-    # 2. For team keys: only team admin or key owner can delete
+    # 2. For team keys: only team admin or key owner can modify
     if is_team_key and key_info.team_id is not None:
         # Get team object to check if user is team admin
         team_table = await get_team_object(
@@ -2354,12 +2366,14 @@ async def can_delete_verification_token(
         # Not team admin and doesn't own the key
         return False
     
-    # 3. For personal keys: only key owner can delete
+    # 3. For personal keys: only key owner can modify
     if key_info.user_id is not None and key_info.user_id == user_api_key_dict.user_id:
         return True
     
     # Default: deny
     return False
+
+
 
 
 async def delete_verification_tokens(
@@ -2413,7 +2427,7 @@ async def delete_verification_tokens(
                 for key in _keys_being_deleted:
 
                     async def _delete_key(key: LiteLLM_VerificationToken):
-                        if await can_delete_verification_token(
+                        if await can_modify_verification_token(
                             key_info=key,
                             user_api_key_cache=user_api_key_cache,
                             user_api_key_dict=user_api_key_dict,
@@ -2763,6 +2777,18 @@ async def regenerate_key_fn(
             existing_key_row=_key_in_db,
             user_api_key_cache=user_api_key_cache,
         )
+
+        # check if user has ownership permission to regenerate key
+        if not await can_modify_verification_token(
+            key_info=_key_in_db,
+            user_api_key_cache=user_api_key_cache,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "You are not authorized to regenerate this key"},
+            )
 
         verbose_proxy_logger.debug("key_in_db: %s", _key_in_db)
 

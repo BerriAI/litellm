@@ -30,7 +30,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     _check_team_key_limits,
     _common_key_generation_helper,
     _list_key_helper,
-    can_delete_verification_token,
+    can_modify_verification_token,
     check_org_key_model_specific_limits,
     check_team_key_model_specific_limits,
     generate_key_helper_fn,
@@ -2635,7 +2635,7 @@ async def test_can_delete_verification_token_proxy_admin_team_key(monkeypatch):
     mock_prisma_client = AsyncMock()
     mock_user_api_key_cache = MagicMock()
 
-    result = await can_delete_verification_token(
+    result = await can_modify_verification_token(
         key_info=key_info,
         user_api_key_cache=mock_user_api_key_cache,
         user_api_key_dict=user_api_key_dict,
@@ -2663,7 +2663,7 @@ async def test_can_delete_verification_token_proxy_admin_personal_key(monkeypatc
     mock_prisma_client = AsyncMock()
     mock_user_api_key_cache = MagicMock()
 
-    result = await can_delete_verification_token(
+    result = await can_modify_verification_token(
         key_info=key_info,
         user_api_key_cache=mock_user_api_key_cache,
         user_api_key_dict=user_api_key_dict,
@@ -2714,7 +2714,7 @@ async def test_can_delete_verification_token_team_admin_own_team(monkeypatch):
         mock_get_team_object,
     )
 
-    result = await can_delete_verification_token(
+    result = await can_modify_verification_token(
         key_info=key_info,
         user_api_key_cache=mock_user_api_key_cache,
         user_api_key_dict=user_api_key_dict,
@@ -2765,7 +2765,7 @@ async def test_can_delete_verification_token_team_admin_different_team(monkeypat
         mock_get_team_object,
     )
 
-    result = await can_delete_verification_token(
+    result = await can_modify_verification_token(
         key_info=key_info,
         user_api_key_cache=mock_user_api_key_cache,
         user_api_key_dict=user_api_key_dict,
@@ -2815,7 +2815,7 @@ async def test_can_delete_verification_token_key_owner_team_key(monkeypatch):
         mock_get_team_object,
     )
 
-    result = await can_delete_verification_token(
+    result = await can_modify_verification_token(
         key_info=key_info,
         user_api_key_cache=mock_user_api_key_cache,
         user_api_key_dict=user_api_key_dict,
@@ -2843,7 +2843,7 @@ async def test_can_delete_verification_token_key_owner_personal_key(monkeypatch)
     mock_prisma_client = AsyncMock()
     mock_user_api_key_cache = MagicMock()
 
-    result = await can_delete_verification_token(
+    result = await can_modify_verification_token(
         key_info=key_info,
         user_api_key_cache=mock_user_api_key_cache,
         user_api_key_dict=user_api_key_dict,
@@ -2895,7 +2895,7 @@ async def test_can_delete_verification_token_other_user_team_key(monkeypatch):
         mock_get_team_object,
     )
 
-    result = await can_delete_verification_token(
+    result = await can_modify_verification_token(
         key_info=key_info,
         user_api_key_cache=mock_user_api_key_cache,
         user_api_key_dict=user_api_key_dict,
@@ -2923,7 +2923,7 @@ async def test_can_delete_verification_token_other_user_personal_key(monkeypatch
     mock_prisma_client = AsyncMock()
     mock_user_api_key_cache = MagicMock()
 
-    result = await can_delete_verification_token(
+    result = await can_modify_verification_token(
         key_info=key_info,
         user_api_key_cache=mock_user_api_key_cache,
         user_api_key_dict=user_api_key_dict,
@@ -2959,7 +2959,7 @@ async def test_can_delete_verification_token_team_key_no_team_found(monkeypatch)
         mock_get_team_object,
     )
 
-    result = await can_delete_verification_token(
+    result = await can_modify_verification_token(
         key_info=key_info,
         user_api_key_cache=mock_user_api_key_cache,
         user_api_key_dict=user_api_key_dict,
@@ -2987,7 +2987,386 @@ async def test_can_delete_verification_token_personal_key_no_user_id(monkeypatch
     mock_prisma_client = AsyncMock()
     mock_user_api_key_cache = MagicMock()
 
-    result = await can_delete_verification_token(
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is False
+
+@pytest.mark.asyncio
+async def test_can_modify_verification_token_proxy_admin_team_key(monkeypatch):
+    """Test that proxy admin can modify any team key."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="other-user",
+        team_id="test-team-123",
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin-user",
+        api_key="sk-admin",
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_can_modify_verification_token_proxy_admin_personal_key(monkeypatch):
+    """Test that proxy admin can modify any personal key."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="other-user",
+        team_id=None,
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin-user",
+        api_key="sk-admin",
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_can_modify_verification_token_team_admin_own_team(monkeypatch):
+    """Test that team admin can modify team keys from their own team."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="other-user",
+        team_id="test-team-123",
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="team-admin-user",
+        api_key="sk-user",
+    )
+
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test-team-123",
+        team_alias="test-team",
+        tpm_limit=None,
+        rpm_limit=None,
+        max_budget=None,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[
+            Member(user_id="team-admin-user", role="admin"),
+            Member(user_id="other-user", role="user"),
+        ],
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    async def mock_get_team_object(*args, **kwargs):
+        return team_table
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        mock_get_team_object,
+    )
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_can_modify_verification_token_team_admin_different_team(monkeypatch):
+    """Test that team admin cannot modify team keys from a different team."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="other-user",
+        team_id="test-team-456",
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="team-admin-user",
+        api_key="sk-user",
+    )
+
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test-team-456",
+        team_alias="test-team",
+        tpm_limit=None,
+        rpm_limit=None,
+        max_budget=None,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[
+            Member(user_id="different-admin", role="admin"),
+            Member(user_id="other-user", role="user"),
+        ],
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    async def mock_get_team_object(*args, **kwargs):
+        return team_table
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        mock_get_team_object,
+    )
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_can_modify_verification_token_key_owner_team_key(monkeypatch):
+    """Test that key owner can modify their own team key."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="key-owner-user",
+        team_id="test-team-123",
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="key-owner-user",
+        api_key="sk-user",
+    )
+
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test-team-123",
+        team_alias="test-team",
+        tpm_limit=None,
+        rpm_limit=None,
+        max_budget=None,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[
+            Member(user_id="key-owner-user", role="user"),
+        ],
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    async def mock_get_team_object(*args, **kwargs):
+        return team_table
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        mock_get_team_object,
+    )
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_can_modify_verification_token_key_owner_personal_key(monkeypatch):
+    """Test that key owner can modify their own personal key."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="key-owner-user",
+        team_id=None,
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="key-owner-user",
+        api_key="sk-user",
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_can_modify_verification_token_other_user_team_key(monkeypatch):
+    """Test that other user cannot modify team keys they don't own and aren't admin for."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="key-owner-user",
+        team_id="test-team-123",
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="other-user",
+        api_key="sk-user",
+    )
+
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test-team-123",
+        team_alias="test-team",
+        tpm_limit=None,
+        rpm_limit=None,
+        max_budget=None,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[
+            Member(user_id="key-owner-user", role="user"),
+            Member(user_id="other-user", role="user"),
+            Member(user_id="team-admin-user", role="admin"),
+        ],
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    async def mock_get_team_object(*args, **kwargs):
+        return team_table
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        mock_get_team_object,
+    )
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_can_modify_verification_token_other_user_personal_key(monkeypatch):
+    """Test that other user cannot modify personal keys they don't own."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="key-owner-user",
+        team_id=None,
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="other-user",
+        api_key="sk-user",
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_can_modify_verification_token_team_key_no_team_found(monkeypatch):
+    """Test that modification fails when team is not found in database."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="key-owner-user",
+        team_id="non-existent-team",
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="key-owner-user",
+        api_key="sk-user",
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    async def mock_get_team_object(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        mock_get_team_object,
+    )
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_can_modify_verification_token_personal_key_no_user_id(monkeypatch):
+    """Test that modification fails for personal key when key has no user_id."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id=None,
+        team_id=None,
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="some-user",
+        api_key="sk-user",
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    result = await can_modify_verification_token(
         key_info=key_info,
         user_api_key_cache=mock_user_api_key_cache,
         user_api_key_dict=user_api_key_dict,
