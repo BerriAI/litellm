@@ -1291,6 +1291,42 @@ jobs:
           paths:
             - llm_responses_api_coverage.xml
             - llm_responses_api_coverage
+  interactions_api_testing:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "respx==0.22.0"
+            pip install "google-genai>=1.0.0"
+            pip install "httpx>=0.24.0"
+            pip install "uvicorn>=0.20.0"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run Interactions API E2E tests with Google SDK
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/interactions_api_tests/test_interactions_google_sdk_e2e.py -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 30m
+
+      # Store test results
+      - store_test_results:
+          path: test-results
   ocr_testing:
     docker:
       - image: cimg/python:3.11
@@ -3767,6 +3803,12 @@ workflows:
                 - main
                 - /litellm_.*/
       - llm_responses_api_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - interactions_api_testing:
           filters:
             branches:
               only:
