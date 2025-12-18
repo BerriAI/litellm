@@ -291,6 +291,12 @@ class LiteLLMCompletionResponsesConfig:
             )
         _messages = litellm_completion_request.get("messages") or []
         session_messages = chat_completion_session.get("messages") or []
+        
+        # If session messages are empty (e.g., no database in test environment),
+        # we still need to process the new input messages
+        # Store original _messages before combining for safety check
+        original_new_messages = _messages.copy() if _messages else []
+        
         combined_messages = session_messages + _messages
         
         # Fix: Ensure tool_results have corresponding tool_calls in previous assistant message
@@ -300,6 +306,22 @@ class LiteLLMCompletionResponsesConfig:
             messages=combined_messages,
             tools=tools
         )
+        
+        # Safety check: Ensure we don't end up with empty messages
+        # This can happen when using previous_response_id without a database (e.g., in tests)
+        # and session messages are empty but new input messages exist
+        if not combined_messages:
+            # If we end up with empty messages, try to restore from original inputs
+            if original_new_messages:
+                # If we had new input messages but they got filtered out,
+                # restore them (better to have messages than empty list)
+                # This can happen when tool_call_id is empty and can't be recovered
+                combined_messages = original_new_messages
+            elif session_messages:
+                # If we had session messages but they got filtered out,
+                # restore them
+                combined_messages = session_messages
+            # If both are empty, we'll let it fail with a proper error message
         
         litellm_completion_request["messages"] = combined_messages
         litellm_completion_request["litellm_trace_id"] = chat_completion_session.get(
@@ -521,6 +543,12 @@ class LiteLLMCompletionResponsesConfig:
         fixed_messages = copy.deepcopy(messages)
         messages_to_remove = []
         
+        # Count non-tool messages to avoid removing all messages
+        # This prevents empty messages list when using previous_response_id without a database
+        non_tool_messages_count = sum(
+            1 for msg in fixed_messages if msg.get("role") != "tool"
+        )
+        
         for i, message in enumerate(fixed_messages):
             if message.get("role") == "tool" and "tool_call_id" in message:
                 tool_call_id_raw = message.get("tool_call_id")
@@ -544,8 +572,16 @@ class LiteLLMCompletionResponsesConfig:
                         elif hasattr(message, "tool_call_id"):
                             setattr(message, "tool_call_id", tool_call_id)
                 
+                # Only remove messages with empty tool_call_id if we have other non-tool messages
+                # This prevents ending up with an empty messages list when using previous_response_id
+                # without a database (e.g., in tests where session messages are empty)
                 if not tool_call_id:
-                    messages_to_remove.append(i)
+                    # If we have non-tool messages, we can safely remove this tool message
+                    # But if removing it would leave us with no messages, keep it to avoid empty list
+                    if non_tool_messages_count > 0:
+                        messages_to_remove.append(i)
+                    # If no non-tool messages, keep the tool message even with empty call_id
+                    # The API will return a proper error message about the missing tool_use block
                     continue
                 
                 if prev_assistant_idx is not None:
@@ -667,13 +703,10 @@ class LiteLLMCompletionResponsesConfig:
         ChatCompletionToolMessage is used to indicate the output from a tool call
         """
         call_id = tool_call_output.get("call_id")
-        # If call_id is missing or empty, try to get it from cache or skip this message
-        # Empty tool_call_id will cause Anthropic API errors
+        # If call_id is missing or empty, we'll try to recover it later in _ensure_tool_results_have_corresponding_tool_calls
+        # Don't skip the message here - let the fix handle it
         if not call_id:
-            # Try to find call_id from cache if available
-            # This can happen when messages are reconstructed from spend logs
-            # and the call_id wasn't properly preserved
-            return []  # Skip messages with empty call_id - they can't be properly matched to tool_calls
+            call_id = ""
         
         tool_output_message = ChatCompletionToolMessage(
             role="tool",
