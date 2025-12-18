@@ -85,7 +85,7 @@ response = client.chat.completions.create(
 <details>
 <summary><b>Agents</b> - Invoke A2A Agents (Python SDK + AI Gateway)</summary>
 
-[**Supported Agent Providers**](https://docs.litellm.ai/docs/a2a#add-a2a-agents) - LangGraph, Vertex AI Agent Engine, Azure AI Foundry, Bedrock AgentCore, Pydantic AI
+[**Supported Providers**](https://docs.litellm.ai/docs/a2a#add-a2a-agents) - LangGraph, Vertex AI Agent Engine, Azure AI Foundry, Bedrock AgentCore, Pydantic AI
 
 ### Python SDK - A2A Protocol
 
@@ -110,6 +110,10 @@ response = await client.send_message(request)
 ```
 
 ### AI Gateway (Proxy Server)
+
+**Step 1.** [Add your Agent to the AI Gateway](https://docs.litellm.ai/docs/a2a#adding-your-agent)
+
+**Step 2.** Call Agent via A2A SDK
 
 ```python
 from a2a.client import A2ACardResolver, A2AClient
@@ -172,15 +176,9 @@ async with stdio_client(server_params) as (read, write):
 
 ### AI Gateway - MCP Gateway
 
-```yaml
-mcp_servers:
-  deepwiki_mcp:
-    url: "https://mcp.deepwiki.com/mcp"
-  github_mcp:
-    url: "https://api.githubcopilot.com/mcp"
-    auth_type: "bearer_token"
-    auth_value: "os.environ/GITHUB_TOKEN"
-```
+**Step 1.** [Add your MCP Server to the AI Gateway](https://docs.litellm.ai/docs/mcp#adding-your-mcp)
+
+**Step 2.** Call MCP tools via `/chat/completions`
 
 ```bash
 curl -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
@@ -227,8 +225,8 @@ You can use LiteLLM through either the Proxy Server or Python SDK. Both gives yo
 <thead>
 <tr>
 <th style={{width: '14%'}}></th>
-<th style={{width: '43%'}}><strong><a href="#litellm-proxy-server-llm-gateway">LiteLLM AI Gateway</a></strong></th>
-<th style={{width: '43%'}}><strong><a href="#basic-usage">LiteLLM Python SDK</a></strong></th>
+<th style={{width: '43%'}}><strong><a href="https://docs.litellm.ai/docs/simple_proxy">LiteLLM AI Gateway</a></strong></th>
+<th style={{width: '43%'}}><strong><a href="https://docs.litellm.ai/docs/">LiteLLM Python SDK</a></strong></th>
 </tr>
 </thead>
 <tbody>
@@ -252,7 +250,7 @@ You can use LiteLLM through either the Proxy Server or Python SDK. Both gives yo
 
 LiteLLM Performance: **8ms P95 latency** at 1k RPS (See benchmarks [here](https://docs.litellm.ai/docs/benchmarks))
 
-[**Jump to LiteLLM Proxy (LLM Gateway) Docs**](https://github.com/BerriAI/litellm?tab=readme-ov-file#litellm-proxy-server-llm-gateway---docs) <br>
+[**Jump to LiteLLM Proxy (LLM Gateway) Docs**](https://docs.litellm.ai/docs/simple_proxy) <br>
 [**Jump to Supported LLM Providers**](https://docs.litellm.ai/docs/providers)
 
 **Stable Release:** Use docker images with the `-stable` tag. These have undergone 12 hour load tests, before being published. [More information about the release cycle here](https://docs.litellm.ai/docs/proxy/release_cycle)
