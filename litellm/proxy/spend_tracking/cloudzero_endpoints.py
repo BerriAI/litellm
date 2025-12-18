@@ -296,7 +296,7 @@ def is_cloudzero_setup_in_config() -> bool:
 
 async def is_cloudzero_setup() -> bool:
     """
-    Check if CloudZero is setup in either config.yaml/env vars OR database.
+    Check if CloudZero is setup in either config.yaml/env vars OR database
 
     CloudZero is considered setup if:
     - CloudZero is configured in config.yaml callbacks, OR
