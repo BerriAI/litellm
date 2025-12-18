@@ -142,7 +142,28 @@ def completion(
 - `tool_call_id`: *str (optional)* - Tool call that this message is responding to.
 
 
-[**See All Message Values**](https://github.com/BerriAI/litellm/blob/8600ec77042dacad324d3879a2bd918fc6a719fa/litellm/types/llms/openai.py#L392)
+[**See All Message Values**](https://github.com/BerriAI/litellm/blob/main/litellm/types/llms/openai.py#L664)
+
+#### Content Types
+
+`content` can be a string (text only) or a list of content blocks (multimodal):
+
+| Type | Description | Docs |
+|------|-------------|------|
+| `text` | Text content | - |
+| `image_url` | Images | [Vision](./vision.md) |
+| `input_audio` | Audio input | [Audio](./audio.md) |
+| `video_url` | Video input | - |
+| `file` | Files (OpenAI) | [Document Understanding](./document_understanding.md) |
+| `document` | PDFs (Anthropic) | [Document Understanding](./document_understanding.md) |
+
+**Example (multimodal):**
+```python
+{"role": "user", "content": [
+    {"type": "text", "text": "What's in this image?"},
+    {"type": "image_url", "image_url": {"url": "https://example.com/image.jpg"}}
+]}
+```
 
 ## Optional Fields
 
