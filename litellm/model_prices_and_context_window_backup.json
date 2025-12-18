@@ -15366,7 +15366,7 @@
         "max_tokens": 16000,
         "mode": "chat",
         "supported_endpoints": [
-            "/chat/completions"
+            "/v1/chat/completions"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -15379,7 +15379,7 @@
         "max_tokens": 16000,
         "mode": "chat",
         "supported_endpoints": [
-            "/chat/completions"
+            "/v1/chat/completions"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -15392,7 +15392,7 @@
         "max_tokens": 16000,
         "mode": "chat",
         "supported_endpoints": [
-            "/chat/completions"
+            "/v1/chat/completions"
         ],
         "supports_vision": true
     },
@@ -15403,7 +15403,7 @@
         "max_tokens": 16000,
         "mode": "chat",
         "supported_endpoints": [
-            "/chat/completions"
+            "/v1/chat/completions"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -15416,7 +15416,7 @@
         "max_tokens": 16000,
         "mode": "chat",
         "supported_endpoints": [
-            "/chat/completions"
+            "/v1/chat/completions"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -15573,8 +15573,8 @@
         "max_tokens": 128000,
         "mode": "chat",
         "supported_endpoints": [
-            "/chat/completions",
-            "/responses"
+            "/v1/chat/completions",
+            "/v1/responses"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -15599,8 +15599,8 @@
         "max_tokens": 64000,
         "mode": "chat",
         "supported_endpoints": [
-            "/chat/completions",
-            "/responses"
+            "/v1/chat/completions",
+            "/v1/responses"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -15614,7 +15614,7 @@
         "max_tokens": 128000,
         "mode": "responses",
         "supported_endpoints": [
-            "/responses"
+            "/v1/responses"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -15628,8 +15628,8 @@
         "max_tokens": 64000,
         "mode": "chat",
         "supported_endpoints": [
-            "/chat/completions",
-            "/responses"
+            "/v1/chat/completions",
+            "/v1/responses"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -16831,7 +16831,8 @@
         "supported_endpoints": [
             "/v1/images/generations"
         ],
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_pdf_input": true
     },
     "gpt-image-1.5-2025-12-16": {
         "cache_read_input_image_token_cost": 2e-06,
@@ -16845,7 +16846,8 @@
         "supported_endpoints": [
             "/v1/images/generations"
         ],
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_pdf_input": true
     },
     "gpt-5": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -22386,7 +22388,7 @@
         "input_cost_per_token": 0,
         "litellm_provider": "openrouter",
         "max_input_tokens": 262144,
-        "max_output_tokens": null,
+        "max_output_tokens": 262144,
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 0,
@@ -22428,7 +22430,7 @@
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 262144,
-        "max_output_tokens": null,
+        "max_output_tokens": 262144,
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 1.5e-07,
@@ -22456,7 +22458,7 @@
         "input_cost_per_token": 5e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 262144,
-        "max_output_tokens": null,
+        "max_output_tokens": 262144,
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 1.5e-06,
@@ -31070,7 +31072,8 @@
         "input_cost_per_token": 9e-07,
         "output_cost_per_token": 9e-07,
         "litellm_provider": "fireworks_ai",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_reasoning": true
     },
     "fireworks_ai/accounts/fireworks/models/qwen3-4b": {
         "max_tokens": 40960,
