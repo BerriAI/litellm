@@ -10,6 +10,8 @@ import {
 import { getGuardrailProviderSpecificParams } from "../networking";
 import NumericalInput from "../shared/numerical_input";
 
+const { useWatch } = Form;
+
 interface GuardrailProviderFieldsProps {
   selectedProvider: string | null;
   accessToken?: string | null;
@@ -42,6 +44,9 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
   const [loading, setLoading] = useState(false);
   const [providerParams, setProviderParams] = useState<ProviderParamsResponse | null>(providerParamsProp);
   const [error, setError] = useState<string | null>(null);
+  
+  // Watch the supported_content_types field to conditionally show image_model
+  const supportedContentTypes = useWatch('supported_content_types');
 
   // Fetch provider-specific parameters when component mounts
   useEffect(() => {
@@ -141,6 +146,17 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
       // Skip content filter specific fields when it's a content filter provider (handled in dedicated steps)
       if (isContentFilterProvider && contentFilterFieldsToSkip.has(fieldKey)) {
         return null;
+      }
+
+      // Only show image_model if supported_content_types includes 'images'
+      if (fieldKey === 'image_model') {
+        const shouldShowImageModel = Array.isArray(supportedContentTypes) 
+          ? supportedContentTypes.includes('images')
+          : supportedContentTypes === 'images';
+        
+        if (!shouldShowImageModel) {
+          return null;
+        }
       }
 
       // Handle other nested fields (like azure/text_moderations optional_params)

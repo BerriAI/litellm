@@ -14,12 +14,15 @@ Pattern Overview:
 This pattern can be replicated for other message formats (e.g., Anthropic).
 """
 
+import base64
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.main import stream_chunk_builder
+from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.llms.openai import ChatCompletionToolParam
 from litellm.types.utils import Choices, GenericGuardrailAPIInputs, ModelResponse, ModelResponseStream, StreamingChoices
 
@@ -53,6 +56,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
+        documents_to_check: List[str] = []
         tool_calls_to_check: List[ChatCompletionToolParam] = []
         text_task_mappings: List[Tuple[int, Optional[int]]] = []
         tool_call_task_mappings: List[Tuple[int, int]] = []
@@ -67,6 +71,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 msg_idx=msg_idx,
                 texts_to_check=texts_to_check,
                 images_to_check=images_to_check,
+                documents_to_check=documents_to_check,
                 tool_calls_to_check=tool_calls_to_check,
                 text_task_mappings=text_task_mappings,
                 tool_call_task_mappings=tool_call_task_mappings,
@@ -77,6 +82,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
                 inputs["images"] = images_to_check
+            if documents_to_check:
+                inputs["documents"] = documents_to_check
             if tool_calls_to_check:
                 inputs["tool_calls"] = tool_calls_to_check  # type: ignore
             if messages:
@@ -124,14 +131,15 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         msg_idx: int,
         texts_to_check: List[str],
         images_to_check: List[str],
+        documents_to_check: List[str],
         tool_calls_to_check: List[ChatCompletionToolParam],
         text_task_mappings: List[Tuple[int, Optional[int]]],
         tool_call_task_mappings: List[Tuple[int, int]],
     ) -> None:
         """
-        Extract text content, images, and tool calls from a message.
+        Extract text content, images, documents, and tool calls from a message.
 
-        Override this method to customize text/image/tool call extraction logic.
+        Override this method to customize text/image/document/tool call extraction logic.
         """
         content = message.get("content", None)
         if content is not None:
@@ -159,6 +167,37 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                         elif isinstance(image_url, str):
                             images_to_check.append(image_url)
 
+                    # Extract documents (document or file)
+                    if content_item.get("type") == "document":
+                        # ChatCompletionDocumentObject format
+                        source = content_item.get("source", {})
+                        if isinstance(source, dict):
+                            data = source.get("data")
+                            if data:
+                                # Decode base64 if needed to get actual text
+                                document_text = self._decode_document_data(data)
+                                documents_to_check.append(document_text)
+
+                    # Extract files (file)
+                    if content_item.get("type") == "file":
+                        # ChatCompletionFileObject format
+                        file_obj = content_item.get("file", {})
+                        if isinstance(file_obj, dict):
+                            # Check for file_id (PDF/TXT URL or file reference)
+                            file_id = file_obj.get("file_id")
+                            if file_id and (
+                                file_id.endswith(".pdf") or file_id.endswith(".txt")
+                            ):
+                                # Add URL to documents list - will be processed asynchronously later
+                                documents_to_check.append(file_id)
+
+                            # Check for file_data (base64 encoded)
+                            file_data = file_obj.get("file_data")
+                            if file_data:
+                                # Decode base64 to get actual text
+                                document_text = self._decode_document_data(file_data)
+                                documents_to_check.append(document_text)
+
         # Extract tool calls (typically in assistant messages)
         tool_calls = message.get("tool_calls", None)
         if tool_calls is not None and isinstance(tool_calls, list):
@@ -167,6 +206,29 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     # Add the full tool call object to the list
                     tool_calls_to_check.append(cast(ChatCompletionToolParam, tool_call))
                     tool_call_task_mappings.append((msg_idx, int(tool_call_idx)))
+
+    def _decode_document_data(self, data: str) -> str:
+        """
+        Decode document data from base64 if applicable.
+
+        Args:
+            data: Document data, either base64 encoded or plain text
+
+        Returns:
+            Decoded text content
+        """
+        try:
+            # Try to decode as base64
+            decoded_bytes = base64.b64decode(data)
+            # Try to decode as UTF-8 text
+            return decoded_bytes.decode("utf-8")
+        except Exception:
+            # If decoding fails, return the original data
+            # (it might already be plain text or in a different format)
+            verbose_proxy_logger.debug(
+                "Failed to decode document data as base64, returning as-is"
+            )
+            return data
 
     async def _apply_guardrail_responses_to_input_texts(
         self,
@@ -257,6 +319,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
+        documents_to_check: List[str] = []
         tool_calls_to_check: List[Dict[str, Any]] = []
         text_task_mappings: List[Tuple[int, Optional[int]]] = []
         tool_call_task_mappings: List[Tuple[int, int]] = []
@@ -271,6 +334,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 choice_idx=choice_idx,
                 texts_to_check=texts_to_check,
                 images_to_check=images_to_check,
+                documents_to_check=documents_to_check,
                 tool_calls_to_check=tool_calls_to_check,
                 text_task_mappings=text_task_mappings,
                 tool_call_task_mappings=tool_call_task_mappings,
@@ -291,6 +355,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
                 inputs["images"] = images_to_check
+            if documents_to_check:
+                inputs["documents"] = documents_to_check
             if tool_calls_to_check:
                 inputs["tool_calls"] = tool_calls_to_check  # type: ignore
 
@@ -391,6 +457,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         # Step 2: Create lists for guardrail processing
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
+        documents_to_check: List[str] = []
         task_mappings: List[Tuple[int, Optional[int]]] = []
         # Track (choice_index, content_index) for each combined text
 
@@ -413,6 +480,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
                 inputs["images"] = images_to_check
+            if documents_to_check:
+                inputs["documents"] = documents_to_check
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=request_data,
@@ -531,14 +600,15 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         choice_idx: int,
         texts_to_check: List[str],
         images_to_check: List[str],
+        documents_to_check: List[str],
         tool_calls_to_check: List[Dict[str, Any]],
         text_task_mappings: List[Tuple[int, Optional[int]]],
         tool_call_task_mappings: List[Tuple[int, int]],
     ) -> None:
         """
-        Extract text content, images, and tool calls from a response choice.
+        Extract text content, images, documents, and tool calls from a response choice.
 
-        Override this method to customize text/image/tool call extraction logic.
+        Override this method to customize text/image/document/tool call extraction logic.
         """
         verbose_proxy_logger.debug(
             "OpenAI Chat Completions: Processing choice: %s", choice
@@ -579,6 +649,37 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                         url = image_url.get("url")
                         if url:
                             images_to_check.append(url)
+
+                # Extract documents (document or file)
+                if content_item.get("type") == "document":
+                    # ChatCompletionDocumentObject format
+                    source = content_item.get("source", {})
+                    if isinstance(source, dict):
+                        data = source.get("data")
+                        if data:
+                            # Decode base64 if needed to get actual text
+                            document_text = self._decode_document_data(data)
+                            documents_to_check.append(document_text)
+
+                # Extract files (file)
+                if content_item.get("type") == "file":
+                    # ChatCompletionFileObject format
+                    file_obj = content_item.get("file", {})
+                    if isinstance(file_obj, dict):
+                        # Check for file_id (PDF/TXT URL or file reference)
+                        file_id = file_obj.get("file_id")
+                        if file_id and (
+                            file_id.endswith(".pdf") or file_id.endswith(".txt")
+                        ):
+                            # Add URL to documents list - will be processed asynchronously later
+                            documents_to_check.append(file_id)
+
+                        # Check for file_data (base64 encoded)
+                        file_data = file_obj.get("file_data")
+                        if file_data:
+                            # Decode base64 to get actual text
+                            document_text = self._decode_document_data(file_data)
+                            documents_to_check.append(document_text)
 
         # Process tool calls if they exist
         if tool_calls is not None and isinstance(tool_calls, list):

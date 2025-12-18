@@ -57,6 +57,7 @@ class GenericGuardrailAPIRequest(BaseModel):
     ]  # the trace id of the LLM call - useful if there are multiple LLM calls for the same conversation
     structured_messages: Optional[List[AllMessageValues]]
     images: Optional[List[str]]
+    documents: Optional[List[str]]  # URLs or base64-encoded document data
     tools: Optional[List[ChatCompletionToolParam]]
     texts: Optional[List[str]]
     request_data: GenericGuardrailAPIMetadata
@@ -71,6 +72,7 @@ class GenericGuardrailAPIResponse:
 
     texts: Optional[List[str]]
     images: Optional[List[str]]
+    documents: Optional[List[str]]
     tools: Optional[List[ChatCompletionToolParam]]
     action: str
     blocked_reason: Optional[str]
@@ -81,12 +83,14 @@ class GenericGuardrailAPIResponse:
         texts: Optional[List[str]] = None,
         blocked_reason: Optional[str] = None,
         images: Optional[List[str]] = None,
+        documents: Optional[List[str]] = None,
         tools: Optional[List[ChatCompletionToolParam]] = None,
     ):
         self.action = action
         self.blocked_reason = blocked_reason
         self.texts = texts
         self.images = images
+        self.documents = documents
         self.tools = tools
 
     @classmethod
@@ -96,5 +100,6 @@ class GenericGuardrailAPIResponse:
             blocked_reason=data.get("blocked_reason"),
             texts=data.get("texts"),
             images=data.get("images"),
+            documents=data.get("documents"),
             tools=data.get("tools"),
         )

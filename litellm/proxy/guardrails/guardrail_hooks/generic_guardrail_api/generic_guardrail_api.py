@@ -159,23 +159,26 @@ class GenericGuardrailAPI(CustomGuardrail):
             inputs: Dictionary containing:
                 - texts: List of texts to check
                 - images: Optional list of images to check
+                - documents: Optional list of documents to check
                 - tool_calls: Optional list of tool calls to check
             request_data: Request data dictionary containing user_api_key_dict and other metadata
             input_type: Whether this is a "request" or "response" guardrail
             logging_obj: Optional logging object for tracking the guardrail execution
 
         Returns:
-            Tuple of (processed texts, processed images)
+            Tuple of (processed texts, processed images, processed documents)
 
         Raises:
             Exception: If the guardrail blocks the request
         """
         verbose_proxy_logger.debug("Generic Guardrail API: Applying guardrail to text")
 
-        # Extract texts and images from inputs
+        # Extract texts, images, and documents from inputs
         texts = inputs.get("texts", [])
         images = inputs.get("images")
+        documents = inputs.get("documents")
         tools = inputs.get("tools")
+
         structured_messages = inputs.get("structured_messages")
         tool_calls = inputs.get("tool_calls")
 
@@ -203,6 +206,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             texts=texts,
             request_data=user_metadata,
             images=images,
+            documents=documents,
             tools=tools,
             structured_messages=structured_messages,
             tool_calls=tool_calls,
@@ -251,6 +255,10 @@ class GenericGuardrailAPI(CustomGuardrail):
                 return_inputs["images"] = guardrail_response.images
             elif images:
                 return_inputs["images"] = images
+            if guardrail_response.documents:
+                return_inputs["documents"] = guardrail_response.documents
+            elif documents:
+                return_inputs["documents"] = documents
             if guardrail_response.tools:
                 return_inputs["tools"] = guardrail_response.tools
             elif tools:

@@ -18,7 +18,8 @@ import Image from '@theme/IdealImage';
 | Detection Methods | Prebuilt regex patterns, custom regex, keyword matching |
 | Actions | `BLOCK` (reject request), `MASK` (redact content) |
 | Supported Modes | `pre_call`, `post_call`, `during_call` (streaming) |
-| Performance | Fast - runs locally, no external API calls |
+| Supported Content | Text (default), Images (opt-in), Documents (opt-in) |
+| Performance | Fast for text filtering. **Images and documents are opt-in** due to latency: images require LLM vision model calls, documents require network calls to fetch content. |
 
 ## Quick Start
 
@@ -402,6 +403,7 @@ This can introduce significant latency to the request - depending on the speed o
 
 This is because, each request containing images will be sent to the vision-capable model to generate a description.
 
+This behavior is opt-in. To enable image content filtering, set `supported_content_types` to include `"images"`:
 :::
 
 ### Configuration
@@ -420,6 +422,7 @@ guardrails:
       guardrail: litellm_content_filter
       mode: "pre_call"
       image_model: "gpt-4-vision"  # value is `model_name` of the vision-capable model
+      supported_content_types: ["texts", "images"]
       
       # Apply same filters to image descriptions
       categories:
@@ -470,6 +473,51 @@ If the image description contains filtered content, you'll get:
   "error": "Content blocked: harmful_violence category keyword 'weapon' detected (severity: high) (Image description): The image shows..."
 }
 ```
+
+## Document Content Filtering
+
+Content filter can analyze documents (PDF/TXT files) from URLs by fetching and extracting their content.
+
+:::warning Latency Impact
+
+**Document filtering is opt-in** due to latency from network calls to fetch document content:
+- **PDF documents**: Network call to fetch + base64 encoding
+- **TXT documents**: Network call to fetch + text extraction
+
+Enable only if you need to filter document content.
+
+:::
+
+### Configuration
+
+To enable document filtering, set `supported_content_types` to include `"documents"`:
+
+```yaml showLineNumbers title="config.yaml"
+guardrails:
+  - guardrail_name: "document-filter"
+    litellm_params:
+      guardrail: litellm_content_filter
+      mode: "pre_call"
+      supported_content_types: ["texts", "documents"]  # Enable document filtering
+      
+      # Apply filters to document content
+      patterns:
+        - pattern_type: "prebuilt"
+          pattern_name: "email"
+          action: "MASK"
+      
+      blocked_words:
+        - keyword: "confidential"
+          action: "BLOCK"
+```
+
+### How It Works
+
+1. Document URLs are extracted from messages (supports `file_id` with `.pdf` or `.txt` extensions)
+2. Documents are fetched from URLs asynchronously
+3. Content is extracted (text for TXT, base64 for PDF)
+4. Content filters are applied to the extracted text
+5. If sensitive content is detected, request is blocked or content is masked
 
 ## Customizing Redaction Tags
 

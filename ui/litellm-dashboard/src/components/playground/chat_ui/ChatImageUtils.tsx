@@ -1,11 +1,14 @@
 import { MessageType } from "./types";
 
 export interface ChatMultimodalContent {
-  type: "text" | "image_url";
+  type: "text" | "image_url" | "file";
   text?: string;
   image_url?: {
     url: string;
     detail?: string;
+  };
+  file?: {
+    file_data: string;
   };
 }
 
@@ -27,17 +30,30 @@ export const createChatMultimodalMessage = async (
   file: File,
 ): Promise<{ role: string; content: ChatMultimodalContent[] }> => {
   const base64DataUri = await convertImageToBase64(file);
+  const fileName = file.name.toLowerCase();
+  
+  // Check if file is PDF or text
+  const isPdfOrText = fileName.endsWith('.pdf') || fileName.endsWith('.txt');
+  
+  const fileContent: ChatMultimodalContent = isPdfOrText
+    ? {
+        type: "file",
+        file: {
+          file_data: base64DataUri,
+        },
+      }
+    : {
+        type: "image_url",
+        image_url: {
+          url: base64DataUri,
+        },
+      };
 
   return {
     role: "user",
     content: [
       { type: "text", text: inputMessage },
-      {
-        type: "image_url",
-        image_url: {
-          url: base64DataUri,
-        },
-      },
+      fileContent,
     ],
   };
 };
@@ -50,7 +66,14 @@ export const createChatDisplayMessage = (
 ): MessageType => {
   let attachmentText = "";
   if (hasFile && fileName) {
-    attachmentText = fileName.toLowerCase().endsWith(".pdf") ? "[PDF attached]" : "[Image attached]";
+    const lowerFileName = fileName.toLowerCase();
+    if (lowerFileName.endsWith(".pdf")) {
+      attachmentText = "[PDF attached]";
+    } else if (lowerFileName.endsWith(".txt")) {
+      attachmentText = "[Text file attached]";
+    } else {
+      attachmentText = "[Image attached]";
+    }
   }
 
   const displayMessage: MessageType = {
@@ -69,7 +92,9 @@ export const shouldShowChatAttachedImage = (message: MessageType): boolean => {
   return (
     message.role === "user" &&
     typeof message.content === "string" &&
-    (message.content.includes("[Image attached]") || message.content.includes("[PDF attached]")) &&
+    (message.content.includes("[Image attached]") || 
+     message.content.includes("[PDF attached]") || 
+     message.content.includes("[Text file attached]")) &&
     !!message.imagePreviewUrl
   );
 };

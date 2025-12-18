@@ -59,6 +59,18 @@ class LitellmContentFilterGuardrailConfigModel(GuardrailConfigModel):
         description="Path to YAML file containing blocked words",
     )
 
+    supported_content_types: Optional[List[Literal["texts", "images", "documents"]]] = (
+        Field(
+            default=None,
+            description="Default is just 'texts'. If you want to support images or documents, set this to ['texts', 'images', 'documents'].",
+        )
+    )
+
+    image_model: Optional[str] = Field(
+        default=None,
+        description="Model name for image description. Must be a 'public model name' from the LiteLLM model list.",
+    )
+
     # Category-based detection
     categories: Optional[List[ContentFilterCategoryConfig]] = Field(
         default=None,

@@ -446,6 +446,177 @@ class TestImageSupport:
             assert result_images == ["https://example.com/image.jpg"]
 
 
+class TestDocumentSupport:
+    """Test document handling in guardrail requests"""
+
+    @pytest.mark.asyncio
+    async def test_documents_passed_in_request(
+        self, generic_guardrail, mock_request_data_input
+    ):
+        """Test that documents are passed to the API"""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "action": "NONE",
+            "texts": ["Analyze this document"],
+            "documents": [
+                "https://example.com/doc.pdf",
+                "base64_encoded_document_data",
+            ],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            generic_guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            guardrailed_inputs = await generic_guardrail.apply_guardrail(
+                inputs={
+                    "texts": ["Analyze this document"],
+                    "documents": [
+                        "https://example.com/doc.pdf",
+                        "base64_encoded_document_data",
+                    ],
+                },
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+            result_texts = guardrailed_inputs.get("texts", [])
+            result_documents = guardrailed_inputs.get("documents", None)
+
+            # Verify API was called with documents
+            call_args = mock_post.call_args
+            json_payload = call_args.kwargs["json"]
+            assert json_payload["documents"] == [
+                "https://example.com/doc.pdf",
+                "base64_encoded_document_data",
+            ]
+
+            # Verify result includes documents
+            assert result_documents == [
+                "https://example.com/doc.pdf",
+                "base64_encoded_document_data",
+            ]
+
+    @pytest.mark.asyncio
+    async def test_documents_url_format(
+        self, generic_guardrail, mock_request_data_input
+    ):
+        """Test that document URLs are handled correctly"""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "action": "NONE",
+            "texts": ["Check this PDF"],
+            "documents": ["https://example.com/document.pdf"],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            generic_guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            await generic_guardrail.apply_guardrail(
+                inputs={
+                    "texts": ["Check this PDF"],
+                    "documents": ["https://example.com/document.pdf"],
+                },
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+            # Verify API was called with document URL
+            call_args = mock_post.call_args
+            json_payload = call_args.kwargs["json"]
+            assert "documents" in json_payload
+            assert json_payload["documents"][0].startswith("https://")
+
+    @pytest.mark.asyncio
+    async def test_documents_base64_format(
+        self, generic_guardrail, mock_request_data_input
+    ):
+        """Test that base64-encoded documents are handled correctly"""
+        base64_doc = "data:application/pdf;base64,JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PC9UeXBlIC9QYWdlcw=="
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "action": "NONE",
+            "texts": ["Analyze base64 document"],
+            "documents": [base64_doc],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            generic_guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            await generic_guardrail.apply_guardrail(
+                inputs={
+                    "texts": ["Analyze base64 document"],
+                    "documents": [base64_doc],
+                },
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+            # Verify API was called with base64 document
+            call_args = mock_post.call_args
+            json_payload = call_args.kwargs["json"]
+            assert "documents" in json_payload
+            assert json_payload["documents"][0] == base64_doc
+
+    @pytest.mark.asyncio
+    async def test_documents_blocked_action(
+        self, generic_guardrail, mock_request_data_input
+    ):
+        """Test that documents can trigger BLOCKED action"""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "action": "BLOCKED",
+            "blocked_reason": "Document contains sensitive information",
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            generic_guardrail.async_handler, "post", return_value=mock_response
+        ):
+            with pytest.raises(Exception) as exc_info:
+                await generic_guardrail.apply_guardrail(
+                    inputs={
+                        "texts": ["Process this document"],
+                        "documents": ["https://example.com/confidential.pdf"],
+                    },
+                    request_data=mock_request_data_input,
+                    input_type="request",
+                )
+
+            assert "Content blocked by guardrail" in str(exc_info.value)
+            assert "sensitive information" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_documents_intervened_action(
+        self, generic_guardrail, mock_request_data_input
+    ):
+        """Test that documents can be modified via GUARDRAIL_INTERVENED action"""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "action": "GUARDRAIL_INTERVENED",
+            "texts": ["Process this document"],
+            "documents": ["https://example.com/redacted-document.pdf"],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            generic_guardrail.async_handler, "post", return_value=mock_response
+        ):
+            guardrailed_inputs = await generic_guardrail.apply_guardrail(
+                inputs={
+                    "texts": ["Process this document"],
+                    "documents": ["https://example.com/original-document.pdf"],
+                },
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+            result_documents = guardrailed_inputs.get("documents", None)
+
+            # Verify documents were modified
+            assert result_documents == ["https://example.com/redacted-document.pdf"]
+
+
 class TestAdditionalParams:
     """Test additional provider-specific parameters"""
 

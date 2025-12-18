@@ -579,8 +579,3 @@ class TestOpenAIChatCompletionsHandlerToolCallsOutput:
         assert response.id == "chatcmpl-abc123"
         assert response.model == "gpt-4o-mini"
         assert response.choices[0].finish_reason == "tool_calls"
-
-
-if __name__ == "__main__":
-    # Run the tests
-    pytest.main([__file__, "-v"])

@@ -18,14 +18,15 @@ def str_to_bool(value: Optional[str]) -> bool:
     return value.lower() in ("true", "1", "t", "y", "yes")
 
 
-
 def _get_prisma_env() -> dict:
     """Get environment variables for Prisma, handling offline mode if configured."""
     prisma_env = os.environ.copy()
     if str_to_bool(os.getenv("PRISMA_OFFLINE_MODE")):
         # These env vars prevent Prisma from attempting downloads
         prisma_env["NPM_CONFIG_PREFER_OFFLINE"] = "true"
-        prisma_env["NPM_CONFIG_CACHE"] = os.getenv("NPM_CONFIG_CACHE", "/app/.cache/npm")
+        prisma_env["NPM_CONFIG_CACHE"] = os.getenv(
+            "NPM_CONFIG_CACHE", "/app/.cache/npm"
+        )
     return prisma_env
 
 
@@ -34,27 +35,26 @@ def _get_prisma_command() -> str:
     if str_to_bool(os.getenv("PRISMA_OFFLINE_MODE")):
         # Primary location where Prisma Python package installs the CLI
         default_cli_path = "/app/.cache/prisma-python/binaries/node_modules/.bin/prisma"
-        
+
         # Check if custom path is provided (for flexibility)
         custom_cli_path = os.getenv("PRISMA_CLI_PATH")
         if custom_cli_path and os.path.exists(custom_cli_path):
             logger.info(f"Using custom Prisma CLI at {custom_cli_path}")
             return custom_cli_path
-        
+
         # Check the default location
         if os.path.exists(default_cli_path):
             logger.info(f"Using cached Prisma CLI at {default_cli_path}")
             return default_cli_path
-        
+
         # If not found, log warning and fall back
         logger.warning(
             f"Prisma CLI not found at {default_cli_path}. "
             "Falling back to Python wrapper (may attempt downloads)"
         )
-    
+
     # Fall back to the Python wrapper (will work in online mode)
     return "prisma"
-
 
 
 class ProxyExtrasDBManager:
@@ -119,7 +119,7 @@ class ProxyExtrasDBManager:
                 stdout=open(migration_file, "w"),
                 check=True,
                 timeout=30,
-                env=prisma_env
+                env=prisma_env,
             )
 
             # 3. Mark the migration as applied since it represents current state
@@ -134,7 +134,7 @@ class ProxyExtrasDBManager:
                 ],
                 check=True,
                 timeout=30,
-                env=prisma_env
+                env=prisma_env,
             )
 
             return True
@@ -159,14 +159,20 @@ class ProxyExtrasDBManager:
     @staticmethod
     def _roll_back_migration(migration_name: str):
         """Mark a specific migration as rolled back"""
-         # Set up environment for offline mode if configured
+        # Set up environment for offline mode if configured
         prisma_env = _get_prisma_env()
         subprocess.run(
-            [_get_prisma_command(), "migrate", "resolve", "--rolled-back", migration_name],
+            [
+                _get_prisma_command(),
+                "migrate",
+                "resolve",
+                "--rolled-back",
+                migration_name,
+            ],
             timeout=60,
             check=True,
             capture_output=True,
-            env=prisma_env
+            env=prisma_env,
         )
 
     @staticmethod
@@ -178,7 +184,7 @@ class ProxyExtrasDBManager:
             timeout=60,
             check=True,
             capture_output=True,
-            env=prisma_env
+            env=prisma_env,
         )
 
     @staticmethod
@@ -248,7 +254,7 @@ class ProxyExtrasDBManager:
         if not database_url:
             logger.error("DATABASE_URL not set")
             return
-        
+
         diff_dir = (
             Path(migrations_dir)
             / "migrations"
@@ -283,7 +289,7 @@ class ProxyExtrasDBManager:
                     check=True,
                     timeout=60,
                     stdout=f,
-                    env=_get_prisma_env()
+                    env=_get_prisma_env(),
                 )
         except subprocess.CalledProcessError as e:
             logger.warning(f"Failed to generate migration diff: {e.stderr}")
@@ -295,6 +301,22 @@ class ProxyExtrasDBManager:
             logger.warning("Migration diff was not created")
             return
         logger.info(f"Migration diff created at {diff_sql_path}")
+
+        # Sanity check: if the migration file is empty or contains only empty migration marker, delete the folder
+        try:
+            with open(diff_sql_path, "r") as f:
+                content = f.read().strip()
+
+            # Check if file is empty or contains empty migration marker
+            if not content or "-- This is an empty migration." in content:
+                logger.info("Migration diff is empty, cleaning up migration folder...")
+                import shutil
+
+                shutil.rmtree(diff_dir)
+                logger.info(f"Deleted empty migration folder: {diff_dir}")
+                return
+        except Exception as e:
+            logger.warning(f"Failed to check migration file content: {e}")
 
         # 2. Run prisma db execute to apply the migration
         try:
@@ -313,7 +335,7 @@ class ProxyExtrasDBManager:
                 check=True,
                 capture_output=True,
                 text=True,
-                env=_get_prisma_env()
+                env=_get_prisma_env(),
             )
             logger.info(f"prisma db execute stdout: {result.stdout}")
             logger.info("✅ Migration diff applied successfully")
@@ -331,12 +353,18 @@ class ProxyExtrasDBManager:
             try:
                 logger.info(f"Resolving migration: {migration_name}")
                 subprocess.run(
-                    [_get_prisma_command(), "migrate", "resolve", "--applied", migration_name],
+                    [
+                        _get_prisma_command(),
+                        "migrate",
+                        "resolve",
+                        "--applied",
+                        migration_name,
+                    ],
                     timeout=60,
                     check=True,
                     capture_output=True,
                     text=True,
-                    env=_get_prisma_env()
+                    env=_get_prisma_env(),
                 )
                 logger.debug(f"Resolved migration: {migration_name}")
             except subprocess.CalledProcessError as e:
@@ -375,7 +403,7 @@ class ProxyExtrasDBManager:
                             check=True,
                             capture_output=True,
                             text=True,
-                            env=_get_prisma_env()
+                            env=_get_prisma_env(),
                         )
                         logger.info(f"prisma migrate deploy stdout: {result.stdout}")
 
@@ -413,7 +441,7 @@ class ProxyExtrasDBManager:
                                     check=True,
                                     capture_output=True,
                                     text=True,
-                                    env=_get_prisma_env()
+                                    env=_get_prisma_env(),
                                 )
                                 logger.info(
                                     f"✅ Migration {failed_migration} marked as rolled back... retrying"
