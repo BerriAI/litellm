@@ -85,6 +85,8 @@ response = client.chat.completions.create(
 <details>
 <summary><b>Agents</b> - Invoke A2A Agents (Python SDK + AI Gateway)</summary>
 
+[**Supported Agent Providers**](https://docs.litellm.ai/docs/a2a#add-a2a-agents) - LangGraph, Vertex AI Agent Engine, Azure AI Foundry, Bedrock AgentCore, Pydantic AI
+
 ### Python SDK - A2A Protocol
 
 ```python
@@ -107,7 +109,7 @@ request = SendMessageRequest(
 response = await client.send_message(request)
 ```
 
-### AI Gateway - A2A SDK
+### AI Gateway (Proxy Server)
 
 ```python
 from a2a.client import A2ACardResolver, A2AClient
