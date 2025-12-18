@@ -704,7 +704,10 @@ class TestAddTeamModelToDb:
         with patch(
             "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add",
             new_callable=AsyncMock,
-        ) as mock_team_model_add:
+        ) as mock_team_model_add, patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
+            return_value="encrypted_fake_key",
+        ):
             result = await _add_team_model_to_db(
                 model_params=model_params,
                 user_api_key_dict=user_api_key_dict,
