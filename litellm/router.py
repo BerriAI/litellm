@@ -136,6 +136,7 @@ from litellm.types.router import (
     CustomRoutingStrategyBase,
     Deployment,
     DeploymentTypedDict,
+    GuardrailTypedDict,
     LiteLLM_Params,
     MockRouterTestingParams,
     ModelGroupInfo,
@@ -214,6 +215,8 @@ class Router:
         assistants_config: Optional[AssistantsTypedDict] = None,
         ## SEARCH API ##
         search_tools: Optional[List[SearchToolTypedDict]] = None,
+        ## GUARDRAIL API ##
+        guardrail_list: Optional[List[GuardrailTypedDict]] = None,
         ## CACHING ##
         redis_url: Optional[str] = None,
         redis_host: Optional[str] = None,
@@ -375,6 +378,7 @@ class Router:
 
         self.assistants_config = assistants_config
         self.search_tools = search_tools or []
+        self.guardrail_list = guardrail_list or []
         self.deployment_names: List = (
             []
         )  # names of models under litellm_params. ex. azure/chatgpt-v-2
@@ -2973,6 +2977,78 @@ class Router:
             original_generic_function=original_generic_function,
             **kwargs,
         )
+
+    async def aguardrail(
+        self,
+        guardrail_name: str,
+        original_function: Callable,
+        **kwargs,
+    ):
+        """
+        Execute a guardrail with load balancing and fallbacks.
+
+        Args:
+            guardrail_name: Name of the guardrail to execute
+            original_function: The guardrail's execution function (e.g., async_pre_call_hook)
+            **kwargs: Additional arguments passed to the guardrail
+
+        Returns:
+            Result from the guardrail execution
+        """
+        kwargs["model"] = guardrail_name  # For fallback system compatibility
+        kwargs["original_generic_function"] = original_function
+        kwargs["original_function"] = self._aguardrail_helper
+        self._update_kwargs_before_fallbacks(
+            model=guardrail_name, kwargs=kwargs, metadata_variable_name="litellm_metadata"
+        )
+        verbose_router_logger.debug(
+            f"Inside aguardrail() - guardrail_name: {guardrail_name}; kwargs: {kwargs}"
+        )
+        response = await self.async_function_with_fallbacks(**kwargs)
+        return response
+
+    async def _aguardrail_helper(
+        self,
+        model: str,
+        original_generic_function: Callable,
+        **kwargs,
+    ):
+        """
+        Helper for aguardrail - selects a guardrail deployment and executes it.
+        Called by async_function_with_fallbacks for each retry attempt.
+
+        Args:
+            model: The guardrail_name (named 'model' for fallback system compatibility)
+            original_generic_function: The guardrail's execution function
+            **kwargs: Additional arguments
+        """
+        from litellm.router_strategy.simple_shuffle import simple_shuffle
+
+        guardrail_name = model
+
+        # Get all deployments matching guardrail_name
+        healthy_deployments = [
+            g for g in self.guardrail_list if g.get("guardrail_name") == guardrail_name
+        ]
+
+        if not healthy_deployments:
+            raise ValueError(f"No guardrail found with name: {guardrail_name}")
+
+        # Use simple_shuffle for selection (same as model deployments)
+        selected_guardrail = simple_shuffle(
+            llm_router_instance=self,
+            healthy_deployments=healthy_deployments,
+            model=guardrail_name,
+        )
+
+        verbose_router_logger.debug(
+            f"Selected guardrail deployment: {selected_guardrail.get('litellm_params', {}).get('guardrail')}"
+        )
+
+        # Pass the selected guardrail config to the original function
+        kwargs["selected_guardrail"] = selected_guardrail
+        response = await original_generic_function(**kwargs)
+        return response
 
     async def _ageneric_api_call_with_fallbacks(
         self, model: str, original_function: Callable, **kwargs
