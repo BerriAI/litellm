@@ -2795,19 +2795,25 @@ class ProxyConfig:
         verbose_proxy_logger.debug(f"_alerting_callbacks: {general_settings}")
         if _alerting_callbacks is None:
             return
+        
+        # Ensure proxy_logging_obj.alerting is set for all alerting types
+        _alerting_value = general_settings.get("alerting", None)
+        verbose_proxy_logger.debug(f"_load_alerting_settings: Calling update_values with alerting={_alerting_value}")
+        proxy_logging_obj.update_values(
+            alerting=_alerting_value,
+            alerting_threshold=general_settings.get("alerting_threshold", 600),
+            alert_types=general_settings.get("alert_types", None),
+            alert_to_webhook_url=general_settings.get(
+                "alert_to_webhook_url", None
+            ),
+            alerting_args=general_settings.get("alerting_args", None),
+            redis_cache=redis_usage_cache,
+        )
+        
         for _alert in _alerting_callbacks:
             if _alert == "slack":
-                # [OLD] v0 implementation
-                proxy_logging_obj.update_values(
-                    alerting=general_settings.get("alerting", None),
-                    alerting_threshold=general_settings.get("alerting_threshold", 600),
-                    alert_types=general_settings.get("alert_types", None),
-                    alert_to_webhook_url=general_settings.get(
-                        "alert_to_webhook_url", None
-                    ),
-                    alerting_args=general_settings.get("alerting_args", None),
-                    redis_cache=redis_usage_cache,
-                )
+                # [OLD] v0 implementation - already handled by update_values above
+                pass
             else:
                 # [NEW] v1 implementation - init as a custom logger
                 if _alert in litellm._known_custom_logger_compatible_callbacks:
@@ -3274,6 +3280,7 @@ class ProxyConfig:
             proxy_logging_obj: ProxyLogging
         """
         _general_settings = config_data.get("general_settings", {})
+    
         if _general_settings is not None and "alerting" in _general_settings:
             if (
                 general_settings is not None
@@ -3282,29 +3289,36 @@ class ProxyConfig:
                 and _general_settings.get("alerting", None) is not None
                 and isinstance(_general_settings["alerting"], list)
             ):
-                verbose_proxy_logger.debug(
-                    "Overriding Default 'alerting' values with db 'alerting' values."
-                )
-                general_settings["alerting"] = _general_settings[
-                    "alerting"
-                ]  # override yaml values with db
-                proxy_logging_obj.alerting = general_settings["alerting"]
-                proxy_logging_obj.slack_alerting_instance.alerting = general_settings[
-                    "alerting"
+                # Merge DB and YAML/config alerting values instead of overriding
+                _yaml_alerting = set(general_settings["alerting"])
+                _db_alerting = set(_general_settings["alerting"])
+                _merged_alerting = list(_yaml_alerting.union(_db_alerting))
+                # Preserve order: YAML values first, then DB values
+                _merged_alerting = list(general_settings["alerting"]) + [
+                    item for item in _general_settings["alerting"] 
+                    if item not in general_settings["alerting"]
                 ]
+                verbose_proxy_logger.debug(
+                    f"Merging alerting values: YAML={general_settings['alerting']}, DB={_general_settings['alerting']}, Merged={_merged_alerting}"
+                )
+                general_settings["alerting"] = _merged_alerting
+                # Use update_values to properly set alerting for both slack and email
+                proxy_logging_obj.update_values(
+                    alerting=general_settings["alerting"],
+                )
             elif general_settings is None:
                 general_settings = {}
                 general_settings["alerting"] = _general_settings["alerting"]
-                proxy_logging_obj.alerting = general_settings["alerting"]
-                proxy_logging_obj.slack_alerting_instance.alerting = general_settings[
-                    "alerting"
-                ]
+                # Use update_values to properly set alerting for both slack and email
+                proxy_logging_obj.update_values(
+                    alerting=general_settings["alerting"],
+                )
             elif isinstance(general_settings, dict):
                 general_settings["alerting"] = _general_settings["alerting"]
-                proxy_logging_obj.alerting = general_settings["alerting"]
-                proxy_logging_obj.slack_alerting_instance.alerting = general_settings[
-                    "alerting"
-                ]
+                # Use update_values to properly set alerting for both slack and email
+                proxy_logging_obj.update_values(
+                    alerting=general_settings["alerting"],
+                )
 
         if _general_settings is not None and "alert_types" in _general_settings:
             general_settings["alert_types"] = _general_settings["alert_types"]
