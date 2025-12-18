@@ -579,48 +579,51 @@ class LiteLLMCompletionResponsesConfig:
                         message_dict["tool_call_id"] = tool_call_id
                     elif hasattr(message, "tool_call_id"):
                         setattr(message, "tool_call_id", tool_call_id)
+            
+            # Only remove messages with empty tool_call_id if we have other non-tool messages
+            # This prevents ending up with an empty messages list when using previous_response_id
+            # without a database (e.g., in tests where session messages are empty)
+            if not tool_call_id:
+                # If we have non-tool messages, we can safely remove this tool message
+                # But if removing it would leave us with no messages, keep it to avoid empty list
+                if non_tool_messages_count > 0:
+                    messages_to_remove.append(i)
+                # If no non-tool messages, keep the tool message even with empty call_id
+                # The API will return a proper error message about the missing tool_use block
+                continue
+            
+            # Check if the previous assistant message has the corresponding tool_call
+            # This needs to run for ALL tool messages with a valid tool_call_id,
+            # not just those that had an empty tool_call_id initially
+            if prev_assistant_idx is not None and tool_call_id:
+                prev_assistant = fixed_messages[prev_assistant_idx]
+                tool_calls = LiteLLMCompletionResponsesConfig._get_tool_calls_list(
+                    prev_assistant
+                )
                 
-                # Only remove messages with empty tool_call_id if we have other non-tool messages
-                # This prevents ending up with an empty messages list when using previous_response_id
-                # without a database (e.g., in tests where session messages are empty)
-                if not tool_call_id:
-                    # If we have non-tool messages, we can safely remove this tool message
-                    # But if removing it would leave us with no messages, keep it to avoid empty list
-                    if non_tool_messages_count > 0:
-                        messages_to_remove.append(i)
-                    # If no non-tool messages, keep the tool message even with empty call_id
-                    # The API will return a proper error message about the missing tool_use block
-                    continue
-                
-                if prev_assistant_idx is not None:
-                    prev_assistant = fixed_messages[prev_assistant_idx]
-                    tool_calls = LiteLLMCompletionResponsesConfig._get_tool_calls_list(
-                        prev_assistant
-                    )
+                if not LiteLLMCompletionResponsesConfig._check_tool_call_exists(
+                    tool_calls, tool_call_id
+                ):
+                    _tool_use_definition = TOOL_CALLS_CACHE.get_cache(key=tool_call_id)
                     
-                    if not LiteLLMCompletionResponsesConfig._check_tool_call_exists(
-                        tool_calls, tool_call_id
-                    ):
-                        _tool_use_definition = TOOL_CALLS_CACHE.get_cache(key=tool_call_id)
-                        
-                        if not _tool_use_definition and tools:
-                            _tool_use_definition = (
-                                LiteLLMCompletionResponsesConfig._reconstruct_tool_call_from_tools(
-                                    tool_call_id, tools
-                                )
+                    if not _tool_use_definition and tools:
+                        _tool_use_definition = (
+                            LiteLLMCompletionResponsesConfig._reconstruct_tool_call_from_tools(
+                                tool_call_id, tools
                             )
-                        
-                        if _tool_use_definition:
-                            if not isinstance(_tool_use_definition, dict):
-                                _tool_use_definition = {}
-                            tool_call_chunk = (
-                                LiteLLMCompletionResponsesConfig._create_tool_call_chunk(
-                                    _tool_use_definition, tool_call_id, len(tool_calls)
-                                )
+                        )
+                    
+                    if _tool_use_definition:
+                        if not isinstance(_tool_use_definition, dict):
+                            _tool_use_definition = {}
+                        tool_call_chunk = (
+                            LiteLLMCompletionResponsesConfig._create_tool_call_chunk(
+                                _tool_use_definition, tool_call_id, len(tool_calls)
                             )
-                            LiteLLMCompletionResponsesConfig._add_tool_call_to_assistant(
-                                prev_assistant, tool_call_chunk
-                            )
+                        )
+                        LiteLLMCompletionResponsesConfig._add_tool_call_to_assistant(
+                            prev_assistant, tool_call_chunk
+                        )
         
         # Remove messages with empty tool_call_id that couldn't be fixed
         for idx in reversed(messages_to_remove):
