@@ -162,6 +162,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                             url = image_url.get("url")
                             if url:
                                 images_to_check.append(url)
+                        elif isinstance(image_url, str):
+                            images_to_check.append(image_url)
 
         # Extract tool calls (typically in assistant messages)
         tool_calls = message.get("tool_calls", None)

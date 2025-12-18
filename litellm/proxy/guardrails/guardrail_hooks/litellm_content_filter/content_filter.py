@@ -5,12 +5,12 @@ This guardrail provides regex pattern matching and keyword filtering
 to detect and block/mask sensitive content.
 """
 
+import asyncio
 import os
 import re
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncGenerator,
     Dict,
     List,
     Literal,
@@ -18,11 +18,13 @@ from typing import (
     Pattern,
     Tuple,
     Union,
+    cast,
 )
 
 import yaml
 from fastapi import HTTPException
 
+from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 
@@ -94,6 +96,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         keyword_redaction_tag: Optional[str] = None,
         categories: Optional[List[ContentFilterCategoryConfig]] = None,
         severity_threshold: str = "medium",
+        llm_router: Optional[Router] = None,
+        image_model: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -129,7 +133,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         )
         self.keyword_redaction_tag = keyword_redaction_tag or self.KEYWORD_REDACTION_STR
         self.severity_threshold = severity_threshold
-
+        self.llm_router = llm_router
+        self.image_model = image_model
         # Store loaded categories
         self.loaded_categories: Dict[str, CategoryConfig] = {}
         self.category_keywords: Dict[str, Tuple[str, str, ContentFilterAction]] = (
@@ -211,8 +216,9 @@ class ContentFilterGuardrail(CustomGuardrail):
 
             enabled = cat_config.get("enabled", True)
             action = cat_config.get("action")
-            severity_threshold = cat_config.get(
-                "severity_threshold", self.severity_threshold
+            severity_threshold = (
+                cat_config.get("severity_threshold", self.severity_threshold)
+                or self.severity_threshold
             )
             custom_file = cat_config.get("category_file")
 
@@ -502,6 +508,121 @@ class ContentFilterGuardrail(CustomGuardrail):
                 return (keyword, action, description)
         return None
 
+    def _filter_single_text(self, text: str) -> str:
+        """
+        Apply all content filtering checks to a single text.
+
+        This method performs:
+        1. Category keyword checks
+        2. Regex pattern checks
+        3. Blocked word checks
+
+        Args:
+            text: Text to filter
+
+        Returns:
+            Filtered text (with masking applied if action is MASK)
+
+        Raises:
+            HTTPException: If sensitive content is detected and action is BLOCK
+        """
+        # Collect all exceptions from loaded categories
+        all_exceptions = []
+        for category in self.loaded_categories.values():
+            all_exceptions.extend(category.exceptions)
+
+        # Check category keywords
+        category_keyword_match = self._check_category_keywords(text, all_exceptions)
+        if category_keyword_match:
+            keyword, category, severity, action = category_keyword_match
+            if action == ContentFilterAction.BLOCK:
+                error_msg = (
+                    f"Content blocked: {category} category keyword '{keyword}' detected "
+                    f"(severity: {severity})"
+                )
+                verbose_proxy_logger.warning(error_msg)
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": error_msg,
+                        "category": category,
+                        "keyword": keyword,
+                        "severity": severity,
+                    },
+                )
+            elif action == ContentFilterAction.MASK:
+                # Replace keyword with redaction tag
+                text = re.sub(
+                    re.escape(keyword),
+                    self.keyword_redaction_tag,
+                    text,
+                    flags=re.IGNORECASE,
+                )
+                verbose_proxy_logger.info(
+                    f"Masked category keyword '{keyword}' from {category} (severity: {severity})"
+                )
+
+        # Check regex patterns - process ALL patterns, not just first match
+        for compiled_pattern, pattern_name, action in self.compiled_patterns:
+            match = compiled_pattern.search(text)
+            if not match:
+                continue
+
+            if action == ContentFilterAction.BLOCK:
+                error_msg = f"Content blocked: {pattern_name} pattern detected"
+                verbose_proxy_logger.warning(error_msg)
+                raise HTTPException(
+                    status_code=403,
+                    detail={"error": error_msg, "pattern": pattern_name},
+                )
+            elif action == ContentFilterAction.MASK:
+                # Replace ALL matches of this pattern with redaction tag
+                redaction_tag = self.pattern_redaction_format.format(
+                    pattern_name=pattern_name.upper()
+                )
+                text = compiled_pattern.sub(redaction_tag, text)
+                verbose_proxy_logger.info(
+                    f"Masked all {pattern_name} matches in content"
+                )
+
+        # Check blocked words - iterate through ALL blocked words
+        # to ensure all matching keywords are processed, not just the first one
+        text_lower = text.lower()
+        for keyword, (action, description) in self.blocked_words.items():
+            if keyword not in text_lower:
+                continue
+
+            verbose_proxy_logger.debug(
+                f"Blocked word '{keyword}' found with action {action}"
+            )
+
+            if action == ContentFilterAction.BLOCK:
+                error_msg = f"Content blocked: keyword '{keyword}' detected"
+                if description:
+                    error_msg += f" ({description})"
+                verbose_proxy_logger.warning(error_msg)
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": error_msg,
+                        "keyword": keyword,
+                        "description": description,
+                    },
+                )
+            elif action == ContentFilterAction.MASK:
+                # Replace keyword with redaction tag (case-insensitive)
+                text = re.sub(
+                    re.escape(keyword),
+                    self.keyword_redaction_tag,
+                    text,
+                    flags=re.IGNORECASE,
+                )
+                # Update text_lower after masking to avoid re-matching
+                text_lower = text.lower()
+                verbose_proxy_logger.info(f"Masked keyword '{keyword}' in content")
+
+        return text
+
     def _mask_content(self, text: str, pattern_name: str) -> str:
         """
         Mask sensitive content in text.
@@ -544,178 +665,78 @@ class ContentFilterGuardrail(CustomGuardrail):
             HTTPException: If sensitive content is detected and action is BLOCK
         """
         texts = inputs.get("texts", [])
+        images = inputs.get("images", [])
+        if images and self.image_model and self.llm_router:
+            tasks = []
+            for image in images:
+                task = self.llm_router.acompletion(
+                    model=self.image_model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "Describe the image in detail.",
+                        },
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "image_url", "image_url": {"url": image}},
+                            ],
+                        },
+                    ],
+                    stream=False,
+                )
+                tasks.append(task)
 
+            responses = await asyncio.gather(*tasks)
+            descriptions = []
+            for response in responses:
+                if response.choices[0].message.content:
+                    image_description = response.choices[0].message.content
+                    verbose_proxy_logger.debug(
+                        f"Image description: {image_description}"
+                    )
+                    descriptions.append(image_description)
+                else:
+                    verbose_proxy_logger.warning("No image description found")
+
+            # Apply content filtering to image descriptions
+            verbose_proxy_logger.debug(
+                f"ContentFilterGuardrail: Applying guardrail to {len(descriptions)} image description(s)"
+            )
+            for description in descriptions:
+                # This will raise HTTPException if BLOCK action is triggered
+                try:
+                    self._filter_single_text(description)
+                except HTTPException as e:
+                    # e.detail can be a string or dict
+                    if isinstance(e.detail, dict) and "error" in e.detail:
+                        detail_dict = cast(Dict[str, Any], e.detail)
+                        detail_dict["error"] = (
+                            detail_dict["error"]
+                            + " (Image description): "
+                            + description
+                        )
+                    elif isinstance(e.detail, str):
+                        e.detail = e.detail + " (Image description): " + description
+                    else:
+                        e.detail = (
+                            "Content blocked: Image description detected" + description
+                        )
+                    raise e
         verbose_proxy_logger.debug(
             f"ContentFilterGuardrail: Applying guardrail to {len(texts)} text(s)"
         )
 
         processed_texts = []
-
         for text in texts:
-            # Collect all exceptions from loaded categories
-            all_exceptions = []
-            for category in self.loaded_categories.values():
-                all_exceptions.extend(category.exceptions)
-
-            # Check category keywords
-            category_keyword_match = self._check_category_keywords(text, all_exceptions)
-            if category_keyword_match:
-                keyword, category, severity, action = category_keyword_match
-                if action == ContentFilterAction.BLOCK:
-                    error_msg = (
-                        f"Content blocked: {category} category keyword '{keyword}' detected "
-                        f"(severity: {severity})"
-                    )
-                    verbose_proxy_logger.warning(error_msg)
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "error": error_msg,
-                            "category": category,
-                            "keyword": keyword,
-                            "severity": severity,
-                        },
-                    )
-                elif action == ContentFilterAction.MASK:
-                    # Replace keyword with redaction tag
-                    text = re.sub(
-                        re.escape(keyword),
-                        self.keyword_redaction_tag,
-                        text,
-                        flags=re.IGNORECASE,
-                    )
-                    verbose_proxy_logger.info(
-                        f"Masked category keyword '{keyword}' from {category} (severity: {severity})"
-                    )
-
-            # Check regex patterns - process ALL patterns, not just first match
-            for compiled_pattern, pattern_name, action in self.compiled_patterns:
-                match = compiled_pattern.search(text)
-                if not match:
-                    continue
-
-                if action == ContentFilterAction.BLOCK:
-                    error_msg = f"Content blocked: {pattern_name} pattern detected"
-                    verbose_proxy_logger.warning(error_msg)
-                    raise HTTPException(
-                        status_code=400,
-                        detail={"error": error_msg, "pattern": pattern_name},
-                    )
-                elif action == ContentFilterAction.MASK:
-                    # Replace ALL matches of this pattern with redaction tag
-                    redaction_tag = self.pattern_redaction_format.format(
-                        pattern_name=pattern_name.upper()
-                    )
-                    text = compiled_pattern.sub(redaction_tag, text)
-                    verbose_proxy_logger.info(
-                        f"Masked all {pattern_name} matches in content"
-                    )
-
-            # Check blocked words - iterate through ALL blocked words
-            # to ensure all matching keywords are processed, not just the first one
-            text_lower = text.lower()
-            for keyword, (action, description) in self.blocked_words.items():
-                if keyword not in text_lower:
-                    continue
-
-                verbose_proxy_logger.debug(
-                    f"Blocked word '{keyword}' found with action {action}"
-                )
-
-                if action == ContentFilterAction.BLOCK:
-                    error_msg = f"Content blocked: keyword '{keyword}' detected"
-                    if description:
-                        error_msg += f" ({description})"
-                    verbose_proxy_logger.warning(error_msg)
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "error": error_msg,
-                            "keyword": keyword,
-                            "description": description,
-                        },
-                    )
-                elif action == ContentFilterAction.MASK:
-                    # Replace keyword with redaction tag (case-insensitive)
-                    text = re.sub(
-                        re.escape(keyword),
-                        self.keyword_redaction_tag,
-                        text,
-                        flags=re.IGNORECASE,
-                    )
-                    # Update text_lower after masking to avoid re-matching
-                    text_lower = text.lower()
-                    verbose_proxy_logger.info(f"Masked keyword '{keyword}' in content")
-
-            processed_texts.append(text)
+            filtered_text = self._filter_single_text(text)
+            processed_texts.append(filtered_text)
 
         verbose_proxy_logger.debug(
             "ContentFilterGuardrail: Guardrail applied successfully"
         )
         inputs["texts"] = processed_texts
         return inputs
-
-    async def async_post_call_streaming_iterator_hook(
-        self,
-        user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
-        request_data: dict,
-    ) -> AsyncGenerator[ModelResponseStream, None]:
-        """
-        Streaming hook to check each chunk as it's yielded.
-
-        This implementation checks each chunk individually and yields it immediately,
-        allowing for low-latency streaming with content filtering.
-
-        Args:
-            user_api_key_dict: User API key authentication
-            response: Async generator of response chunks
-            request_data: Original request data
-
-        Yields:
-            Checked and potentially masked chunks
-
-        Raises:
-            HTTPException: If chunk content should be blocked
-        """
-        verbose_proxy_logger.debug(
-            "ContentFilterGuardrail: Running streaming check (per-chunk mode)"
-        )
-
-        # Process each chunk individually
-        async for chunk in response:
-            if isinstance(chunk, ModelResponseStream):
-                for choice in chunk.choices:
-                    if hasattr(choice, "delta") and choice.delta.content:
-                        if isinstance(choice.delta.content, str):
-                            # Check the chunk content using apply_guardrail
-                            try:
-                                guardrailed_inputs = await self.apply_guardrail(
-                                    inputs={"texts": [choice.delta.content]},
-                                    input_type="response",
-                                    request_data=request_data,
-                                )
-                                processed_texts = guardrailed_inputs.get("texts", [])
-                                processed_content = (
-                                    processed_texts[0]
-                                    if processed_texts
-                                    else choice.delta.content
-                                )
-                                if processed_content != choice.delta.content:
-                                    choice.delta.content = processed_content
-                                    verbose_proxy_logger.debug(
-                                        "ContentFilterGuardrail: Modified streaming chunk"
-                                    )
-                            except HTTPException as e:
-                                # If content should be blocked, raise immediately
-                                verbose_proxy_logger.warning(
-                                    f"ContentFilterGuardrail: Blocked streaming chunk: {e.detail}"
-                                )
-                                raise
-
-            yield chunk
-
-        verbose_proxy_logger.debug("ContentFilterGuardrail: Streaming check completed")
 
     @staticmethod
     def get_config_model():

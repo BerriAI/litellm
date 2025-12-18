@@ -1,6 +1,7 @@
 from typing import Dict, List, Optional, cast
 
 import litellm
+from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 
@@ -18,6 +19,7 @@ Map guardrail_name: <pre_call>, <post_call>, during_call
 def init_guardrails_v2(
     all_guardrails: List[Dict],
     config_file_path: Optional[str] = None,
+    llm_router: Optional[Router] = None,
 ):
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
 
@@ -27,6 +29,7 @@ def init_guardrails_v2(
         initialized_guardrail = IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
             guardrail=cast(Guardrail, guardrail),
             config_file_path=config_file_path,
+            llm_router=llm_router,
         )
         if initialized_guardrail:
             guardrail_list.append(initialized_guardrail)
