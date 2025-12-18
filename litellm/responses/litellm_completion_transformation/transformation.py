@@ -372,6 +372,130 @@ class LiteLLMCompletionResponsesConfig:
         return False
 
     @staticmethod
+    def _find_previous_assistant_idx(
+        messages: List[Any], current_idx: int
+    ) -> Optional[int]:
+        """Find the index of the previous assistant message."""
+        for j in range(current_idx - 1, -1, -1):
+            if messages[j].get("role") == "assistant":
+                return j
+        return None
+
+    @staticmethod
+    def _recover_tool_call_id_from_assistant(
+        assistant_message: Any, message: Any
+    ) -> str:
+        """Try to recover empty tool_call_id from assistant message's tool_calls."""
+        tool_calls_raw = (
+            assistant_message.get("tool_calls")
+            if isinstance(assistant_message, dict)
+            else getattr(assistant_message, "tool_calls", None)
+        )
+        if tool_calls_raw and isinstance(tool_calls_raw, list) and len(tool_calls_raw) > 0:
+            first_tool_call = tool_calls_raw[0]
+            if isinstance(first_tool_call, dict):
+                tool_call_id_raw = first_tool_call.get("id", "")
+                return str(tool_call_id_raw) if tool_call_id_raw is not None else ""
+            elif hasattr(first_tool_call, "id"):
+                tool_call_id_raw = getattr(first_tool_call, "id", None)
+                return str(tool_call_id_raw) if tool_call_id_raw is not None else ""
+        return ""
+
+    @staticmethod
+    def _get_tool_calls_list(assistant_message: Any) -> List[Any]:
+        """Extract tool_calls as a list from assistant message."""
+        tool_calls_raw = (
+            assistant_message.get("tool_calls")
+            if isinstance(assistant_message, dict)
+            else getattr(assistant_message, "tool_calls", None)
+        )
+        if tool_calls_raw is None:
+            return []
+        if isinstance(tool_calls_raw, list):
+            return tool_calls_raw
+        if hasattr(tool_calls_raw, "__iter__") and not isinstance(
+            tool_calls_raw, (str, bytes)
+        ):
+            return list(tool_calls_raw)
+        return []
+
+    @staticmethod
+    def _check_tool_call_exists(tool_calls: List[Any], tool_call_id: str) -> bool:
+        """Check if a tool_call with the given ID exists in the list."""
+        for tool_call in tool_calls:
+            tool_call_id_to_check: Optional[str] = None
+            if isinstance(tool_call, dict):
+                tool_call_id_to_check = tool_call.get("id")
+            elif hasattr(tool_call, "id"):
+                tool_call_id_to_check = getattr(tool_call, "id", None)
+            if tool_call_id_to_check == tool_call_id:
+                return True
+        return False
+
+    @staticmethod
+    def _reconstruct_tool_call_from_tools(
+        tool_call_id: str, tools: List[Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Reconstruct a minimal tool_call definition from tools list."""
+        for tool in tools:
+            if isinstance(tool, dict):
+                tool_function = tool.get("function") or {}
+                tool_name = tool_function.get("name") or tool.get("name") or ""
+                if tool_name:
+                    return {
+                        "id": tool_call_id,
+                        "type": "function",
+                        "function": {
+                            "name": tool_name,
+                            "arguments": "{}",  # We don't know the arguments, use empty
+                        },
+                    }
+        return None
+
+    @staticmethod
+    def _create_tool_call_chunk(
+        tool_use_definition: Dict[str, Any], tool_call_id: str, index: int
+    ) -> ChatCompletionToolCallChunk:
+        """Create a ChatCompletionToolCallChunk from tool_use_definition."""
+        function_raw = tool_use_definition.get("function")
+        function: Dict[str, Any] = function_raw if isinstance(function_raw, dict) else {}
+        tool_use_id_raw = tool_use_definition.get("id")
+        tool_use_id: str = (
+            str(tool_use_id_raw) if tool_use_id_raw is not None else str(tool_call_id)
+        )
+        tool_use_type_raw = tool_use_definition.get("type")
+        tool_use_type: str = (
+            str(tool_use_type_raw) if tool_use_type_raw is not None else "function"
+        )
+        return ChatCompletionToolCallChunk(
+            id=tool_use_id,
+            type=cast(Literal["function"], tool_use_type),
+            function=ChatCompletionToolCallFunctionChunk(
+                name=str(function.get("name", "")),
+                arguments=str(function.get("arguments", "{}")),
+            ),
+            index=index,
+        )
+
+    @staticmethod
+    def _add_tool_call_to_assistant(
+        assistant_message: Any, tool_call_chunk: ChatCompletionToolCallChunk
+    ) -> None:
+        """Add a tool_call to an assistant message."""
+        if isinstance(assistant_message, dict):
+            prev_assistant_dict = cast(Dict[str, Any], assistant_message)
+            if "tool_calls" not in prev_assistant_dict:
+                prev_assistant_dict["tool_calls"] = []
+            tool_calls_list = prev_assistant_dict["tool_calls"]
+            if isinstance(tool_calls_list, list):
+                tool_calls_list.append(tool_call_chunk)
+        elif hasattr(assistant_message, "tool_calls"):
+            if assistant_message.tool_calls is None:
+                assistant_message.tool_calls = []
+            if isinstance(assistant_message.tool_calls, list):
+                assistant_message.tool_calls.append(tool_call_chunk)
+
+    @staticmethod
     def _ensure_tool_results_have_corresponding_tool_calls(
         messages: List[Union[AllMessageValues, GenericChatCompletionMessage, ChatCompletionResponseMessage]],
         tools: Optional[List[Any]] = None,
@@ -395,142 +519,66 @@ class LiteLLMCompletionResponsesConfig:
         # Create a deep copy to avoid modifying the original
         import copy
         fixed_messages = copy.deepcopy(messages)
-        
-        # Track messages to remove (those with empty tool_call_id that can't be fixed)
         messages_to_remove = []
         
         for i, message in enumerate(fixed_messages):
-            # Check if this is a tool message (tool_result)
             if message.get("role") == "tool" and "tool_call_id" in message:
                 tool_call_id_raw = message.get("tool_call_id")
-                tool_call_id: str = str(tool_call_id_raw) if tool_call_id_raw is not None else ""
+                tool_call_id: str = (
+                    str(tool_call_id_raw) if tool_call_id_raw is not None else ""
+                )
                 
-                # Find the previous assistant message
-                prev_assistant_idx = None
-                for j in range(i - 1, -1, -1):
-                    if fixed_messages[j].get("role") == "assistant":
-                        prev_assistant_idx = j
-                        break
+                prev_assistant_idx = LiteLLMCompletionResponsesConfig._find_previous_assistant_idx(
+                    fixed_messages, i
+                )
                 
-                # If tool_call_id is empty, try to find it from the previous assistant message
+                # Try to recover empty tool_call_id from previous assistant message
                 if not tool_call_id and prev_assistant_idx is not None:
                     prev_assistant = fixed_messages[prev_assistant_idx]
-                    tool_calls_raw = prev_assistant.get("tool_calls") if isinstance(prev_assistant, dict) else getattr(prev_assistant, "tool_calls", None)
-                    if tool_calls_raw:
-                        if isinstance(tool_calls_raw, list) and len(tool_calls_raw) > 0:
-                            # Use the first tool_call's id
-                            first_tool_call = tool_calls_raw[0]
-                            if isinstance(first_tool_call, dict):
-                                tool_call_id_raw = first_tool_call.get("id", "")
-                                tool_call_id = str(tool_call_id_raw) if tool_call_id_raw is not None else ""
-                            elif hasattr(first_tool_call, "id"):
-                                tool_call_id_raw = getattr(first_tool_call, "id", None)
-                                tool_call_id = str(tool_call_id_raw) if tool_call_id_raw is not None else ""
-                    
-                    # Update the message with the found tool_call_id if we found one
+                    tool_call_id = LiteLLMCompletionResponsesConfig._recover_tool_call_id_from_assistant(
+                        prev_assistant, message
+                    )
                     if tool_call_id:
                         if isinstance(message, dict):
                             message["tool_call_id"] = tool_call_id
                         elif hasattr(message, "tool_call_id"):
                             setattr(message, "tool_call_id", tool_call_id)
                 
-                # If still empty after trying to recover, mark for removal
                 if not tool_call_id:
                     messages_to_remove.append(i)
                     continue
                 
                 if prev_assistant_idx is not None:
                     prev_assistant = fixed_messages[prev_assistant_idx]
+                    tool_calls = LiteLLMCompletionResponsesConfig._get_tool_calls_list(
+                        prev_assistant
+                    )
                     
-                    # Check if the assistant message has tool_calls with this tool_call_id
-                    # Ensure tool_calls is always a list for iteration
-                    tool_calls_raw = prev_assistant.get("tool_calls") if isinstance(prev_assistant, dict) else getattr(prev_assistant, "tool_calls", None)
-                    tool_calls: List[Any] = []
-                    if tool_calls_raw is not None:
-                        if isinstance(tool_calls_raw, list):
-                            tool_calls = tool_calls_raw
-                        elif hasattr(tool_calls_raw, "__iter__") and not isinstance(tool_calls_raw, (str, bytes)):
-                            tool_calls = list(tool_calls_raw)
-                    
-                    has_matching_tool_call = False
-                    
-                    for tool_call in tool_calls:
-                        tool_call_id_to_check: Optional[str] = None
-                        if isinstance(tool_call, dict):
-                            tool_call_id_to_check = tool_call.get("id")
-                        elif hasattr(tool_call, "id"):
-                            tool_call_id_to_check = getattr(tool_call, "id", None)
-                        
-                        if tool_call_id_to_check == tool_call_id:
-                            has_matching_tool_call = True
-                            break
-                    
-                    # If no matching tool_call found, try to get it from cache or reconstruct it
-                    if not has_matching_tool_call:
+                    if not LiteLLMCompletionResponsesConfig._check_tool_call_exists(
+                        tool_calls, tool_call_id
+                    ):
                         _tool_use_definition = TOOL_CALLS_CACHE.get_cache(key=tool_call_id)
                         
-                        # If not in cache, try to reconstruct from tools parameter
                         if not _tool_use_definition and tools:
-                            # Try to find a tool that might match (we can't know for sure which one was called,
-                            # but we can create a minimal tool_call with the first available tool)
-                            # This is a best-effort approach when cache is missing
-                            for tool in tools:
-                                if isinstance(tool, dict):
-                                    tool_function = tool.get("function") or {}
-                                    tool_name = tool_function.get("name") or tool.get("name") or ""
-                                    if tool_name:
-                                        # Create a minimal tool_call definition
-                                        _tool_use_definition = {
-                                            "id": tool_call_id,
-                                            "type": "function",
-                                            "function": {
-                                                "name": tool_name,
-                                                "arguments": "{}"  # We don't know the arguments, use empty
-                                            }
-                                        }
-                                        break
+                            _tool_use_definition = (
+                                LiteLLMCompletionResponsesConfig._reconstruct_tool_call_from_tools(
+                                    tool_call_id, tools
+                                )
+                            )
                         
                         if _tool_use_definition:
-                            # Add the tool_call to the assistant message
-                            # Ensure _tool_use_definition is treated as a dict
                             if not isinstance(_tool_use_definition, dict):
                                 _tool_use_definition = {}
-                            
-                            function_raw = _tool_use_definition.get("function")
-                            function: Dict[str, Any] = function_raw if isinstance(function_raw, dict) else {}
-                            tool_use_id_raw = _tool_use_definition.get("id")
-                            tool_use_id: str = str(tool_use_id_raw) if tool_use_id_raw is not None else str(tool_call_id)
-                            tool_use_type_raw = _tool_use_definition.get("type")
-                            tool_use_type: str = str(tool_use_type_raw) if tool_use_type_raw is not None else "function"
-                            
-                            tool_call_chunk = ChatCompletionToolCallChunk(
-                                id=tool_use_id,
-                                type=cast(Literal["function"], tool_use_type),
-                                function=ChatCompletionToolCallFunctionChunk(
-                                    name=str(function.get("name", "")),
-                                    arguments=str(function.get("arguments", "{}")),
-                                ),
-                                index=len(tool_calls),
+                            tool_call_chunk = (
+                                LiteLLMCompletionResponsesConfig._create_tool_call_chunk(
+                                    _tool_use_definition, tool_call_id, len(tool_calls)
+                                )
                             )
-                            
-                            # Update the assistant message
-                            # Use cast to tell type checker we're modifying a dict that can have tool_calls
-                            if isinstance(prev_assistant, dict):
-                                # Cast to Dict[str, Any] to allow adding tool_calls key
-                                prev_assistant_dict = cast(Dict[str, Any], prev_assistant)
-                                if "tool_calls" not in prev_assistant_dict:
-                                    prev_assistant_dict["tool_calls"] = []
-                                tool_calls_list = prev_assistant_dict["tool_calls"]
-                                if isinstance(tool_calls_list, list):
-                                    tool_calls_list.append(tool_call_chunk)
-                            elif hasattr(prev_assistant, "tool_calls"):
-                                if prev_assistant.tool_calls is None:
-                                    prev_assistant.tool_calls = []
-                                if isinstance(prev_assistant.tool_calls, list):
-                                    prev_assistant.tool_calls.append(tool_call_chunk)
+                            LiteLLMCompletionResponsesConfig._add_tool_call_to_assistant(
+                                prev_assistant, tool_call_chunk
+                            )
         
         # Remove messages with empty tool_call_id that couldn't be fixed
-        # Remove in reverse order to maintain indices
         for idx in reversed(messages_to_remove):
             fixed_messages.pop(idx)
         
