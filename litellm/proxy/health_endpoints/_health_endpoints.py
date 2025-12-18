@@ -1263,7 +1263,7 @@ async def test_model_connection(
         
         # Look up model configuration from router if model name is provided
         # This gets the litellm_params from proxy config (with resolved env vars)
-        config_litellm_params = {}
+        config_litellm_params: dict = {}
         if model_name and llm_router is not None:
             try:
                 # First try to find by proxy model_name (e.g., "gpt-4o")
@@ -1281,7 +1281,7 @@ async def test_model_connection(
                 if deployments and len(deployments) > 0:
                     # Use the first deployment's litellm_params as base config
                     # These already have resolved environment variables from proxy config
-                    config_litellm_params = deployments[0].get("litellm_params", {}).copy()
+                    config_litellm_params = dict(deployments[0].get("litellm_params", {}))
             except Exception as e:
                 verbose_proxy_logger.debug(
                     f"Could not find model {model_name} in router: {e}. "

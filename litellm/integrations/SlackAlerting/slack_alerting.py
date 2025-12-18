@@ -531,8 +531,9 @@ class SlackAlerting(CustomBatchLogger):
         self,
         type: Literal[
             "token_budget",
-            "soft_budget",
             "user_budget",
+            "soft_budget",
+            "max_budget_alert",
             "team_budget",
             "organization_budget",
             "proxy_budget",

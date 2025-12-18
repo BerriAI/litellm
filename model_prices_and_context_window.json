@@ -24546,6 +24546,16 @@
         "mode": "image_generation",
         "output_cost_per_pixel": 0.0
     },
+    "linkup/search": {
+        "input_cost_per_query": 5.87e-03,
+        "litellm_provider": "linkup",
+        "mode": "search"
+    },
+    "linkup/search-deep": {
+        "input_cost_per_query": 58.67e-03,
+        "litellm_provider": "linkup",
+        "mode": "search"
+    },
     "tavily/search": {
         "input_cost_per_query": 0.008,
         "litellm_provider": "tavily",
