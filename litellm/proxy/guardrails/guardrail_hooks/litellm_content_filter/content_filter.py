@@ -531,10 +531,10 @@ class ContentFilterGuardrail(CustomGuardrail):
         # Check category keywords
         category_keyword_match = self._check_category_keywords(text, all_exceptions)
         if category_keyword_match:
-            keyword, category, severity, action = category_keyword_match
+            keyword, category_name, severity, action = category_keyword_match
             if action == ContentFilterAction.BLOCK:
                 error_msg = (
-                    f"Content blocked: {category} category keyword '{keyword}' detected "
+                    f"Content blocked: {category_name} category keyword '{keyword}' detected "
                     f"(severity: {severity})"
                 )
                 verbose_proxy_logger.warning(error_msg)
@@ -542,7 +542,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                     status_code=403,
                     detail={
                         "error": error_msg,
-                        "category": category,
+                        "category": category_name,
                         "keyword": keyword,
                         "severity": severity,
                     },
@@ -556,7 +556,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                     flags=re.IGNORECASE,
                 )
                 verbose_proxy_logger.info(
-                    f"Masked category keyword '{keyword}' from {category} (severity: {severity})"
+                    f"Masked category keyword '{keyword}' from {category_name} (severity: {severity})"
                 )
 
         # Check regex patterns - process ALL patterns, not just first match
@@ -687,8 +687,10 @@ class ContentFilterGuardrail(CustomGuardrail):
             responses = await asyncio.gather(*tasks)
             descriptions = []
             for response in responses:
-                if response.choices[0].message.content:
-                    image_description = response.choices[0].message.content
+                choice = response.choices[0]
+                message = getattr(choice, "message", None)
+                if message and getattr(message, "content", None):
+                    image_description = message.content
                     verbose_proxy_logger.debug(
                         f"Image description: {image_description}"
                     )
