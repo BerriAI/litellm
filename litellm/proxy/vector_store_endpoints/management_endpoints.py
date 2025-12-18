@@ -48,7 +48,7 @@ async def new_vector_store(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Create a new vector store.
+    Create a new vector store
 
     Parameters:
     - vector_store_id: str - Unique identifier for the vector store
