@@ -3022,23 +3022,9 @@ class Router:
             original_generic_function: The guardrail's execution function
             **kwargs: Additional arguments
         """
-        from litellm.router_strategy.simple_shuffle import simple_shuffle
-
         guardrail_name = model
-
-        # Get all deployments matching guardrail_name
-        healthy_deployments = [
-            g for g in self.guardrail_list if g.get("guardrail_name") == guardrail_name
-        ]
-
-        if not healthy_deployments:
-            raise ValueError(f"No guardrail found with name: {guardrail_name}")
-
-        # Use simple_shuffle for selection (same as model deployments)
-        selected_guardrail = simple_shuffle(
-            llm_router_instance=self,
-            healthy_deployments=healthy_deployments,
-            model=guardrail_name,
+        selected_guardrail = self.get_available_guardrail(
+            guardrail_name=guardrail_name,
         )
 
         verbose_router_logger.debug(
@@ -3049,6 +3035,41 @@ class Router:
         kwargs["selected_guardrail"] = selected_guardrail
         response = await original_generic_function(**kwargs)
         return response
+
+    def get_available_guardrail(
+        self,
+        guardrail_name: str,
+    ) -> "GuardrailTypedDict":
+        """
+        Select a guardrail deployment using the router's load balancing strategy.
+
+        Args:
+            guardrail_name: Name of the guardrail to select
+
+        Returns:
+            Selected guardrail configuration dict
+        """
+        from litellm.router_strategy.simple_shuffle import simple_shuffle
+
+        healthy_deployments = [
+            g for g in self.guardrail_list if g.get("guardrail_name") == guardrail_name
+        ]
+
+        if not healthy_deployments:
+            raise ValueError(f"No guardrail found with name: {guardrail_name}")
+
+        if len(healthy_deployments) == 1:
+            return healthy_deployments[0]
+
+        # Use simple_shuffle for weighted selection
+        return cast(
+            GuardrailTypedDict,
+            simple_shuffle(
+                llm_router_instance=self,
+                healthy_deployments=healthy_deployments,
+                model=guardrail_name,
+            ),
+        )
 
     async def _ageneric_api_call_with_fallbacks(
         self, model: str, original_function: Callable, **kwargs

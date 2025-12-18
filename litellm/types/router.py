@@ -646,6 +646,7 @@ class GuardrailLiteLLMParams(TypedDict, total=False):
     mode: Required[str]
     api_key: Optional[str]
     api_base: Optional[str]
+    weight: Optional[int]  # For load balancing
 
 
 class GuardrailTypedDict(TypedDict, total=False):
@@ -656,6 +657,7 @@ class GuardrailTypedDict(TypedDict, total=False):
     guardrail_name: Required[str]
     litellm_params: Required[GuardrailLiteLLMParams]
     callback: Any  # The CustomGuardrail instance
+    id: Optional[str]  # Unique identifier for the guardrail deployment
 
 
 class FineTuningConfig(BaseModel):
