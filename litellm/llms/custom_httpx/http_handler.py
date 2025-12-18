@@ -769,7 +769,7 @@ class AsyncHTTPHandler:
             connector_kwargs["ssl"] = ssl_context
         elif ssl_verify is False:
             # Priority 2: Explicitly disable SSL verification
-            connector_kwargs["verify_ssl"] = False
+            connector_kwargs["ssl"] = False
 
         return connector_kwargs
 

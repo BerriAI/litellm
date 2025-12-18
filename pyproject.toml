@@ -31,7 +31,7 @@ click = "*"
 jinja2 = "^3.1.2"
 aiohttp = ">=3.10"
 pydantic = "^2.5.0"
-jsonschema = "^4.22.0"
+jsonschema = ">=4.23.0,<5.0.0"
 numpydoc = {version = "*", optional = true} # used in utils.py
 
 uvicorn = {version = "^0.31.1", optional = true}

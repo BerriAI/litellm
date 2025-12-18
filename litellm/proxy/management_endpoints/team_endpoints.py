@@ -2434,6 +2434,27 @@ def validate_membership(
     ):  # allow team keys to check their info
         return
 
+    # Handle case where user_id is None (e.g., team key accessing different team)
+    if user_api_key_dict.user_id is None:
+        if user_api_key_dict.team_id is not None:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Team key for team={} not authorized to access this team={}".format(
+                        user_api_key_dict.team_id, team_table.team_id
+                    )
+                },
+            )
+        else:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "API key not authorized to access this team={}. No user_id or team_id associated with this key.".format(
+                        team_table.team_id
+                    )
+                },
+            )
+
     if user_api_key_dict.user_id not in [
         m.user_id for m in team_table.members_with_roles
     ]:

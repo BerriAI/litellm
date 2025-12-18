@@ -10,6 +10,7 @@ Has 4 primary methods:
 
 import ast
 import asyncio
+import hashlib
 import inspect
 import json
 import time
@@ -159,6 +160,22 @@ class RedisCache(BaseCache):
                     "Error connecting to Async Redis client - {}".format(str(e)),
                     extra={"error": str(e)},
                 )
+                # Non-blocking service health monitoring for async Redis init failures
+                try:
+                    loop = asyncio.get_running_loop()
+                    start_time = time.time()
+                    end_time = start_time
+                    loop.create_task(
+                        self.service_logger_obj.async_service_failure_hook(
+                            service=ServiceTypes.REDIS,
+                            duration=end_time - start_time,
+                            error=e,
+                            call_type="redis_async_ping",
+                        )
+                    )
+                except Exception:
+                    # If no event loop or hook fails, ignore to keep init non-blocking
+                    pass
 
         ### SYNC HEALTH PING ###
         try:
@@ -168,11 +185,39 @@ class RedisCache(BaseCache):
             verbose_logger.error(
                 "Error connecting to Sync Redis client", extra={"error": str(e)}
             )
+            # Non-blocking service health monitoring for sync Redis init failures
+            try:
+                loop = asyncio.get_running_loop()
+                start_time = time.time()
+                end_time = start_time
+                loop.create_task(
+                    self.service_logger_obj.async_service_failure_hook(
+                        service=ServiceTypes.REDIS,
+                        duration=end_time - start_time,
+                        error=e,
+                        call_type="redis_sync_ping",
+                    )
+                )
+            except Exception:
+                # If no event loop or hook fails, ignore to keep init non-blocking
+                pass
 
         if litellm.default_redis_ttl is not None:
             super().__init__(default_ttl=int(litellm.default_redis_ttl))
         else:
             super().__init__()  # defaults to 60s
+
+    def _get_async_client_cache_key(self) -> str:
+        """
+        Generate a cache key for the async Redis client based on connection parameters.
+        This ensures different Redis configurations use different cached clients.
+        """
+        # Create a stable representation of redis_kwargs for hashing
+        # Sort keys to ensure consistent hash regardless of parameter order
+        sorted_kwargs = sorted(self.redis_kwargs.items())
+        kwargs_str = json.dumps(sorted_kwargs, sort_keys=True)
+        kwargs_hash = hashlib.sha256(kwargs_str.encode()).hexdigest()[:16]
+        return f"async-redis-client-{kwargs_hash}"
 
     def init_async_client(
         self,
@@ -181,7 +226,8 @@ class RedisCache(BaseCache):
 
         from .._redis import get_redis_async_client, get_redis_connection_pool
 
-        cached_client = in_memory_llm_clients_cache.get_cache(key="async-redis-client")
+        cache_key = self._get_async_client_cache_key()
+        cached_client = in_memory_llm_clients_cache.get_cache(key=cache_key)
         if cached_client is not None:
             redis_async_client = cast(
                 Union[async_redis_client, async_redis_cluster_client], cached_client
@@ -193,7 +239,7 @@ class RedisCache(BaseCache):
                 connection_pool=self.async_redis_conn_pool, **self.redis_kwargs
             )
             in_memory_llm_clients_cache.set_cache(
-                key="async-redis-client", value=redis_async_client
+                key=cache_key, value=redis_async_client
             )
 
         self.redis_async_client = redis_async_client  # type: ignore
