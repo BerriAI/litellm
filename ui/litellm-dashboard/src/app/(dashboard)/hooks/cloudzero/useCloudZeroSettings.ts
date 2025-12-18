@@ -1,7 +1,7 @@
-import { getProxyBaseUrl } from "@/components/networking";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { createQueryKeys } from "../common/queryKeysFactory";
 import { CloudZeroSettings } from "@/components/CloudZeroCostTracking/types";
+import { getProxyBaseUrl } from "@/components/networking";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { createQueryKeys } from "../common/queryKeysFactory";
 
 const cloudZeroSettingsKeys = createQueryKeys("cloudZeroSettings");
 
@@ -54,6 +54,11 @@ interface UpdateResponse {
   status: string;
 }
 
+interface DeleteResponse {
+  message: string;
+  status: string;
+}
+
 const updateCloudZeroSettings = async (accessToken: string, params: UpdateParams): Promise<UpdateResponse> => {
   const proxyBaseUrl = getProxyBaseUrl();
   const url = proxyBaseUrl ? `${proxyBaseUrl}/cloudzero/settings` : `/cloudzero/settings`;
@@ -91,6 +96,46 @@ export const useCloudZeroUpdateSettings = (accessToken: string) => {
         throw new Error("Access token is required");
       }
       return await updateCloudZeroSettings(accessToken, params);
+    },
+    onSuccess: () => {
+      // Invalidate the settings query to refetch updated data
+      queryClient.invalidateQueries({ queryKey: cloudZeroSettingsKeys.list({}) });
+    },
+  });
+};
+
+const deleteCloudZeroSettings = async (accessToken: string): Promise<DeleteResponse> => {
+  const proxyBaseUrl = getProxyBaseUrl();
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/cloudzero/delete` : `/cloudzero/delete`;
+
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const errorMessage =
+      errorData?.error?.message || errorData?.message || errorData?.detail || "Failed to delete CloudZero settings";
+    throw new Error(errorMessage);
+  }
+
+  const data = await response.json();
+  return data;
+};
+
+export const useCloudZeroDeleteSettings = (accessToken: string) => {
+  const queryClient = useQueryClient();
+
+  return useMutation<DeleteResponse, Error, void>({
+    mutationFn: async () => {
+      if (!accessToken) {
+        throw new Error("Access token is required");
+      }
+      return await deleteCloudZeroSettings(accessToken);
     },
     onSuccess: () => {
       // Invalidate the settings query to refetch updated data
