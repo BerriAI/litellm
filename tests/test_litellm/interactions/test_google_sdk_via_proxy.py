@@ -44,10 +44,10 @@ def test_simple_interaction():
     print(f"\n[TEST] Simple interaction via Google SDK -> Proxy")
     print(f"  Proxy URL: {proxy_base_url}")
     
-    # Create interaction
+    # Create interaction - Google SDK takes input and model directly
     response = client.interactions.create(
         model="anthropic/claude-3-5-haiku-20241022",
-        config={"input": "What is 2 + 2? Answer with just the number."}
+        input="What is 2 + 2? Answer with just the number."
     )
     
     print(f"  Response ID: {response.id}")
@@ -55,7 +55,7 @@ def test_simple_interaction():
     print(f"  Outputs: {response.outputs}")
     
     assert response is not None
-    assert response.status in ["completed", "COMPLETED"]
+    assert str(response.status).lower() == "completed"
     assert response.outputs is not None
     assert len(response.outputs) > 0
     
@@ -87,22 +87,22 @@ def test_streaming_interaction():
     print(f"\n[TEST] Streaming interaction via Google SDK -> Proxy")
     
     # Create streaming interaction
-    response_stream = client.interactions.with_streaming_response.create(
+    response_stream = client.interactions.create(
         model="anthropic/claude-3-5-haiku-20241022",
-        config={"input": "Count from 1 to 3. Just the numbers, comma separated."}
+        input="Count from 1 to 3. Just the numbers, comma separated.",
+        stream=True,
     )
     
     chunks = []
     collected_text = ""
     
-    with response_stream as stream:
-        for event in stream:
-            chunks.append(event)
-            print(f"  Chunk: {event}")
-            if hasattr(event, 'outputs') and event.outputs:
-                for output in event.outputs:
-                    if hasattr(output, 'text'):
-                        collected_text += output.text
+    for chunk in response_stream:
+        chunks.append(chunk)
+        print(f"  Chunk: {chunk}")
+        if hasattr(chunk, 'outputs') and chunk.outputs:
+            for output in chunk.outputs:
+                if hasattr(output, 'text'):
+                    collected_text += output.text
     
     print(f"  Total chunks: {len(chunks)}")
     print(f"  Collected text: {collected_text}")
@@ -132,10 +132,8 @@ def test_interaction_with_system_instruction():
     
     response = client.interactions.create(
         model="anthropic/claude-3-5-haiku-20241022",
-        config={
-            "input": "What are you?",
-            "system_instruction": "You are a helpful robot. Always start your response with 'Beep boop!'",
-        }
+        input="What are you?",
+        system_instruction="You are a helpful robot. Always start your response with 'Beep boop!'",
     )
     
     print(f"  Response: {response}")
@@ -172,13 +170,11 @@ def test_multi_turn_conversation():
     # Multi-turn input using the Turn format
     response = client.interactions.create(
         model="anthropic/claude-3-5-haiku-20241022",
-        config={
-            "input": [
-                {"role": "user", "content": [{"type": "text", "text": "My name is Alice."}]},
-                {"role": "model", "content": [{"type": "text", "text": "Hello Alice! Nice to meet you."}]},
-                {"role": "user", "content": [{"type": "text", "text": "What is my name?"}]},
-            ]
-        }
+        input=[
+            {"role": "user", "content": [{"type": "text", "text": "My name is Alice."}]},
+            {"role": "model", "content": [{"type": "text", "text": "Hello Alice! Nice to meet you."}]},
+            {"role": "user", "content": [{"type": "text", "text": "What is my name?"}]},
+        ]
     )
     
     print(f"  Response: {response}")
@@ -214,26 +210,24 @@ def test_function_calling():
     
     response = client.interactions.create(
         model="anthropic/claude-3-5-haiku-20241022",
-        config={
-            "input": "What's the weather in San Francisco?",
-            "tools": [
-                {
-                    "type": "function",
-                    "name": "get_weather",
-                    "description": "Get the current weather for a location",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "location": {
-                                "type": "string",
-                                "description": "The city name"
-                            }
-                        },
-                        "required": ["location"]
-                    }
+        input="What's the weather in San Francisco?",
+        tools=[
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get the current weather for a location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city name"
+                        }
+                    },
+                    "required": ["location"]
                 }
-            ]
-        }
+            }
+        ]
     )
     
     print(f"  Response: {response}")
@@ -246,7 +240,7 @@ def test_function_calling():
     # Check if there's a function call in the outputs
     has_function_call = False
     for output in response.outputs:
-        if hasattr(output, 'type') and output.type == 'function_call':
+        if hasattr(output, 'type') and str(output.type) == 'function_call':
             has_function_call = True
             break
         if hasattr(output, 'name') and output.name == 'get_weather':
@@ -285,7 +279,7 @@ async def test_async_interaction():
     
     response = await client.aio.interactions.create(
         model="anthropic/claude-3-5-haiku-20241022",
-        config={"input": "Say 'hello' in one word."}
+        input="Say 'hello' in one word."
     )
     
     print(f"  Response: {response}")
