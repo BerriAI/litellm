@@ -399,7 +399,10 @@ class LiteLLMCompletionResponsesConfig:
         for i, message in enumerate(fixed_messages):
             # Check if this is a tool message (tool_result)
             if message.get("role") == "tool" and "tool_call_id" in message:
-                tool_call_id = message.get("tool_call_id")
+                tool_call_id_raw = message.get("tool_call_id")
+                tool_call_id: str = str(tool_call_id_raw) if tool_call_id_raw is not None else ""
+                if not tool_call_id:
+                    continue
                 
                 # Find the previous assistant message
                 prev_assistant_idx = None
@@ -412,14 +415,25 @@ class LiteLLMCompletionResponsesConfig:
                     prev_assistant = fixed_messages[prev_assistant_idx]
                     
                     # Check if the assistant message has tool_calls with this tool_call_id
-                    tool_calls = prev_assistant.get("tool_calls") or []
+                    # Ensure tool_calls is always a list for iteration
+                    tool_calls_raw = prev_assistant.get("tool_calls") if isinstance(prev_assistant, dict) else getattr(prev_assistant, "tool_calls", None)
+                    tool_calls: List[Any] = []
+                    if tool_calls_raw is not None:
+                        if isinstance(tool_calls_raw, list):
+                            tool_calls = tool_calls_raw
+                        elif hasattr(tool_calls_raw, "__iter__") and not isinstance(tool_calls_raw, (str, bytes)):
+                            tool_calls = list(tool_calls_raw)
+                    
                     has_matching_tool_call = False
                     
                     for tool_call in tool_calls:
-                        if isinstance(tool_call, dict) and tool_call.get("id") == tool_call_id:
-                            has_matching_tool_call = True
-                            break
-                        elif hasattr(tool_call, "id") and tool_call.id == tool_call_id:
+                        tool_call_id_to_check: Optional[str] = None
+                        if isinstance(tool_call, dict):
+                            tool_call_id_to_check = tool_call.get("id")
+                        elif hasattr(tool_call, "id"):
+                            tool_call_id_to_check = getattr(tool_call, "id", None)
+                        
+                        if tool_call_id_to_check == tool_call_id:
                             has_matching_tool_call = True
                             break
                     
@@ -450,26 +464,42 @@ class LiteLLMCompletionResponsesConfig:
                         
                         if _tool_use_definition:
                             # Add the tool_call to the assistant message
-                            function: dict = _tool_use_definition.get("function") or {}
+                            # Ensure _tool_use_definition is treated as a dict
+                            if not isinstance(_tool_use_definition, dict):
+                                _tool_use_definition = {}
+                            
+                            function_raw = _tool_use_definition.get("function")
+                            function: Dict[str, Any] = function_raw if isinstance(function_raw, dict) else {}
+                            tool_use_id_raw = _tool_use_definition.get("id")
+                            tool_use_id: str = str(tool_use_id_raw) if tool_use_id_raw is not None else str(tool_call_id)
+                            tool_use_type_raw = _tool_use_definition.get("type")
+                            tool_use_type: str = str(tool_use_type_raw) if tool_use_type_raw is not None else "function"
+                            
                             tool_call_chunk = ChatCompletionToolCallChunk(
-                                id=_tool_use_definition.get("id") or tool_call_id,
-                                type=cast(Literal["function"], _tool_use_definition.get("type") or "function"),
+                                id=tool_use_id,
+                                type=cast(Literal["function"], tool_use_type),
                                 function=ChatCompletionToolCallFunctionChunk(
-                                    name=function.get("name") or "",
-                                    arguments=str(function.get("arguments") or "{}"),
+                                    name=str(function.get("name", "")),
+                                    arguments=str(function.get("arguments", "{}")),
                                 ),
                                 index=len(tool_calls),
                             )
                             
                             # Update the assistant message
+                            # Use cast to tell type checker we're modifying a dict that can have tool_calls
                             if isinstance(prev_assistant, dict):
-                                if "tool_calls" not in prev_assistant:
-                                    prev_assistant["tool_calls"] = []
-                                prev_assistant["tool_calls"].append(tool_call_chunk)
+                                # Cast to Dict[str, Any] to allow adding tool_calls key
+                                prev_assistant_dict = cast(Dict[str, Any], prev_assistant)
+                                if "tool_calls" not in prev_assistant_dict:
+                                    prev_assistant_dict["tool_calls"] = []
+                                tool_calls_list = prev_assistant_dict["tool_calls"]
+                                if isinstance(tool_calls_list, list):
+                                    tool_calls_list.append(tool_call_chunk)
                             elif hasattr(prev_assistant, "tool_calls"):
                                 if prev_assistant.tool_calls is None:
                                     prev_assistant.tool_calls = []
-                                prev_assistant.tool_calls.append(tool_call_chunk)
+                                if isinstance(prev_assistant.tool_calls, list):
+                                    prev_assistant.tool_calls.append(tool_call_chunk)
         
         return fixed_messages
 
