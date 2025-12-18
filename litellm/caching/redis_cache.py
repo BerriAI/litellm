@@ -10,6 +10,7 @@ Has 4 primary methods:
 
 import ast
 import asyncio
+import hashlib
 import inspect
 import json
 import time
@@ -206,6 +207,18 @@ class RedisCache(BaseCache):
         else:
             super().__init__()  # defaults to 60s
 
+    def _get_async_client_cache_key(self) -> str:
+        """
+        Generate a cache key for the async Redis client based on connection parameters.
+        This ensures different Redis configurations use different cached clients.
+        """
+        # Create a stable representation of redis_kwargs for hashing
+        # Sort keys to ensure consistent hash regardless of parameter order
+        sorted_kwargs = sorted(self.redis_kwargs.items())
+        kwargs_str = json.dumps(sorted_kwargs, sort_keys=True)
+        kwargs_hash = hashlib.sha256(kwargs_str.encode()).hexdigest()[:16]
+        return f"async-redis-client-{kwargs_hash}"
+
     def init_async_client(
         self,
     ) -> Union[async_redis_client, async_redis_cluster_client]:
@@ -213,7 +226,8 @@ class RedisCache(BaseCache):
 
         from .._redis import get_redis_async_client, get_redis_connection_pool
 
-        cached_client = in_memory_llm_clients_cache.get_cache(key="async-redis-client")
+        cache_key = self._get_async_client_cache_key()
+        cached_client = in_memory_llm_clients_cache.get_cache(key=cache_key)
         if cached_client is not None:
             redis_async_client = cast(
                 Union[async_redis_client, async_redis_cluster_client], cached_client
@@ -225,7 +239,7 @@ class RedisCache(BaseCache):
                 connection_pool=self.async_redis_conn_pool, **self.redis_kwargs
             )
             in_memory_llm_clients_cache.set_cache(
-                key="async-redis-client", value=redis_async_client
+                key=cache_key, value=redis_async_client
             )
 
         self.redis_async_client = redis_async_client  # type: ignore
