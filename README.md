@@ -143,30 +143,52 @@ async with httpx.AsyncClient(headers=headers) as httpx_client:
 </details>
 
 <details>
-<summary><b>MCP Tools</b> - Connect MCP servers to any LLM (AI Gateway)</summary>
+<summary><b>MCP Tools</b> - Connect MCP servers to any LLM (Python SDK + AI Gateway)</summary>
+
+### Python SDK - MCP Bridge
+
+```python
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+from litellm import experimental_mcp_client
+import litellm
+
+server_params = StdioServerParameters(command="python", args=["mcp_server.py"])
+
+async with stdio_client(server_params) as (read, write):
+    async with ClientSession(read, write) as session:
+        await session.initialize()
+
+        # Load MCP tools in OpenAI format
+        tools = await experimental_mcp_client.load_mcp_tools(session=session, format="openai")
+
+        # Use with any LiteLLM model
+        response = await litellm.acompletion(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "What's 3 + 5?"}],
+            tools=tools
+        )
+```
 
 ### AI Gateway - MCP Gateway
 
-1. Add MCP servers to your config:
-
 ```yaml
 mcp_servers:
-  - server_name: "github"
-    server_url: "https://api.githubcopilot.com/mcp/"
-    auth:
-      type: "api_key"
-      api_key: "os.environ/GITHUB_TOKEN"
+  deepwiki_mcp:
+    url: "https://mcp.deepwiki.com/mcp"
+  github_mcp:
+    url: "https://api.githubcopilot.com/mcp"
+    auth_type: "bearer_token"
+    auth_value: "os.environ/GITHUB_TOKEN"
 ```
 
-2. Use MCP tools with any LLM:
-
 ```bash
-curl -X POST 'http://0.0.0.0:4000/v1/responses' \
+curl -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
   -H 'Authorization: Bearer sk-1234' \
   -H 'Content-Type: application/json' \
   -d '{
     "model": "gpt-4o",
-    "input": "Summarize the latest open PR",
+    "messages": [{"role": "user", "content": "Summarize the latest open PR"}],
     "tools": [{
       "type": "mcp",
       "server_url": "litellm_proxy/mcp/github",
