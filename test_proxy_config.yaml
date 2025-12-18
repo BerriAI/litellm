@@ -1,0 +1,12 @@
+model_list:
+  - model_name: anthropic/claude-3-5-haiku-20241022
+    litellm_params:
+      model: anthropic/claude-3-5-haiku-20241022
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+litellm_settings:
+  drop_params: true
+
+general_settings:
+  master_key: sk-1234
+  allow_user_auth: true
