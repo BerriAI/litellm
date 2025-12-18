@@ -550,27 +550,35 @@ class LiteLLMCompletionResponsesConfig:
         )
         
         for i, message in enumerate(fixed_messages):
-            if message.get("role") == "tool" and "tool_call_id" in message:
-                tool_call_id_raw = message.get("tool_call_id")
-                tool_call_id: str = (
-                    str(tool_call_id_raw) if tool_call_id_raw is not None else ""
-                )
+            # Only process tool messages - check role first to narrow the type
+            if message.get("role") != "tool":
+                continue
                 
-                prev_assistant_idx = LiteLLMCompletionResponsesConfig._find_previous_assistant_idx(
-                    fixed_messages, i
+            # At this point, we know it's a tool message, so it should have tool_call_id
+            # Use get() with default to safely access tool_call_id
+            tool_call_id_raw = message.get("tool_call_id") if isinstance(message, dict) else getattr(message, "tool_call_id", None)
+            tool_call_id: str = (
+                str(tool_call_id_raw) if tool_call_id_raw is not None else ""
+            )
+            
+            prev_assistant_idx = LiteLLMCompletionResponsesConfig._find_previous_assistant_idx(
+                fixed_messages, i
+            )
+            
+            # Try to recover empty tool_call_id from previous assistant message
+            if not tool_call_id and prev_assistant_idx is not None:
+                prev_assistant = fixed_messages[prev_assistant_idx]
+                tool_call_id = LiteLLMCompletionResponsesConfig._recover_tool_call_id_from_assistant(
+                    prev_assistant, message
                 )
-                
-                # Try to recover empty tool_call_id from previous assistant message
-                if not tool_call_id and prev_assistant_idx is not None:
-                    prev_assistant = fixed_messages[prev_assistant_idx]
-                    tool_call_id = LiteLLMCompletionResponsesConfig._recover_tool_call_id_from_assistant(
-                        prev_assistant, message
-                    )
-                    if tool_call_id:
-                        if isinstance(message, dict):
-                            message["tool_call_id"] = tool_call_id
-                        elif hasattr(message, "tool_call_id"):
-                            setattr(message, "tool_call_id", tool_call_id)
+                if tool_call_id:
+                    # Type-safe way to set tool_call_id on tool message
+                    if isinstance(message, dict):
+                        # Cast to dict to allow setting tool_call_id
+                        message_dict = cast(Dict[str, Any], message)
+                        message_dict["tool_call_id"] = tool_call_id
+                    elif hasattr(message, "tool_call_id"):
+                        setattr(message, "tool_call_id", tool_call_id)
                 
                 # Only remove messages with empty tool_call_id if we have other non-tool messages
                 # This prevents ending up with an empty messages list when using previous_response_id
