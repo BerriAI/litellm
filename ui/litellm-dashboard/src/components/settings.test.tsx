@@ -33,6 +33,11 @@ vi.mock("./email_settings", () => ({
   default: () => <div>Mock Email Settings</div>,
 }));
 
+vi.mock("./CloudZeroCostTracking/CloudZeroCostTracking", () => ({
+  __esModule: true,
+  default: () => <div>Mock CloudZero Cost Tracking</div>,
+}));
+
 // Polyfill ResizeObserver for components relying on it in tests
 if (typeof window !== "undefined" && !window.ResizeObserver) {
   window.ResizeObserver = class ResizeObserver {
@@ -92,6 +97,7 @@ describe("Settings", () => {
     const { getByText } = render(<Settings {...defaultProps} />);
 
     await waitFor(() => {
+      expect(getByText("CloudZero Cost Tracking")).toBeInTheDocument();
       expect(getByText("Alerting Types")).toBeInTheDocument();
       expect(getByText("Alerting Settings")).toBeInTheDocument();
       expect(getByText("Email Alerts")).toBeInTheDocument();
@@ -186,5 +192,15 @@ describe("Settings", () => {
       expect(getByText("Secret Key")).toBeInTheDocument();
       expect(getByText("Host")).toBeInTheDocument();
     });
+  });
+
+  it("should display CloudZero Cost Tracking tab", async () => {
+    const { getByText } = render(<Settings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
+    });
+
+    expect(getByText("CloudZero Cost Tracking")).toBeInTheDocument();
   });
 });

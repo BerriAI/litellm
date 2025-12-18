@@ -1,3 +1,5 @@
+import Image from '@theme/IdealImage';
+
 # Secret Managers Overview
 
 :::info
@@ -45,3 +47,11 @@ general_settings:
     primary_secret_name: "litellm_secrets" # OPTIONAL. Read multiple keys from one JSON secret on AWS Secret Manager
 ```
 
+## Team-Level Secret Manager Settings
+
+From the **Teams** page in the LiteLLM dashboard you can configure a secret manager per team. Open the team (or the “Create New Team” modal), find the **Secret Manager Settings** panel, and enter the provider-specific JSON configuration (e.g. `{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}`). This configuration is applied whenever LiteLLM writes secrets (e.g., storing virtual keys) on behalf of that team.
+
+<Image img={require('../../img/secret_manager_settings.png')} />
+
+
+Refer to each provider’s documentation (AWS, Azure, Google, Hashicorp, etc.) for the supported keys/values you can place inside `secret_manager_settings`.

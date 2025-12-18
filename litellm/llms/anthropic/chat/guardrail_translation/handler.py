@@ -43,7 +43,6 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.llms.anthropic_messages.anthropic_response import (
         AnthropicMessagesResponse,
-        AnthropicResponseTextBlock,
     )
 
 
@@ -253,20 +252,39 @@ class AnthropicMessagesHandler(BaseTranslation):
         task_mappings: List[Tuple[int, Optional[int]]] = []
         # Track (content_index, None) for each text
 
-        response_content = response.get("content", [])
+        # Handle both dict and object responses
+        response_content: List[Any] = []
+        if isinstance(response, dict):
+            response_content = response.get("content", []) or []
+        elif hasattr(response, "content"):
+            content = getattr(response, "content", None)
+            response_content = content or []
+        else:
+            response_content = []
+
         if not response_content:
             return response
 
         # Step 1: Extract all text content and tool calls from response
         for content_idx, content_block in enumerate(response_content):
-            # Check if this is a text or tool_use block by checking the 'type' field
-            if isinstance(content_block, dict) and content_block.get("type") in [
-                "text",
-                "tool_use",
-            ]:
-                # Cast to dict to handle the union type properly
+            # Handle both dict and Pydantic object content blocks
+            block_dict: Dict[str, Any] = {}
+            if isinstance(content_block, dict):
+                block_type = content_block.get("type")
+                block_dict = cast(Dict[str, Any], content_block)
+            elif hasattr(content_block, "type"):
+                block_type = getattr(content_block, "type", None)
+                # Convert Pydantic object to dict for processing
+                if hasattr(content_block, "model_dump"):
+                    block_dict = content_block.model_dump()
+                else:
+                    block_dict = {"type": block_type, "text": getattr(content_block, "text", None)}
+            else:
+                continue
+
+            if block_type in ["text", "tool_use"]:
                 self._extract_output_text_and_images(
-                    content_block=cast(Dict[str, Any], content_block),
+                    content_block=block_dict,
                     content_idx=content_idx,
                     texts_to_check=texts_to_check,
                     images_to_check=images_to_check,
@@ -530,7 +548,11 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         Override this method to customize text content detection.
         """
-        response_content = response.get("content", [])
+        if isinstance(response, dict):
+            response_content = response.get("content", [])
+        else:
+            response_content = getattr(response, "content", None) or []
+        
         if not response_content:
             return False
         for content_block in response_content:
@@ -590,7 +612,16 @@ class AnthropicMessagesHandler(BaseTranslation):
             mapping = task_mappings[task_idx]
             content_idx = cast(int, mapping[0])
 
-            response_content = response.get("content", [])
+            # Handle both dict and object responses
+            response_content: List[Any] = []
+            if isinstance(response, dict):
+                response_content = response.get("content", []) or []
+            elif hasattr(response, "content"):
+                content = getattr(response, "content", None)
+                response_content = content or []
+            else:
+                continue
+
             if not response_content:
                 continue
 
@@ -601,7 +632,11 @@ class AnthropicMessagesHandler(BaseTranslation):
             content_block = response_content[content_idx]
 
             # Verify it's a text block and update the text field
-            if isinstance(content_block, dict) and content_block.get("type") == "text":
-                # Cast to dict to handle the union type properly for assignment
-                content_block = cast("AnthropicResponseTextBlock", content_block)
-                content_block["text"] = guardrail_response
+            # Handle both dict and Pydantic object content blocks
+            if isinstance(content_block, dict):
+                if content_block.get("type") == "text":
+                    cast(Dict[str, Any], content_block)["text"] = guardrail_response
+            elif hasattr(content_block, "type") and getattr(content_block, "type", None) == "text":
+                # Update Pydantic object's text attribute
+                if hasattr(content_block, "text"):
+                    content_block.text = guardrail_response

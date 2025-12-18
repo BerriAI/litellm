@@ -32,8 +32,8 @@
 
 LiteLLM manages:
 
-- Translate inputs to provider's `completion`, `embedding`, and `image_generation` endpoints
-- [Consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
+- Translate inputs to provider's endpoints (`/chat/completions`, `/responses`, `/embeddings`, `/images`, `/audio`, `/batches`, and more)
+- [Consistent output](https://docs.litellm.ai/docs/supported_endpoints) - same response format regardless of which provider you use
 - Retry/fallback logic across multiple deployments (e.g. Azure/OpenAI) - [Router](https://docs.litellm.ai/docs/routing)
 - Set Budgets & Rate limits per project, api key, model [LiteLLM Proxy Server (LLM Gateway)](https://docs.litellm.ai/docs/simple_proxy)
 
@@ -74,7 +74,7 @@ response = completion(model="anthropic/claude-sonnet-4-20250514", messages=messa
 print(response)
 ```
 
-### Response (OpenAI Format)
+### Response (OpenAI Chat Completions Format)
 
 ```json
 {
@@ -110,7 +110,59 @@ print(response)
 }
 ```
 
-> **Note:** LiteLLM also supports the [Responses API](https://docs.litellm.ai/docs/response_api) (`litellm.responses()`)
+### Responses API ([Docs](https://docs.litellm.ai/docs/response_api))
+
+LiteLLM also supports OpenAI's `/responses` format. Works with **all providers** - LiteLLM handles the translation automatically.
+
+```python
+import litellm
+
+# OpenAI
+response = litellm.responses(
+    model="openai/gpt-4o",
+    input="Hello, how are you?"
+)
+
+# Anthropic
+response = litellm.responses(
+    model="anthropic/claude-sonnet-4-5-20250929",
+    input="Hello, how are you?"
+)
+
+print(response)
+```
+
+### Response (OpenAI Responses API Format)
+
+```json
+{
+    "id": "resp_abc123",
+    "object": "response",
+    "created_at": 1764682691,
+    "status": "completed",
+    "model": "gpt-4o-mini-2024-07-18",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_abc123",
+            "status": "completed",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "Hello! I'm here and ready to help you. How can I assist you today?",
+                    "annotations": []
+                }
+            ]
+        }
+    ],
+    "usage": {
+        "input_tokens": 13,
+        "output_tokens": 18,
+        "total_tokens": 31
+    }
+}
+```
 
 Call any model supported by a provider, with `model=<provider_name>/<model_name>`. There might be provider-specific details here, so refer to [provider docs for more information](https://docs.litellm.ai/docs/providers)
 
