@@ -42,6 +42,7 @@ const sidebars = {
       label: "Guardrails",
       items: [
         "proxy/guardrails/quick_start",
+        "proxy/guardrails/guardrail_load_balancing",
         {
           type: "category",
           "label": "Contributing to Guardrails",

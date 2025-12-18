@@ -36,10 +36,18 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypes, CallTypesLiteral
 
 try:
-    from litellm_enterprise.enterprise_callbacks.send_emails.base_email import BaseEmailLogger
-    from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import SendGridEmailLogger
-    from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import SMTPEmailLogger
-    from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import ResendEmailLogger
+    from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
+        BaseEmailLogger,
+    )
+    from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
+        ResendEmailLogger,
+    )
+    from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import (
+        SendGridEmailLogger,
+    )
+    from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (
+        SMTPEmailLogger,
+    )
 except ImportError:
     BaseEmailLogger = None  # type: ignore
     SendGridEmailLogger = None  # type: ignore
@@ -813,6 +821,125 @@ class ProxyLogging:
                 raise HTTPException(status_code=400, detail={"error": response})
         return data
 
+    def _should_use_guardrail_load_balancing(
+        self,
+        guardrail_name: str,
+    ) -> bool:
+        """
+        Check if load balancing should be used for this guardrail.
+
+        Returns True if the router has multiple deployments for this guardrail name.
+        """
+        from litellm.proxy.proxy_server import llm_router
+
+        if llm_router is None or not hasattr(llm_router, "guardrail_list"):
+            return False
+
+        matching = [
+            g
+            for g in llm_router.guardrail_list
+            if g.get("guardrail_name") == guardrail_name
+        ]
+        return len(matching) > 1
+
+    async def _execute_guardrail_hook(
+        self,
+        callback: "CustomGuardrail",
+        hook_type: str,
+        data: dict,
+        user_api_key_dict: Optional[UserAPIKeyAuth],
+        call_type: CallTypesLiteral,
+        response: Optional[Any] = None,
+    ) -> Any:
+        """
+        Execute a single guardrail's hook.
+
+        Args:
+            callback: The guardrail callback to execute
+            hook_type: One of "pre_call", "during_call", "post_call"
+            data: Request data
+            user_api_key_dict: User API key auth
+            call_type: Type of call
+            response: Response object (for post_call hooks)
+
+        Returns:
+            Result from the guardrail execution
+        """
+        # Use unified_guardrail if callback has apply_guardrail method
+        use_unified = "apply_guardrail" in type(callback).__dict__
+        if use_unified:
+            data["guardrail_to_apply"] = callback
+
+        target = unified_guardrail if use_unified else callback
+
+        if hook_type == "pre_call":
+            return await target.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,  # type: ignore
+                cache=self.call_details["user_api_key_cache"],
+                data=data,
+                call_type=call_type,
+            )
+        elif hook_type == "during_call":
+            return await target.async_moderation_hook(
+                data=data,
+                user_api_key_dict=user_api_key_dict,  # type: ignore
+                call_type=call_type,
+            )
+        elif hook_type == "post_call":
+            return await target.async_post_call_success_hook(
+                user_api_key_dict=user_api_key_dict,  # type: ignore
+                data=data,
+                response=response,  # type: ignore
+            )
+        else:
+            raise ValueError(f"Unknown hook_type: {hook_type}")
+
+    async def _execute_guardrail_with_load_balancing(
+        self,
+        guardrail_name: str,
+        hook_type: str,
+        data: dict,
+        user_api_key_dict: Optional[UserAPIKeyAuth],
+        call_type: CallTypesLiteral,
+        response: Optional[Any] = None,
+    ) -> Any:
+        """
+        Execute a guardrail using the router's load balancing.
+
+        Args:
+            guardrail_name: Name of the guardrail
+            hook_type: One of "pre_call", "during_call", "post_call"
+            data: Request data
+            user_api_key_dict: User API key auth
+            call_type: Type of call
+            response: Response object (for post_call hooks)
+
+        Returns:
+            Result from the guardrail execution
+        """
+        from litellm.proxy.proxy_server import llm_router
+
+        if llm_router is None:
+            raise ValueError("Router not initialized")
+
+        # Select guardrail using router's load balancing
+        selected_guardrail = llm_router.get_available_guardrail(
+            guardrail_name=guardrail_name
+        )
+
+        callback = selected_guardrail.get("callback")
+        if callback is None:
+            raise ValueError(f"No callback found for guardrail: {guardrail_name}")
+
+        return await self._execute_guardrail_hook(
+            callback=callback,
+            hook_type=hook_type,
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            call_type=call_type,
+            response=response,
+        )
+
     async def _process_guardrail_callback(
         self,
         callback: CustomGuardrail,
@@ -822,6 +949,8 @@ class ProxyLogging:
     ) -> Optional[dict]:
         """
         Process a guardrail callback during pre-call hook.
+
+        Supports load balancing when multiple guardrail deployments exist.
 
         Args:
             callback: The CustomGuardrail callback to process
@@ -843,23 +972,25 @@ class ProxyLogging:
         if callback.should_run_guardrail(data=data, event_type=event_type) is not True:
             return None
 
-        # Execute the appropriate guardrail hook
-        if "apply_guardrail" in type(callback).__dict__:
-            # Use unified guardrail for callbacks with apply_guardrail method
-            data["guardrail_to_apply"] = callback
-            response = await unified_guardrail.async_pre_call_hook(
-                user_api_key_dict=user_api_key_dict,  # type: ignore
-                cache=self.call_details["user_api_key_cache"],
-                data=data,  # type: ignore
-                call_type=call_type,  # type: ignore
+        guardrail_name = callback.guardrail_name
+
+        # Check if load balancing should be used
+        if guardrail_name and self._should_use_guardrail_load_balancing(guardrail_name):
+            response = await self._execute_guardrail_with_load_balancing(
+                guardrail_name=guardrail_name,
+                hook_type="pre_call",
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                call_type=call_type,
             )
         else:
-            # Use the callback's own async_pre_call_hook method
-            response = await callback.async_pre_call_hook(
-                user_api_key_dict=user_api_key_dict,  # type: ignore
-                cache=self.call_details["user_api_key_cache"],
-                data=data,  # type: ignore
-                call_type=call_type,  # type: ignore
+            # Single guardrail - execute directly
+            response = await self._execute_guardrail_hook(
+                callback=callback,
+                hook_type="pre_call",
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                call_type=call_type,
             )
 
         # Process the response if one was returned
@@ -3583,7 +3714,10 @@ async def _monitor_spend_logs_queue(
         db_writer_client: Optional HTTP handler for external spend logs endpoint
         proxy_logging_obj: Proxy logging object
     """
-    from litellm.constants import SPEND_LOG_QUEUE_SIZE_THRESHOLD, SPEND_LOG_QUEUE_POLL_INTERVAL
+    from litellm.constants import (
+        SPEND_LOG_QUEUE_POLL_INTERVAL,
+        SPEND_LOG_QUEUE_SIZE_THRESHOLD,
+    )
     
     threshold = SPEND_LOG_QUEUE_SIZE_THRESHOLD
     base_interval = SPEND_LOG_QUEUE_POLL_INTERVAL
