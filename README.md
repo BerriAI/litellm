@@ -37,7 +37,7 @@
 <details open>
 <summary><b>LLMs</b> - Call 100+ LLMs (Python SDK + AI Gateway)</summary>
 
-Supports `/chat/completions`, `/responses`, `/messages`, `generateContent` endpoints.
+[**All Supported Endpoints**](https://docs.litellm.ai/docs/supported_endpoints) - `/chat/completions`, `/responses`, `/embeddings`, `/images`, `/audio`, `/batches`, `/rerank`, `/a2a`, `/messages` and more.
 
 ### Python SDK
 
