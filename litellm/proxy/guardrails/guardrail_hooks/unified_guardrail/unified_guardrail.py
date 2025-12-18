@@ -181,7 +181,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         if user_api_key_dict.request_route is not None:
             call_types = get_call_types_for_route(user_api_key_dict.request_route)
             if call_types is not None and len(call_types) > 0: # type: ignore
-                call_type = call_types[0]
+                call_type = call_types[0] # type: ignore
         if call_type is None:
             call_type = _infer_call_type(call_type=None, completion_response=response)  # type: ignore
 
