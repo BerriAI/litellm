@@ -261,13 +261,20 @@ async def test_new_user_license_over_limit(mocker):
 
     mock_prisma_client.db.litellm_usertable.count = mock_count
 
-    # Mock check_duplicate_user_email to pass
+    # Mock duplicate checks to pass
     async def mock_check_duplicate_user_email(*args, **kwargs):
+        return None  # No duplicate found
+
+    async def mock_check_duplicate_user_id(*args, **kwargs):
         return None  # No duplicate found
 
     mocker.patch(
         "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
         mock_check_duplicate_user_email,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_id",
+        mock_check_duplicate_user_id,
     )
 
     # Mock the license check to return True (over limit)
@@ -449,13 +456,20 @@ async def test_new_user_default_teams_flow(mocker):
 
     mock_prisma_client.db.litellm_usertable.count = mock_count
 
-    # Mock check_duplicate_user_email to pass
+    # Mock duplicate checks to pass
     async def mock_check_duplicate_user_email(*args, **kwargs):
+        return None  # No duplicate found
+
+    async def mock_check_duplicate_user_id(*args, **kwargs):
         return None  # No duplicate found
 
     mocker.patch(
         "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
         mock_check_duplicate_user_email,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_id",
+        mock_check_duplicate_user_id,
     )
 
     # Mock the license check to return False (under limit)
@@ -737,7 +751,7 @@ async def test_check_duplicate_user_email_case_insensitive(mocker):
     with pytest.raises(HTTPException) as exc_info:
         await _check_duplicate_user_email("user@example.com", mock_prisma_client)
 
-    assert exc_info.value.status_code == 400
+    assert exc_info.value.status_code == 409
     assert "User with email User@Example.com already exists" in str(
         exc_info.value.detail
     )
@@ -768,6 +782,56 @@ async def test_check_duplicate_user_email_case_insensitive(mocker):
     await _check_duplicate_user_email(
         None, mock_prisma_client
     )  # Should not raise exception
+
+
+@pytest.mark.asyncio
+async def test_check_duplicate_user_id(mocker):
+    """
+    Test that _check_duplicate_user_id detects duplicates and does not use case insensitive matching.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _check_duplicate_user_id,
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+
+    # Duplicate user_id should raise
+    mock_existing_user = mocker.MagicMock()
+    mock_existing_user.user_id = "existing-user-id"
+
+    async def mock_find_first_duplicate(*args, **kwargs):
+        where_clause = kwargs.get("where", {})
+        user_id_clause = where_clause.get("user_id", {})
+        assert user_id_clause.get("equals") == "existing-user-id"
+        assert "mode" not in user_id_clause
+        return mock_existing_user
+
+    mock_prisma_client.db.litellm_usertable.find_first = mock_find_first_duplicate
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _check_duplicate_user_id("existing-user-id", mock_prisma_client)
+
+    assert exc_info.value.status_code == 409
+    assert "User with id existing-user-id already exists" in str(
+        exc_info.value.detail
+    )
+
+    # No duplicate should pass
+    async def mock_find_first_no_duplicate(*args, **kwargs):
+        where_clause = kwargs.get("where", {})
+        user_id_clause = where_clause.get("user_id", {})
+        assert user_id_clause.get("equals") == "new-user-id"
+        assert "mode" not in user_id_clause
+        return None
+
+    mock_prisma_client.db.litellm_usertable.find_first = mock_find_first_no_duplicate
+
+    await _check_duplicate_user_id("new-user-id", mock_prisma_client)
+
+    # None user_id should no-op
+    await _check_duplicate_user_id(None, mock_prisma_client)
 
 
 def test_process_keys_for_user_info_filters_dashboard_keys(monkeypatch):
