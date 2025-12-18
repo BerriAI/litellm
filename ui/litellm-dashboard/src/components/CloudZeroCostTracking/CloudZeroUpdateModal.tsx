@@ -1,7 +1,7 @@
-import { Form, Modal, Input, message } from "antd";
-import { useState, useEffect } from "react";
-import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useCloudZeroUpdateSettings } from "@/app/(dashboard)/hooks/cloudzero/useCloudZeroSettings";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { Form, Input, message, Modal } from "antd";
+import { useEffect } from "react";
 import { CloudZeroSettings } from "./types";
 
 interface CloudZeroUpdateModalProps {
