@@ -83,22 +83,6 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 tool_call_task_mappings=tool_call_task_mappings,
             )
 
-        # Step 1.5: Process document URLs asynchronously to extract content
-        if documents_to_check:
-            processed_documents = []
-            for doc in documents_to_check:
-                # Check if it's a URL (PDF or TXT)
-                if doc.startswith("http://") or doc.startswith("https://"):
-                    # Fetch and extract content from URL
-                    extracted_content = await self._extract_document_content_from_url(
-                        doc
-                    )
-                    processed_documents.append(extracted_content)
-                else:
-                    # Already processed (base64 decoded or plain text)
-                    processed_documents.append(doc)
-            documents_to_check = processed_documents
-
         # Step 2: Apply guardrail to all texts and tool calls in batch
         if texts_to_check or tool_calls_to_check:
             inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
@@ -252,53 +236,6 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             )
             return data
 
-    async def _extract_document_content_from_url(self, url: str) -> str:
-        """
-        Fetch document content from a URL.
-        For TXT files, extracts and returns the text content.
-        For PDF files, returns base64 encoded content for the guardrail to process.
-
-        Args:
-            url: URL to the document file
-
-        Returns:
-            Text content (for TXT) or base64 encoded content (for PDF)
-        """
-        try:
-            # Use async httpx client to fetch the document
-            client = get_async_httpx_client(
-                llm_provider=httpxSpecialProvider.GuardrailCallback,
-                params={"concurrent_limit": 1},
-            )
-            response = await client.get(url, follow_redirects=True)
-            response.raise_for_status()
-
-            # Check content type to determine how to process
-            content_type = response.headers.get("content-type", "")
-
-            # Handle PDF files - return as base64 for guardrail to process
-            if "application/pdf" in content_type or url.endswith(".pdf"):
-                verbose_proxy_logger.debug(
-                    f"Fetched PDF from URL {url}, returning as base64 for guardrail processing"
-                )
-                return base64.b64encode(response.content).decode("utf-8")
-
-            # Handle text files
-            elif "text/" in content_type or url.endswith(".txt"):
-                return response.content.decode("utf-8", errors="ignore")
-
-            # Unknown format - return as base64
-            else:
-                verbose_proxy_logger.debug(
-                    f"Unknown document format for URL {url}, content-type: {content_type}"
-                )
-                return base64.b64encode(response.content).decode("utf-8")
-
-        except Exception as e:
-            verbose_proxy_logger.error(f"Failed to fetch document from URL {url}: {e}")
-            # Return the URL itself as fallback
-            return url
-
     async def _apply_guardrail_responses_to_input_texts(
         self,
         messages: List[Dict[str, Any]],
@@ -408,22 +345,6 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 text_task_mappings=text_task_mappings,
                 tool_call_task_mappings=tool_call_task_mappings,
             )
-
-        # Step 1.5: Process document URLs asynchronously to extract content
-        if documents_to_check:
-            processed_documents = []
-            for doc in documents_to_check:
-                # Check if it's a URL (PDF or TXT)
-                if doc.startswith("http://") or doc.startswith("https://"):
-                    # Fetch and extract content from URL
-                    extracted_content = await self._extract_document_content_from_url(
-                        doc
-                    )
-                    processed_documents.append(extracted_content)
-                else:
-                    # Already processed (base64 decoded or plain text)
-                    processed_documents.append(doc)
-            documents_to_check = processed_documents
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
         if texts_to_check or tool_calls_to_check:

@@ -42,6 +42,9 @@ def initialize_guardrail(
         severity_threshold=getattr(litellm_params, "severity_threshold", "medium"),
         llm_router=llm_router,
         image_model=getattr(litellm_params, "image_model", None),
+        supported_content_types=getattr(
+            litellm_params, "supported_content_types", None
+        ),
     )
 
     litellm.logging_callback_manager.add_litellm_callback(content_filter_guardrail)

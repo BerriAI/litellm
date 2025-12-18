@@ -98,6 +98,9 @@ class ContentFilterGuardrail(CustomGuardrail):
         severity_threshold: str = "medium",
         llm_router: Optional[Router] = None,
         image_model: Optional[str] = None,
+        supported_content_types: Optional[
+            List[Literal["texts", "images", "documents"]]
+        ] = None,
         **kwargs,
     ):
         """
@@ -114,6 +117,13 @@ class ContentFilterGuardrail(CustomGuardrail):
             keyword_redaction_tag: Tag to use for keyword redaction
             categories: List of category configurations with enabled/action/severity settings
             severity_threshold: Minimum severity to block ("high", "medium", "low")
+            llm_router: Router instance
+            image_model: Model name for image description
+            supported_content_types: List of content types to support (texts, images, documents)
+            kwargs: Additional keyword arguments
+
+        Returns:
+            None
         """
         super().__init__(
             guardrail_name=guardrail_name,
@@ -135,6 +145,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         self.severity_threshold = severity_threshold
         self.llm_router = llm_router
         self.image_model = image_model
+        self.supported_content_types = supported_content_types
         # Store loaded categories
         self.loaded_categories: Dict[str, CategoryConfig] = {}
         self.category_keywords: Dict[str, Tuple[str, str, ContentFilterAction]] = (
@@ -639,6 +650,117 @@ class ContentFilterGuardrail(CustomGuardrail):
         )
         return redaction_tag
 
+    def _decode_document_data(self, data: str) -> str:
+        """
+        Decode document data from base64 if applicable.
+
+        Args:
+            data: Document data, either base64 encoded or plain text
+
+        Returns:
+            Decoded text content
+        """
+        import base64
+
+        try:
+            # Try to decode as base64
+            decoded_bytes = base64.b64decode(data)
+            # Try to decode as UTF-8 text
+            return decoded_bytes.decode("utf-8")
+        except Exception:
+            # If decoding fails, return the original data
+            # (it might already be plain text or in a different format)
+            verbose_proxy_logger.debug(
+                "Failed to decode document data as base64, returning as-is"
+            )
+            return data
+
+    async def _extract_document_content_from_url(self, url: str) -> str:
+        """
+        Fetch document content from a URL.
+        For TXT files, extracts and returns the text content.
+        For PDF files, returns base64 encoded content for processing.
+
+        Args:
+            url: URL to the document file
+
+        Returns:
+            Text content (for TXT) or base64 encoded content (for PDF)
+        """
+        import base64
+
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+        from litellm.types.llms.custom_http import httpxSpecialProvider
+
+        try:
+            # Use async httpx client to fetch the document
+            client = get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.GuardrailCallback,
+                params={"concurrent_limit": 1},
+            )
+            response = await client.get(url, follow_redirects=True)
+            response.raise_for_status()
+
+            # Check content type to determine how to process
+            content_type = response.headers.get("content-type", "")
+
+            # Handle PDF files - return as base64 for further processing
+            if "application/pdf" in content_type or url.endswith(".pdf"):
+                verbose_proxy_logger.debug(
+                    f"Fetched PDF from URL {url}, returning as base64 for processing"
+                )
+                return base64.b64encode(response.content).decode("utf-8")
+
+            # Handle text files
+            elif "text/" in content_type or url.endswith(".txt"):
+                return response.content.decode("utf-8", errors="ignore")
+
+            # Unknown format - return as base64
+            else:
+                verbose_proxy_logger.debug(
+                    f"Unknown document format for URL {url}, content-type: {content_type}"
+                )
+                return base64.b64encode(response.content).decode("utf-8")
+
+        except Exception as e:
+            verbose_proxy_logger.error(f"Failed to fetch document from URL {url}: {e}")
+            # Return the URL itself as fallback
+            return url
+
+    async def _process_documents(self, documents: List[str]) -> List[str]:
+        """
+        Process document list by converting URLs to content and decoding base64 data.
+
+        Args:
+            documents: List of documents (can be URLs, base64 data, or plain text)
+
+        Returns:
+            List of processed document content as text
+        """
+        if not documents:
+            return []
+
+        if (
+            self.supported_content_types
+            and "documents" not in self.supported_content_types
+        ):
+            return []
+
+        processed_documents = []
+        for doc in documents:
+            # Check if it's a URL (PDF or TXT)
+            if doc.startswith("http://") or doc.startswith("https://"):
+                # Fetch and extract content from URL
+                extracted_content = await self._extract_document_content_from_url(doc)
+                processed_documents.append(extracted_content)
+            else:
+                # Already processed (base64 decoded or plain text)
+                # Try to decode in case it's base64
+                decoded_content = self._decode_document_data(doc)
+                processed_documents.append(decoded_content)
+
+        return processed_documents
+
     async def apply_guardrail(
         self,
         inputs: "GenericGuardrailAPIInputs",
@@ -653,7 +775,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         either blocking the request or masking the sensitive content.
 
         Args:
-            inputs: Dictionary containing texts and optional images
+            inputs: Dictionary containing texts, optional images, and optional documents
             request_data: Request data dictionary for logging metadata
             input_type: Whether this is a "request" or "response"
             logging_obj: Optional logging object
@@ -666,7 +788,27 @@ class ContentFilterGuardrail(CustomGuardrail):
         """
         texts = inputs.get("texts", [])
         images = inputs.get("images", [])
-        if images and self.image_model and self.llm_router:
+        documents = inputs.get("documents", [])
+
+        # Process documents (convert URLs to text, decode base64)
+        if documents:
+            verbose_proxy_logger.debug(
+                f"ContentFilterGuardrail: Processing {len(documents)} document(s)"
+            )
+            processed_documents = await self._process_documents(documents)
+            # Add document content to texts for filtering
+            texts = texts + processed_documents
+            verbose_proxy_logger.debug(
+                f"ContentFilterGuardrail: Added {len(processed_documents)} document(s) to text filtering"
+            )
+
+        if (
+            images
+            and self.image_model
+            and self.llm_router
+            and self.supported_content_types
+            and "images" in self.supported_content_types
+        ):
             tasks = []
             for image in images:
                 task = self.llm_router.acompletion(
