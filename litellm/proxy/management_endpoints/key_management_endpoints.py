@@ -2343,7 +2343,7 @@ async def delete_verification_tokens(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Tuple[Optional[Dict], List[LiteLLM_VerificationToken]]:
     """
-    Helper that deletes the list of tokens from the database
+    Helper that deletes the list of tokens from the database.
 
     - check if user is proxy admin
     - check if user is team admin and key is a team key
