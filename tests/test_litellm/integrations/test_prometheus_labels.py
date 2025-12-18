@@ -69,8 +69,39 @@ def test_prometheus_metric_labels_structure():
         print(f"✅ {metric_name} has proper label structure with user_email")
 
 
+def test_model_id_in_required_metrics():
+    """
+    Test that model_id label is present in all the metrics that should have it:
+    - litellm_proxy_total_requests_metric
+    - litellm_proxy_failed_requests_metric
+    - litellm_request_total_latency_metric
+    - litellm_llm_api_time_to_first_token_metric
+    """
+    model_id_label = UserAPIKeyLabelNames.MODEL_ID.value
+
+    # Metrics that should have model_id
+    metrics_with_model_id = [
+        "litellm_proxy_total_requests_metric",
+        "litellm_proxy_failed_requests_metric",
+        "litellm_request_total_latency_metric",
+        "litellm_llm_api_time_to_first_token_metric"
+    ]
+
+    for metric_name in metrics_with_model_id:
+        labels = PrometheusMetricLabels.get_labels(metric_name)
+        assert model_id_label in labels, f"Metric {metric_name} should contain model_id label"
+        print(f"✅ {metric_name} contains model_id label")
+
+
+def test_model_id_label_exists():
+    """Test that the MODEL_ID label is properly defined"""
+    assert UserAPIKeyLabelNames.MODEL_ID.value == "model_id"
+
+
 if __name__ == "__main__":
     test_user_email_in_required_metrics()
     test_user_email_label_exists()
     test_prometheus_metric_labels_structure()
+    test_model_id_in_required_metrics()
+    test_model_id_label_exists()
     print("All prometheus label tests passed!")
