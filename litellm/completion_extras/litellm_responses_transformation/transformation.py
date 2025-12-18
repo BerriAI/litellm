@@ -492,7 +492,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     def _convert_content_str_to_input_text(
         self, content: str, role: str
     ) -> Dict[str, Any]:
-        if role == "user" or role == "system":
+        if role == "user" or role == "system" or role == "tool":
             return {"type": "input_text", "text": content}
         else:
             return {"type": "output_text", "text": content}
