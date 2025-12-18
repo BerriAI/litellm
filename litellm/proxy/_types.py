@@ -2482,6 +2482,7 @@ class CallInfo(LiteLLMPydanticObjectBase):
 class WebhookEvent(CallInfo):
     event: Literal[
         "budget_crossed",
+        "max_budget_alert",
         "soft_budget_crossed",
         "threshold_crossed",
         "projected_limit_exceeded",
