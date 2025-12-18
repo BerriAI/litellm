@@ -13,7 +13,7 @@ import random
 import time
 import traceback
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast, overload
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Union, cast, overload
 
 import litellm
 from litellm._logging import verbose_proxy_logger
