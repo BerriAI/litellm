@@ -443,32 +443,15 @@ class LiteLLMCompletionResponsesConfig:
         """
         ChatCompletionToolMessage is used to indicate the output from a tool call
         """
-        call_id = tool_call_output.get("call_id") or ""
-        
-        # Try to get tool_use_definition from cache
-        # First try with call_id (Responses API format)
-        _tool_use_definition = TOOL_CALLS_CACHE.get_cache(
-            key=call_id,
-        ) if call_id else None
-        
-        # If not found and call_id is empty, the tool_use_definition might have been
-        # cached with the actual Anthropic tool_use ID. We can't easily enumerate the cache,
-        # so we'll handle empty call_id in convert_to_anthropic_tool_result by raising an error
-        # if we can't create a valid tool_result.
-        
-        # If we have a tool_use_definition, use its ID for the tool_call_id
-        # This ensures the tool_result matches the tool_use block
-        if _tool_use_definition:
-            tool_use_id = _tool_use_definition.get("id") or ""
-            if tool_use_id:
-                call_id = tool_use_id
-        
         tool_output_message = ChatCompletionToolMessage(
             role="tool",
             content=tool_call_output.get("output") or "",
-            tool_call_id=call_id,
+            tool_call_id=tool_call_output.get("call_id") or "",
         )
 
+        _tool_use_definition = TOOL_CALLS_CACHE.get_cache(
+            key=tool_call_output.get("call_id") or "",
+        )
         if _tool_use_definition:
             """
             Append the tool use definition to the list of messages
@@ -763,14 +746,10 @@ class LiteLLMCompletionResponsesConfig:
                 if choice.message.tool_calls:
                     all_chat_completion_tools.extend(choice.message.tool_calls)
                     for tool_call in choice.message.tool_calls:
-                        # Cache with the tool_use ID (from Anthropic response)
-                        # This allows lookup even when Responses API call_id is empty or different
-                        tool_use_id = tool_call.id
-                        if tool_use_id:
-                            TOOL_CALLS_CACHE.set_cache(
-                                key=tool_use_id,
-                                value=tool_call,
-                            )
+                        TOOL_CALLS_CACHE.set_cache(
+                            key=tool_call.id,
+                            value=tool_call,
+                        )
 
         responses_tools: List[ResponseFunctionToolCall] = []
         for tool in all_chat_completion_tools:
