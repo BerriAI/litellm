@@ -2580,26 +2580,9 @@ def cohere_message_pt(messages: list):
             )
             tool_results.append(tool_result)
         elif message.get("content"):
-            content = message["content"]
-
-            # Support both string content and OpenAI-style list-of-parts content
-            # e.g. [{"type": "text", "text": "Hi"}]
-            if isinstance(content, list):
-                text_parts: List[str] = []
-                for part in content:
-                    if isinstance(part, dict):
-                        # Prefer explicit text field
-                        if part.get("type") == "text" and "text" in part:
-                            text_parts.append(str(part["text"]))
-                        elif "text" in part:
-                            text_parts.append(str(part["text"]))
-                    elif isinstance(part, str):
-                        text_parts.append(part)
-
-                if len(text_parts) > 0:
-                    prompt += "".join(text_parts) + "\n\n"
-            else:
-                prompt += str(content) + "\n\n"
+            text_content = convert_content_list_to_str(message)
+            if text_content:
+                prompt += text_content + "\n\n"
     prompt = prompt.rstrip()
     return prompt, tool_results
 
