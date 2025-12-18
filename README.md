@@ -61,6 +61,8 @@ response = completion(model="anthropic/claude-sonnet-4-20250514", messages=[{"ro
 
 ### AI Gateway (Proxy Server)
 
+[**Getting Started - E2E Tutorial**](https://docs.litellm.ai/docs/proxy/docker_quick_start) - Setup virtual keys, make your first request
+
 ```shell
 pip install 'litellm[proxy]'
 litellm --model gpt-4o
