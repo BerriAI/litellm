@@ -35,11 +35,17 @@ export const createChatMultimodalMessage = async (
   // Check if file is PDF or text
   const isPdfOrText = fileName.endsWith('.pdf') || fileName.endsWith('.txt');
   
+  // Ensure the data URI has the correct format with data: prefix
+  // FileReader.readAsDataURL() should already provide this, but validate
+  const fileData = base64DataUri.startsWith('data:') 
+    ? base64DataUri 
+    : `data:${file.type};base64,${base64DataUri}`;
+  
   const fileContent: ChatMultimodalContent = isPdfOrText
     ? {
         type: "file",
         file: {
-          file_data: base64DataUri,
+          file_data: fileData,
         },
       }
     : {

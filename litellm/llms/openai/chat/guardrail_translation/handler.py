@@ -20,9 +20,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.main import stream_chunk_builder
-from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.llms.openai import ChatCompletionToolParam
 from litellm.types.utils import (
     Choices,
@@ -66,9 +64,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         tool_calls_to_check: List[ChatCompletionToolParam] = []
         text_task_mappings: List[Tuple[int, Optional[int]]] = []
         tool_call_task_mappings: List[Tuple[int, int]] = []
+        document_task_mappings: List[Tuple[int, int]] = []
         # text_task_mappings: Track (message_index, content_index) for each text
         # content_index is None for string content, int for list content
         # tool_call_task_mappings: Track (message_index, tool_call_index) for each tool call
+        # document_task_mappings: Track (message_index, content_index) for each document
 
         # Step 1: Extract all text content, images, and tool calls
         for msg_idx, message in enumerate(messages):
@@ -81,6 +81,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 tool_calls_to_check=tool_calls_to_check,
                 text_task_mappings=text_task_mappings,
                 tool_call_task_mappings=tool_call_task_mappings,
+                document_task_mappings=document_task_mappings,
             )
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
@@ -106,6 +107,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
             guardrailed_texts = guardrailed_inputs.get("texts", [])
             guardrailed_tool_calls = guardrailed_inputs.get("tool_calls", [])
+            guardrailed_documents = guardrailed_inputs.get("documents", [])
 
             # Step 3: Map guardrail responses back to original message structure
             if guardrailed_texts and texts_to_check:
@@ -125,6 +127,14 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     task_mappings=tool_call_task_mappings,
                 )
 
+            # Step 5: Apply guardrailed documents back to messages
+            if guardrailed_documents:
+                await self._apply_guardrail_responses_to_input_documents(
+                    messages=messages,
+                    documents=guardrailed_documents,
+                    task_mappings=document_task_mappings,
+                )
+
         verbose_proxy_logger.debug(
             "OpenAI Chat Completions: Processed input messages: %s", messages
         )
@@ -141,9 +151,21 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         tool_calls_to_check: List[ChatCompletionToolParam],
         text_task_mappings: List[Tuple[int, Optional[int]]],
         tool_call_task_mappings: List[Tuple[int, int]],
+        document_task_mappings: List[Tuple[int, int]],
     ) -> None:
         """
         Extract text content, images, documents, and tool calls from a message.
+
+        Args:
+            message: The message dictionary to extract from
+            msg_idx: Index of the message in the messages list
+            texts_to_check: List to append extracted text content to
+            images_to_check: List to append extracted image URLs to
+            documents_to_check: List to append extracted document content to
+            tool_calls_to_check: List to append extracted tool calls to
+            text_task_mappings: List to track (message_index, content_index) for each text
+            tool_call_task_mappings: List to track (message_index, tool_call_index) for each tool call
+            document_task_mappings: List to track (message_index, content_index) for each document
 
         Override this method to customize text/image/document/tool call extraction logic.
         """
@@ -183,6 +205,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                                 # Decode base64 if needed to get actual text
                                 document_text = self._decode_document_data(data)
                                 documents_to_check.append(document_text)
+                                document_task_mappings.append(
+                                    (msg_idx, int(content_idx))
+                                )
 
                     # Extract files (file)
                     if content_item.get("type") == "file":
@@ -196,6 +221,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                             ):
                                 # Add URL to documents list - will be processed asynchronously later
                                 documents_to_check.append(file_id)
+                                document_task_mappings.append(
+                                    (msg_idx, int(content_idx))
+                                )
 
                             # Check for file_data (base64 encoded)
                             file_data = file_obj.get("file_data")
@@ -203,6 +231,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                                 # Decode base64 to get actual text
                                 document_text = self._decode_document_data(file_data)
                                 documents_to_check.append(document_text)
+                                document_task_mappings.append(
+                                    (msg_idx, int(content_idx))
+                                )
 
         # Extract tool calls (typically in assistant messages)
         tool_calls = message.get("tool_calls", None)
@@ -291,6 +322,89 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     if tool_call_idx < len(message_tool_calls):
                         # Replace the tool call with the guardrailed version
                         message_tool_calls[tool_call_idx] = guardrailed_tool_call
+
+    async def _apply_guardrail_responses_to_input_documents(
+        self,
+        messages: List[Dict[str, Any]],
+        documents: List[str],
+        task_mappings: List[Tuple[int, int]],
+    ) -> None:
+        """
+        Apply guardrailed documents back to input messages.
+
+        The guardrail may have modified the documents list,
+        so we apply the modified documents back to the original messages.
+
+        Args:
+            messages: List of message dictionaries to update
+            documents: List of guardrailed document texts
+            task_mappings: List of tuples (message_index, content_index) tracking where each document came from
+
+        Override this method to customize how document responses are applied.
+        """
+        for task_idx, guardrailed_document in enumerate(documents):
+            if task_idx >= len(task_mappings):
+                break
+
+            msg_idx, content_idx = task_mappings[task_idx]
+
+            # Get the message content
+            content = messages[msg_idx].get("content", None)
+            if content is None or not isinstance(content, list):
+                continue
+
+            if content_idx >= len(content):
+                continue
+
+            content_item = content[content_idx]
+
+            # Update the document based on its type
+            if content_item.get("type") == "document":
+                # ChatCompletionDocumentObject format
+                source = content_item.get("source", {})
+                if isinstance(source, dict):
+                    # Encode the guardrailed text back to base64
+                    encoded_data = self._encode_document_data(guardrailed_document)
+                    source["data"] = encoded_data
+
+            elif content_item.get("type") == "file":
+                # ChatCompletionFileObject format
+                file_obj = content_item.get("file", {})
+                if isinstance(file_obj, dict):
+                    # Check which field was used (file_id or file_data)
+                    if "file_data" in file_obj:
+                        # Update file_data with encoded guardrailed text
+                        encoded_data = self._encode_document_data(guardrailed_document)
+                        file_obj["file_data"] = encoded_data
+                    elif "file_id" in file_obj:
+                        # For file_id (URLs), we keep it as-is since guardrails
+                        # typically process the content, not change the reference
+                        # If needed, the guardrail can provide a new URL
+                        verbose_proxy_logger.debug(
+                            "Document with file_id cannot be directly updated, skipping"
+                        )
+
+    def _encode_document_data(self, text: str) -> str:
+        """
+        Encode document text to base64 format.
+
+        Args:
+            text: Plain text content to encode
+
+        Returns:
+            Base64 encoded string
+        """
+        try:
+            # Encode text to bytes, then to base64
+            text_bytes = text.encode("utf-8")
+            encoded_bytes = base64.b64encode(text_bytes)
+            return encoded_bytes.decode("ascii")
+        except Exception as e:
+            verbose_proxy_logger.error(
+                "Failed to encode document data as base64: %s", str(e)
+            )
+            # Return the original text if encoding fails
+            return text
 
     async def process_output_response(
         self,

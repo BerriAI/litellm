@@ -6,6 +6,7 @@ to detect and block/mask sensitive content.
 """
 
 import asyncio
+import base64
 import os
 import re
 from typing import (
@@ -31,7 +32,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.utils import GenericGuardrailAPIInputs
-from litellm.proxy._types import UserAPIKeyAuth
+
 from litellm.types.guardrails import (
     BlockedWord,
     ContentFilterAction,
@@ -42,7 +43,6 @@ from litellm.types.guardrails import (
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
 )
-from litellm.types.utils import ModelResponseStream
 
 from .patterns import get_compiled_pattern
 
@@ -675,6 +675,12 @@ class ContentFilterGuardrail(CustomGuardrail):
             )
             return data
 
+    def _encode_document_data(self, data: str) -> str:
+        """
+        Encode document data to base64.
+        """
+        return base64.b64encode(data.encode("utf-8")).decode("utf-8")
+
     async def _extract_document_content_from_url(self, url: str) -> str:
         """
         Fetch document content from a URL.
@@ -761,6 +767,67 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         return processed_documents
 
+    async def _filter_and_encode_documents(
+        self, documents: List[str]
+    ) -> Optional[List[str]]:
+        """
+        Process, filter, and re-encode documents.
+
+        This method:
+        1. Processes documents (converts URLs, decodes base64)
+        2. Applies content filtering to each document
+        3. Re-encodes filtered documents back to base64
+
+        Args:
+            documents: List of documents (URLs, base64 data, or plain text)
+
+        Returns:
+            List of base64-encoded filtered documents, or None if no documents provided
+
+        Raises:
+            HTTPException: If sensitive content is detected and action is BLOCK
+        """
+        if not documents:
+            return None
+
+        verbose_proxy_logger.debug(
+            f"ContentFilterGuardrail: Processing {len(documents)} document(s)"
+        )
+
+        # Process documents (decode, fetch URLs, etc.)
+        processed_documents = await self._process_documents(documents)
+
+        # Filter each document through content filter
+        filtered_documents = []
+        for processed_document in processed_documents:
+            try:
+                masked_document = self._filter_single_text(processed_document)
+                filtered_documents.append(masked_document)
+            except HTTPException as e:
+                # Add document context to error message
+                if isinstance(e.detail, dict) and "error" in e.detail:
+                    detail_dict = cast(Dict[str, Any], e.detail)
+                    detail_dict["error"] = (
+                        detail_dict["error"]
+                        + " (Document): "
+                        + processed_document[:100]
+                    )
+                elif isinstance(e.detail, str):
+                    e.detail = e.detail + " (Document): " + processed_document[:100]
+                else:
+                    e.detail = (
+                        "Content blocked: Document detected" + processed_document[:100]
+                    )
+                raise e
+
+        # Re-encode documents to base64
+        encoded_documents = []
+        for document in filtered_documents:
+            base64_document = self._encode_document_data(document)
+            encoded_documents.append(base64_document)
+
+        return encoded_documents
+
     async def apply_guardrail(
         self,
         inputs: "GenericGuardrailAPIInputs",
@@ -790,35 +857,11 @@ class ContentFilterGuardrail(CustomGuardrail):
         images = inputs.get("images", [])
         documents = inputs.get("documents", [])
 
-        # Process documents (convert URLs to text, decode base64)
+        # Process, filter, and re-encode documents
         if documents:
-            verbose_proxy_logger.debug(
-                f"ContentFilterGuardrail: Processing {len(documents)} document(s)"
-            )
-            processed_documents = await self._process_documents(documents)
-            # Add document content to texts for filtering
-
-            for processed_document in processed_documents:
-                # This will raise HTTPException if BLOCK action is triggered
-                try:
-                    self._filter_single_text(processed_document)
-                except HTTPException as e:
-                    # e.detail can be a string or dict
-                    if isinstance(e.detail, dict) and "error" in e.detail:
-                        detail_dict = cast(Dict[str, Any], e.detail)
-                        detail_dict["error"] = (
-                            detail_dict["error"]
-                            + " (Document): "
-                            + processed_document[:100]
-                        )
-                    elif isinstance(e.detail, str):
-                        e.detail = e.detail + " (Document): " + processed_document[:100]
-                    else:
-                        e.detail = (
-                            "Content blocked: Document detected"
-                            + processed_document[:100]
-                        )
-                    raise e
+            encoded_documents = await self._filter_and_encode_documents(documents)
+            if encoded_documents is not None:
+                inputs["documents"] = encoded_documents
 
         if (
             images
