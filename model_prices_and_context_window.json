@@ -12819,6 +12819,7 @@
     },
     "gemini-2.5-pro": {
         "cache_read_input_token_cost": 1.25e-07,
+        "cache_read_input_token_cost_above_200k_tokens": 2.5e-07,
         "cache_creation_input_token_cost_above_200k_tokens": 2.5e-07,
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_above_200k_tokens": 2.5e-06,
@@ -12958,7 +12959,8 @@
         "supports_web_search": true
     },
     "gemini-2.5-pro-exp-03-25": {
-        "cache_read_input_token_cost": 3.125e-07,
+        "cache_read_input_token_cost": 1.25e-07,
+        "cache_read_input_token_cost_above_200k_tokens": 2.5e-07,
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_above_200k_tokens": 2.5e-06,
         "litellm_provider": "vertex_ai-language-models",
@@ -13001,7 +13003,8 @@
         "supports_web_search": true
     },
     "gemini-2.5-pro-preview-03-25": {
-        "cache_read_input_token_cost": 3.125e-07,
+        "cache_read_input_token_cost": 1.25e-07,
+        "cache_read_input_token_cost_above_200k_tokens": 2.5e-07,
         "input_cost_per_audio_token": 1.25e-06,
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_above_200k_tokens": 2.5e-06,
@@ -13046,7 +13049,8 @@
         "supports_web_search": true
     },
     "gemini-2.5-pro-preview-05-06": {
-        "cache_read_input_token_cost": 3.125e-07,
+        "cache_read_input_token_cost": 1.25e-07,
+        "cache_read_input_token_cost_above_200k_tokens": 2.5e-07,
         "input_cost_per_audio_token": 1.25e-06,
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_above_200k_tokens": 2.5e-06,
@@ -13094,7 +13098,8 @@
         "supports_web_search": true
     },
     "gemini-2.5-pro-preview-06-05": {
-        "cache_read_input_token_cost": 3.125e-07,
+        "cache_read_input_token_cost": 1.25e-07,
+        "cache_read_input_token_cost_above_200k_tokens": 2.5e-07,
         "input_cost_per_audio_token": 1.25e-06,
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_above_200k_tokens": 2.5e-06,
@@ -13139,7 +13144,8 @@
         "supports_web_search": true
     },
     "gemini-2.5-pro-preview-tts": {
-        "cache_read_input_token_cost": 3.125e-07,
+        "cache_read_input_token_cost": 1.25e-07,
+        "cache_read_input_token_cost_above_200k_tokens": 2.5e-07,
         "input_cost_per_audio_token": 7e-07,
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_above_200k_tokens": 2.5e-06,
@@ -14608,7 +14614,8 @@
         "tpm": 250000
     },
     "gemini/gemini-2.5-pro": {
-        "cache_read_input_token_cost": 3.125e-07,
+        "cache_read_input_token_cost": 1.25e-07,
+        "cache_read_input_token_cost_above_200k_tokens": 2.5e-07,
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_above_200k_tokens": 2.5e-06,
         "litellm_provider": "gemini",
@@ -14777,7 +14784,8 @@
         "tpm": 250000
     },
     "gemini/gemini-2.5-pro-preview-03-25": {
-        "cache_read_input_token_cost": 3.125e-07,
+        "cache_read_input_token_cost": 1.25e-07,
+        "cache_read_input_token_cost_above_200k_tokens": 2.5e-07,
         "input_cost_per_audio_token": 7e-07,
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_above_200k_tokens": 2.5e-06,
@@ -14817,7 +14825,8 @@
         "tpm": 10000000
     },
     "gemini/gemini-2.5-pro-preview-05-06": {
-        "cache_read_input_token_cost": 3.125e-07,
+        "cache_read_input_token_cost": 1.25e-07,
+        "cache_read_input_token_cost_above_200k_tokens": 2.5e-07,
         "input_cost_per_audio_token": 7e-07,
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_above_200k_tokens": 2.5e-06,
@@ -14858,7 +14867,8 @@
         "tpm": 10000000
     },
     "gemini/gemini-2.5-pro-preview-06-05": {
-        "cache_read_input_token_cost": 3.125e-07,
+        "cache_read_input_token_cost": 1.25e-07,
+        "cache_read_input_token_cost_above_200k_tokens": 2.5e-07,
         "input_cost_per_audio_token": 7e-07,
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_above_200k_tokens": 2.5e-06,
@@ -14899,7 +14909,8 @@
         "tpm": 10000000
     },
     "gemini/gemini-2.5-pro-preview-tts": {
-        "cache_read_input_token_cost": 3.125e-07,
+        "cache_read_input_token_cost": 1.25e-07,
+        "cache_read_input_token_cost_above_200k_tokens": 2.5e-07,
         "input_cost_per_audio_token": 7e-07,
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_above_200k_tokens": 2.5e-06,
