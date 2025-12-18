@@ -30,7 +30,8 @@
     </a>
 </h4>
 
-<img width="2688" height="1600" alt="Gemini_Generated_Image_3dryk33dryk33dry (1)" src="https://github.com/user-attachments/assets/c6e23207-30c0-4f57-9b01-33890211b098" />
+<img width="2688" height="1600" alt="Gemini_Generated_Image_ink3wkink3wkink3" src="https://github.com/user-attachments/assets/c827426c-a523-4313-93e5-300ec332b560" />
+
 
 ## Use LiteLLM for
 
