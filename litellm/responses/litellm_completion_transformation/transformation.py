@@ -396,13 +396,14 @@ class LiteLLMCompletionResponsesConfig:
         import copy
         fixed_messages = copy.deepcopy(messages)
         
+        # Track messages to remove (those with empty tool_call_id that can't be fixed)
+        messages_to_remove = []
+        
         for i, message in enumerate(fixed_messages):
             # Check if this is a tool message (tool_result)
             if message.get("role") == "tool" and "tool_call_id" in message:
                 tool_call_id_raw = message.get("tool_call_id")
                 tool_call_id: str = str(tool_call_id_raw) if tool_call_id_raw is not None else ""
-                if not tool_call_id:
-                    continue
                 
                 # Find the previous assistant message
                 prev_assistant_idx = None
@@ -410,6 +411,31 @@ class LiteLLMCompletionResponsesConfig:
                     if fixed_messages[j].get("role") == "assistant":
                         prev_assistant_idx = j
                         break
+                
+                # If tool_call_id is empty, try to find it from the previous assistant message
+                if not tool_call_id and prev_assistant_idx is not None:
+                    prev_assistant = fixed_messages[prev_assistant_idx]
+                    tool_calls_raw = prev_assistant.get("tool_calls") if isinstance(prev_assistant, dict) else getattr(prev_assistant, "tool_calls", None)
+                    if tool_calls_raw:
+                        if isinstance(tool_calls_raw, list) and len(tool_calls_raw) > 0:
+                            # Use the first tool_call's id
+                            first_tool_call = tool_calls_raw[0]
+                            if isinstance(first_tool_call, dict):
+                                tool_call_id = first_tool_call.get("id", "")
+                            elif hasattr(first_tool_call, "id"):
+                                tool_call_id = str(getattr(first_tool_call, "id", ""))
+                    
+                    # Update the message with the found tool_call_id if we found one
+                    if tool_call_id:
+                        if isinstance(message, dict):
+                            message["tool_call_id"] = tool_call_id
+                        elif hasattr(message, "tool_call_id"):
+                            setattr(message, "tool_call_id", tool_call_id)
+                
+                # If still empty after trying to recover, mark for removal
+                if not tool_call_id:
+                    messages_to_remove.append(i)
+                    continue
                 
                 if prev_assistant_idx is not None:
                     prev_assistant = fixed_messages[prev_assistant_idx]
@@ -501,6 +527,11 @@ class LiteLLMCompletionResponsesConfig:
                                 if isinstance(prev_assistant.tool_calls, list):
                                     prev_assistant.tool_calls.append(tool_call_chunk)
         
+        # Remove messages with empty tool_call_id that couldn't be fixed
+        # Remove in reverse order to maintain indices
+        for idx in reversed(messages_to_remove):
+            fixed_messages.pop(idx)
+        
         return fixed_messages
 
     @staticmethod
@@ -585,10 +616,19 @@ class LiteLLMCompletionResponsesConfig:
         """
         ChatCompletionToolMessage is used to indicate the output from a tool call
         """
+        call_id = tool_call_output.get("call_id")
+        # If call_id is missing or empty, try to get it from cache or skip this message
+        # Empty tool_call_id will cause Anthropic API errors
+        if not call_id:
+            # Try to find call_id from cache if available
+            # This can happen when messages are reconstructed from spend logs
+            # and the call_id wasn't properly preserved
+            return []  # Skip messages with empty call_id - they can't be properly matched to tool_calls
+        
         tool_output_message = ChatCompletionToolMessage(
             role="tool",
             content=tool_call_output.get("output") or "",
-            tool_call_id=tool_call_output.get("call_id") or "",
+            tool_call_id=str(call_id),
         )
 
         _tool_use_definition = TOOL_CALLS_CACHE.get_cache(
