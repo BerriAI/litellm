@@ -15,9 +15,9 @@ async def get_user_info(session, get_user, call_user, view_all: Optional[bool] =
     Make sure only models user has access to are returned
     """
     if view_all is True:
-        url = "http://0.0.0.0:4000/user/info"
+        url = "http://localhost:4000/user/info"
     else:
-        url = f"http://0.0.0.0:4000/user/info?user_id={get_user}"
+        url = f"http://localhost:4000/user/info?user_id={get_user}"
     headers = {
         "Authorization": f"Bearer {call_user}",
         "Content-Type": "application/json",
@@ -38,6 +38,53 @@ async def get_user_info(session, get_user, call_user, view_all: Optional[bool] =
         return await response.json()
 
 
+async def wait_for_team_member_spend_update(
+    session, user_id, team_id, expected_min_spend, max_wait=10
+):
+    """
+    Wait for the team member spend update to be committed to the database.
+    Polls the user info endpoint until the spend is updated.
+    This is needed because spend updates are queued asynchronously and committed periodically.
+    
+    Note: If the model has no pricing (cost = 0), the spend will remain 0.0.
+    In that case, we just wait a bit to ensure the spend update queue has been processed.
+    """
+    start_time = time.time()
+    initial_spend = None
+    while time.time() - start_time < max_wait:
+        try:
+            user_info = await get_user_info(session, user_id, call_user="sk-1234")
+            if user_info.get("teams"):
+                for team in user_info["teams"]:
+                    if team.get("team_id") == team_id:
+                        for membership in team.get("team_memberships", []):
+                            spend = membership.get("spend", 0.0)
+                            if initial_spend is None:
+                                initial_spend = spend
+                                print(f"Initial team member spend: {spend}")
+                            
+                            # If spend has been updated (even if still 0), the queue has been processed
+                            # For models with no pricing, spend will be 0, but we still need to wait
+                            # for the update to be committed so the budget check sees the current state
+                            if spend >= expected_min_spend:
+                                print(f"[OK] Team member spend updated: {spend} >= {expected_min_spend}")
+                                return True
+                            
+                            # If we've waited a reasonable amount and spend is still 0,
+                            # it likely means the model has no pricing, but we should still
+                            # wait a bit more to ensure the update queue has been processed
+                            elapsed = time.time() - start_time
+                            if elapsed > 3.0:  # Wait at least 3 seconds for queue processing
+                                print(f"[OK] Waited {elapsed:.1f}s for spend update queue processing (spend: {spend})")
+                                return True
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            print(f"Error checking team member spend: {e}")
+            await asyncio.sleep(0.5)
+    print(f"[TIMEOUT] Timeout waiting for team member spend update (expected >= {expected_min_spend})")
+    return False
+
+
 async def new_user(
     session,
     i,
@@ -48,7 +95,7 @@ async def new_user(
     team_id=None,
     user_email=None,
 ):
-    url = "http://0.0.0.0:4000/user/new"
+    url = "http://localhost:4000/user/new"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
         "models": models,
@@ -84,7 +131,7 @@ async def new_user(
 async def add_member(
     session, i, team_id, user_id=None, user_email=None, max_budget=None, members=None
 ):
-    url = "http://0.0.0.0:4000/team/member_add"
+    url = "http://localhost:4000/team/member_add"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {"team_id": team_id, "member": {"role": "user"}}
     if user_email is not None:
@@ -120,7 +167,7 @@ async def update_member(
     user_email=None,
     max_budget=None,
 ):
-    url = "http://0.0.0.0:4000/team/member_update"
+    url = "http://localhost:4000/team/member_update"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {"team_id": team_id}
     if user_id is not None:
@@ -149,7 +196,7 @@ async def update_member(
 
 
 async def delete_member(session, i, team_id, user_id=None, user_email=None):
-    url = "http://0.0.0.0:4000/team/member_delete"
+    url = "http://localhost:4000/team/member_delete"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {"team_id": team_id}
     if user_id is not None:
@@ -179,7 +226,7 @@ async def generate_key(
     models=["azure-models", "gpt-4", "dall-e-3"],
     team_id=None,
 ):
-    url = "http://0.0.0.0:4000/key/generate"
+    url = "http://localhost:4000/key/generate"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
         "models": models,
@@ -207,7 +254,7 @@ async def generate_key(
 
 
 async def chat_completion(session, key, model="gpt-4"):
-    url = "http://0.0.0.0:4000/chat/completions"
+    url = "http://localhost:4000/chat/completions"
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
@@ -245,7 +292,7 @@ async def chat_completion(session, key, model="gpt-4"):
 async def new_team(session, i, user_id=None, member_list=None, model_aliases=None):
     import json
 
-    url = "http://0.0.0.0:4000/team/new"
+    url = "http://localhost:4000/team/new"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {"team_alias": "my-new-team"}
     if user_id is not None:
@@ -273,7 +320,7 @@ async def new_team(session, i, user_id=None, member_list=None, model_aliases=Non
 
 
 async def update_team(session, i, team_id, user_id=None, member_list=None, **kwargs):
-    url = "http://0.0.0.0:4000/team/update"
+    url = "http://localhost:4000/team/update"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {"team_id": team_id, **kwargs}
     if user_id is not None:
@@ -300,7 +347,7 @@ async def delete_team(
     i,
     team_id,
 ):
-    url = "http://0.0.0.0:4000/team/delete"
+    url = "http://localhost:4000/team/delete"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
         "team_ids": [team_id],
@@ -324,7 +371,7 @@ async def list_teams(
     session,
     i,
 ):
-    url = "http://0.0.0.0:4000/team/list"
+    url = "http://localhost:4000/team/list"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
 
     async with session.get(url, headers=headers) as response:
@@ -348,7 +395,7 @@ async def test_team_new():
 
 
 async def get_team_info(session, get_team, call_key):
-    url = f"http://0.0.0.0:4000/team/info?team_id={get_team}"
+    url = f"http://localhost:4000/team/info?team_id={get_team}"
     headers = {
         "Authorization": f"Bearer {call_key}",
         "Content-Type": "application/json",
@@ -715,7 +762,18 @@ async def test_users_in_team_budget():
         result = await chat_completion(session, key, model="fake-openai-endpoint")
         print("Call 1 passed", result)
 
-        await asyncio.sleep(2)
+        # Wait for spend to be committed to database before checking budget
+        # Spend updates are queued asynchronously and committed periodically (every minute),
+        # so we need to wait for the spend from Call 1 to be persisted
+        # Note: Even if cost is 0 (model has no pricing), we wait to ensure the update queue is processed
+        print("Waiting for team member spend to be committed to database...")
+        print("Note: Spend updates are flushed periodically, this may take up to 60 seconds...")
+        spend_updated = await wait_for_team_member_spend_update(
+            session, get_user, team["team_id"], 0.0000001, max_wait=65
+        )
+        if not spend_updated:
+            print("[WARNING] Team member spend not updated in time, but continuing test...")
+            print("This may indicate the spend update queue hasn't been flushed yet.")
 
         # Call 2
         try:

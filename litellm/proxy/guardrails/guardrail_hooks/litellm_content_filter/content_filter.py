@@ -11,6 +11,7 @@ import re
 from typing import (
     TYPE_CHECKING,
     Any,
+    AsyncGenerator,
     Dict,
     List,
     Literal,
@@ -27,6 +28,8 @@ from fastapi import HTTPException
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.utils import ModelResponseStream
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -736,6 +739,101 @@ class ContentFilterGuardrail(CustomGuardrail):
         )
         inputs["texts"] = processed_texts
         return inputs
+
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_data: dict,
+    ) -> AsyncGenerator[ModelResponseStream, None]:
+        """
+        Process streaming response chunks and check for blocked content.
+
+        For BLOCK action: Raises HTTPException immediately when blocked content is detected.
+        For MASK action: Content passes through (masking streaming responses is not supported).
+        """
+
+        # Accumulate content as we iterate through chunks
+        accumulated_content = ""
+
+        async for item in response:
+            # Accumulate content from this chunk before checking
+            if isinstance(item, ModelResponseStream) and item.choices:
+                for choice in item.choices:
+                    if hasattr(choice, "delta") and choice.delta:
+                        content = getattr(choice.delta, "content", None)
+                        if content and isinstance(content, str):
+                            accumulated_content += content
+
+                # Check accumulated content for blocked patterns/keywords after processing all choices
+                # Only check for BLOCK actions, not MASK (masking streaming is not supported)
+                if accumulated_content:
+                    try:
+                        # Check patterns
+                        pattern_match = self._check_patterns(accumulated_content)
+                        if pattern_match:
+                            matched_text, pattern_name, action = pattern_match
+                            if action == ContentFilterAction.BLOCK:
+                                error_msg = f"Content blocked: {pattern_name} pattern detected"
+                                verbose_proxy_logger.warning(error_msg)
+                                raise HTTPException(
+                                    status_code=403,
+                                    detail={"error": error_msg, "pattern": pattern_name},
+                                )
+
+                        # Check blocked words
+                        blocked_word_match = self._check_blocked_words(accumulated_content)
+                        if blocked_word_match:
+                            keyword, action, description = blocked_word_match
+                            if action == ContentFilterAction.BLOCK:
+                                error_msg = f"Content blocked: keyword '{keyword}' detected"
+                                if description:
+                                    error_msg += f" ({description})"
+                                verbose_proxy_logger.warning(error_msg)
+                                raise HTTPException(
+                                    status_code=403,
+                                    detail={
+                                        "error": error_msg,
+                                        "keyword": keyword,
+                                        "description": description,
+                                    },
+                                )
+
+                        # Check category keywords
+                        all_exceptions = []
+                        for category in self.loaded_categories.values():
+                            all_exceptions.extend(category.exceptions)
+                        category_match = self._check_category_keywords(
+                            accumulated_content, all_exceptions
+                        )
+                        if category_match:
+                            keyword, category_name, severity, action = category_match
+                            if action == ContentFilterAction.BLOCK:
+                                error_msg = (
+                                    f"Content blocked: {category_name} category keyword '{keyword}' detected "
+                                    f"(severity: {severity})"
+                                )
+                                verbose_proxy_logger.warning(error_msg)
+                                raise HTTPException(
+                                    status_code=403,
+                                    detail={
+                                        "error": error_msg,
+                                        "category": category_name,
+                                        "keyword": keyword,
+                                        "severity": severity,
+                                    },
+                                )
+                    except HTTPException:
+                        # Re-raise HTTPException (blocked content detected)
+                        raise
+                    except Exception as e:
+                        # Log other exceptions but don't block the stream
+                        verbose_proxy_logger.warning(
+                            f"Error checking content filter in streaming: {e}"
+                        )
+
+            # Yield the chunk (only if no exception was raised above)
+            yield item
 
     @staticmethod
     def get_config_model():
