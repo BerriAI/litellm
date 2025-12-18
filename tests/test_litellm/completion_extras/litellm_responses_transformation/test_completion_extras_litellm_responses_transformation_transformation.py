@@ -142,6 +142,84 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_imag
     print("✓ Tool result with image correctly transformed to Responses API format")
 
 
+def test_convert_chat_completion_messages_to_responses_api_tool_result_with_text():
+    """
+    Test that tool messages with text content are correctly transformed to Responses API format.
+
+    This is a regression test for the issue where tool results were being transformed
+    with type='output_text' instead of type='input_text', which caused OpenAI's Responses API
+    to reject the request with "Invalid value: 'output_text'".
+
+    Chat Completion format:
+        {"role": "tool", "tool_call_id": "call_abc123", "content": "15 degrees"}
+
+    Responses API format should use input_text, not output_text:
+        {"type": "function_call_output", "call_id": "call_abc123", "output": [{"type": "input_text", "text": "15 degrees"}]}
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Chat Completion format with tool result containing text
+    messages = [
+        {
+            "role": "user",
+            "content": "What is the weather like in San Francisco?",
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_abc123",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "San Francisco, CA", "unit": "celsius"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_abc123",
+            "content": "15 degrees",
+        },
+    ]
+
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    # Find the function_call_output item
+    function_call_output = None
+    for item in response:
+        if item.get("type") == "function_call_output":
+            function_call_output = item
+            break
+
+    assert (
+        function_call_output is not None
+    ), "function_call_output not found in response"
+    assert function_call_output["call_id"] == "call_abc123"
+
+    # Check that the output is correctly transformed to use input_text, not output_text
+    output = function_call_output["output"]
+    assert isinstance(output, list), "output should be a list"
+    assert len(output) == 1, "output should have one item"
+
+    text_item = output[0]
+    # Should be transformed to use input_text for tool results in Responses API format
+    assert (
+        text_item["type"] == "input_text"
+    ), f"Expected type 'input_text' for tool result, got '{text_item.get('type')}'"
+    assert (
+        text_item["text"] == "15 degrees"
+    ), f"Expected text '15 degrees', got '{text_item.get('text')}'"
+
+    print("✓ Tool result with text correctly transformed to use input_text for Responses API format")
+
+
 def test_openai_responses_chunk_parser_reasoning_summary():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,
