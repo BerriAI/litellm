@@ -15,7 +15,6 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 from openapi_core import OpenAPI
-from openapi_core.testing.mock import MockRequest, MockResponse
 
 OPENAPI_SPEC_URL = "https://ai.google.dev/static/api/interactions.openapi.json"
 
