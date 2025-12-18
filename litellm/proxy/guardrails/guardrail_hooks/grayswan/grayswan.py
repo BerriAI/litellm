@@ -8,7 +8,6 @@ from fastapi import HTTPException
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
-    ModifyResponseException,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import (
@@ -506,11 +505,13 @@ class GraySwanGuardrail(CustomGuardrail):
         # Handle legacy format where detection_info is a list
         if isinstance(detection_info, list) and len(detection_info) > 0:
             detection_info = detection_info[0]
-        
-        violation_score = detection_info.get("violation_score", 0.0)
-        violated_rules = detection_info.get("violated_rules", [])
-        mutation = detection_info.get("mutation", False)
-        ipi = detection_info.get("ipi", False)
+
+        # Extract fields from detection_info dict
+        detection_dict: dict = detection_info if isinstance(detection_info, dict) else {}
+        violation_score = detection_dict.get("violation_score", 0.0)
+        violated_rules = detection_dict.get("violated_rules", [])
+        mutation = detection_dict.get("mutation", False)
+        ipi = detection_dict.get("ipi", False)
 
         violation_location = "the model response" if is_output else "input query"
 
