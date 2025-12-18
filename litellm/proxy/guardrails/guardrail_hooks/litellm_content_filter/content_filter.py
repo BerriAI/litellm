@@ -31,7 +31,6 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.utils import GenericGuardrailAPIInputs
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import (
     BlockedWord,
     ContentFilterAction,
@@ -42,8 +41,6 @@ from litellm.types.guardrails import (
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
 )
-from litellm.types.utils import ModelResponseStream
-
 from .patterns import get_compiled_pattern
 
 
@@ -243,16 +240,16 @@ class ContentFilterGuardrail(CustomGuardrail):
                 continue
 
             try:
-                category = self._load_category_file(category_file_path)
-                self.loaded_categories[category_name] = category
+                category_config_obj = self._load_category_file(category_file_path)
+                self.loaded_categories[category_name] = category_config_obj
 
                 # Use action from config, or default from category file
                 category_action = ContentFilterAction(
-                    action if action else category.default_action
+                    action if action else category_config_obj.default_action
                 )
 
                 # Add keywords from this category
-                for keyword_data in category.keywords:
+                for keyword_data in category_config_obj.keywords:
                     keyword = keyword_data["keyword"].lower()
                     severity = keyword_data["severity"]
 
@@ -266,7 +263,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
                 verbose_proxy_logger.info(
                     f"Loaded category {category_name}: "
-                    f"{len(category.keywords)} keywords"
+                    f"{len(category_config_obj.keywords)} keywords"
                 )
             except Exception as e:
                 verbose_proxy_logger.error(
@@ -534,10 +531,10 @@ class ContentFilterGuardrail(CustomGuardrail):
         # Check category keywords
         category_keyword_match = self._check_category_keywords(text, all_exceptions)
         if category_keyword_match:
-            keyword, category, severity, action = category_keyword_match
+            keyword, category_name, severity, action = category_keyword_match
             if action == ContentFilterAction.BLOCK:
                 error_msg = (
-                    f"Content blocked: {category} category keyword '{keyword}' detected "
+                    f"Content blocked: {category_name} category keyword '{keyword}' detected "
                     f"(severity: {severity})"
                 )
                 verbose_proxy_logger.warning(error_msg)
@@ -545,7 +542,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                     status_code=403,
                     detail={
                         "error": error_msg,
-                        "category": category,
+                        "category": category_name,
                         "keyword": keyword,
                         "severity": severity,
                     },
@@ -559,7 +556,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                     flags=re.IGNORECASE,
                 )
                 verbose_proxy_logger.info(
-                    f"Masked category keyword '{keyword}' from {category} (severity: {severity})"
+                    f"Masked category keyword '{keyword}' from {category_name} (severity: {severity})"
                 )
 
         # Check regex patterns - process ALL patterns, not just first match
@@ -690,8 +687,10 @@ class ContentFilterGuardrail(CustomGuardrail):
             responses = await asyncio.gather(*tasks)
             descriptions = []
             for response in responses:
-                if response.choices[0].message.content:
-                    image_description = response.choices[0].message.content
+                choice = response.choices[0]
+                message = getattr(choice, "message", None)
+                if message and getattr(message, "content", None):
+                    image_description = message.content
                     verbose_proxy_logger.debug(
                         f"Image description: {image_description}"
                     )
