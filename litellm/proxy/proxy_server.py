@@ -297,9 +297,7 @@ from litellm.proxy.management_endpoints.customer_endpoints import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import (
-    user_update,
-)
+from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
     duration_in_seconds,
@@ -353,9 +351,7 @@ from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import (
-    set_files_config,
-)
+from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
 )
@@ -450,9 +446,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     LiteLLM_UpperboundKeyGenerateParams,
 )
 from litellm.types.realtime import RealtimeQueryParams
-from litellm.types.router import (
-    DeploymentTypedDict,
-)
+from litellm.types.router import DeploymentTypedDict
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import (
     RouterGeneralSettings,
@@ -565,9 +559,7 @@ else:
 ui_link = f"{server_root_path}/ui"
 fallback_login_link = f"{server_root_path}/fallback/login"
 model_hub_link = f"{server_root_path}/ui/model_hub_table"
-ui_message = (
-    f"👉 [```LiteLLM Admin Panel on /ui```]({ui_link}). Create, Edit Keys with SSO. Having issues? Try [```Fallback Login```]({fallback_login_link})"
-)
+ui_message = f"👉 [```LiteLLM Admin Panel on /ui```]({ui_link}). Create, Edit Keys with SSO. Having issues? Try [```Fallback Login```]({fallback_login_link})"
 ui_message += "\n\n💸 [```LiteLLM Model Cost Map```](https://models.litellm.ai/)."
 
 ui_message += f"\n\n🔎 [```LiteLLM Model Hub```]({model_hub_link}). See available models on the proxy. [**Docs**](https://docs.litellm.ai/docs/proxy/ai_hub)"
@@ -649,10 +641,10 @@ async def _initialize_shared_aiohttp_session():
             connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
         if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
             connector_kwargs["limit_per_host"] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
-        
+
         connector = TCPConnector(**connector_kwargs)
         session = ClientSession(connector=connector)
-        
+
         verbose_proxy_logger.info(
             f"SESSION REUSE: Created shared aiohttp session for connection pooling (ID: {id(session)}, "
             f"limit={AIOHTTP_CONNECTOR_LIMIT}, limit_per_host={AIOHTTP_CONNECTOR_LIMIT_PER_HOST})"
@@ -1150,6 +1142,7 @@ if docs_url != "/" and root_redirect_url is not None:
     @app.get("/", include_in_schema=False)
     async def root_redirect():
         return RedirectResponse(url=root_redirect_url)  # type: ignore[arg-type]
+
 
 from typing import Dict
 
@@ -1734,7 +1727,7 @@ async def _run_background_health_check():
             else:
                 # Use a system identifier for background health checks
                 checked_by = "background_health_check"
-            
+
             start_time = time_module.time()
             asyncio.create_task(
                 _save_background_health_checks_to_db(
@@ -2425,7 +2418,9 @@ class ProxyConfig:
                     # Initialize global polling via cache settings
                     global polling_via_cache_enabled, polling_cache_ttl
                     background_mode = value.get("background_mode", {})
-                    polling_via_cache_enabled = background_mode.get("polling_via_cache", False)
+                    polling_via_cache_enabled = background_mode.get(
+                        "polling_via_cache", False
+                    )
                     polling_cache_ttl = background_mode.get("ttl", 3600)
                     verbose_proxy_logger.debug(
                         f"{blue_color_code} Initialized polling via cache: enabled={polling_via_cache_enabled}, ttl={polling_cache_ttl}{reset_color_code}"
@@ -2720,7 +2715,9 @@ class ProxyConfig:
             guardrails_v2 = config.get("guardrails", None)
         if guardrails_v2:
             init_guardrails_v2(
-                all_guardrails=guardrails_v2, config_file_path=config_file_path
+                all_guardrails=guardrails_v2,
+                config_file_path=config_file_path,
+                llm_router=router,
             )
 
         ## Prompt settings
@@ -4522,7 +4519,7 @@ class ProxyStartupEvent:
         ### MONITOR SPEND LOGS QUEUE (queue-size-based job) ###
         if general_settings.get("disable_spend_logs", False) is False:
             from litellm.proxy.utils import _monitor_spend_logs_queue
-            
+
             # Start background task to monitor spend logs queue size
             asyncio.create_task(
                 _monitor_spend_logs_queue(
@@ -5383,7 +5380,9 @@ async def embeddings(  # noqa: PLR0915
             # check if provider accept list of tokens as input - e.g. for langchain integration
             if llm_router is not None and data.get("model") in router_model_names:
                 # Use router's O(1) lookup instead of O(N) iteration through llm_model_list
-                deployment = llm_router.get_deployment_by_model_group_name(model_group_name=data["model"])
+                deployment = llm_router.get_deployment_by_model_group_name(
+                    model_group_name=data["model"]
+                )
                 if deployment is not None:
                     litellm_params = deployment.get("litellm_params", {}) or {}
                     litellm_model = litellm_params.get("model", "")
@@ -5663,10 +5662,12 @@ async def audio_speech(
             if "gemini" in request_model_lower and (
                 "tts" in request_model_lower or "preview-tts" in request_model_lower
             ):
-                media_type = "audio/wav"  # Gemini TTS returns WAV format after conversion
+                media_type = (
+                    "audio/wav"  # Gemini TTS returns WAV format after conversion
+                )
 
         return StreamingResponse(
-            _audio_speech_chunk_generator(response), # type: ignore[arg-type]
+            _audio_speech_chunk_generator(response),  # type: ignore[arg-type]
             media_type=media_type,
             headers=custom_headers,  # type: ignore
         )
@@ -8638,6 +8639,7 @@ async def login_v2(request: Request):  # noqa: PLR0915
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+
 @app.get("/onboarding/get_token", include_in_schema=False)
 async def onboarding(invite_link: str, request: Request):
     """
@@ -9730,11 +9732,11 @@ async def get_config():  # noqa: PLR0915
         _litellm_settings = config_data.get("litellm_settings", {})
         _general_settings = config_data.get("general_settings", {})
         environment_variables = config_data.get("environment_variables", {})
-        
+
         _success_callbacks = _litellm_settings.get("success_callback", [])
         _failure_callbacks = _litellm_settings.get("failure_callback", [])
         _success_and_failure_callbacks = _litellm_settings.get("callbacks", [])
-        
+
         _data_to_return = []
         """
         [
@@ -9750,15 +9752,23 @@ async def get_config():  # noqa: PLR0915
         ]
 
         """
-        
+
         for _callback in _success_callbacks:
-            _data_to_return.append(process_callback(_callback, "success", environment_variables))
-        
+            _data_to_return.append(
+                process_callback(_callback, "success", environment_variables)
+            )
+
         for _callback in _failure_callbacks:
-            _data_to_return.append(process_callback(_callback, "failure", environment_variables))
-        
+            _data_to_return.append(
+                process_callback(_callback, "failure", environment_variables)
+            )
+
         for _callback in _success_and_failure_callbacks:
-            _data_to_return.append(process_callback(_callback, "success_and_failure", environment_variables))
+            _data_to_return.append(
+                process_callback(
+                    _callback, "success_and_failure", environment_variables
+                )
+            )
 
         # Check if slack alerting is on
         _alerting = _general_settings.get("alerting", [])

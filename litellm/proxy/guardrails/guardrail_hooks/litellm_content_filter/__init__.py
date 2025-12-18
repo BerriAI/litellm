@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import litellm
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
@@ -7,10 +7,15 @@ from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_fil
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
 if TYPE_CHECKING:
+    from litellm import Router
     from litellm.types.guardrails import Guardrail, LitellmParams
 
 
-def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
+def initialize_guardrail(
+    litellm_params: "LitellmParams",
+    guardrail: "Guardrail",
+    llm_router: Optional["Router"] = None,
+):
     """
     Initialize the Content Filter Guardrail.
 
@@ -22,6 +27,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         Initialized ContentFilterGuardrail instance
     """
     guardrail_name = guardrail.get("guardrail_name")
+
     if not guardrail_name:
         raise ValueError("Content Filter: guardrail_name is required")
 
@@ -34,6 +40,8 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         default_on=litellm_params.default_on or False,
         categories=getattr(litellm_params, "categories", None),
         severity_threshold=getattr(litellm_params, "severity_threshold", "medium"),
+        llm_router=llm_router,
+        image_model=getattr(litellm_params, "image_model", None),
     )
 
     litellm.logging_callback_manager.add_litellm_callback(content_filter_guardrail)
