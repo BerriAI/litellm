@@ -30,6 +30,12 @@ class AzureAIRerankConfig(CohereRerankConfig):
                 "Azure AI API Base is required. api_base=None. Set in call or via `AZURE_AI_API_BASE` env var."
             )
         original_url = httpx.URL(api_base)
+        if not original_url.is_absolute_url:
+            raise ValueError(
+                "Azure AI API Base must be an absolute URL including scheme (e.g. "
+                "'https://<resource>.services.ai.azure.com'). "
+                f"Got api_base={api_base!r}."
+            )
         normalized_path = original_url.path.rstrip("/")
 
         # Allow callers to pass either full v1/v2 rerank endpoints:
