@@ -1572,18 +1572,29 @@ def convert_to_gemini_tool_call_result(
     return _part
 
 
-def _sanitize_anthropic_tool_use_id(tool_use_id: str) -> str:
+def _sanitize_anthropic_tool_use_id(tool_use_id: str) -> Optional[str]:
     """
     Sanitize tool_use_id to match Anthropic's required pattern: ^[a-zA-Z0-9_-]+$
     
     Anthropic requires tool_use_id to only contain alphanumeric characters, underscores, and hyphens.
     This function replaces any invalid characters with underscores.
+    
+    Returns:
+        Sanitized tool_use_id if valid, None if empty (which means we can't create a valid tool_result)
     """
+    # If empty, return None - we can't create a valid tool_result without an ID
+    if not tool_use_id or not tool_use_id.strip():
+        return None
+    
+    # Check if it already matches the pattern
+    if re.match(r'^[a-zA-Z0-9_-]+$', tool_use_id):
+        return tool_use_id
+    
     # Replace any character that's not alphanumeric, underscore, or hyphen with underscore
     sanitized = re.sub(r'[^a-zA-Z0-9_-]', '_', tool_use_id)
-    # Ensure it's not empty (fallback to a default if needed)
+    # Ensure it's not empty after sanitization
     if not sanitized:
-        sanitized = "tool_use_id"
+        return None
     return sanitized
 
 
@@ -1654,8 +1665,25 @@ def convert_to_anthropic_tool_result(
     if message["role"] == "tool":
         tool_message: ChatCompletionToolMessage = message
         tool_call_id: str = tool_message["tool_call_id"]
+        
+        # If tool_call_id is empty, we can't create a valid tool_result
+        # This should have been handled earlier (e.g., by getting ID from tool_use_definition)
+        if not tool_call_id or not tool_call_id.strip():
+            raise ValueError(
+                f"Cannot create tool_result with empty tool_call_id. "
+                f"This usually means the call_id from the Responses API was empty. "
+                f"Message: {message}"
+            )
+        
         # Sanitize tool_use_id to match Anthropic's pattern requirement: ^[a-zA-Z0-9_-]+$
         sanitized_tool_use_id = _sanitize_anthropic_tool_use_id(tool_call_id)
+        
+        # If sanitization returns None, something went wrong (shouldn't happen if tool_call_id is not empty)
+        if sanitized_tool_use_id is None:
+            raise ValueError(
+                f"Failed to sanitize tool_use_id '{tool_call_id}'. "
+                f"Message: {message}"
+            )
 
         # We can't determine from openai message format whether it's a successful or
         # error call result so default to the successful result template
@@ -1668,6 +1696,11 @@ def convert_to_anthropic_tool_result(
         tool_call_id = function_message.get("tool_call_id") or str(uuid.uuid4())
         # Sanitize tool_use_id to match Anthropic's pattern requirement: ^[a-zA-Z0-9_-]+$
         sanitized_tool_use_id = _sanitize_anthropic_tool_use_id(tool_call_id)
+        
+        # If sanitization returns None, use the generated UUID (which should always be valid)
+        if sanitized_tool_use_id is None:
+            sanitized_tool_use_id = tool_call_id
+        
         anthropic_tool_result = AnthropicMessagesToolResultParam(
             type="tool_result", tool_use_id=sanitized_tool_use_id, content=anthropic_content
         )
