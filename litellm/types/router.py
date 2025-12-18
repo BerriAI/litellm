@@ -637,6 +637,27 @@ class SearchToolTypedDict(TypedDict):
     litellm_params: Required[SearchToolLiteLLMParams]
 
 
+class GuardrailLiteLLMParams(TypedDict, total=False):
+    """
+    LiteLLM params for guardrails.
+    """
+
+    guardrail: Required[str]
+    mode: Required[str]
+    api_key: Optional[str]
+    api_base: Optional[str]
+
+
+class GuardrailTypedDict(TypedDict, total=False):
+    """
+    Configuration for a guardrail in the router.
+    """
+
+    guardrail_name: Required[str]
+    litellm_params: Required[GuardrailLiteLLMParams]
+    callback: Any  # The CustomGuardrail instance
+
+
 class FineTuningConfig(BaseModel):
     custom_llm_provider: Literal["azure", "openai"]
 
