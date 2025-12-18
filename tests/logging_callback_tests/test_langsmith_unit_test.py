@@ -210,11 +210,20 @@ async def test_langsmith_key_based_logging(mocker):
     """
     try:
         # Mock the httpx post request
-        mock_post = mocker.patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
+        # We need to mock get_async_httpx_client to return a mock AsyncHTTPHandler
+        # because LangsmithLogger creates its own instance
+        mock_async_httpx_handler = AsyncMock()
+        mock_response = MagicMock()  # Use MagicMock for response to allow sync methods
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()  # raise_for_status is sync in httpx
+        mock_response.text = ""
+        mock_async_httpx_handler.post = AsyncMock(return_value=mock_response)
+        
+        mock_get_client = mocker.patch(
+            "litellm.integrations.langsmith.get_async_httpx_client",
+            return_value=mock_async_httpx_handler
         )
-        mock_post.return_value.status_code = 200
-        mock_post.return_value.raise_for_status = lambda: None
+        
         litellm.set_verbose = True
         litellm.DEFAULT_FLUSH_INTERVAL_SECONDS = 1
 
@@ -234,8 +243,8 @@ async def test_langsmith_key_based_logging(mocker):
         print("done sleeping 3 seconds...")
 
         # Verify the post request was made with correct parameters
-        mock_post.assert_called_once()
-        call_args = mock_post.call_args
+        mock_async_httpx_handler.post.assert_called_once()
+        call_args = mock_async_httpx_handler.post.call_args
 
         print("call_args", call_args)
 

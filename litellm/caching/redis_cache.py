@@ -146,9 +146,17 @@ class RedisCache(BaseCache):
         except Exception:
             pass
 
-        ### ASYNC HEALTH PING ###
+        self._setup_health_pings()
+
+        if litellm.default_redis_ttl is not None:
+            super().__init__(default_ttl=int(litellm.default_redis_ttl))
+        else:
+            super().__init__()  # defaults to 60s
+
+    def _setup_health_pings(self):
+        """Setup async and sync health pings for Redis."""
+        # ASYNC HEALTH PING
         try:
-            # asyncio.get_running_loop().create_task(self.ping())
             _ = asyncio.get_running_loop().create_task(self.ping())
         except Exception as e:
             if "no running event loop" in str(e):
@@ -160,24 +168,9 @@ class RedisCache(BaseCache):
                     "Error connecting to Async Redis client - {}".format(str(e)),
                     extra={"error": str(e)},
                 )
-                # Non-blocking service health monitoring for async Redis init failures
-                try:
-                    loop = asyncio.get_running_loop()
-                    start_time = time.time()
-                    end_time = start_time
-                    loop.create_task(
-                        self.service_logger_obj.async_service_failure_hook(
-                            service=ServiceTypes.REDIS,
-                            duration=end_time - start_time,
-                            error=e,
-                            call_type="redis_async_ping",
-                        )
-                    )
-                except Exception:
-                    # If no event loop or hook fails, ignore to keep init non-blocking
-                    pass
+                self._handle_async_ping_error(e)
 
-        ### SYNC HEALTH PING ###
+        # SYNC HEALTH PING
         try:
             if hasattr(self.redis_client, "ping"):
                 self.redis_client.ping()  # type: ignore
@@ -185,27 +178,41 @@ class RedisCache(BaseCache):
             verbose_logger.error(
                 "Error connecting to Sync Redis client", extra={"error": str(e)}
             )
-            # Non-blocking service health monitoring for sync Redis init failures
-            try:
-                loop = asyncio.get_running_loop()
-                start_time = time.time()
-                end_time = start_time
-                loop.create_task(
-                    self.service_logger_obj.async_service_failure_hook(
-                        service=ServiceTypes.REDIS,
-                        duration=end_time - start_time,
-                        error=e,
-                        call_type="redis_sync_ping",
-                    )
-                )
-            except Exception:
-                # If no event loop or hook fails, ignore to keep init non-blocking
-                pass
+            self._handle_sync_ping_error(e)
 
-        if litellm.default_redis_ttl is not None:
-            super().__init__(default_ttl=int(litellm.default_redis_ttl))
-        else:
-            super().__init__()  # defaults to 60s
+    def _handle_async_ping_error(self, e: Exception):
+        """Handle async ping error with service failure hook."""
+        try:
+            loop = asyncio.get_running_loop()
+            start_time = time.time()
+            end_time = start_time
+            loop.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=end_time - start_time,
+                    error=e,
+                    call_type="redis_async_ping",
+                )
+            )
+        except Exception:
+            pass
+
+    def _handle_sync_ping_error(self, e: Exception):
+        """Handle sync ping error with service failure hook."""
+        try:
+            loop = asyncio.get_running_loop()
+            start_time = time.time()
+            end_time = start_time
+            loop.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=end_time - start_time,
+                    error=e,
+                    call_type="redis_sync_ping",
+                )
+            )
+        except Exception:
+            pass
 
     def _get_async_client_cache_key(self) -> str:
         """
