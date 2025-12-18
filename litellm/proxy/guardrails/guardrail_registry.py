@@ -20,6 +20,10 @@ from litellm.types.guardrails import (
     LitellmParams,
     SupportedGuardrailIntegrations,
 )
+from litellm.proxy.guardrails.guardrail_hooks.grayswan import (
+    GraySwanGuardrail,
+    initialize_guardrail as initialize_grayswan,
+)
 
 from .guardrail_initializers import (
     initialize_bedrock,
@@ -37,9 +41,12 @@ guardrail_initializer_registry = {
     SupportedGuardrailIntegrations.PRESIDIO.value: initialize_presidio,
     SupportedGuardrailIntegrations.HIDE_SECRETS.value: initialize_hide_secrets,
     SupportedGuardrailIntegrations.TOOL_PERMISSION.value: initialize_tool_permission,
+    SupportedGuardrailIntegrations.GRAYSWAN.value: initialize_grayswan,
 }
 
-guardrail_class_registry: Dict[str, Type[CustomGuardrail]] = {}
+guardrail_class_registry: Dict[str, Type[CustomGuardrail]] = {
+    SupportedGuardrailIntegrations.GRAYSWAN.value: GraySwanGuardrail
+}
 
 
 def get_guardrail_initializer_from_hooks():

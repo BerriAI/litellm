@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _safe_convert_created_field,
 )
@@ -15,7 +16,7 @@ from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
-from litellm.litellm_core_utils.core_helpers import process_response_headers
+
 from ..common_utils import OpenAIError
 
 if TYPE_CHECKING:
@@ -181,6 +182,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             )
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
         
+        # Store processed headers in additional_headers so they get returned to the client
         response._hidden_params["additional_headers"] = processed_headers
         response._hidden_params["headers"] = raw_response_headers
         return response

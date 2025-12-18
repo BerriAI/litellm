@@ -30,8 +30,8 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.guardrails import GenericGuardrailAPIInputs
-
+    from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import (
     BlockedWord,
     ContentFilterAction,
@@ -42,6 +42,7 @@ from litellm.types.guardrails import (
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
 )
+from litellm.types.utils import ModelResponseStream
 
 from .patterns import get_compiled_pattern
 

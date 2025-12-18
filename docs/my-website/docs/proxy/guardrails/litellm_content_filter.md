@@ -783,6 +783,13 @@ guardrails:
 Ensure regulatory compliance by filtering sensitive data types:
 
 ```yaml
+# Categories checked first (high priority)
+# Category keywords are matched first
+categories:
+  - category: "harmful_self_harm"
+    severity_threshold: "high"
+
+# Then regex patterns
 patterns:
   - pattern_type: "prebuilt"
     pattern_name: "visa"

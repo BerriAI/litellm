@@ -357,6 +357,14 @@ class BaseAWSLLM:
             model_id = BaseAWSLLM._get_model_id_from_model_with_spec(
                 model_id, spec="openai"
             )
+        elif provider == "qwen2" and "qwen2/" in model_id:
+            model_id = BaseAWSLLM._get_model_id_from_model_with_spec(
+                model_id, spec="qwen2"
+            )
+        elif provider == "qwen3" and "qwen3/" in model_id:
+            model_id = BaseAWSLLM._get_model_id_from_model_with_spec(
+                model_id, spec="qwen3"
+            ) 
         return model_id
 
     @staticmethod
