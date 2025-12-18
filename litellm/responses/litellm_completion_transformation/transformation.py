@@ -291,7 +291,17 @@ class LiteLLMCompletionResponsesConfig:
             )
         _messages = litellm_completion_request.get("messages") or []
         session_messages = chat_completion_session.get("messages") or []
-        litellm_completion_request["messages"] = session_messages + _messages
+        combined_messages = session_messages + _messages
+        
+        # Fix: Ensure tool_results have corresponding tool_calls in previous assistant message
+        # Pass tools parameter to help reconstruct tool_calls if not in cache
+        tools = litellm_completion_request.get("tools") or []
+        combined_messages = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
+            messages=combined_messages,
+            tools=tools
+        )
+        
+        litellm_completion_request["messages"] = combined_messages
         litellm_completion_request["litellm_trace_id"] = chat_completion_session.get(
             "litellm_session_id"
         )
@@ -360,6 +370,108 @@ class LiteLLMCompletionResponsesConfig:
             if message.get("role") == "tool":
                 return True
         return False
+
+    @staticmethod
+    def _ensure_tool_results_have_corresponding_tool_calls(
+        messages: List[Union[AllMessageValues, GenericChatCompletionMessage, ChatCompletionResponseMessage]],
+        tools: Optional[List[Any]] = None,
+    ) -> List[Union[AllMessageValues, GenericChatCompletionMessage, ChatCompletionResponseMessage]]:
+        """
+        Ensure that tool_result messages have corresponding tool_calls in the previous assistant message.
+        
+        This is critical for Anthropic API which requires that each tool_result block has a
+        corresponding tool_use block in the previous assistant message.
+        
+        Args:
+            messages: List of messages that may include tool_result messages
+            tools: Optional list of tools that can be used to reconstruct tool_calls if not in cache
+            
+        Returns:
+            List of messages with tool_calls added to assistant messages when needed
+        """
+        if not messages:
+            return messages
+        
+        # Create a deep copy to avoid modifying the original
+        import copy
+        fixed_messages = copy.deepcopy(messages)
+        
+        for i, message in enumerate(fixed_messages):
+            # Check if this is a tool message (tool_result)
+            if message.get("role") == "tool" and "tool_call_id" in message:
+                tool_call_id = message.get("tool_call_id")
+                
+                # Find the previous assistant message
+                prev_assistant_idx = None
+                for j in range(i - 1, -1, -1):
+                    if fixed_messages[j].get("role") == "assistant":
+                        prev_assistant_idx = j
+                        break
+                
+                if prev_assistant_idx is not None:
+                    prev_assistant = fixed_messages[prev_assistant_idx]
+                    
+                    # Check if the assistant message has tool_calls with this tool_call_id
+                    tool_calls = prev_assistant.get("tool_calls") or []
+                    has_matching_tool_call = False
+                    
+                    for tool_call in tool_calls:
+                        if isinstance(tool_call, dict) and tool_call.get("id") == tool_call_id:
+                            has_matching_tool_call = True
+                            break
+                        elif hasattr(tool_call, "id") and tool_call.id == tool_call_id:
+                            has_matching_tool_call = True
+                            break
+                    
+                    # If no matching tool_call found, try to get it from cache or reconstruct it
+                    if not has_matching_tool_call:
+                        _tool_use_definition = TOOL_CALLS_CACHE.get_cache(key=tool_call_id)
+                        
+                        # If not in cache, try to reconstruct from tools parameter
+                        if not _tool_use_definition and tools:
+                            # Try to find a tool that might match (we can't know for sure which one was called,
+                            # but we can create a minimal tool_call with the first available tool)
+                            # This is a best-effort approach when cache is missing
+                            for tool in tools:
+                                if isinstance(tool, dict):
+                                    tool_function = tool.get("function") or {}
+                                    tool_name = tool_function.get("name") or tool.get("name") or ""
+                                    if tool_name:
+                                        # Create a minimal tool_call definition
+                                        _tool_use_definition = {
+                                            "id": tool_call_id,
+                                            "type": "function",
+                                            "function": {
+                                                "name": tool_name,
+                                                "arguments": "{}"  # We don't know the arguments, use empty
+                                            }
+                                        }
+                                        break
+                        
+                        if _tool_use_definition:
+                            # Add the tool_call to the assistant message
+                            function: dict = _tool_use_definition.get("function") or {}
+                            tool_call_chunk = ChatCompletionToolCallChunk(
+                                id=_tool_use_definition.get("id") or tool_call_id,
+                                type=cast(Literal["function"], _tool_use_definition.get("type") or "function"),
+                                function=ChatCompletionToolCallFunctionChunk(
+                                    name=function.get("name") or "",
+                                    arguments=str(function.get("arguments") or "{}"),
+                                ),
+                                index=len(tool_calls),
+                            )
+                            
+                            # Update the assistant message
+                            if isinstance(prev_assistant, dict):
+                                if "tool_calls" not in prev_assistant:
+                                    prev_assistant["tool_calls"] = []
+                                prev_assistant["tool_calls"].append(tool_call_chunk)
+                            elif hasattr(prev_assistant, "tool_calls"):
+                                if prev_assistant.tool_calls is None:
+                                    prev_assistant.tool_calls = []
+                                prev_assistant.tool_calls.append(tool_call_chunk)
+        
+        return fixed_messages
 
     @staticmethod
     def _transform_responses_api_input_item_to_chat_completion_message(
