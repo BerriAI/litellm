@@ -156,7 +156,14 @@ class OpenrouterConfig(OpenAIGPTConfig):
         """
         if self._supports_cache_control_in_content(model):
             messages = self._move_cache_control_to_content(messages)
-        
+
+        for message in messages:
+            if (
+                "provider_specific_fields" in message
+                and "reasoning_details" in message["provider_specific_fields"]
+            ):
+                message["reasoning_details"] = message["provider_specific_fields"]["reasoning_details"]
+
         extra_body = optional_params.pop("extra_body", {})
         response = super().transform_request(
             model, messages, optional_params, litellm_params, headers
@@ -272,6 +279,13 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
             new_choices = []
             for choice in chunk["choices"]:
                 choice["delta"]["reasoning_content"] = choice["delta"].get("reasoning")
+
+                if "provider_specific_fields" not in choice["delta"]:
+                    choice["delta"]["provider_specific_fields"] = {}
+
+                if "reasoning_details" in choice["delta"]:
+                    choice["delta"]["provider_specific_fields"]["reasoning_details"] = choice["delta"].get("reasoning_details")
+
                 new_choices.append(choice)
             return ModelResponseStream(
                 id=chunk["id"],
