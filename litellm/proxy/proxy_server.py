@@ -8368,7 +8368,7 @@ async def async_queue_request(
 ):
     global general_settings, user_debug, proxy_logging_obj
     """
-    v2 attempt at a background worker to handle queuing.
+    v2 attempt at a background worker to handle queuing
 
     Just supports /chat/completion calls currently.
 
