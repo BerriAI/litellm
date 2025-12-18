@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional, Union, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -59,7 +59,7 @@ def _populate_router_guardrail_list(guardrail_list: List[Guardrail]) -> None:
     for guardrail in guardrail_list:
         guardrail_id = guardrail.get("guardrail_id")
         guardrail_name = guardrail.get("guardrail_name")
-        litellm_params = guardrail.get("litellm_params", {})
+        litellm_params: Any = guardrail.get("litellm_params", {})
 
         # Get the callback instance from the registry
         callback = None
