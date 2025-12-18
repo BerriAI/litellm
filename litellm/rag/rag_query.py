@@ -96,9 +96,11 @@ class RAGQuery:
         return response
 
     @staticmethod
-    def extract_documents_from_search(search_response: Any) -> List[str]:
+    def extract_documents_from_search(
+        search_response: Any,
+    ) -> List[Union[str, Dict[str, Any]]]:
         """Extract text documents from vector store search response."""
-        documents = []
+        documents: List[Union[str, Dict[str, Any]]] = []
         for result in search_response.get("data", []):
             content_list = result.get("content", [])
             for content in content_list:
