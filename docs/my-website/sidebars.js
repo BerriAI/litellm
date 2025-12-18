@@ -544,6 +544,7 @@ const sidebars = {
             "search/dataforseo",
             "search/firecrawl",
             "search/searxng",
+            "search/linkup",
           ]
         },
         "skills",
