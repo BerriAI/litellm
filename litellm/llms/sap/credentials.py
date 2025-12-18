@@ -159,24 +159,26 @@ def _resolve_value(
     if cred.name in kwargs and kwargs[cred.name] is not None:
         return kwargs[cred.name]
 
-    # 2) environment variables (primary name)
-    env_key = _env_name(cred.name)
-    if env_key in env and env[env_key] is not None:
-        return env[env_key]
-
-    # 3) config file (accept both prefixed and plain keys)
-    for key in (env_key, cred.name):
-        if key in config and config[key] is not None:
-            return config[key]
-
-    # 4) service-like source (AICORE_SERVICE_KEY first, else VCAP)
+    # 2) service-like source (AICORE_SERVICE_KEY first, else VCAP)
     if service_like and cred.vcap_key:
         try:
             val = _get_nested(service_like, cred.vcap_key)
             if val is not None:
                 return val
-        except KeyError:
-            pass
+        except KeyError as e:
+            raise KeyError(f"Unable to find {cred.name} in service key") from e
+        except json.JSONDecodeError:
+            raise KeyError(f"{service_like} is not valid JSON. Please fix or remove it!")
+
+    # 3) environment variables (primary name)
+    env_key = _env_name(cred.name)
+    if env_key in env and env[env_key] is not None:
+        return env[env_key]
+
+    # 4) config file (accept both prefixed and plain keys)
+    for key in (env_key, cred.name):
+        if key in config and config[key] is not None:
+            return config[key]
 
     # 5) default
     return cred.default
@@ -196,11 +198,11 @@ def fetch_credentials(service_key: Optional[str] = None, profile: Optional[str] 
     env = os.environ  # snapshot for testability
     service_like = None
 
-    if not config:
-        # Prefer AICORE_SERVICE_KEY if present; otherwise fall back to the VCAP service.
-        service_like = service_key or sap_service_key or _load_json_env(SERVICE_KEY_ENV_VAR) or _get_vcap_service(
+
+    # Prefer AICORE_SERVICE_KEY if present; otherwise fall back to the VCAP service.
+    service_like = service_key or sap_service_key or _load_json_env(SERVICE_KEY_ENV_VAR) or _get_vcap_service(
             VCAP_AICORE_SERVICE_NAME
-        )
+    )
 
     out: Dict[str, str] = {}
     for cred in CREDENTIAL_VALUES:
