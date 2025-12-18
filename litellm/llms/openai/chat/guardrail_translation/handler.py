@@ -21,13 +21,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.main import stream_chunk_builder
 from litellm.types.llms.openai import ChatCompletionToolParam
-from litellm.types.utils import (
-    Choices,
-    GenericGuardrailAPIInputs,
-    ModelResponse,
-    ModelResponseStream,
-    StreamingChoices,
-)
+from litellm.types.utils import Choices, GenericGuardrailAPIInputs, ModelResponse, ModelResponseStream, StreamingChoices
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail

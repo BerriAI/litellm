@@ -1461,6 +1461,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     team_member_key_duration: Optional[str] = None
     allowed_passthrough_routes: Optional[list] = None
     secret_manager_settings: Optional[dict] = None
+    prompts: Optional[List[str]] = None
     model_rpm_limit: Optional[Dict[str, int]] = None
     model_tpm_limit: Optional[Dict[str, int]] = None
     allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None

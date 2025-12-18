@@ -37,39 +37,72 @@ from litellm.secret_managers.main import get_secret
 
 def _resolve_os_environ_variables(params: dict) -> dict:
     """
-    Resolve os.environ/ environment variables in litellm_params.
-    
-    This function recursively processes dictionary values that start with "os.environ/"
-    by replacing them with the actual environment variable values.
-    
-    Args:
-        params: Dictionary containing litellm_params that may have os.environ/ values
-        
-    Returns:
-        Dictionary with os.environ/ values resolved to actual environment variable values
+    Resolve ``os.environ/`` environment variables in ``litellm_params``.
+
+    This walks the input dict/list structure iteratively (no Python recursion) to
+    avoid unbounded recursion / stack overflows on deeply nested inputs.
     """
     if not isinstance(params, dict):
         return params
-    
-    resolved_params = {}
-    for key, value in params.items():
-        if isinstance(value, str) and value.startswith("os.environ/"):
-            # Resolve the environment variable
-            resolved_value = get_secret(value)
-            resolved_params[key] = resolved_value
-        elif isinstance(value, dict):
-            # Recursively resolve nested dictionaries
-            resolved_params[key] = _resolve_os_environ_variables(value)
-        elif isinstance(value, list):
-            # Handle lists that might contain dictionaries with os.environ/ values
-            resolved_params[key] = [
-                _resolve_os_environ_variables(item) if isinstance(item, dict) else item
-                for item in value
-            ]
-        else:
-            resolved_params[key] = value
-    
-    return resolved_params
+
+    # Use an explicit stack to avoid recursion and handle nested dicts/lists.
+    # We also keep a `seen` set to guard against accidental cycles.
+    resolved_root: dict = {}
+    stack: list[tuple[object, object]] = [(params, resolved_root)]
+    seen: set[int] = {id(params)}
+
+    while stack:
+        src, dst = stack.pop()
+
+        if isinstance(src, dict) and isinstance(dst, dict):
+            for key, value in src.items():
+                # Direct string replacement for os.environ/ references
+                if isinstance(value, str) and value.startswith("os.environ/"):
+                    dst[key] = get_secret(value)
+                elif isinstance(value, dict):
+                    if id(value) in seen:
+                        # Cycle detected – keep a shallow copy reference to prevent infinite loops
+                        dst[key] = {}
+                        continue
+                    seen.add(id(value))
+                    new_dict: dict = {}
+                    dst[key] = new_dict
+                    stack.append((value, new_dict))
+                elif isinstance(value, list):
+                    if id(value) in seen:
+                        dst[key] = []
+                        continue
+                    seen.add(id(value))
+                    new_list: list = []
+                    dst[key] = new_list
+                    stack.append((value, new_list))
+                else:
+                    dst[key] = value
+
+        elif isinstance(src, list) and isinstance(dst, list):
+            for item in src:
+                if isinstance(item, str) and item.startswith("os.environ/"):
+                    dst.append(get_secret(item))
+                elif isinstance(item, dict):
+                    if id(item) in seen:
+                        dst.append({})
+                        continue
+                    seen.add(id(item))
+                    new_dict = {}
+                    dst.append(new_dict)
+                    stack.append((item, new_dict))
+                elif isinstance(item, list):
+                    if id(item) in seen:
+                        dst.append([])
+                        continue
+                    seen.add(id(item))
+                    new_list = []
+                    dst.append(new_list)
+                    stack.append((item, new_list))
+                else:
+                    dst.append(item)
+
+    return resolved_root
 
 
 router = APIRouter()
