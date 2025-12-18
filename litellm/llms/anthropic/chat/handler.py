@@ -565,13 +565,6 @@ class ModelResponseIterator:
             # web_search_tool_result blocks also have input_json_delta but should not be treated as tool calls
             # See: https://github.com/BerriAI/litellm/issues/17254
             if self.current_content_block_type in ("tool_use", "server_tool_use"):
-                # Get partial_json and ensure it's a string (handle None case)
-                partial_json = content_block["delta"].get("partial_json", "")
-                if partial_json is None:
-                    partial_json = ""
-                elif not isinstance(partial_json, str):
-                    partial_json = str(partial_json)
-                
                 tool_use = cast(
                     ChatCompletionToolCallChunk,
                     {
@@ -579,7 +572,7 @@ class ModelResponseIterator:
                         "type": "function",
                         "function": {
                             "name": None,
-                            "arguments": partial_json,
+                            "arguments": content_block["delta"]["partial_json"],
                         },
                         "index": self.tool_index,
                     },
