@@ -2322,19 +2322,44 @@ async def can_delete_verification_token(
     - check if key is personal key
     """
     is_team_key = _is_team_key(data=key_info)
+    
+    # 1. Proxy admin can delete any key
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return True
-    elif is_team_key and key_info.team_id is not None:
-        return await _team_key_deletion_check(
-            user_api_key_dict=user_api_key_dict,
-            key_info=key_info,
+    
+    # 2. For team keys: only team admin or key owner can delete
+    if is_team_key and key_info.team_id is not None:
+        # Get team object to check if user is team admin
+        team_table = await get_team_object(
+            team_id=key_info.team_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
+            check_db_only=True,
         )
-    elif key_info.user_id is not None and key_info.user_id == user_api_key_dict.user_id:
-        return True
-    else:
+        
+        if team_table is None:
+            return False
+        
+        # Check if user is team admin
+        if _is_user_team_admin(
+            user_api_key_dict=user_api_key_dict,
+            team_obj=team_table,
+        ):
+            return True
+        
+        # Check if the key belongs to the user (they own it)
+        if key_info.user_id is not None and key_info.user_id == user_api_key_dict.user_id:
+            return True
+        
+        # Not team admin and doesn't own the key
         return False
+    
+    # 3. For personal keys: only key owner can delete
+    if key_info.user_id is not None and key_info.user_id == user_api_key_dict.user_id:
+        return True
+    
+    # Default: deny
+    return False
 
 
 async def delete_verification_tokens(
@@ -2343,7 +2368,7 @@ async def delete_verification_tokens(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Tuple[Optional[Dict], List[LiteLLM_VerificationToken]]:
     """
-    Helper that deletes the list of tokens from the database.
+    Helper that deletes the list of tokens from the database
 
     - check if user is proxy admin
     - check if user is team admin and key is a team key
