@@ -829,11 +829,15 @@ async def get_team_membership(
     user_api_key_cache: DualCache,
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
+    bypass_cache: Optional[bool] = False,
 ) -> Optional["LiteLLM_TeamMembership"]:
     """
     Returns team membership object if user is member of team.
 
     Do a isolated check for team membership vs. doing a combined key + team + user + team-membership check, as key might come in frequently for different users/teams. Larger call will slowdown query time. This way we get to cache the constant (key/team/user info) and only update based on the changing value (team membership).
+    
+    Args:
+        bypass_cache: If True, skip cache and always fetch from database (useful for budget checks after spend updates)
     """
     from litellm.proxy._types import LiteLLM_TeamMembership
 
@@ -845,10 +849,11 @@ async def get_team_membership(
 
     _key = "team_membership:{}:{}".format(user_id, team_id)
 
-    # check if in cache
-    cached_membership_obj = await user_api_key_cache.async_get_cache(key=_key)
-    if cached_membership_obj is not None:
-        return LiteLLM_TeamMembership(**cached_membership_obj)
+    # check if in cache (unless bypassing)
+    if not bypass_cache:
+        cached_membership_obj = await user_api_key_cache.async_get_cache(key=_key)
+        if cached_membership_obj is not None:
+            return LiteLLM_TeamMembership(**cached_membership_obj)
 
     # else, check db
     try:
@@ -2052,12 +2057,15 @@ async def _check_team_member_budget(
         and valid_token is not None
         and valid_token.user_id is not None
     ):
+        # Bypass cache for budget checks to ensure we read fresh spend data
+        # This is critical because spend is updated asynchronously and cache might be stale
         team_membership = await get_team_membership(
             user_id=valid_token.user_id,
             team_id=team_object.team_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
+            bypass_cache=True,  # Always read fresh from DB for budget checks
         )
         
         if (
