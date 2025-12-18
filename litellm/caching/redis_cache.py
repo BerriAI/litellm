@@ -159,6 +159,22 @@ class RedisCache(BaseCache):
                     "Error connecting to Async Redis client - {}".format(str(e)),
                     extra={"error": str(e)},
                 )
+                # Non-blocking service health monitoring for async Redis init failures
+                try:
+                    loop = asyncio.get_running_loop()
+                    start_time = time.time()
+                    end_time = start_time
+                    loop.create_task(
+                        self.service_logger_obj.async_service_failure_hook(
+                            service=ServiceTypes.REDIS,
+                            duration=end_time - start_time,
+                            error=e,
+                            call_type="redis_async_ping",
+                        )
+                    )
+                except Exception:
+                    # If no event loop or hook fails, ignore to keep init non-blocking
+                    pass
 
         ### SYNC HEALTH PING ###
         try:
@@ -168,6 +184,22 @@ class RedisCache(BaseCache):
             verbose_logger.error(
                 "Error connecting to Sync Redis client", extra={"error": str(e)}
             )
+            # Non-blocking service health monitoring for sync Redis init failures
+            try:
+                loop = asyncio.get_running_loop()
+                start_time = time.time()
+                end_time = start_time
+                loop.create_task(
+                    self.service_logger_obj.async_service_failure_hook(
+                        service=ServiceTypes.REDIS,
+                        duration=end_time - start_time,
+                        error=e,
+                        call_type="redis_sync_ping",
+                    )
+                )
+            except Exception:
+                # If no event loop or hook fails, ignore to keep init non-blocking
+                pass
 
         if litellm.default_redis_ttl is not None:
             super().__init__(default_ttl=int(litellm.default_redis_ttl))
