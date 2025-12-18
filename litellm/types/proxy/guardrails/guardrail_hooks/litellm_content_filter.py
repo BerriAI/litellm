@@ -66,6 +66,11 @@ class LitellmContentFilterGuardrailConfigModel(GuardrailConfigModel):
         )
     )
 
+    image_model: Optional[str] = Field(
+        default=None,
+        description="Model name for image description. Must be a 'public model name' from the LiteLLM model list.",
+    )
+
     # Category-based detection
     categories: Optional[List[ContentFilterCategoryConfig]] = Field(
         default=None,
