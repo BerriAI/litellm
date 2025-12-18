@@ -150,10 +150,10 @@ def completion(
 
 | Type | Description | Docs |
 |------|-------------|------|
-| `text` | Text content | - |
+| `text` | Text content | [Type Definition](https://github.com/BerriAI/litellm/blob/main/litellm/types/llms/openai.py#L603) |
 | `image_url` | Images | [Vision](./vision.md) |
 | `input_audio` | Audio input | [Audio](./audio.md) |
-| `video_url` | Video input | - |
+| `video_url` | Video input | [Type Definition](https://github.com/BerriAI/litellm/blob/main/litellm/types/llms/openai.py#L625) |
 | `file` | Files (OpenAI) | [Document Understanding](./document_understanding.md) |
 | `document` | PDFs (Anthropic) | [Document Understanding](./document_understanding.md) |
 
