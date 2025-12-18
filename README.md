@@ -30,6 +30,9 @@
     </a>
 </h4>
 
+<img width="2688" height="1600" alt="Gemini_Generated_Image_3dryk33dryk33dry (1)" src="https://github.com/user-attachments/assets/c6e23207-30c0-4f57-9b01-33890211b098" />
+
+
 
 ## How to use LiteLLM
 
