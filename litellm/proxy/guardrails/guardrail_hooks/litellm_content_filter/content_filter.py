@@ -797,10 +797,28 @@ class ContentFilterGuardrail(CustomGuardrail):
             )
             processed_documents = await self._process_documents(documents)
             # Add document content to texts for filtering
-            texts = texts + processed_documents
-            verbose_proxy_logger.debug(
-                f"ContentFilterGuardrail: Added {len(processed_documents)} document(s) to text filtering"
-            )
+
+            for processed_document in processed_documents:
+                # This will raise HTTPException if BLOCK action is triggered
+                try:
+                    self._filter_single_text(processed_document)
+                except HTTPException as e:
+                    # e.detail can be a string or dict
+                    if isinstance(e.detail, dict) and "error" in e.detail:
+                        detail_dict = cast(Dict[str, Any], e.detail)
+                        detail_dict["error"] = (
+                            detail_dict["error"]
+                            + " (Document): "
+                            + processed_document[:100]
+                        )
+                    elif isinstance(e.detail, str):
+                        e.detail = e.detail + " (Document): " + processed_document[:100]
+                    else:
+                        e.detail = (
+                            "Content blocked: Document detected"
+                            + processed_document[:100]
+                        )
+                    raise e
 
         if (
             images
