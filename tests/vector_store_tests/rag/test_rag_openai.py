@@ -59,7 +59,16 @@ class TestRAGOpenAI(BaseRAGTest):
             ingest_options=self.get_base_ingest_options(),
             file_data=(filename, text_content, "text/plain"),
         )
+        
+        # Check if ingestion succeeded
+        if ingest_response["status"] != "completed":
+            pytest.fail(
+                f"Ingestion failed with status: {ingest_response['status']}, "
+                f"error: {ingest_response.get('error', 'Unknown')}"
+            )
+        
         vector_store_id = ingest_response["vector_store_id"]
+        assert vector_store_id, "vector_store_id should not be empty"
 
         # Wait for indexing
         await asyncio.sleep(10)
@@ -99,7 +108,16 @@ class TestRAGOpenAI(BaseRAGTest):
             ingest_options=self.get_base_ingest_options(),
             file_data=(filename, text_content, "text/plain"),
         )
+        
+        # Check if ingestion succeeded
+        if ingest_response["status"] != "completed":
+            pytest.fail(
+                f"Ingestion failed with status: {ingest_response['status']}, "
+                f"error: {ingest_response.get('error', 'Unknown')}"
+            )
+        
         vector_store_id = ingest_response["vector_store_id"]
+        assert vector_store_id, "vector_store_id should not be empty"
 
         # Wait for indexing
         await asyncio.sleep(10)
@@ -120,7 +138,7 @@ class TestRAGOpenAI(BaseRAGTest):
             },
         )
 
-        print(f"RAG Query Response with Rerank: {response}")
+        print(f"RAG Query Response with Rerank: {response.model_dump_json(indent=4)}")
 
         assert response.choices[0].message.content
         assert (
