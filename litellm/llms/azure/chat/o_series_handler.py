@@ -21,18 +21,23 @@ if TYPE_CHECKING:
 class AzureOpenAIO1ChatCompletion(BaseAzureLLM, OpenAIChatCompletion):
     def _set_dynamic_params_on_client(
         self,
-        client: Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI],
-        organization: Optional[str] = None,
+        client: Union[AzureOpenAI, AsyncAzureOpenAI],
         max_retries: Optional[int] = None,
     ):
         """
         Set dynamic parameters on an existing client.
         
-        This method overrides the base class methods to provide a compatible signature
-        that works with both Azure and OpenAI clients. For Azure clients, organization
-        is ignored since Azure OpenAI doesn't support organization parameter.
+        This method overrides BaseAzureLLM._set_dynamic_params_on_client to match
+        its signature exactly (since BaseAzureLLM is first in MRO). This works with
+        OpenAIChatCompletion's calls that use keyword arguments (organization parameter
+        will be ignored as it's not in this signature, which is correct since Azure
+        clients don't support organization).
+        
+        Args:
+            client: The Azure OpenAI client
+            max_retries: Maximum number of retries
         """
-        # Only set max_retries (Azure clients don't support organization)
+        # Only set max_retries (Azure clients don't support organization parameter)
         if max_retries is not None:
             client.max_retries = max_retries
 
