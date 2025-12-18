@@ -346,6 +346,44 @@ class LiteLLMCompletionResponsesConfig:
                 else:
                     messages.extend(chat_completion_messages)
 
+        # After processing all messages, if we have tool_call_output_messages with empty tool_call_id,
+        # try to extract tool_use IDs from assistant messages with tool_calls
+        # This handles the case where call_id is empty in Responses API but tool_use blocks exist
+        if tool_call_output_messages:
+            # Find assistant messages with tool_calls (from both current messages and session messages)
+            assistant_tool_calls: List[Any] = []
+            for msg in messages:
+                # Handle dict messages (TypedDict or regular dict)
+                if isinstance(msg, dict):
+                    if msg.get("role") == "assistant":
+                        tool_calls = msg.get("tool_calls")
+                        if tool_calls and isinstance(tool_calls, list):
+                            assistant_tool_calls.extend(tool_calls)
+            
+            # If we have tool_calls and tool_call_output_messages with empty tool_call_id,
+            # match them by index (first tool_call with first tool_result, etc.)
+            if assistant_tool_calls:
+                for idx, tool_msg in enumerate(tool_call_output_messages):
+                    # Only process dict messages with role="tool"
+                    if isinstance(tool_msg, dict) and tool_msg.get("role") == "tool":
+                        tool_call_id = tool_msg.get("tool_call_id")
+                        # Check if tool_call_id is empty or None
+                        if not tool_call_id or (isinstance(tool_call_id, str) and not tool_call_id.strip()):
+                            # Use the tool_call ID at the same index, or the first one if index is out of range
+                            tool_call_idx = min(idx, len(assistant_tool_calls) - 1)
+                            if tool_call_idx >= 0:
+                                tool_call = assistant_tool_calls[tool_call_idx]
+                                # Extract ID from tool_call (can be dict or object)
+                                extracted_id: Optional[str] = None
+                                if isinstance(tool_call, dict):
+                                    extracted_id = tool_call.get("id")
+                                else:
+                                    extracted_id = getattr(tool_call, "id", None)
+                                
+                                if extracted_id:
+                                    # Update the tool_call_id in the dict
+                                    tool_msg["tool_call_id"] = extracted_id  # type: ignore
+
         messages.extend(tool_call_output_messages)
         return messages
 
