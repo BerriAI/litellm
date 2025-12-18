@@ -240,16 +240,16 @@ class ContentFilterGuardrail(CustomGuardrail):
                 continue
 
             try:
-                category = self._load_category_file(category_file_path)
-                self.loaded_categories[category_name] = category
+                category_config_obj = self._load_category_file(category_file_path)
+                self.loaded_categories[category_name] = category_config_obj
 
                 # Use action from config, or default from category file
                 category_action = ContentFilterAction(
-                    action if action else category.default_action
+                    action if action else category_config_obj.default_action
                 )
 
                 # Add keywords from this category
-                for keyword_data in category.keywords:
+                for keyword_data in category_config_obj.keywords:
                     keyword = keyword_data["keyword"].lower()
                     severity = keyword_data["severity"]
 
@@ -263,7 +263,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
                 verbose_proxy_logger.info(
                     f"Loaded category {category_name}: "
-                    f"{len(category.keywords)} keywords"
+                    f"{len(category_config_obj.keywords)} keywords"
                 )
             except Exception as e:
                 verbose_proxy_logger.error(
