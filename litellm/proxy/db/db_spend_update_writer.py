@@ -13,7 +13,7 @@ import random
 import time
 import traceback
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Union, cast, overload
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast, overload
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -869,6 +869,14 @@ class DBSpendUpdateWriter:
             team_member_list_transactions is not None
             and len(team_member_list_transactions.keys()) > 0
         ):
+            # Track which team memberships will be updated for cache invalidation
+            team_memberships_to_invalidate: List[tuple[str, str]] = []
+            for key in team_member_list_transactions.keys():
+                # key is "team_id::<value>::user_id::<value>"
+                team_id = key.split("::")[1]
+                user_id = key.split("::")[3]
+                team_memberships_to_invalidate.append((user_id, team_id))
+            
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
@@ -888,6 +896,7 @@ class DBSpendUpdateWriter:
                                     where={"team_id": team_id, "user_id": user_id},
                                     data={"spend": {"increment": response_cost}},
                                 )
+                    # Transaction succeeded, break out of retry loop
                     break
                 except DB_CONNECTION_ERROR_TYPES as e:
                     if (
@@ -904,6 +913,18 @@ class DBSpendUpdateWriter:
                     _raise_failed_update_spend_exception(
                         e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
                     )
+            
+            # Invalidate cache for updated team memberships
+            # This ensures budget checks read fresh spend data from the database
+            if team_memberships_to_invalidate and proxy_logging_obj is not None:
+                user_api_key_cache = proxy_logging_obj.call_details.get("user_api_key_cache")
+                if user_api_key_cache is not None:
+                    for user_id, team_id in team_memberships_to_invalidate:
+                        cache_key = "team_membership:{}:{}".format(user_id, team_id)
+                        await user_api_key_cache.async_delete_cache(key=cache_key)
+                        verbose_proxy_logger.debug(
+                            f"Invalidated team membership cache for user_id={user_id}, team_id={team_id}"
+                        )
 
         ### UPDATE ORG TABLE ###
         org_list_transactions = db_spend_update_transactions["org_list_transactions"]
