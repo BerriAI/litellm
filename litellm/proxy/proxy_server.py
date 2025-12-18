@@ -8561,44 +8561,68 @@ async def login_v2(request: Request):  # noqa: PLR0915
     from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object
     from litellm.proxy.utils import get_custom_url
 
-    body = await request.json()
-    username = str(body.get("username"))
-    password = str(body.get("password"))
+    try:
+        body = await request.json()
+        username = str(body.get("username"))
+        password = str(body.get("password"))
 
-    login_result = await authenticate_user(
-        username=username,
-        password=password,
-        master_key=master_key,
-        prisma_client=prisma_client,
-    )
+        login_result = await authenticate_user(
+            username=username,
+            password=password,
+            master_key=master_key,
+            prisma_client=prisma_client,
+        )
 
-    returned_ui_token_object = create_ui_token_object(
-        login_result=login_result,
-        general_settings=general_settings,
-        premium_user=premium_user,
-    )
+        returned_ui_token_object = create_ui_token_object(
+            login_result=login_result,
+            general_settings=general_settings,
+            premium_user=premium_user,
+        )
 
-    import jwt
+        import jwt
 
-    jwt_token = jwt.encode(
-        cast(dict, returned_ui_token_object),
-        cast(str, master_key),
-        algorithm="HS256",
-    )
+        jwt_token = jwt.encode(
+            cast(dict, returned_ui_token_object),
+            cast(str, master_key),
+            algorithm="HS256",
+        )
 
-    litellm_dashboard_ui = get_custom_url(str(request.base_url))
-    if litellm_dashboard_ui.endswith("/"):
-        litellm_dashboard_ui += "ui/"
-    else:
-        litellm_dashboard_ui += "/ui/"
-    litellm_dashboard_ui += "?login=success"
+        litellm_dashboard_ui = get_custom_url(str(request.base_url))
+        if litellm_dashboard_ui.endswith("/"):
+            litellm_dashboard_ui += "ui/"
+        else:
+            litellm_dashboard_ui += "/ui/"
+        litellm_dashboard_ui += "?login=success"
 
-    json_response = JSONResponse(
-        content={"redirect_url": litellm_dashboard_ui},
-        status_code=status.HTTP_200_OK,
-    )
-    json_response.set_cookie(key="token", value=jwt_token)
-    return json_response
+        json_response = JSONResponse(
+            content={"redirect_url": litellm_dashboard_ui},
+            status_code=status.HTTP_200_OK,
+        )
+        json_response.set_cookie(key="token", value=jwt_token)
+        return json_response
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.login_v2(): Exception occurred - {}".format(
+                str(e)
+            )
+        )
+        if isinstance(e, ProxyException):
+            raise e
+        elif isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", str(e)),
+                type=ProxyErrorTypes.auth_error,
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        else:
+            error_msg = f"{str(e)}"
+            raise ProxyException(
+                message=error_msg,
+                type=ProxyErrorTypes.auth_error,
+                param="None",
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 @app.get("/onboarding/get_token", include_in_schema=False)
 async def onboarding(invite_link: str, request: Request):
