@@ -30,12 +30,38 @@
     </a>
 </h4>
 
-LiteLLM manages:
+LiteLLM is a Python SDK, Proxy Server (AI Gateway) to call 100+ LLM APIs in OpenAI (or native) format, with cost tracking, guardrails, loadbalancing and logging. [Bedrock, Azure, OpenAI, VertexAI, Cohere, Anthropic, Sagemaker, HuggingFace, VLLM, NVIDIA NIM]limits per project, api key, model [LiteLLM Proxy Server (LLM Gateway)](https://docs.litellm.ai/docs/simple_proxy)
 
-- Translate inputs to provider's endpoints (`/chat/completions`, `/responses`, `/embeddings`, `/images`, `/audio`, `/batches`, and more)
-- [Consistent output](https://docs.litellm.ai/docs/supported_endpoints) - same response format regardless of which provider you use
-- Retry/fallback logic across multiple deployments (e.g. Azure/OpenAI) - [Router](https://docs.litellm.ai/docs/routing)
-- Set Budgets & Rate limits per project, api key, model [LiteLLM Proxy Server (LLM Gateway)](https://docs.litellm.ai/docs/simple_proxy)
+## How to use LiteLLM
+
+You can use LiteLLM through either the Proxy Server or Python SDK. Both gives you a unified interface to access multiple LLMs (100+ LLMs). Choose the option that best fits your needs:
+
+<table style={{width: '100%', tableLayout: 'fixed'}}>
+<thead>
+<tr>
+<th style={{width: '14%'}}></th>
+<th style={{width: '43%'}}><strong><a href="#litellm-proxy-server-llm-gateway">LiteLLM Proxy Server</a></strong></th>
+<th style={{width: '43%'}}><strong><a href="#basic-usage">LiteLLM Python SDK</a></strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style={{width: '14%'}}><strong>Use Case</strong></td>
+<td style={{width: '43%'}}>Central service (LLM Gateway) to access multiple LLMs</td>
+<td style={{width: '43%'}}>Use LiteLLM directly in your Python code</td>
+</tr>
+<tr>
+<td style={{width: '14%'}}><strong>Who Uses It?</strong></td>
+<td style={{width: '43%'}}>Gen AI Enablement / ML Platform Teams</td>
+<td style={{width: '43%'}}>Developers building LLM projects</td>
+</tr>
+<tr>
+<td style={{width: '14%'}}><strong>Key Features</strong></td>
+<td style={{width: '43%'}}>• Centralized API gateway with authentication & authorization<br />• Multi-tenant cost tracking and spend management per project/user<br />• Per-project customization (logging, guardrails, caching)<br />• Virtual keys for secure access control<br />• Admin dashboard UI for monitoring and management</td>
+<td style={{width: '43%'}}>• Direct Python library integration in your codebase<br />• Router with retry/fallback logic across multiple deployments (e.g. Azure/OpenAI) - <a href="https://docs.litellm.ai/docs/routing">Router</a><br />• Application-level load balancing and cost tracking<br />• Exception handling with OpenAI-compatible errors<br />• Observability callbacks (Lunary, MLflow, Langfuse, etc.)</td>
+</tr>
+</tbody>
+</table>
 
 LiteLLM Performance: **8ms P95 latency** at 1k RPS (See benchmarks [here](https://docs.litellm.ai/docs/benchmarks))
 
