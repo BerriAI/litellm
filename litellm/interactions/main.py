@@ -49,6 +49,9 @@ import httpx
 
 import litellm
 from litellm.interactions.http_handler import interactions_http_handler
+from litellm.interactions.litellm_responses_transformation.handler import (
+    LiteLLMResponsesTransformationHandler,
+)
 from litellm.interactions.utils import (
     InteractionsAPIRequestUtils,
     get_provider_interactions_api_config,
@@ -64,6 +67,9 @@ from litellm.types.interactions import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import client
+
+# Initialize the responses transformation handler (bridge from Interactions -> Responses API)
+litellm_responses_transformation_handler = LiteLLMResponsesTransformationHandler()
 
 # ============================================================
 # SDK Methods - CREATE INTERACTION
@@ -272,12 +278,6 @@ def create(
             model=model,
         )
         
-        if interactions_api_config is None:
-            raise ValueError(
-                f"Interactions API is not supported for provider: {custom_llm_provider}. "
-                "Currently only 'gemini' is supported."
-            )
-        
         # Get optional params using utility (similar to responses API pattern)
         local_vars.update(kwargs)
         optional_params = InteractionsAPIRequestUtils.get_requested_interactions_api_optional_params(
@@ -290,6 +290,24 @@ def create(
             litellm_params={"litellm_call_id": litellm_call_id},
             custom_llm_provider=custom_llm_provider,
         )
+        
+        #########################################################
+        # INTERACTIONS -> RESPONSES API BRIDGE
+        # If provider doesn't have native interactions API support,
+        # use the bridge to route through the Responses API
+        #########################################################
+        if interactions_api_config is None:
+            return litellm_responses_transformation_handler.interactions_api_handler(
+                model=model,
+                agent=agent,
+                input=input,
+                interactions_api_request=optional_params,
+                custom_llm_provider=custom_llm_provider,
+                _is_async=_is_async,
+                stream=stream,
+                extra_headers=extra_headers,
+                **kwargs,
+            )
         
         response = interactions_http_handler.create_interaction(
             model=model,
