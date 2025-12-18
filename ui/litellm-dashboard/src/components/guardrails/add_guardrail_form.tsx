@@ -597,7 +597,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         </Form.Item>
 
         {/* Use the GuardrailProviderFields component to render provider-specific fields */}
-        {!isToolPermissionProvider && !shouldRenderContentFilterConfigSettings(selectedProvider) && (
+        {!isToolPermissionProvider && (
           <GuardrailProviderFields
             selectedProvider={selectedProvider}
             accessToken={accessToken}
