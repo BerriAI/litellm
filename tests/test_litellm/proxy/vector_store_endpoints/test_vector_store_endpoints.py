@@ -387,7 +387,7 @@ class TestCheckVectorStorePermission:
 
 
 class TestIsAllowedToCallVectorStoreEndpoint:
-    """Test suite for is_allowed_to_call_vector_store_endpoint function"""
+    """Test suite for is_allowed_to_call_vector_store_endpoint function."""
 
     def test_read_permission_allowed(self):
         """Test read permission is checked correctly."""
