@@ -1,12 +1,10 @@
 import os
 from typing import TYPE_CHECKING, Any, Optional, Union
-from datetime import datetime
 
 from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
 from litellm.integrations.arize._utils import ArizeOTELAttributes
 from litellm.types.integrations.arize_phoenix import ArizePhoenixConfig
-from litellm.types.services import ServiceLoggerPayload
 from litellm.integrations.opentelemetry import OpenTelemetry
 
 if TYPE_CHECKING:

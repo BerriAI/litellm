@@ -176,36 +176,14 @@ async def common_checks(
             )
 
     ## 4.2 check team member budget, if team key
-    if (
-        team_object is not None
-        and team_object.team_id is not None
-        and user_object is not None
-        and valid_token is not None
-        and valid_token.user_id is not None
-    ):
-        # Get team membership to check team member budget
-        team_membership = await get_team_membership(
-            user_id=valid_token.user_id,
-            team_id=team_object.team_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-        
-        if (
-            team_membership is not None
-            and team_membership.litellm_budget_table is not None
-            and team_membership.litellm_budget_table.max_budget is not None
-        ):
-            team_member_budget = team_membership.litellm_budget_table.max_budget
-            team_member_spend = team_membership.spend or 0.0
-            
-            if team_member_spend > team_member_budget:
-                raise litellm.BudgetExceededError(
-                    current_cost=team_member_spend,
-                    max_budget=team_member_budget,
-                    message=f"Budget has been exceeded! User={valid_token.user_id} in Team={team_object.team_id} Current cost: {team_member_spend}, Max budget: {team_member_budget}",
-                )
+    await _check_team_member_budget(
+        team_object=team_object,
+        user_object=user_object,
+        valid_token=valid_token,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
 
     # 5. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
     if end_user_object is not None and end_user_object.litellm_budget_table is not None:
@@ -2056,6 +2034,46 @@ async def _virtual_key_max_budget_alert_check(
                     user_info=call_info,
                 )
             )
+
+
+async def _check_team_member_budget(
+    team_object: Optional[LiteLLM_TeamTable],
+    user_object: Optional[LiteLLM_UserTable],
+    valid_token: Optional[UserAPIKeyAuth],
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+    proxy_logging_obj: ProxyLogging,
+):
+    """Check if team member is over their max budget within the team."""
+    if (
+        team_object is not None
+        and team_object.team_id is not None
+        and user_object is not None
+        and valid_token is not None
+        and valid_token.user_id is not None
+    ):
+        team_membership = await get_team_membership(
+            user_id=valid_token.user_id,
+            team_id=team_object.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        
+        if (
+            team_membership is not None
+            and team_membership.litellm_budget_table is not None
+            and team_membership.litellm_budget_table.max_budget is not None
+        ):
+            team_member_budget = team_membership.litellm_budget_table.max_budget
+            team_member_spend = team_membership.spend or 0.0
+            
+            if team_member_spend > team_member_budget:
+                raise litellm.BudgetExceededError(
+                    current_cost=team_member_spend,
+                    max_budget=team_member_budget,
+                    message=f"Budget has been exceeded! User={valid_token.user_id} in Team={team_object.team_id} Current cost: {team_member_spend}, Max budget: {team_member_budget}",
+                )
 
 
 async def _team_max_budget_check(
