@@ -24,27 +24,31 @@ from litellm.responses.litellm_completion_transformation.transformation import (
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
 
-def test_empty_tool_call_id_is_skipped():
+def test_empty_tool_call_id_is_created():
     """
-    Test that tool messages with empty tool_call_id are skipped
+    Test that tool messages with empty tool_call_id are created (not skipped)
     when transforming function_call_output to chat completion messages.
+    This allows the recovery logic to try to recover the call_id from session messages.
     """
     # Simulate a function_call_output with empty call_id (the bug scenario)
     tool_call_output_empty = {
         "type": "function_call_output",
-        "call_id": "",  # Empty call_id - this causes the issue
+        "call_id": "",  # Empty call_id - will be recovered later if possible
         "output": '{"output":"test output","metadata":{"exit_code":0}}'
     }
     
-    # Transform should return empty list (skip the message)
+    # Transform should create a message with empty tool_call_id (not skip it)
+    # This allows _ensure_tool_results_have_corresponding_tool_calls to try to recover it
     result = LiteLLMCompletionResponsesConfig._transform_responses_api_tool_call_output_to_chat_completion_message(
         tool_call_output_empty
     )
     
-    assert result == [], (
-        "Tool messages with empty call_id should be skipped, not created"
+    assert len(result) == 1, (
+        "Tool messages with empty call_id should be created (not skipped) to allow recovery"
     )
-    print("[OK] Empty call_id messages are correctly skipped")
+    assert result[0].get("role") == "tool", "Should be a tool message"
+    assert result[0].get("tool_call_id") == "", "Should have empty tool_call_id"
+    print("[OK] Empty call_id messages are correctly created (for recovery)")
 
 
 def test_empty_tool_call_id_in_messages_list_is_removed():
