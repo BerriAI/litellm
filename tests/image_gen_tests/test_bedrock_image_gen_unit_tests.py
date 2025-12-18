@@ -527,7 +527,6 @@ def test_backward_compatibility_regular_nova_model():
     assert result["imageGenerationConfig"]["cfg_scale"] == 7
 
 
-@pytest.mark.skip(reason="amazon.titan-image-generator-v1 has reached end of life and is no longer available")
 def test_amazon_titan_image_gen():
     from litellm import image_generation
 

@@ -144,17 +144,12 @@ class AzureTextCompletion(BaseAzureLLM):
                         status_code=422, message="max retries must be an int"
                     )
                 # init AzureOpenAI Client
-                # Pass max_retries to litellm_params so it gets passed to initialize_azure_sdk_client
-                litellm_params_with_max_retries = litellm_params.copy() if litellm_params else {}
-                litellm_params_with_max_retries["max_retries"] = max_retries
-                if timeout is not None:
-                    litellm_params_with_max_retries["timeout"] = timeout
                 azure_client = self.get_azure_openai_client(
                     api_key=api_key,
                     api_base=api_base,
                     api_version=api_version,
                     client=client,
-                    litellm_params=litellm_params_with_max_retries,
+                    litellm_params=litellm_params,
                     _is_async=False,
                     model=model,
                 )
@@ -218,11 +213,6 @@ class AzureTextCompletion(BaseAzureLLM):
         try:
             # init AzureOpenAI Client
             # setting Azure client
-            # Pass max_retries to litellm_params so it gets passed to initialize_azure_sdk_client
-            litellm_params_with_max_retries = litellm_params.copy() if litellm_params else {}
-            litellm_params_with_max_retries["max_retries"] = max_retries
-            if timeout is not None:
-                litellm_params_with_max_retries["timeout"] = timeout
             azure_client = self.get_azure_openai_client(
                 api_version=api_version,
                 api_base=api_base,
@@ -230,7 +220,7 @@ class AzureTextCompletion(BaseAzureLLM):
                 model=model,
                 _is_async=True,
                 client=client,
-                litellm_params=litellm_params_with_max_retries,
+                litellm_params=litellm_params,
             )
             if not isinstance(azure_client, AsyncAzureOpenAI):
                 raise AzureOpenAIError(
@@ -288,11 +278,6 @@ class AzureTextCompletion(BaseAzureLLM):
                 status_code=422, message="max retries must be an int"
             )
         # init AzureOpenAI Client
-        # Pass max_retries to litellm_params so it gets passed to initialize_azure_sdk_client
-        litellm_params_with_max_retries = litellm_params.copy() if litellm_params else {}
-        litellm_params_with_max_retries["max_retries"] = max_retries
-        if timeout is not None:
-            litellm_params_with_max_retries["timeout"] = timeout
         azure_client = self.get_azure_openai_client(
             api_version=api_version,
             api_base=api_base,
@@ -300,7 +285,7 @@ class AzureTextCompletion(BaseAzureLLM):
             model=model,
             _is_async=False,
             client=client,
-            litellm_params=litellm_params_with_max_retries,
+            litellm_params=litellm_params,
         )
         if not isinstance(azure_client, AzureOpenAI):
             raise AzureOpenAIError(
@@ -345,17 +330,7 @@ class AzureTextCompletion(BaseAzureLLM):
         litellm_params: dict = {},
     ):
         try:
-            max_retries = data.pop("max_retries", 2)
-            if not isinstance(max_retries, int):
-                raise AzureOpenAIError(
-                    status_code=422, message="max retries must be an int"
-                )
             # init AzureOpenAI Client
-            # Pass max_retries to litellm_params so it gets passed to initialize_azure_sdk_client
-            litellm_params_with_max_retries = litellm_params.copy() if litellm_params else {}
-            litellm_params_with_max_retries["max_retries"] = max_retries
-            if timeout is not None:
-                litellm_params_with_max_retries["timeout"] = timeout
             azure_client = self.get_azure_openai_client(
                 api_version=api_version,
                 api_base=api_base,
@@ -363,7 +338,7 @@ class AzureTextCompletion(BaseAzureLLM):
                 model=model,
                 _is_async=True,
                 client=client,
-                litellm_params=litellm_params_with_max_retries,
+                litellm_params=litellm_params,
             )
             if not isinstance(azure_client, AsyncAzureOpenAI):
                 raise AzureOpenAIError(

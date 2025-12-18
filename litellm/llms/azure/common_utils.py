@@ -402,15 +402,6 @@ def get_azure_ad_token(
 
 
 class BaseAzureLLM(BaseOpenAILLM):
-    def _set_dynamic_params_on_client(
-        self,
-        client: Union[AzureOpenAI, AsyncAzureOpenAI],
-        max_retries: Optional[int] = None,
-    ):
-        """Set dynamic parameters on an existing Azure OpenAI client."""
-        if max_retries is not None:
-            client.max_retries = max_retries
-
     @staticmethod
     def _try_get_default_azure_credential_provider(
         scope: str,
@@ -486,13 +477,6 @@ class BaseAzureLLM(BaseOpenAILLM):
             ):
                 # set api_version to version passed by user
                 openai_client._custom_query.setdefault("api-version", api_version)
-            
-            # Set dynamic parameters on existing client (e.g., max_retries)
-            max_retries = litellm_params.get("max_retries") if litellm_params else None
-            self._set_dynamic_params_on_client(
-                client=openai_client,
-                max_retries=max_retries,
-            )
 
         # save client in-memory cache
         self.set_cached_openai_client(

@@ -1489,26 +1489,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         try:
             if json_mode_content_str is not None:
-                # Try to parse JSON, handling cases where there might be extra data
-                try:
-                    args = json.loads(json_mode_content_str)
-                except json.JSONDecodeError as e:
-                    # If there's extra data, try to extract just the first valid JSON object
-                    # by finding where the first complete JSON object ends
-                    if "Extra data" in str(e):
-                        # Find the position where the error occurred
-                        error_pos = getattr(e, "pos", None)
-                        if error_pos and error_pos < len(json_mode_content_str):
-                            # Try to parse just the valid portion
-                            try:
-                                args = json.loads(json_mode_content_str[:error_pos])
-                            except (json.JSONDecodeError, ValueError):
-                                # If that fails, return the original string
-                                return litellm.Message(content=json_mode_content_str)
-                    else:
-                        # For other JSON errors, return the original string
-                        return litellm.Message(content=json_mode_content_str)
-                
+                args = json.loads(json_mode_content_str)
                 if (
                     isinstance(args, dict)
                     and (values := args.get("values")) is not None
@@ -1520,9 +1501,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     # relevant issue: https://github.com/BerriAI/litellm/issues/6741
                     _message = litellm.Message(content=json.dumps(args))
                     return _message
-        except (json.JSONDecodeError, ValueError, TypeError):
+        except json.JSONDecodeError:
             # json decode error does occur, return the original tool response str
-            return litellm.Message(content=json_mode_content_str) if json_mode_content_str else None
+            return litellm.Message(content=json_mode_content_str)
         return None
 
     def get_error_class(
