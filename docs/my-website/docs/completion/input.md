@@ -157,12 +157,31 @@ def completion(
 | `file` | Files | [Document Understanding](./document_understanding.md) |
 | `document` | Documents/PDFs | [Document Understanding](./document_understanding.md) |
 
-**Example (multimodal):**
+**Examples:**
 ```python
-{"role": "user", "content": [
-    {"type": "text", "text": "What's in this image?"},
+# Text
+messages=[{"role": "user", "content": [{"type": "text", "text": "Hello!"}]}]
+
+# Image
+messages=[{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://example.com/image.jpg"}}]}]
+
+# Audio
+messages=[{"role": "user", "content": [{"type": "input_audio", "input_audio": {"data": "<base64>", "format": "wav"}}]}]
+
+# Video
+messages=[{"role": "user", "content": [{"type": "video_url", "video_url": {"url": "https://example.com/video.mp4"}}]}]
+
+# File
+messages=[{"role": "user", "content": [{"type": "file", "file": {"file_id": "https://example.com/doc.pdf"}}]}]
+
+# Document
+messages=[{"role": "user", "content": [{"type": "document", "source": {"type": "text", "media_type": "application/pdf", "data": "<base64>"}}]}]
+
+# Combining multiple types (multimodal)
+messages=[{"role": "user", "content": [
+    {"type": "text", "text": "Generate a product description based on this image"},
     {"type": "image_url", "image_url": {"url": "https://example.com/image.jpg"}}
-]}
+]}]
 ```
 
 ## Optional Fields
