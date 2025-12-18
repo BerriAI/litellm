@@ -169,7 +169,7 @@ class LiteLLMAnthropicMessagesAdapter:
         """
         Which anthropic params, we need to translate to the openai format.
         """
-        return ["messages", "metadata", "system", "tool_choice", "tools"]
+        return ["messages", "metadata", "system", "tool_choice", "tools", "thinking"]
 
     def translate_anthropic_messages_to_openai(  # noqa: PLR0915
         self,
@@ -420,6 +420,35 @@ class LiteLLMAnthropicMessagesAdapter:
 
         return new_messages
 
+    def translate_anthropic_thinking_to_openai(
+        self, thinking: Dict[str, Any]
+    ) -> Optional[str]:
+        """
+        Translate Anthropic's thinking parameter to OpenAI's reasoning_effort.
+        
+        Anthropic thinking format: {'type': 'enabled'|'disabled', 'budget_tokens': int}
+        OpenAI reasoning_effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'default'
+        """
+        if not isinstance(thinking, dict):
+            return None
+        
+        thinking_type = thinking.get("type", "disabled")
+        
+        if thinking_type == "disabled":
+            return None
+        elif thinking_type == "enabled":
+            budget_tokens = thinking.get("budget_tokens", 0)
+            if budget_tokens >= 10000:
+                return "high"
+            elif budget_tokens >= 5000:
+                return "medium"
+            elif budget_tokens >= 2000:
+                return "low"
+            else:
+                return "minimal"
+        
+        return None
+
     def translate_anthropic_tool_choice_to_openai(
         self, tool_choice: AnthropicMessagesToolChoice
     ) -> ChatCompletionToolChoiceValues:
@@ -528,6 +557,16 @@ class LiteLLMAnthropicMessagesAdapter:
                 new_kwargs["tools"] = self.translate_anthropic_tools_to_openai(
                     tools=cast(List[AllAnthropicToolsValues], tools)
                 )
+
+        ## CONVERT THINKING
+        if "thinking" in anthropic_message_request:
+            thinking = anthropic_message_request["thinking"]
+            if thinking:
+                reasoning_effort = self.translate_anthropic_thinking_to_openai(
+                    thinking=cast(Dict[str, Any], thinking)
+                )
+                if reasoning_effort:
+                    new_kwargs["reasoning_effort"] = reasoning_effort
 
         translatable_params = self.translatable_anthropic_params()
         for k, v in anthropic_message_request.items():
