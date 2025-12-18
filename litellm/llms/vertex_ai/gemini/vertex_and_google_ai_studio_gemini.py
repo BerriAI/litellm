@@ -479,19 +479,26 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 or tool_name == VertexToolName.CODE_EXECUTION.value
             ):  # code_execution maintained for backwards compatibility
                 code_execution = self.get_tool_value(tool, "codeExecution")
-            elif tool_name and tool_name == VertexToolName.GOOGLE_SEARCH.value:
+            elif tool_name and (
+                tool_name == VertexToolName.GOOGLE_SEARCH.value
+                or tool_name == "google_search"
+            ):
                 googleSearch = self.get_tool_value(
-                    tool, VertexToolName.GOOGLE_SEARCH.value
+                    tool, tool_name
                 )
-            elif (
-                tool_name and tool_name == VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value
+            elif tool_name and (
+                tool_name == VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value
+                or tool_name == "google_search_retrieval"
             ):
                 googleSearchRetrieval = self.get_tool_value(
-                    tool, VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value
+                    tool, tool_name
                 )
-            elif tool_name and tool_name == VertexToolName.ENTERPRISE_WEB_SEARCH.value:
+            elif tool_name and (
+                tool_name == VertexToolName.ENTERPRISE_WEB_SEARCH.value
+                or tool_name == "enterprise_web_search"
+            ):
                 enterpriseWebSearch = self.get_tool_value(
-                    tool, VertexToolName.ENTERPRISE_WEB_SEARCH.value
+                    tool, tool_name
                 )
             elif tool_name and (
                 tool_name == VertexToolName.URL_CONTEXT.value
