@@ -7,6 +7,7 @@ Written separately to handle faking streaming for o1 and o3 models.
 from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 
 import httpx
+from openai import AsyncAzureOpenAI, AzureOpenAI, AsyncOpenAI, OpenAI
 
 from litellm.types.utils import ModelResponse
 
@@ -18,6 +19,23 @@ if TYPE_CHECKING:
 
 
 class AzureOpenAIO1ChatCompletion(BaseAzureLLM, OpenAIChatCompletion):
+    def _set_dynamic_params_on_client(
+        self,
+        client: Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI],
+        organization: Optional[str] = None,
+        max_retries: Optional[int] = None,
+    ):
+        """
+        Set dynamic parameters on an existing client.
+        
+        This method overrides the base class methods to provide a compatible signature
+        that works with both Azure and OpenAI clients. For Azure clients, organization
+        is ignored since Azure OpenAI doesn't support organization parameter.
+        """
+        # Only set max_retries (Azure clients don't support organization)
+        if max_retries is not None:
+            client.max_retries = max_retries
+
     def completion(
         self,
         model_response: ModelResponse,
