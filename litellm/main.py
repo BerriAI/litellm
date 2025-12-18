@@ -6848,8 +6848,7 @@ def stream_chunk_builder(  # noqa: PLR0915
                         elif isinstance(value, list) and isinstance(
                             combined_provider_fields[key], list
                         ):
-                            # For lists like web_search_results, take the last (most complete) one
-                            combined_provider_fields[key] = value
+                            combined_provider_fields[key].extend(value)
                         else:
                             combined_provider_fields[key] = value
 
