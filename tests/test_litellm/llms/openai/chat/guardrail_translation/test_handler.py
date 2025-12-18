@@ -581,6 +581,402 @@ class TestOpenAIChatCompletionsHandlerToolCallsOutput:
         assert response.choices[0].finish_reason == "tool_calls"
 
 
+class TestOpenAIChatCompletionsHandlerDocumentURLProcessing:
+    """Test document URL processing functionality"""
+
+    @pytest.mark.asyncio
+    async def test_process_http_document_url(self):
+        """Test that HTTP URLs are processed correctly"""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail()
+
+        # Create input data with document URL (HTTP) using file_id
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Analyze this document"},
+                        {
+                            "type": "file",
+                            "file": {"file_id": "http://example.com/document.pdf"},
+                        },
+                    ],
+                }
+            ]
+        }
+
+        # Mock the _extract_document_content_from_url method
+        async def mock_extract(url: str) -> str:
+            return f"EXTRACTED_CONTENT_FROM_{url}"
+
+        handler._extract_document_content_from_url = mock_extract
+
+        # Process the input
+        await handler.process_input_messages(data, guardrail)
+
+        # Verify that the URL was processed
+        assert guardrail.last_inputs is not None
+        assert "documents" in guardrail.last_inputs
+        documents = guardrail.last_inputs["documents"]
+        assert len(documents) == 1
+        assert documents[0] == "EXTRACTED_CONTENT_FROM_http://example.com/document.pdf"
+
+    @pytest.mark.asyncio
+    async def test_process_https_document_url(self):
+        """Test that HTTPS URLs are processed correctly"""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail()
+
+        # Create input data with document URL (HTTPS) using file_id
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Review this file"},
+                        {
+                            "type": "file",
+                            "file": {
+                                "file_id": "https://secure.example.com/report.txt"
+                            },
+                        },
+                    ],
+                }
+            ]
+        }
+
+        # Mock the _extract_document_content_from_url method
+        async def mock_extract(url: str) -> str:
+            return f"EXTRACTED_CONTENT_FROM_{url}"
+
+        handler._extract_document_content_from_url = mock_extract
+
+        # Process the input
+        await handler.process_input_messages(data, guardrail)
+
+        # Verify that the URL was processed
+        assert guardrail.last_inputs is not None
+        assert "documents" in guardrail.last_inputs
+        documents = guardrail.last_inputs["documents"]
+        assert len(documents) == 1
+        assert (
+            documents[0]
+            == "EXTRACTED_CONTENT_FROM_https://secure.example.com/report.txt"
+        )
+
+    @pytest.mark.asyncio
+    async def test_process_non_url_document(self):
+        """Test that non-URL documents (base64 data) are passed through unchanged"""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail()
+
+        # Create input data with already processed document content using source/data format
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Check this content"},
+                        {
+                            "type": "document",
+                            "source": {
+                                "data": "cGxhaW4gdGV4dCBjb250ZW50",  # base64 for "plain text content"
+                            },
+                        },
+                    ],
+                }
+            ]
+        }
+
+        # Mock the _extract_document_content_from_url method to track if it's called
+        extract_called = False
+
+        async def mock_extract(url: str) -> str:
+            nonlocal extract_called
+            extract_called = True
+            return "SHOULD_NOT_BE_CALLED"
+
+        handler._extract_document_content_from_url = mock_extract
+
+        # Process the input
+        await handler.process_input_messages(data, guardrail)
+
+        # Verify that _extract_document_content_from_url was NOT called
+        assert not extract_called
+
+        # Verify that the document content was decoded and passed to guardrail
+        assert guardrail.last_inputs is not None
+        assert "documents" in guardrail.last_inputs
+        documents = guardrail.last_inputs["documents"]
+        assert len(documents) == 1
+        assert documents[0] == "plain text content"  # Should be decoded from base64
+
+    @pytest.mark.asyncio
+    async def test_process_mixed_documents(self):
+        """Test processing of both URL and non-URL documents together"""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail()
+
+        # Create input data with both URL and non-URL documents
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Compare these documents"},
+                        {
+                            "type": "file",
+                            "file": {"file_id": "https://example.com/doc1.pdf"},
+                        },
+                        {
+                            "type": "document",
+                            "source": {
+                                "data": "cHJlbG9hZGVkIGNvbnRlbnQ=",  # base64 for "preloaded content"
+                            },
+                        },
+                        {
+                            "type": "file",
+                            "file": {"file_id": "http://example.com/doc2.txt"},
+                        },
+                    ],
+                }
+            ]
+        }
+
+        # Mock the _extract_document_content_from_url method
+        async def mock_extract(url: str) -> str:
+            return f"FETCHED:{url}"
+
+        handler._extract_document_content_from_url = mock_extract
+
+        # Process the input
+        await handler.process_input_messages(data, guardrail)
+
+        # Verify that all documents were processed correctly
+        assert guardrail.last_inputs is not None
+        assert "documents" in guardrail.last_inputs
+        documents = guardrail.last_inputs["documents"]
+        assert len(documents) == 3
+
+        # First document: HTTPS URL (should be fetched)
+        assert documents[0] == "FETCHED:https://example.com/doc1.pdf"
+
+        # Second document: Non-URL base64 (should be decoded)
+        assert documents[1] == "preloaded content"
+
+        # Third document: HTTP URL (should be fetched)
+        assert documents[2] == "FETCHED:http://example.com/doc2.txt"
+
+    @pytest.mark.asyncio
+    async def test_process_multiple_url_documents(self):
+        """Test processing of multiple URL documents"""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail()
+
+        # Create input data with multiple URL documents using file_id
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Analyze all these documents"},
+                        {
+                            "type": "file",
+                            "file": {"file_id": "https://example.com/report1.pdf"},
+                        },
+                        {
+                            "type": "file",
+                            "file": {"file_id": "https://example.com/report2.pdf"},
+                        },
+                        {
+                            "type": "file",
+                            "file": {"file_id": "http://example.com/report3.txt"},
+                        },
+                    ],
+                }
+            ]
+        }
+
+        # Track which URLs were processed
+        processed_urls = []
+
+        async def mock_extract(url: str) -> str:
+            processed_urls.append(url)
+            return f"CONTENT_FROM_{url}"
+
+        handler._extract_document_content_from_url = mock_extract
+
+        # Process the input
+        await handler.process_input_messages(data, guardrail)
+
+        # Verify that all URLs were processed
+        assert len(processed_urls) == 3
+        assert "https://example.com/report1.pdf" in processed_urls
+        assert "https://example.com/report2.pdf" in processed_urls
+        assert "http://example.com/report3.txt" in processed_urls
+
+        # Verify that all documents were passed to the guardrail
+        assert guardrail.last_inputs is not None
+        assert "documents" in guardrail.last_inputs
+        documents = guardrail.last_inputs["documents"]
+        assert len(documents) == 3
+        assert documents[0] == "CONTENT_FROM_https://example.com/report1.pdf"
+        assert documents[1] == "CONTENT_FROM_https://example.com/report2.pdf"
+        assert documents[2] == "CONTENT_FROM_http://example.com/report3.txt"
+
+    @pytest.mark.asyncio
+    async def test_process_file_data_base64(self):
+        """Test that base64 file_data is decoded and processed correctly"""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail()
+
+        # Create input data with base64 encoded file_data
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Process this file"},
+                        {
+                            "type": "file",
+                            "file": {
+                                "file_data": "VGhpcyBpcyBhIHRlc3QgZmlsZQ==",  # base64 for "This is a test file"
+                            },
+                        },
+                    ],
+                }
+            ]
+        }
+
+        # Mock the _extract_document_content_from_url method to ensure it's NOT called
+        extract_called = False
+
+        async def mock_extract(url: str) -> str:
+            nonlocal extract_called
+            extract_called = True
+            return "SHOULD_NOT_BE_CALLED"
+
+        handler._extract_document_content_from_url = mock_extract
+
+        # Process the input
+        await handler.process_input_messages(data, guardrail)
+
+        # Verify that _extract_document_content_from_url was NOT called
+        assert not extract_called
+
+        # Verify that the document content was decoded and passed to guardrail
+        assert guardrail.last_inputs is not None
+        assert "documents" in guardrail.last_inputs
+        documents = guardrail.last_inputs["documents"]
+        assert len(documents) == 1
+        assert documents[0] == "This is a test file"  # Should be decoded from base64
+
+    @pytest.mark.asyncio
+    async def test_empty_documents_list(self):
+        """Test that empty documents list doesn't cause issues"""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail()
+
+        # Create input data without documents
+        data = {
+            "messages": [
+                {"role": "user", "content": "Just a simple message"},
+            ]
+        }
+
+        # Mock the _extract_document_content_from_url method to track if it's called
+        extract_called = False
+
+        async def mock_extract(url: str) -> str:
+            nonlocal extract_called
+            extract_called = True
+            return "SHOULD_NOT_BE_CALLED"
+
+        handler._extract_document_content_from_url = mock_extract
+
+        # Process the input
+        await handler.process_input_messages(data, guardrail)
+
+        # Verify that _extract_document_content_from_url was NOT called
+        assert not extract_called
+
+        # Verify that no documents were passed to guardrail
+        assert guardrail.last_inputs is not None
+        documents = guardrail.last_inputs.get("documents", [])
+        assert len(documents) == 0
+
+    @pytest.mark.asyncio
+    async def test_document_url_with_text_and_tool_calls(self):
+        """Test that document URLs work correctly alongside text and tool calls"""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail()
+
+        # Create input data with documents, text, and tool calls
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Analyze this document and get weather",
+                        },
+                        {
+                            "type": "file",
+                            "file": {"file_id": "https://example.com/data.pdf"},
+                        },
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "content": "I'll analyze the document and check the weather.",
+                    "tool_calls": [
+                        {
+                            "id": "call_123",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": json.dumps({"location": "New York"}),
+                            },
+                        }
+                    ],
+                },
+            ]
+        }
+
+        # Mock the _extract_document_content_from_url method
+        async def mock_extract(url: str) -> str:
+            return "PDF_CONTENT_EXTRACTED"
+
+        handler._extract_document_content_from_url = mock_extract
+
+        # Process the input
+        await handler.process_input_messages(data, guardrail)
+
+        # Verify that all inputs were processed correctly
+        assert guardrail.last_inputs is not None
+
+        # Check texts
+        assert "texts" in guardrail.last_inputs
+        texts = guardrail.last_inputs["texts"]
+        assert len(texts) == 2
+        assert "Analyze this document and get weather" in texts
+        assert "I'll analyze the document and check the weather." in texts
+
+        # Check documents
+        assert "documents" in guardrail.last_inputs
+        documents = guardrail.last_inputs["documents"]
+        assert len(documents) == 1
+        assert documents[0] == "PDF_CONTENT_EXTRACTED"
+
+        # Check tool calls
+        assert "tool_calls" in guardrail.last_inputs
+        tool_calls = guardrail.last_inputs["tool_calls"]
+        assert len(tool_calls) == 1
+        assert tool_calls[0]["function"]["name"] == "get_weather"
+
+
 if __name__ == "__main__":
     # Run the tests
     pytest.main([__file__, "-v"])

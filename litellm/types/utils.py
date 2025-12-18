@@ -3328,6 +3328,9 @@ class PriorityReservationSettings(BaseModel):
 class GenericGuardrailAPIInputs(TypedDict, total=False):
     texts: List[str]  # extracted text from the LLM response - for basic text guardrails
     images: List[str]  # extracted images from the LLM response - for image guardrails
+    documents: List[
+        str
+    ]  # extracted documents from the LLM response - for document guardrails
     tools: List[ChatCompletionToolParam]  # tools sent to the LLM
     tool_calls: Union[
         List[ChatCompletionToolCallChunk], List[ChatCompletionMessageToolCall]
