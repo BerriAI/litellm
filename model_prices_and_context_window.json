@@ -12972,7 +12972,7 @@
         "supports_web_search": true
     },
     "vertex_ai/gemini-3-flash-preview": {
-        "cache_read_input_token_cost": 1.25e-08,
+        "cache_read_input_token_cost": 5e-08,
         "input_cost_per_token": 5e-07,
         "input_cost_per_audio_token": 1e-06,
         "litellm_provider": "vertex_ai",
@@ -12986,6 +12986,7 @@
         "max_video_length": 1,
         "max_videos_per_prompt": 10,
         "mode": "chat",
+        "output_cost_per_reasoning_token": 3e-06,
         "output_cost_per_token": 3e-06,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
         "supported_endpoints": [
@@ -13003,7 +13004,9 @@
             "text"
         ],
         "supports_audio_input": true,
+        "supports_audio_output": false,
         "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -13011,6 +13014,7 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_video_input": true,
+        "supports_url_context": true,
         "supports_vision": true,
         "supports_web_search": true
     },
