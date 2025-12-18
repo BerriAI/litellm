@@ -480,10 +480,10 @@ class LiteLLMCompletionResponsesConfig:
             function: dict = _tool_use_definition.get("function") or {}
             tool_call_chunk = ChatCompletionToolCallChunk(
                 id=_tool_use_definition.get("id") or "",
-                type=_tool_use_definition.get("type") or "function",
+                type=cast(Literal["function"], _tool_use_definition.get("type") or "function"),
                 function=ChatCompletionToolCallFunctionChunk(
                     name=function.get("name") or "",
-                    arguments=function.get("arguments") or "",
+                    arguments=str(function.get("arguments") or ""),
                 ),
                 index=0,
             )
@@ -527,7 +527,7 @@ class LiteLLMCompletionResponsesConfig:
             type="function",
             function=ChatCompletionToolCallFunctionChunk(
                 name=function_call.get("name") or "",
-                arguments=function_call.get("arguments") or "",
+                arguments=str(function_call.get("arguments") or ""),
             ),
             index=0,
         )
