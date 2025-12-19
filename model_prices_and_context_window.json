@@ -19543,9 +19543,9 @@
     "minimax.minimax-m2": {
         "input_cost_per_token": 3e-07,
         "litellm_provider": "bedrock_converse",
-        "max_input_tokens": 204800,
-        "max_output_tokens": 204800,
-        "max_tokens": 32768,
+        "max_input_tokens": 400000,
+        "max_output_tokens": 400000,
+        "max_tokens": 400000,
         "mode": "chat",
         "output_cost_per_token": 1.2e-06,
         "supports_function_calling": true,
