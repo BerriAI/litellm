@@ -933,7 +933,33 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
 
 
 router = APIRouter()
-origins = ["*"]
+
+
+def _get_cors_allow_list(env_key: str) -> List[str]:
+    raw_value = os.getenv(env_key, "")
+    if not raw_value:
+        return []
+    return [value.strip() for value in raw_value.split(",") if value.strip()]
+
+
+def _get_cors_allow_credentials() -> bool:
+    raw_value = os.getenv("LITELLM_CORS_ALLOW_CREDENTIALS", "")
+    if not raw_value:
+        return False
+    return raw_value.strip().lower() in {"1", "true", "yes"}
+
+
+cors_allow_origins = _get_cors_allow_list("LITELLM_CORS_ALLOW_ORIGINS") or ["*"]
+cors_allow_credentials = _get_cors_allow_credentials()
+cors_allow_methods = _get_cors_allow_list("LITELLM_CORS_ALLOW_METHODS") or ["*"]
+cors_allow_headers = _get_cors_allow_list("LITELLM_CORS_ALLOW_HEADERS") or ["*"]
+
+if "*" in cors_allow_origins and cors_allow_credentials:
+    verbose_proxy_logger.warning(
+        "CORS config rejects allow_credentials with wildcard origins. "
+        "Set general_settings.cors_allow_origins to explicit origins to enable credentials."
+    )
+    cors_allow_credentials = False
 
 
 # get current directory
@@ -1064,10 +1090,10 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=cors_allow_origins,
+    allow_credentials=cors_allow_credentials,
+    allow_methods=cors_allow_methods,
+    allow_headers=cors_allow_headers,
 )
 
 app.add_middleware(PrometheusAuthMiddleware)

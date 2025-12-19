@@ -684,6 +684,41 @@ def run_server(  # noqa: PLR0915
             general_settings = _config.get("general_settings", {})
             if general_settings is None:
                 general_settings = {}
+            cors_allow_origins = general_settings.get("cors_allow_origins", None)
+            cors_allow_credentials = general_settings.get(
+                "cors_allow_credentials", None
+            )
+            cors_allow_methods = general_settings.get("cors_allow_methods", None)
+            cors_allow_headers = general_settings.get("cors_allow_headers", None)
+
+            if cors_allow_origins is not None:
+                if isinstance(cors_allow_origins, list):
+                    os.environ["LITELLM_CORS_ALLOW_ORIGINS"] = ",".join(
+                        cors_allow_origins
+                    )
+                elif isinstance(cors_allow_origins, str):
+                    os.environ["LITELLM_CORS_ALLOW_ORIGINS"] = cors_allow_origins
+
+            if cors_allow_credentials is not None:
+                os.environ["LITELLM_CORS_ALLOW_CREDENTIALS"] = str(
+                    cors_allow_credentials
+                )
+
+            if cors_allow_methods is not None:
+                if isinstance(cors_allow_methods, list):
+                    os.environ["LITELLM_CORS_ALLOW_METHODS"] = ",".join(
+                        cors_allow_methods
+                    )
+                elif isinstance(cors_allow_methods, str):
+                    os.environ["LITELLM_CORS_ALLOW_METHODS"] = cors_allow_methods
+
+            if cors_allow_headers is not None:
+                if isinstance(cors_allow_headers, list):
+                    os.environ["LITELLM_CORS_ALLOW_HEADERS"] = ",".join(
+                        cors_allow_headers
+                    )
+                elif isinstance(cors_allow_headers, str):
+                    os.environ["LITELLM_CORS_ALLOW_HEADERS"] = cors_allow_headers
             ### LOAD KEY MANAGEMENT SETTINGS FIRST (needed for custom secret manager) ###
             key_management_settings = general_settings.get(
                 "key_management_settings", None
