@@ -1513,6 +1513,12 @@ if TYPE_CHECKING:
     from .llms.jina_ai.rerank.transformation import JinaAIRerankConfig as JinaAIRerankConfig
     from .llms.deepinfra.rerank.transformation import DeepinfraRerankConfig as DeepinfraRerankConfig
     from .llms.hosted_vllm.rerank.transformation import HostedVLLMRerankConfig as HostedVLLMRerankConfig
+    from .llms.nvidia_nim.rerank.transformation import NvidiaNimRerankConfig as NvidiaNimRerankConfig
+    from .llms.nvidia_nim.rerank.ranking_transformation import NvidiaNimRankingConfig as NvidiaNimRankingConfig
+    from .llms.vertex_ai.rerank.transformation import VertexAIRerankConfig as VertexAIRerankConfig
+    from .llms.fireworks_ai.rerank.transformation import FireworksAIRerankConfig as FireworksAIRerankConfig
+    from .llms.voyage.rerank.transformation import VoyageRerankConfig as VoyageRerankConfig
+    from .llms.clarifai.chat.transformation import ClarifaiConfig as ClarifaiConfig
     from litellm.caching.llm_caching_handler import LLMClientCache
     from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
     from litellm.types.utils import (
