@@ -160,6 +160,7 @@ LLM_CONFIG_NAMES = (
     "OpenAILikeChatConfig",
     "GaladrielChatConfig",
     "GithubChatConfig",
+    "AzureAnthropicConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -677,5 +678,13 @@ def _lazy_import_llm_configs(name: str) -> Any:
 
         _globals["GithubChatConfig"] = _GithubChatConfig
         return _GithubChatConfig
+
+    if name == "AzureAnthropicConfig":
+        from .llms.azure_ai.anthropic.transformation import (
+            AzureAnthropicConfig as _AzureAnthropicConfig,
+        )
+
+        _globals["AzureAnthropicConfig"] = _AzureAnthropicConfig
+        return _AzureAnthropicConfig
 
     raise AttributeError(f"LLM config lazy import: unknown attribute {name!r}")
