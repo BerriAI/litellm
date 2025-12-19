@@ -16,7 +16,11 @@ from typing_extensions import Required, TypedDict
 
 from litellm._uuid import uuid
 from litellm.types.integrations.slack_alerting import AlertType
-from litellm.types.llms.openai import AllMessageValues, OpenAIFileObject
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    OpenAIFileObject,
+    ResponsesAPIResponse,
+)
 from litellm.types.mcp import (
     MCPAuth,
     MCPAuthType,
@@ -3764,8 +3768,8 @@ class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
 class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
     unified_object_id: str
     model_object_id: str
-    file_purpose: Literal["batch", "fine-tune"]
-    file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob]
+    file_purpose: Literal["batch", "fine-tune", "response"]
+    file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob, ResponsesAPIResponse]
 
 
 class EnterpriseLicenseData(TypedDict, total=False):
