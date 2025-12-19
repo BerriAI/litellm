@@ -159,6 +159,44 @@ LLM_CONFIG_NAMES = (
     "AmazonConverseConfig",
     "OpenAILikeChatConfig",
     "GaladrielChatConfig",
+    "GithubChatConfig",
+    "AzureAnthropicConfig",
+    "BytezChatConfig",
+    "CompactifAIChatConfig",
+    "EmpowerChatConfig",
+    "AiohttpOpenAIChatConfig",
+    "HuggingFaceChatConfig",
+    "HuggingFaceEmbeddingConfig",
+    "OobaboogaConfig",
+    "MaritalkConfig",
+    "OpenrouterConfig",
+    "DataRobotConfig",
+    "AnthropicConfig",
+    "AnthropicTextConfig",
+    "GroqSTTConfig",
+    "TritonConfig",
+    "TritonGenerateConfig",
+    "TritonInferConfig",
+    "TritonEmbeddingConfig",
+    "HuggingFaceRerankConfig",
+    "DatabricksConfig",
+    "DatabricksEmbeddingConfig",
+    "PredibaseConfig",
+    "ReplicateConfig",
+    "SnowflakeConfig",
+    "CohereRerankConfig",
+    "CohereRerankV2Config",
+    "AzureAIRerankConfig",
+    "InfinityRerankConfig",
+    "JinaAIRerankConfig",
+    "DeepinfraRerankConfig",
+    "HostedVLLMRerankConfig",
+    "NvidiaNimRerankConfig",
+    "NvidiaNimRankingConfig",
+    "VertexAIRerankConfig",
+    "FireworksAIRerankConfig",
+    "VoyageRerankConfig",
+    "ClarifaiConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -668,5 +706,309 @@ def _lazy_import_llm_configs(name: str) -> Any:
 
         _globals["GaladrielChatConfig"] = _GaladrielChatConfig
         return _GaladrielChatConfig
+
+    if name == "GithubChatConfig":
+        from .llms.github.chat.transformation import (
+            GithubChatConfig as _GithubChatConfig,
+        )
+
+        _globals["GithubChatConfig"] = _GithubChatConfig
+        return _GithubChatConfig
+
+    if name == "AzureAnthropicConfig":
+        from .llms.azure_ai.anthropic.transformation import (
+            AzureAnthropicConfig as _AzureAnthropicConfig,
+        )
+
+        _globals["AzureAnthropicConfig"] = _AzureAnthropicConfig
+        return _AzureAnthropicConfig
+
+    if name == "BytezChatConfig":
+        from .llms.bytez.chat.transformation import (
+            BytezChatConfig as _BytezChatConfig,
+        )
+
+        _globals["BytezChatConfig"] = _BytezChatConfig
+        return _BytezChatConfig
+
+    if name == "CompactifAIChatConfig":
+        from .llms.compactifai.chat.transformation import (
+            CompactifAIChatConfig as _CompactifAIChatConfig,
+        )
+
+        _globals["CompactifAIChatConfig"] = _CompactifAIChatConfig
+        return _CompactifAIChatConfig
+
+    if name == "EmpowerChatConfig":
+        from .llms.empower.chat.transformation import (
+            EmpowerChatConfig as _EmpowerChatConfig,
+        )
+
+        _globals["EmpowerChatConfig"] = _EmpowerChatConfig
+        return _EmpowerChatConfig
+
+    if name == "AiohttpOpenAIChatConfig":
+        from .llms.aiohttp_openai.chat.transformation import (
+            AiohttpOpenAIChatConfig as _AiohttpOpenAIChatConfig,
+        )
+
+        _globals["AiohttpOpenAIChatConfig"] = _AiohttpOpenAIChatConfig
+        return _AiohttpOpenAIChatConfig
+
+    if name == "HuggingFaceChatConfig":
+        from .llms.huggingface.chat.transformation import (
+            HuggingFaceChatConfig as _HuggingFaceChatConfig,
+        )
+
+        _globals["HuggingFaceChatConfig"] = _HuggingFaceChatConfig
+        return _HuggingFaceChatConfig
+
+    if name == "HuggingFaceEmbeddingConfig":
+        from .llms.huggingface.embedding.transformation import (
+            HuggingFaceEmbeddingConfig as _HuggingFaceEmbeddingConfig,
+        )
+
+        _globals["HuggingFaceEmbeddingConfig"] = _HuggingFaceEmbeddingConfig
+        return _HuggingFaceEmbeddingConfig
+
+    if name == "OobaboogaConfig":
+        from .llms.oobabooga.chat.transformation import (
+            OobaboogaConfig as _OobaboogaConfig,
+        )
+
+        _globals["OobaboogaConfig"] = _OobaboogaConfig
+        return _OobaboogaConfig
+
+    if name == "MaritalkConfig":
+        from .llms.maritalk import (
+            MaritalkConfig as _MaritalkConfig,
+        )
+
+        _globals["MaritalkConfig"] = _MaritalkConfig
+        return _MaritalkConfig
+
+    if name == "OpenrouterConfig":
+        from .llms.openrouter.chat.transformation import (
+            OpenrouterConfig as _OpenrouterConfig,
+        )
+
+        _globals["OpenrouterConfig"] = _OpenrouterConfig
+        return _OpenrouterConfig
+
+    if name == "DataRobotConfig":
+        from .llms.datarobot.chat.transformation import (
+            DataRobotConfig as _DataRobotConfig,
+        )
+
+        _globals["DataRobotConfig"] = _DataRobotConfig
+        return _DataRobotConfig
+
+    if name == "AnthropicConfig":
+        from .llms.anthropic.chat.transformation import (
+            AnthropicConfig as _AnthropicConfig,
+        )
+
+        _globals["AnthropicConfig"] = _AnthropicConfig
+        return _AnthropicConfig
+
+    if name == "AnthropicTextConfig":
+        from .llms.anthropic.completion.transformation import (
+            AnthropicTextConfig as _AnthropicTextConfig,
+        )
+
+        _globals["AnthropicTextConfig"] = _AnthropicTextConfig
+        return _AnthropicTextConfig
+
+    if name == "GroqSTTConfig":
+        from .llms.groq.stt.transformation import (
+            GroqSTTConfig as _GroqSTTConfig,
+        )
+
+        _globals["GroqSTTConfig"] = _GroqSTTConfig
+        return _GroqSTTConfig
+
+    if name == "TritonConfig":
+        from .llms.triton.completion.transformation import (
+            TritonConfig as _TritonConfig,
+        )
+
+        _globals["TritonConfig"] = _TritonConfig
+        return _TritonConfig
+
+    if name == "TritonGenerateConfig":
+        from .llms.triton.completion.transformation import (
+            TritonGenerateConfig as _TritonGenerateConfig,
+        )
+
+        _globals["TritonGenerateConfig"] = _TritonGenerateConfig
+        return _TritonGenerateConfig
+
+    if name == "TritonInferConfig":
+        from .llms.triton.completion.transformation import (
+            TritonInferConfig as _TritonInferConfig,
+        )
+
+        _globals["TritonInferConfig"] = _TritonInferConfig
+        return _TritonInferConfig
+
+    if name == "TritonEmbeddingConfig":
+        from .llms.triton.embedding.transformation import (
+            TritonEmbeddingConfig as _TritonEmbeddingConfig,
+        )
+
+        _globals["TritonEmbeddingConfig"] = _TritonEmbeddingConfig
+        return _TritonEmbeddingConfig
+
+    if name == "HuggingFaceRerankConfig":
+        from .llms.huggingface.rerank.transformation import (
+            HuggingFaceRerankConfig as _HuggingFaceRerankConfig,
+        )
+
+        _globals["HuggingFaceRerankConfig"] = _HuggingFaceRerankConfig
+        return _HuggingFaceRerankConfig
+
+    if name == "DatabricksConfig":
+        from .llms.databricks.chat.transformation import (
+            DatabricksConfig as _DatabricksConfig,
+        )
+
+        _globals["DatabricksConfig"] = _DatabricksConfig
+        return _DatabricksConfig
+
+    if name == "DatabricksEmbeddingConfig":
+        from .llms.databricks.embed.transformation import (
+            DatabricksEmbeddingConfig as _DatabricksEmbeddingConfig,
+        )
+
+        _globals["DatabricksEmbeddingConfig"] = _DatabricksEmbeddingConfig
+        return _DatabricksEmbeddingConfig
+
+    if name == "PredibaseConfig":
+        from .llms.predibase.chat.transformation import (
+            PredibaseConfig as _PredibaseConfig,
+        )
+
+        _globals["PredibaseConfig"] = _PredibaseConfig
+        return _PredibaseConfig
+
+    if name == "ReplicateConfig":
+        from .llms.replicate.chat.transformation import (
+            ReplicateConfig as _ReplicateConfig,
+        )
+
+        _globals["ReplicateConfig"] = _ReplicateConfig
+        return _ReplicateConfig
+
+    if name == "SnowflakeConfig":
+        from .llms.snowflake.chat.transformation import (
+            SnowflakeConfig as _SnowflakeConfig,
+        )
+
+        _globals["SnowflakeConfig"] = _SnowflakeConfig
+        return _SnowflakeConfig
+
+    if name == "CohereRerankConfig":
+        from .llms.cohere.rerank.transformation import (
+            CohereRerankConfig as _CohereRerankConfig,
+        )
+
+        _globals["CohereRerankConfig"] = _CohereRerankConfig
+        return _CohereRerankConfig
+
+    if name == "CohereRerankV2Config":
+        from .llms.cohere.rerank_v2.transformation import (
+            CohereRerankV2Config as _CohereRerankV2Config,
+        )
+
+        _globals["CohereRerankV2Config"] = _CohereRerankV2Config
+        return _CohereRerankV2Config
+
+    if name == "AzureAIRerankConfig":
+        from .llms.azure_ai.rerank.transformation import (
+            AzureAIRerankConfig as _AzureAIRerankConfig,
+        )
+
+        _globals["AzureAIRerankConfig"] = _AzureAIRerankConfig
+        return _AzureAIRerankConfig
+
+    if name == "InfinityRerankConfig":
+        from .llms.infinity.rerank.transformation import (
+            InfinityRerankConfig as _InfinityRerankConfig,
+        )
+
+        _globals["InfinityRerankConfig"] = _InfinityRerankConfig
+        return _InfinityRerankConfig
+
+    if name == "JinaAIRerankConfig":
+        from .llms.jina_ai.rerank.transformation import (
+            JinaAIRerankConfig as _JinaAIRerankConfig,
+        )
+
+        _globals["JinaAIRerankConfig"] = _JinaAIRerankConfig
+        return _JinaAIRerankConfig
+
+    if name == "DeepinfraRerankConfig":
+        from .llms.deepinfra.rerank.transformation import (
+            DeepinfraRerankConfig as _DeepinfraRerankConfig,
+        )
+
+        _globals["DeepinfraRerankConfig"] = _DeepinfraRerankConfig
+        return _DeepinfraRerankConfig
+
+    if name == "HostedVLLMRerankConfig":
+        from .llms.hosted_vllm.rerank.transformation import (
+            HostedVLLMRerankConfig as _HostedVLLMRerankConfig,
+        )
+
+        _globals["HostedVLLMRerankConfig"] = _HostedVLLMRerankConfig
+        return _HostedVLLMRerankConfig
+
+    if name == "NvidiaNimRerankConfig":
+        from .llms.nvidia_nim.rerank.transformation import (
+            NvidiaNimRerankConfig as _NvidiaNimRerankConfig,
+        )
+
+        _globals["NvidiaNimRerankConfig"] = _NvidiaNimRerankConfig
+        return _NvidiaNimRerankConfig
+
+    if name == "NvidiaNimRankingConfig":
+        from .llms.nvidia_nim.rerank.ranking_transformation import (
+            NvidiaNimRankingConfig as _NvidiaNimRankingConfig,
+        )
+
+        _globals["NvidiaNimRankingConfig"] = _NvidiaNimRankingConfig
+        return _NvidiaNimRankingConfig
+
+    if name == "VertexAIRerankConfig":
+        from .llms.vertex_ai.rerank.transformation import (
+            VertexAIRerankConfig as _VertexAIRerankConfig,
+        )
+
+        _globals["VertexAIRerankConfig"] = _VertexAIRerankConfig
+        return _VertexAIRerankConfig
+
+    if name == "FireworksAIRerankConfig":
+        from .llms.fireworks_ai.rerank.transformation import (
+            FireworksAIRerankConfig as _FireworksAIRerankConfig,
+        )
+
+        _globals["FireworksAIRerankConfig"] = _FireworksAIRerankConfig
+        return _FireworksAIRerankConfig
+
+    if name == "VoyageRerankConfig":
+        from .llms.voyage.rerank.transformation import (
+            VoyageRerankConfig as _VoyageRerankConfig,
+        )
+
+        _globals["VoyageRerankConfig"] = _VoyageRerankConfig
+        return _VoyageRerankConfig
+
+    if name == "ClarifaiConfig":
+        from .llms.clarifai.chat.transformation import (
+            ClarifaiConfig as _ClarifaiConfig,
+        )
+
+        _globals["ClarifaiConfig"] = _ClarifaiConfig
+        return _ClarifaiConfig
 
     raise AttributeError(f"LLM config lazy import: unknown attribute {name!r}")
