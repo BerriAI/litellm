@@ -43,7 +43,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
 
     def get_supported_openai_params(
         self, model: str
-    ) -> list:
+    ) -> List[str]:
         """
         Return list of OpenAI params supported by Stability AI.
 
