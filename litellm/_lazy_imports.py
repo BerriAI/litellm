@@ -187,6 +187,8 @@ LLM_CONFIG_NAMES = (
     "CohereRerankConfig",
     "CohereRerankV2Config",
     "AzureAIRerankConfig",
+    "InfinityRerankConfig",
+    "JinaAIRerankConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -920,5 +922,21 @@ def _lazy_import_llm_configs(name: str) -> Any:
 
         _globals["AzureAIRerankConfig"] = _AzureAIRerankConfig
         return _AzureAIRerankConfig
+
+    if name == "InfinityRerankConfig":
+        from .llms.infinity.rerank.transformation import (
+            InfinityRerankConfig as _InfinityRerankConfig,
+        )
+
+        _globals["InfinityRerankConfig"] = _InfinityRerankConfig
+        return _InfinityRerankConfig
+
+    if name == "JinaAIRerankConfig":
+        from .llms.jina_ai.rerank.transformation import (
+            JinaAIRerankConfig as _JinaAIRerankConfig,
+        )
+
+        _globals["JinaAIRerankConfig"] = _JinaAIRerankConfig
+        return _JinaAIRerankConfig
 
     raise AttributeError(f"LLM config lazy import: unknown attribute {name!r}")
