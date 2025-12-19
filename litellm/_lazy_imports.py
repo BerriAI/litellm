@@ -195,6 +195,8 @@ LLM_CONFIG_NAMES = (
     "NvidiaNimRankingConfig",
     "VertexAIRerankConfig",
     "FireworksAIRerankConfig",
+    "VoyageRerankConfig",
+    "ClarifaiConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -992,5 +994,21 @@ def _lazy_import_llm_configs(name: str) -> Any:
 
         _globals["FireworksAIRerankConfig"] = _FireworksAIRerankConfig
         return _FireworksAIRerankConfig
+
+    if name == "VoyageRerankConfig":
+        from .llms.voyage.rerank.transformation import (
+            VoyageRerankConfig as _VoyageRerankConfig,
+        )
+
+        _globals["VoyageRerankConfig"] = _VoyageRerankConfig
+        return _VoyageRerankConfig
+
+    if name == "ClarifaiConfig":
+        from .llms.clarifai.chat.transformation import (
+            ClarifaiConfig as _ClarifaiConfig,
+        )
+
+        _globals["ClarifaiConfig"] = _ClarifaiConfig
+        return _ClarifaiConfig
 
     raise AttributeError(f"LLM config lazy import: unknown attribute {name!r}")
