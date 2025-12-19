@@ -30,6 +30,7 @@ secret-patterns:
   - pattern: "^os\\.environ.*$"
     description: "Python os.environ references (not actual secrets)"
   
-  # Generic database placeholder
-  - pattern: "^postgres$"
-    description: "Generic postgres placeholder"
+  
+  # OpenAI model names (not secrets)
+  - pattern: "^text-(davinci|curie|babbage|ada)-\\d{3}$"
+    description: "OpenAI model identifiers (e.g., text-davinci-003)"
