@@ -2923,6 +2923,7 @@ class LlmProviders(str, Enum):
     GEMINI = "gemini"
     AI21 = "ai21"
     BASETEN = "baseten"
+    BLACK_FOREST_LABS = "black_forest_labs"
     AZURE = "azure"
     AZURE_TEXT = "azure_text"
     AZURE_AI = "azure_ai"
