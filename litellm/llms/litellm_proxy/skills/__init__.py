@@ -18,9 +18,15 @@ Main components:
 from litellm.llms.litellm_proxy.skills.code_execution import (
     LITELLM_CODE_EXECUTION_TOOL,
     CodeExecutionHandler,
+    LiteLLMInternalTools,
     add_code_execution_tool,
     code_execution_handler,
+    get_litellm_code_execution_tool,
     has_code_execution_tool,
+)
+from litellm.llms.litellm_proxy.skills.constants import (
+    DEFAULT_MAX_ITERATIONS,
+    DEFAULT_SANDBOX_TIMEOUT,
 )
 from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
 from litellm.llms.litellm_proxy.skills.prompt_injection import (
@@ -37,8 +43,12 @@ __all__ = [
     "SkillPromptInjectionHandler",
     "SkillsSandboxExecutor",
     "CodeExecutionHandler",
+    "LiteLLMInternalTools",
     "LITELLM_CODE_EXECUTION_TOOL",
+    "get_litellm_code_execution_tool",
     "code_execution_handler",
     "has_code_execution_tool",
     "add_code_execution_tool",
+    "DEFAULT_MAX_ITERATIONS",
+    "DEFAULT_SANDBOX_TIMEOUT",
 ]

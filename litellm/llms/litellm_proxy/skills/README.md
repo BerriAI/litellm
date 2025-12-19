@@ -44,6 +44,53 @@ For skills that include executable code (Python files), LiteLLM automatically ha
 2. **Post-call hook** (`async_post_call_success_deployment_hook`): Detects tool calls, executes code in Docker sandbox, continues loop
 3. **Returns files**: Generated files (GIFs, images, etc.) returned directly on response
 
+```mermaid
+sequenceDiagram
+    participant User
+    participant LiteLLM as LiteLLM SDK
+    participant PreHook as async_pre_call_hook
+    participant LLM as LLM Provider
+    participant PostHook as async_post_call_success_deployment_hook
+    participant Sandbox as Docker Sandbox
+
+    User->>LiteLLM: litellm.acompletion(model, messages, container={skills: [...]})
+    
+    Note over LiteLLM,PreHook: PRE-CALL HOOK
+    LiteLLM->>PreHook: Intercept request
+    PreHook->>PreHook: Fetch skill from DB (litellm:skill_id)
+    PreHook->>PreHook: Extract SKILL.md from ZIP
+    PreHook->>PreHook: Inject SKILL.md into system prompt
+    PreHook->>PreHook: Add litellm_code_execution tool
+    PreHook->>PreHook: Store skill files in metadata
+    PreHook-->>LiteLLM: Modified request
+    
+    LiteLLM->>LLM: Forward to provider (OpenAI/Bedrock/etc)
+    LLM-->>LiteLLM: Response with tool_calls
+    
+    Note over LiteLLM,PostHook: POST-CALL HOOK (Agentic Loop)
+    LiteLLM->>PostHook: Check response
+    
+    loop Until no more tool calls
+        PostHook->>PostHook: Check for litellm_code_execution tool call
+        alt Has code execution tool call
+            PostHook->>Sandbox: Execute Python code
+            Sandbox->>Sandbox: Copy skill files to /sandbox
+            Sandbox->>Sandbox: Install requirements.txt
+            Sandbox->>Sandbox: Run code
+            Sandbox-->>PostHook: Result + generated files
+            PostHook->>PostHook: Add tool result to messages
+            PostHook->>LLM: Make another LLM call
+            LLM-->>PostHook: New response
+        else No code execution
+            PostHook->>PostHook: Break loop
+        end
+    end
+    
+    PostHook->>PostHook: Attach files to response._litellm_generated_files
+    PostHook-->>LiteLLM: Modified response with files
+    LiteLLM-->>User: Final response with generated files
+```
+
 ```python
 import litellm
 from litellm.proxy.hooks.litellm_skills import SkillsInjectionHook
@@ -53,12 +100,13 @@ hook = SkillsInjectionHook()
 litellm.callbacks.append(hook)
 
 # ONE request - LiteLLM handles everything automatically
+# The container parameter triggers the SkillsInjectionHook
 response = await litellm.acompletion(
     model="gpt-4o-mini",
     messages=[{"role": "user", "content": "Create a bouncing ball GIF"}],
     container={
         "skills": [{"type": "custom", "skill_id": "litellm:skill_abc123"}]
-    }
+    },
 )
 
 # Files are attached directly to response
@@ -237,7 +285,7 @@ response = litellm.completion(
 
 ### Step 2: SkillsInjectionHook Processing
 
-The hook (`litellm/proxy/hooks/skills_injection_hook.py`) intercepts the request:
+The hook (`litellm/proxy/hooks/litellm_skills/main.py`) intercepts the request:
 
 1. **Detects `litellm:` prefix** → Fetches skill from database
 2. **Checks model provider** → Bedrock is not Anthropic
