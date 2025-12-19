@@ -214,6 +214,10 @@ class CodeExecutionHandler:
                             code=code,
                             skill_files=skill_files,
                         )
+
+                        verbose_logger.debug(
+                            f"CodeExecutionHandler: Execution result: {exec_result}"
+                        )
                         
                         execution_results.append({
                             "iteration": iteration,

@@ -396,9 +396,15 @@ class SkillsInjectionHook(CustomLogger):
         """Extract tool calls from response, handling both formats."""
         tool_calls = []
         
-        # Anthropic/messages API format: response is dict with "content" list
+        # Get content - handle both dict and object responses
+        content = None
         if isinstance(response, dict):
             content = response.get("content", [])
+        elif hasattr(response, "content"):
+            content = response.content
+        
+        # Anthropic/messages API format: response has "content" list with tool_use blocks
+        if content:
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "tool_use":
                     tool_calls.append({
@@ -414,8 +420,8 @@ class SkillsInjectionHook(CustomLogger):
                     })
         
         # OpenAI format: response has choices[0].message.tool_calls
-        elif hasattr(response, "choices") and response.choices:
-            msg = response.choices[0].message
+        if not tool_calls and hasattr(response, "choices") and response.choices:  # type: ignore[union-attr]
+            msg = response.choices[0].message  # type: ignore[union-attr]
             if hasattr(msg, "tool_calls") and msg.tool_calls:
                 for tc in msg.tool_calls:
                     tool_calls.append({
@@ -444,6 +450,13 @@ class SkillsInjectionHook(CustomLogger):
         from litellm.llms.litellm_proxy.skills.sandbox_executor import (
             SkillsSandboxExecutor,
         )
+
+        # Ensure response is not None
+        if response is None:
+            verbose_proxy_logger.error(
+                "SkillsInjectionHook: Response is None, cannot execute code loop"
+            )
+            return None
         
         model = data.get("model", "")
         messages = list(data.get("messages", []))
@@ -514,12 +527,23 @@ class SkillsInjectionHook(CustomLogger):
             verbose_proxy_logger.debug(
                 f"SkillsInjectionHook: Making LLM call iteration {iteration + 2}"
             )
-            current_response = await litellm.anthropic.acreate(
-                model=model,
-                messages=messages,
-                tools=tools,
-                max_tokens=max_tokens,
-            )
+            try:
+                current_response = await litellm.anthropic.acreate(
+                    model=model,
+                    messages=messages,
+                    tools=tools,
+                    max_tokens=max_tokens,
+                )
+                if current_response is None:
+                    verbose_proxy_logger.error(
+                        "SkillsInjectionHook: LLM call returned None"
+                    )
+                    return self._attach_files_to_response(response, generated_files)
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    f"SkillsInjectionHook: LLM call failed: {e}"
+                )
+                return self._attach_files_to_response(response, generated_files)
         
         verbose_proxy_logger.warning(
             f"SkillsInjectionHook: Max iterations ({self.max_iterations}) reached"

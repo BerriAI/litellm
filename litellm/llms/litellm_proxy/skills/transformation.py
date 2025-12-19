@@ -56,10 +56,10 @@ class LiteLLMSkillsTransformationHandler:
             display_title: Display title for the skill
             description: Description of the skill
             instructions: Instructions/prompt for the skill
-            files: Files to upload (for compatibility with Anthropic API)
-            file_content: Binary content of skill files
-            file_name: Original filename
-            file_type: MIME type
+            files: Files to upload - list of tuples (filename, content, content_type)
+            file_content: Binary content of skill files (alternative to files)
+            file_name: Original filename (alternative to files)
+            file_type: MIME type (alternative to files)
             metadata: Additional metadata
             user_id: User ID for tracking
             _is_async: Whether to return a coroutine
@@ -75,6 +75,16 @@ class LiteLLMSkillsTransformationHandler:
                 litellm_params={"litellm_call_id": litellm_call_id},
                 custom_llm_provider=self.custom_llm_provider,
             )
+
+        # Extract file content from files parameter if provided
+        # files is a list of tuples: [(filename, content, content_type), ...]
+        if files and not file_content:
+            if isinstance(files, list) and len(files) > 0:
+                first_file = files[0]
+                if isinstance(first_file, tuple) and len(first_file) >= 2:
+                    file_name = first_file[0]
+                    file_content = first_file[1]
+                    file_type = first_file[2] if len(first_file) > 2 else "application/zip"
 
         if _is_async:
             return self._async_create_skill(

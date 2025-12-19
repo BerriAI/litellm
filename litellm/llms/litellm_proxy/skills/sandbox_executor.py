@@ -142,12 +142,23 @@ sys.path.insert(0, '/sandbox')
                 result = session.run(wrapped_code)
                 
                 success = result.exit_code == 0
-                output = result.stdout if success else ""
-                error = result.stderr if not success else ""
+                output = result.stdout or ""
+                error = result.stderr or ""
                 
-                verbose_logger.debug(
-                    f"SkillsSandboxExecutor: Code execution {'succeeded' if success else 'failed'}"
-                )
+                if success:
+                    verbose_logger.debug(
+                        f"SkillsSandboxExecutor: Code execution succeeded"
+                    )
+                else:
+                    verbose_logger.debug(
+                        f"SkillsSandboxExecutor: Code execution failed with exit code {result.exit_code}"
+                    )
+                    verbose_logger.debug(
+                        f"SkillsSandboxExecutor: stderr: {error[:500] if error else 'No stderr'}"
+                    )
+                    verbose_logger.debug(
+                        f"SkillsSandboxExecutor: stdout: {output[:500] if output else 'No stdout'}"
+                    )
                 
                 # 4. Collect generated files
                 generated_files = self._collect_generated_files(session, skill_files)
