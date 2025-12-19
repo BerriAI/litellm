@@ -56,6 +56,11 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
                 f"https://api.{self.DD_SITE}/api/intake/llm-obs/v1/trace/spans"
             )
 
+            # testing base url
+            dd_base_url = os.getenv("DD_BASE_URL")
+            if dd_base_url:
+                self.intake_url = f"{dd_base_url}/api/intake/llm-obs/v1/trace/spans"
+
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
             self.log_queue: List[LLMObsPayload] = []
