@@ -37,6 +37,7 @@ from litellm.proxy._types import (
     LiteLLM_DeletedTeamTable,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
+    LiteLLM_VerificationToken,
     LitellmTableNames,
     LitellmUserRoles,
     Member,
@@ -2400,6 +2401,25 @@ async def delete_team(
     # End of Audit logging
 
     ## DELETE ASSOCIATED KEYS
+    # Fetch keys before deletion to persist them
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _persist_deleted_verification_tokens,
+    )
+
+    keys_to_delete: List[LiteLLM_VerificationToken] = (
+        await prisma_client.db.litellm_verificationtoken.find_many(
+            where={"team_id": {"in": data.team_ids}}
+        )
+    )
+
+    if keys_to_delete:
+        await _persist_deleted_verification_tokens(
+            keys=keys_to_delete,
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=litellm_changed_by,
+        )
+
     await prisma_client.delete_data(team_id_list=data.team_ids, table_name="key")
 
     # ## DELETE TEAM MEMBERSHIPS
