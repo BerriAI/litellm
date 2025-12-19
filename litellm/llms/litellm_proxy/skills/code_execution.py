@@ -13,27 +13,50 @@ Generated files are returned directly in the response - no separate storage need
 
 import base64
 import json
+from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
 from litellm._logging import verbose_logger
 
-LITELLM_CODE_EXECUTION_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "litellm_code_execution",
-        "description": "Execute Python code in a sandboxed environment. Use this to run code that generates files, processes data, or performs computations. Generated files will be returned directly.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "code": {
-                    "type": "string",
-                    "description": "Python code to execute"
-                }
-            },
-            "required": ["code"]
+
+class LiteLLMInternalTools(str, Enum):
+    """
+    Enum for internal LiteLLM tools that are injected into requests.
+    
+    These tools are handled automatically by LiteLLM hooks and are not
+    passed to the underlying LLM provider directly.
+    """
+    CODE_EXECUTION = "litellm_code_execution"
+
+
+def get_litellm_code_execution_tool() -> Dict[str, Any]:
+    """
+    Returns the litellm_code_execution tool definition in OpenAI format.
+    
+    This tool enables automatic code execution in a sandboxed environment
+    when skills include executable Python code.
+    """
+    return {
+        "type": "function",
+        "function": {
+            "name": LiteLLMInternalTools.CODE_EXECUTION.value,
+            "description": "Execute Python code in a sandboxed environment. Use this to run code that generates files, processes data, or performs computations. Generated files will be returned directly.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "Python code to execute"
+                    }
+                },
+                "required": ["code"]
+            }
         }
     }
-}
+
+
+# Singleton tool definition for backwards compatibility
+LITELLM_CODE_EXECUTION_TOOL = get_litellm_code_execution_tool()
 
 
 class CodeExecutionHandler:
@@ -47,11 +70,16 @@ class CodeExecutionHandler:
     
     def __init__(
         self,
-        max_iterations: int = 10,
-        sandbox_timeout: int = 120,
+        max_iterations: Optional[int] = None,
+        sandbox_timeout: Optional[int] = None,
     ):
-        self.max_iterations = max_iterations
-        self.sandbox_timeout = sandbox_timeout
+        from litellm.llms.litellm_proxy.skills.constants import (
+            DEFAULT_MAX_ITERATIONS,
+            DEFAULT_SANDBOX_TIMEOUT,
+        )
+        
+        self.max_iterations = max_iterations or DEFAULT_MAX_ITERATIONS
+        self.sandbox_timeout = sandbox_timeout or DEFAULT_SANDBOX_TIMEOUT
     
     async def execute_with_code_execution(
         self,
@@ -149,7 +177,7 @@ class CodeExecutionHandler:
             for tool_call in assistant_message.tool_calls:
                 tool_name = tool_call.function.name
                 
-                if tool_name == "litellm_code_execution":
+                if tool_name == LiteLLMInternalTools.CODE_EXECUTION.value:
                     # Execute code in sandbox
                     try:
                         args = json.loads(tool_call.function.arguments)
@@ -238,7 +266,7 @@ def has_code_execution_tool(tools: Optional[List[Dict]]) -> bool:
         return False
     for tool in tools:
         func = tool.get("function", {})
-        if func.get("name") == "litellm_code_execution":
+        if func.get("name") == LiteLLMInternalTools.CODE_EXECUTION.value:
             return True
     return False
 
