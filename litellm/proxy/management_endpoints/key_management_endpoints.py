@@ -2828,14 +2828,8 @@ async def regenerate_key_fn(
 
         ### 3. remove existing key entry from cache
         ######################################################################
-        if key:
-            await _delete_cache_key_object(
-                hashed_token=hash_token(key),
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-            )
 
-        if hashed_api_key:
+        if hashed_api_key or key:
             await _delete_cache_key_object(
                 hashed_token=hash_token(key),
                 user_api_key_cache=user_api_key_cache,
