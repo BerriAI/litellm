@@ -123,6 +123,9 @@ guardrails:
     litellm_params:
       guardrail: presidio
       mode: "pre_call"  # Run before LLM call
+      presidio_score_thresholds:  # optional confidence score thresholds for detections
+        CREDIT_CARD: 0.8
+        EMAIL_ADDRESS: 0.6
       pii_entities_config:
         CREDIT_CARD: "MASK"
         EMAIL_ADDRESS: "MASK"

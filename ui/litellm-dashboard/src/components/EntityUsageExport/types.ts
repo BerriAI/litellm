@@ -2,6 +2,7 @@ import type { DateRangePickerValue } from "@tremor/react";
 
 export type ExportFormat = "csv" | "json";
 export type ExportScope = "daily" | "daily_with_models";
+export type EntityType = "tag" | "team" | "organization" | "customer" | "agent";
 
 export interface EntitySpendData {
   results: any[];
@@ -17,7 +18,7 @@ export interface EntitySpendData {
 export interface EntityUsageExportModalProps {
   isOpen: boolean;
   onClose: () => void;
-  entityType: "tag" | "team" | "organization";
+  entityType: EntityType;
   spendData: EntitySpendData;
   dateRange: DateRangePickerValue;
   selectedFilters: string[];

@@ -14,12 +14,13 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.types.guardrails import GenericGuardrailAPIInputs, GuardrailEventHooks
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPIMetadata,
     GenericGuardrailAPIRequest,
     GenericGuardrailAPIResponse,
 )
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -127,7 +128,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         for field_name in GenericGuardrailAPIMetadata.__annotations__.keys():
             value = metadata_dict.get(field_name)
             if value is not None:
-                result_metadata[field_name] = value
+                result_metadata[field_name] = value  # type: ignore[literal-required]
 
         # handle user_api_key_token = user_api_key_hash
         if metadata_dict.get("user_api_key_token") is not None:

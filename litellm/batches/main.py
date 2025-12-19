@@ -22,6 +22,7 @@ from openai.types.batch import BatchRequestCounts
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic.batches.handler import AnthropicBatchesHandler
 from litellm.llms.azure.batches.handler import AzureBatchesAPI
 from litellm.llms.bedrock.batches.handler import BedrockBatchesHandler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -53,6 +54,7 @@ from litellm.utils import (
 openai_batches_instance = OpenAIBatchesAPI()
 azure_batches_instance = AzureBatchesAPI()
 vertex_ai_batches_instance = VertexAIBatchPrediction(gcs_bucket_name="")
+anthropic_batches_instance = AnthropicBatchesHandler()
 base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
 
@@ -355,7 +357,7 @@ def create_batch(
 @client
 async def aretrieve_batch(
     batch_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -401,7 +403,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
     litellm_params: dict,
     _retrieve_batch_request: RetrieveBatchRequest,
     _is_async: bool,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic"] = "openai",
 ):
     api_base: Optional[str] = None
     if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
@@ -498,6 +500,27 @@ def _handle_retrieve_batch_providers_without_provider_config(
             timeout=timeout,
             max_retries=optional_params.max_retries,
         )
+    elif custom_llm_provider == "anthropic":
+        api_base = (
+            optional_params.api_base
+            or litellm.api_base
+            or get_secret_str("ANTHROPIC_API_BASE")
+        )
+        api_key = (
+            optional_params.api_key
+            or litellm.api_key
+            or litellm.azure_key
+            or get_secret_str("ANTHROPIC_API_KEY")
+        )
+
+        response = anthropic_batches_instance.retrieve_batch(
+            _is_async=_is_async,
+            batch_id=batch_id,
+            api_base=api_base,
+            api_key=api_key,
+            timeout=timeout,
+            max_retries=optional_params.max_retries,
+        )
     else:
         raise litellm.exceptions.BadRequestError(
             message="LiteLLM doesn't support {} for 'create_batch'. Only 'openai' is supported.".format(
@@ -517,7 +540,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
 @client
 def retrieve_batch(
     batch_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -608,7 +631,7 @@ def retrieve_batch(
                 api_key=optional_params.api_key,
                 logging_obj=litellm_logging_obj
                 or LiteLLMLoggingObj(
-                    model=model or "bedrock/unknown",
+                    model=model or f"{custom_llm_provider}/unknown",
                     messages=[],
                     stream=False,
                     call_type="batch_retrieve",

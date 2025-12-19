@@ -6,7 +6,7 @@ LiteLLM MCP Server Routes
 import asyncio
 import contextlib
 from datetime import datetime
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union, cast
 
 from fastapi import FastAPI, HTTPException
 from pydantic import AnyUrl, ConfigDict
@@ -72,7 +72,13 @@ if MCP_AVAILABLE:
         auth_context_var,
     )
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-    from mcp.types import EmbeddedResource, ImageContent, Prompt, TextContent
+    from mcp.types import (
+        CallToolResult,
+        EmbeddedResource,
+        ImageContent,
+        Prompt,
+        TextContent,
+    )
     from mcp.types import Tool as MCPTool
 
     from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
@@ -234,7 +240,7 @@ if MCP_AVAILABLE:
     @server.call_tool()
     async def mcp_server_tool_call(
         name: str, arguments: Dict[str, Any] | None
-    ) -> List[Union[TextContent, ImageContent, EmbeddedResource]]:
+    ) -> CallToolResult:
         """
         Call a specific tool with the provided arguments
 
@@ -300,26 +306,37 @@ if MCP_AVAILABLE:
             )
         except BlockedPiiEntityError as e:
             verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {str(e)}")
-            # Return error as text content for MCP protocol
-            return [
-                TextContent(
-                    text=f"Error: Blocked PII entity detected - {str(e)}", type="text"
-                )
-            ]
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        text=f"Error: Blocked PII entity detected - {str(e)}",
+                        type="text",
+                    )
+                ],
+                isError=True,
+            )
         except GuardrailRaisedException as e:
             verbose_logger.error(f"GuardrailRaisedException in MCP tool call: {str(e)}")
-            # Return error as text content for MCP protocol
-            return [
-                TextContent(text=f"Error: Guardrail violation - {str(e)}", type="text")
-            ]
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        text=f"Error: Guardrail violation - {str(e)}", type="text"
+                    )
+                ],
+                isError=True,
+            )
         except HTTPException as e:
             verbose_logger.error(f"HTTPException in MCP tool call: {str(e)}")
-            # Return error as text content for MCP protocol
-            return [TextContent(text=f"Error: {str(e.detail)}", type="text")]
+            return CallToolResult(
+                content=[TextContent(text=f"Error: {str(e.detail)}", type="text")],
+                isError=True,
+            )
         except Exception as e:
             verbose_logger.exception(f"MCP mcp_server_tool_call - error: {e}")
-            # Return error as text content for MCP protocol
-            return [TextContent(text=f"Error: {str(e)}", type="text")]
+            return CallToolResult(
+                content=[TextContent(text=f"Error: {str(e)}", type="text")],
+                isError=True,
+            )
 
         return response
 
@@ -1173,7 +1190,7 @@ if MCP_AVAILABLE:
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
         **kwargs: Any,
-    ) -> List[Union[TextContent, ImageContent, EmbeddedResource]]:
+    ) -> CallToolResult:
         """
         Call a specific tool with the provided arguments (handles prefixed tool names)
         """
@@ -1237,9 +1254,9 @@ if MCP_AVAILABLE:
             "litellm_logging_obj", None
         )
         if litellm_logging_obj:
-            litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
-                standard_logging_mcp_tool_call
-            )
+            litellm_logging_obj.model_call_details[
+                "mcp_tool_call_metadata"
+            ] = standard_logging_mcp_tool_call
             litellm_logging_obj.model = f"MCP: {name}"
         # Check if tool exists in local registry first (for OpenAPI-based tools)
         # These tools are registered with their prefixed names
@@ -1247,7 +1264,8 @@ if MCP_AVAILABLE:
         local_tool = global_mcp_tool_registry.get_tool(name)
         if local_tool:
             verbose_logger.debug(f"Executing local registry tool: {name}")
-            response = await _handle_local_mcp_tool(name, arguments)
+            local_content = await _handle_local_mcp_tool(name, arguments)
+            response = CallToolResult(content=cast(Any, local_content), isError=False)
 
         # Try managed MCP server tool (pass the full prefixed name)
         # Primary and recommended way to use external MCP servers
@@ -1262,6 +1280,11 @@ if MCP_AVAILABLE:
                 standard_logging_mcp_tool_call["mcp_server_cost_info"] = (
                     mcp_server.mcp_info or {}
                 ).get("mcp_server_cost_info")
+                # Update model_call_details with the cost info
+                if litellm_logging_obj:
+                    litellm_logging_obj.model_call_details[
+                        "mcp_tool_call_metadata"
+                    ] = standard_logging_mcp_tool_call
                 response = await _handle_managed_mcp_tool(
                     server_name=server_name,
                     name=original_tool_name,  # Pass the full name (potentially prefixed)
@@ -1279,7 +1302,12 @@ if MCP_AVAILABLE:
             # Deprecated: Local MCP Server Tool
             #########################################################
             else:
-                response = await _handle_local_mcp_tool(original_tool_name, arguments)
+                local_content = await _handle_local_mcp_tool(
+                    original_tool_name, arguments
+                )
+                response = CallToolResult(
+                    content=cast(Any, local_content), isError=False
+                )
 
         #########################################################
         # Post MCP Tool Call Hook
@@ -1293,6 +1321,20 @@ if MCP_AVAILABLE:
                 response_obj=response,
                 start_time=start_time,
                 end_time=end_time,
+            )
+            # Set call_type to call_mcp_tool so cost calculator recognizes it
+            from litellm.types.utils import CallTypes
+
+            litellm_logging_obj.call_type = CallTypes.call_mcp_tool.value
+            # Trigger success logging to build standard_logging_object and call callbacks
+            # async_success_handler will:
+            # 1. Call _success_handler_helper_fn which recognizes call_mcp_tool
+            # 2. Call _process_hidden_params_and_response_cost which:
+            #    - Calculates cost via _response_cost_calculator -> MCPCostCalculator
+            #    - Builds standard_logging_object
+            # 3. Call async_log_success_event on all callbacks
+            await litellm_logging_obj.async_success_handler(
+                result=response, start_time=start_time, end_time=end_time
             )
         return response
 
@@ -1432,7 +1474,7 @@ if MCP_AVAILABLE:
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
         litellm_logging_obj: Optional[Any] = None,
-    ) -> List[Union[TextContent, ImageContent, EmbeddedResource]]:
+    ) -> CallToolResult:
         """Handle tool execution for managed server tools"""
         # Import here to avoid circular import
         from litellm.proxy.proxy_server import proxy_logging_obj
@@ -1449,7 +1491,7 @@ if MCP_AVAILABLE:
             proxy_logging_obj=proxy_logging_obj,
         )
         verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
-        return call_tool_result.content  # type: ignore[return-value]
+        return call_tool_result
 
     async def _handle_local_mcp_tool(
         name: str, arguments: Dict[str, Any]
@@ -1741,14 +1783,16 @@ if MCP_AVAILABLE:
         )
         auth_context_var.set(auth_user)
 
-    def get_auth_context() -> Tuple[
-        Optional[UserAPIKeyAuth],
-        Optional[str],
-        Optional[List[str]],
-        Optional[Dict[str, Dict[str, str]]],
-        Optional[Dict[str, str]],
-        Optional[Dict[str, str]],
-    ]:
+    def get_auth_context() -> (
+        Tuple[
+            Optional[UserAPIKeyAuth],
+            Optional[str],
+            Optional[List[str]],
+            Optional[Dict[str, Dict[str, str]]],
+            Optional[Dict[str, str]],
+            Optional[Dict[str, str]],
+        ]
+    ):
         """
         Get the UserAPIKeyAuth from the auth context variable.
 

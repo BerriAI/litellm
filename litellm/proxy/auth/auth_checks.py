@@ -24,6 +24,7 @@ from litellm.constants import (
     DEFAULT_IN_MEMORY_TTL,
     DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
     DEFAULT_MAX_RECURSE_DEPTH,
+    EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.proxy._types import (
@@ -402,13 +403,14 @@ def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
     - user_route: str - the route the user is trying to call
     - allowed_routes: List[str|LiteLLMRoutes] - the list of allowed routes for the user.
     """
+    from starlette.routing import compile_path
 
     for allowed_route in allowed_routes:
-        if (
-            allowed_route in LiteLLMRoutes.__members__
-            and user_route in LiteLLMRoutes[allowed_route].value
-        ):
-            return True
+        if allowed_route in LiteLLMRoutes.__members__:
+            for template in LiteLLMRoutes[allowed_route].value:
+                regex, _, _ = compile_path(template)
+                if regex.match(user_route):
+                    return True
         elif allowed_route == user_route:
             return True
     return False
@@ -1910,6 +1912,7 @@ async def _virtual_key_max_budget_check(
             token=valid_token.token,
             spend=valid_token.spend,
             max_budget=valid_token.max_budget,
+            soft_budget=valid_token.soft_budget,
             user_id=valid_token.user_id,
             team_id=valid_token.team_id,
             organization_id=valid_token.org_id,
@@ -1938,6 +1941,7 @@ async def _virtual_key_max_budget_check(
 async def _virtual_key_soft_budget_check(
     valid_token: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLogging,
+    user_obj: Optional[LiteLLM_UserTable] = None,
 ):
     """
     Triggers a budget alert if the token is over it's soft budget.
@@ -1960,16 +1964,67 @@ async def _virtual_key_soft_budget_check(
             team_id=valid_token.team_id,
             team_alias=valid_token.team_alias,
             organization_id=valid_token.org_id,
-            user_email=None,
+            user_email=user_obj.user_email if user_obj else None,
             key_alias=valid_token.key_alias,
             event_group=Litellm_EntityType.KEY,
         )
+
         asyncio.create_task(
             proxy_logging_obj.budget_alerts(
                 type="soft_budget",
                 user_info=call_info,
             )
         )
+
+
+async def _virtual_key_max_budget_alert_check(
+    valid_token: UserAPIKeyAuth,
+    proxy_logging_obj: ProxyLogging,
+    user_obj: Optional[LiteLLM_UserTable] = None,
+):
+    """
+    Triggers a budget alert if the token has reached EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
+    (default 80%) of its max budget.
+    This is a warning alert before the token actually exceeds the max budget.
+
+    """
+
+    if (
+        valid_token.max_budget is not None
+        and valid_token.spend is not None
+        and valid_token.spend > 0
+    ):
+        alert_threshold = valid_token.max_budget * EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
+        
+        # Only alert if we've crossed the threshold but haven't exceeded max_budget yet
+        if valid_token.spend >= alert_threshold and valid_token.spend < valid_token.max_budget:
+            verbose_proxy_logger.debug(
+                "Reached Max Budget Alert Threshold for token %s, spend %s, max_budget %s, alert_threshold %s",
+                valid_token.token,
+                valid_token.spend,
+                valid_token.max_budget,
+                alert_threshold,
+            )
+            call_info = CallInfo(
+                token=valid_token.token,
+                spend=valid_token.spend,
+                max_budget=valid_token.max_budget,
+                soft_budget=valid_token.soft_budget,
+                user_id=valid_token.user_id,
+                team_id=valid_token.team_id,
+                team_alias=valid_token.team_alias,
+                organization_id=valid_token.org_id,
+                user_email=user_obj.user_email if user_obj else None,
+                key_alias=valid_token.key_alias,
+                event_group=Litellm_EntityType.KEY,
+            )
+
+            asyncio.create_task(
+                proxy_logging_obj.budget_alerts(
+                    type="max_budget_alert",
+                    user_info=call_info,
+                )
+            )
 
 
 async def _team_max_budget_check(

@@ -3,7 +3,7 @@ import TeamInfoView from "@/components/team/team_info";
 import TeamSSOSettings from "@/components/TeamSSOSettings";
 import { isProxyAdminRole } from "@/utils/roles";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { ChevronDownIcon, ChevronRightIcon, PencilAltIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
+import { ChevronDownIcon, ChevronRightIcon, RefreshIcon } from "@heroicons/react/outline";
 import {
   Accordion,
   AccordionBody,
@@ -33,6 +33,7 @@ import {
 import { Button as Button2, Form, Input, Modal, Select as Select2, Switch, Tooltip, Typography } from "antd";
 import React, { useEffect, useState } from "react";
 import { formatNumberWithCommas } from "../utils/dataUtils";
+import AgentSelector from "./agent_management/AgentSelector";
 import { fetchTeams } from "./common_components/fetch_teams";
 import ModelAliasManager from "./common_components/ModelAliasManager";
 import PremiumLoggingSettings from "./common_components/PremiumLoggingSettings";
@@ -44,7 +45,6 @@ import {
 import type { KeyResponse, Team } from "./key_team_helpers/key_list";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "./mcp_server_management/MCPToolPermissions";
-import AgentSelector from "./agent_management/AgentSelector";
 import NotificationsManager from "./molecules/notifications_manager";
 import { Organization, fetchMCPAccessGroups, getGuardrailsList, teamDeleteCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
@@ -78,6 +78,7 @@ interface EditTeamModalProps {
 
 import { updateExistingKeys } from "@/utils/dataUtils";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
+import TableIconActionButton from "./common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import { Member, teamCreateCall, v2TeamListCall } from "./networking";
 
 interface TeamInfo {
@@ -406,6 +407,20 @@ const Teams: React.FC<TeamProps> = ({
           formValues.metadata = JSON.stringify(metadata);
         }
 
+        if (formValues.secret_manager_settings) {
+          if (typeof formValues.secret_manager_settings === "string") {
+            if (formValues.secret_manager_settings.trim() === "") {
+              delete formValues.secret_manager_settings;
+            } else {
+              try {
+                formValues.secret_manager_settings = JSON.parse(formValues.secret_manager_settings);
+              } catch (e) {
+                throw new Error("Failed to parse secret manager settings: " + e);
+              }
+            }
+          }
+        }
+
         // Transform allowed_vector_store_ids and allowed_mcp_servers_and_groups into object_permission
         if (
           (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) ||
@@ -618,6 +633,7 @@ const Teams: React.FC<TeamProps> = ({
               is_proxy_admin={userRole == "Admin"}
               userModels={userModels}
               editTeam={editTeam}
+              premiumUser={premiumUser}
             />
           ) : (
             <TabGroup className="gap-2 h-[75vh] w-full">
@@ -947,28 +963,21 @@ const Teams: React.FC<TeamProps> = ({
                                     <TableCell>
                                       {userRole == "Admin" ? (
                                         <>
-                                          <Tooltip title="Edit team">
-                                            {" "}
-                                            <Icon
-                                              icon={PencilAltIcon}
-                                              size="sm"
-                                              className="cursor-pointer hover:text-blue-600"
-                                              onClick={() => {
-                                                setSelectedTeamId(team.team_id);
-                                                setEditTeam(true);
-                                              }}
-                                            />
-                                          </Tooltip>
-                                          <Tooltip title="Delete team">
-                                            {" "}
-                                            <Icon
-                                              onClick={() => handleDelete(team)}
-                                              icon={TrashIcon}
-                                              size="sm"
-                                              className="cursor-pointer hover:text-red-600"
-                                              data-testid="delete-team-button"
-                                            />
-                                          </Tooltip>
+                                          <TableIconActionButton
+                                            variant="Edit"
+                                            onClick={() => {
+                                              setSelectedTeamId(team.team_id);
+                                              setEditTeam(true);
+                                            }}
+                                            dataTestId="edit-team-button"
+                                            tooltipText="Edit team"
+                                          />
+                                          <TableIconActionButton
+                                            variant="Delete"
+                                            onClick={() => handleDelete(team)}
+                                            dataTestId="delete-team-button"
+                                            tooltipText="Delete team"
+                                          />
                                         </>
                                       ) : null}
                                     </TableCell>
@@ -1164,11 +1173,6 @@ const Teams: React.FC<TeamProps> = ({
                     name="models"
                   >
                     <Select2 mode="multiple" placeholder="Select models" style={{ width: "100%" }}>
-                      {(isProxyAdminRole(userRole || "") || userModels.includes("all-proxy-models")) && (
-                        <Select2.Option key="all-proxy-models" value="all-proxy-models">
-                          All Proxy Models
-                        </Select2.Option>
-                      )}
                       <Select2.Option key="no-default-models" value="no-default-models">
                         No Default Models
                       </Select2.Option>
@@ -1256,6 +1260,36 @@ const Teams: React.FC<TeamProps> = ({
                         help="Additional team metadata. Enter metadata as JSON object."
                       >
                         <Input.TextArea rows={4} />
+                      </Form.Item>
+                      <Form.Item
+                        label="Secret Manager Settings"
+                        name="secret_manager_settings"
+                        help={
+                          premiumUser
+                            ? "Enter secret manager configuration as a JSON object."
+                            : "Premium feature - Upgrade to manage secret manager settings."
+                        }
+                        rules={[
+                          {
+                            validator: async (_, value) => {
+                              if (!value) {
+                                return Promise.resolve();
+                              }
+                              try {
+                                JSON.parse(value);
+                                return Promise.resolve();
+                              } catch (error) {
+                                return Promise.reject(new Error("Please enter valid JSON"));
+                              }
+                            },
+                          },
+                        ]}
+                      >
+                        <Input.TextArea
+                          rows={4}
+                          placeholder='{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}'
+                          disabled={!premiumUser}
+                        />
                       </Form.Item>
                       <Form.Item
                         label={

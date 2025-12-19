@@ -26,6 +26,56 @@ install_grype() {
     echo "Grype installed successfully"
 }
 
+# Function to install ggshield
+install_ggshield() {
+    echo "Installing ggshield..."
+    pip3 install --upgrade pip
+    pip3 install ggshield
+    echo "ggshield installed successfully"
+}
+
+# Function to run secret detection scans
+run_secret_detection() {
+    echo "Running secret detection scans..."
+    
+    if ! command -v ggshield &> /dev/null; then
+        install_ggshield
+    fi
+    
+    # Check if GITGUARDIAN_API_KEY is set (required for CI/CD)
+    if [ -z "$GITGUARDIAN_API_KEY" ]; then
+        echo "Warning: GITGUARDIAN_API_KEY environment variable is not set."
+        echo "ggshield requires a GitGuardian API key to scan for secrets."
+        echo "Please set GITGUARDIAN_API_KEY in your CI/CD environment variables."
+        exit 1
+    fi
+    
+    echo "Scanning codebase for secrets..."
+    echo "Note: Large codebases may take several minutes due to API rate limits (50 requests/minute on free plan)"
+    echo "ggshield will automatically handle rate limits and retry as needed."
+    echo "Binary files, cache files, and build artifacts are excluded via .gitguardian.yaml"
+    
+    # Use --recursive for directory scanning and auto-confirm if prompted
+    # .gitguardian.yaml will automatically exclude binary files, wheel files, etc.
+    # GITGUARDIAN_API_KEY environment variable will be used for authentication
+    echo y | ggshield secret scan path . --recursive || {
+        echo ""
+        echo "=========================================="
+        echo "ERROR: Secret Detection Failed"
+        echo "=========================================="
+        echo "ggshield has detected secrets in the codebase."
+        echo "Please review discovered secrets above, revoke any actively used secrets"
+        echo "from underlying systems and make changes to inject secrets dynamically at runtime."
+        echo ""
+        echo "For more information, see: https://docs.gitguardian.com/secrets-detection/"
+        echo "=========================================="
+        echo ""
+        exit 1
+    }
+    
+    echo "Secret detection scans completed successfully"
+}
+
 # Function to run Trivy scans
 run_trivy_scans() {
     echo "Running Trivy scans..."
@@ -76,6 +126,8 @@ run_grype_scans() {
         "GHSA-4xh5-x5gv-qwph"
         "CVE-2025-8291" # no fix available as of Oct 11, 2025
         "GHSA-5j98-mcp5-4vw2"
+        "CVE-2025-13836" # Python 3.13 HTTP response reading OOM/DoS - no fix available in base image
+        "CVE-2025-12084" # Python 3.13 xml.dom.minidom quadratic algorithm - no fix available in base image
     )
 
     # Build JSON array of allowlisted CVE IDs for jq
@@ -155,6 +207,9 @@ main() {
     echo "Installing security scanning tools..."
     install_trivy
     install_grype
+    
+    echo "Running secret detection scans..."
+    run_secret_detection
     
     echo "Running filesystem vulnerability scans..."
     run_trivy_scans

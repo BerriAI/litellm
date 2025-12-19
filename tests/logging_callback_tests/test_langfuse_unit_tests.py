@@ -387,3 +387,128 @@ def test_get_text_completion_content_for_langfuse():
     mock_response = TextCompletionResponse()
     result = LangFuseLogger._get_text_completion_content_for_langfuse(mock_response)
     assert result is None
+
+
+def test_apply_masking_function_with_string():
+    """
+    Test that _apply_masking_function correctly applies masking to strings
+    """
+    import re
+
+    def mask_credit_cards(data):
+        if isinstance(data, str):
+            return re.sub(r'\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b', '[CARD]', data)
+        return data
+
+    # Test with string containing credit card
+    input_str = "My card is 4532-1234-5678-9012"
+    result = LangFuseLogger._apply_masking_function(input_str, mask_credit_cards)
+    assert result == "My card is [CARD]"
+    assert "4532" not in result
+
+    # Test with string without sensitive data
+    input_str = "Hello world"
+    result = LangFuseLogger._apply_masking_function(input_str, mask_credit_cards)
+    assert result == "Hello world"
+
+
+def test_apply_masking_function_with_dict():
+    """
+    Test that _apply_masking_function correctly applies masking to nested dicts
+    """
+    import re
+
+    def mask_emails(data):
+        if isinstance(data, str):
+            return re.sub(r'[\w\.-]+@[\w\.-]+', '[EMAIL]', data)
+        return data
+
+    # Test with dict containing messages
+    input_dict = {
+        "messages": [
+            {"role": "user", "content": "My email is test@example.com"}
+        ]
+    }
+    result = LangFuseLogger._apply_masking_function(input_dict, mask_emails)
+    assert result["messages"][0]["content"] == "My email is [EMAIL]"
+    assert "test@example.com" not in str(result)
+
+
+def test_apply_masking_function_with_none():
+    """
+    Test that _apply_masking_function handles None correctly
+    """
+    def dummy_mask(data):
+        return data
+
+    result = LangFuseLogger._apply_masking_function(None, dummy_mask)
+    assert result is None
+
+
+def test_apply_masking_function_with_list():
+    """
+    Test that _apply_masking_function correctly applies masking to lists
+    """
+    import re
+
+    def mask_ssn(data):
+        if isinstance(data, str):
+            return re.sub(r'\b\d{3}-\d{2}-\d{4}\b', '[SSN]', data)
+        return data
+
+    input_list = ["SSN: 123-45-6789", "No sensitive data here"]
+    result = LangFuseLogger._apply_masking_function(input_list, mask_ssn)
+    assert result[0] == "SSN: [SSN]"
+    assert result[1] == "No sensitive data here"
+
+
+def test_masking_function_isolated_from_other_loggers():
+    """
+    Test that langfuse_masking_function is extracted from metadata and stored separately.
+    This ensures the callable doesn't leak to other logging integrations.
+    """
+    from litellm.litellm_core_utils.litellm_logging import scrub_sensitive_keys_in_metadata
+
+    def my_masking_fn(data):
+        return data
+
+    # Simulate litellm_params with masking function in metadata
+    litellm_params = {
+        "metadata": {
+            "langfuse_masking_function": my_masking_fn,
+            "other_key": "other_value",
+        }
+    }
+
+    # Scrub should extract the function
+    result = scrub_sensitive_keys_in_metadata(litellm_params)
+
+    # Function should be removed from metadata (won't leak to other loggers)
+    assert "langfuse_masking_function" not in result["metadata"]
+
+    # Function should be stored in dedicated key for Langfuse to access
+    assert result.get("_langfuse_masking_function") == my_masking_fn
+
+    # Other metadata should remain intact
+    assert result["metadata"]["other_key"] == "other_value"
+
+
+def test_masking_function_not_in_metadata_when_not_provided():
+    """
+    Test that scrub_sensitive_keys_in_metadata works normally when no masking function is provided.
+    """
+    from litellm.litellm_core_utils.litellm_logging import scrub_sensitive_keys_in_metadata
+
+    litellm_params = {
+        "metadata": {
+            "some_key": "some_value",
+        }
+    }
+
+    result = scrub_sensitive_keys_in_metadata(litellm_params)
+
+    # No _langfuse_masking_function should be added
+    assert "_langfuse_masking_function" not in result
+
+    # Original metadata should be unchanged
+    assert result["metadata"]["some_key"] == "some_value"

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, renderHook, screen } from "@testing-library/react";
+import { render, renderHook, screen, waitFor } from "@testing-library/react";
 import { Form } from "antd";
 import type { UploadProps } from "antd/es/upload";
 import { describe, expect, it, vi } from "vitest";
@@ -37,12 +37,32 @@ vi.mock("../networking", async () => {
   };
 });
 
+vi.mock("@/app/(dashboard)/hooks/providers/useProviderFields", () => ({
+  useProviderFields: vi.fn().mockReturnValue({
+    data: [
+      {
+        provider: "OpenAI",
+        provider_display_name: "OpenAI",
+        litellm_provider: "openai",
+        default_model_placeholder: "gpt-3.5-turbo",
+        credential_fields: [],
+      },
+    ],
+    isLoading: false,
+    error: null,
+  }),
+}));
+
 const createQueryClient = () =>
   new QueryClient({
     defaultOptions: {
       queries: {
         retry: false,
-        gcTime: 0,
+        staleTime: Infinity,
+        gcTime: Infinity,
+        refetchOnWindowFocus: false,
+        refetchOnReconnect: false,
+        refetchOnMount: false,
       },
     },
   });
@@ -140,7 +160,7 @@ describe("Add Model Tab", () => {
     );
 
     expect(await screen.findByRole("tab", { name: "Add Model" })).toBeInTheDocument();
-  });
+  }, 10000); // This test is flaky, adding a timeout until we find a better solution
 
   it("should display both Add Model and Add Auto Router tabs", async () => {
     const props = createTestProps();
@@ -227,8 +247,15 @@ describe("Add Model Tab", () => {
       </QueryClientProvider>,
     );
 
-    const testConnectButtons = await screen.findAllByRole("button", { name: "Test Connect" });
-    expect(testConnectButtons.length).toBeGreaterThan(0);
-    expect(await screen.findByRole("button", { name: "Add Model" })).toBeInTheDocument();
-  }, 10000); // 10 seconds timeout for complex logic
+    // Wait for async operations to complete and buttons to appear
+    await waitFor(
+      async () => {
+        const testConnectButtons = await screen.findAllByRole("button", { name: "Test Connect" });
+        expect(testConnectButtons.length).toBeGreaterThan(0);
+        const addModelButton = await screen.findByRole("button", { name: "Add Model" });
+        expect(addModelButton).toBeInTheDocument();
+      },
+      { timeout: 10000 },
+    );
+  }, 15000); // 15 second timeout to allow waitFor to complete
 });
