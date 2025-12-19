@@ -12,6 +12,28 @@ from litellm._logging import verbose_logger
 from litellm.proxy._types import LiteLLM_SkillsTable, NewSkillRequest
 
 
+def _prisma_skill_to_litellm(prisma_skill) -> LiteLLM_SkillsTable:
+    """
+    Convert a Prisma skill record to LiteLLM_SkillsTable.
+    
+    Handles Base64 decoding of file_content field.
+    """
+    import base64
+
+    data = prisma_skill.model_dump()
+    
+    # Decode Base64 file_content back to bytes
+    # model_dump() converts Base64 field to base64-encoded string
+    if data.get("file_content") is not None:
+        if isinstance(data["file_content"], str):
+            data["file_content"] = base64.b64decode(data["file_content"])
+        elif isinstance(data["file_content"], bytes):
+            # Already bytes, no conversion needed
+            pass
+    
+    return LiteLLM_SkillsTable(**data)
+
+
 class LiteLLMSkillsHandler:
     """
     Handler for LiteLLM database-backed skills operations.
@@ -67,9 +89,11 @@ class LiteLLMSkillsHandler:
 
             skill_data["metadata"] = safe_dumps(data.metadata)
 
-        # Handle file content
+        # Handle file content - wrap bytes in Base64 for Prisma
         if data.file_content is not None:
-            skill_data["file_content"] = data.file_content
+            from prisma import Base64
+
+            skill_data["file_content"] = Base64.encode(data.file_content)
         if data.file_name is not None:
             skill_data["file_name"] = data.file_name
         if data.file_type is not None:
@@ -81,7 +105,7 @@ class LiteLLMSkillsHandler:
 
         new_skill = await prisma_client.db.litellm_skillstable.create(data=skill_data)
 
-        return LiteLLM_SkillsTable(**new_skill.model_dump())
+        return _prisma_skill_to_litellm(new_skill)
 
     @staticmethod
     async def list_skills(
@@ -110,7 +134,7 @@ class LiteLLMSkillsHandler:
             order={"created_at": "desc"},
         )
 
-        return [LiteLLM_SkillsTable(**s.model_dump()) for s in skills]
+        return [_prisma_skill_to_litellm(s) for s in skills]
 
     @staticmethod
     async def get_skill(skill_id: str) -> LiteLLM_SkillsTable:
@@ -137,7 +161,7 @@ class LiteLLMSkillsHandler:
         if skill is None:
             raise ValueError(f"Skill not found: {skill_id}")
 
-        return LiteLLM_SkillsTable(**skill.model_dump())
+        return _prisma_skill_to_litellm(skill)
 
     @staticmethod
     async def delete_skill(skill_id: str) -> Dict[str, str]:
