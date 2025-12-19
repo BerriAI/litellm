@@ -300,8 +300,8 @@ class BedrockImageEdit(BaseAWSLLM):
         config_class = self.get_config_class(model=model)
         config_instance = config_class()
 
-        config_instance.transform_image_edit_response(
-            model_response=model_response,
+        model_response = config_instance.transform_image_edit_response(
+            model=model,
             raw_response=response,
             logging_obj=logging_obj,
         )

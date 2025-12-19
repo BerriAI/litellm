@@ -365,6 +365,10 @@ class BaseAWSLLM:
             model_id = BaseAWSLLM._get_model_id_from_model_with_spec(
                 model_id, spec="qwen3"
             ) 
+        elif provider == "stability" and "stability/" in model_id:
+            model_id = BaseAWSLLM._get_model_id_from_model_with_spec(
+                model_id, spec="stability"
+            )
         return model_id
 
     @staticmethod

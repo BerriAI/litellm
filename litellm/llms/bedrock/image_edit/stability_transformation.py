@@ -153,43 +153,6 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
 
         return mapped_params
 
-    def _get_model_operation(self, model: str) -> str:
-        """
-        Get the operation type for a given model.
-        """
-        model_lower = model.lower()
-        
-        if "upscale" in model_lower:
-            if "fast" in model_lower:
-                return "fast"
-            elif "conservative" in model_lower:
-                return "conservative"
-            elif "creative" in model_lower:
-                return "creative"
-        elif "outpaint" in model_lower:
-            return "outpaint"
-        elif "inpaint" in model_lower:
-            return "inpaint"
-        elif "erase" in model_lower:
-            return "erase"
-        elif "remove-background" in model_lower:
-            return "remove-background"
-        elif "search-recolor" in model_lower:
-            return "search-and-recolor"
-        elif "search-replace" in model_lower:
-            return "search-and-replace"
-        elif "control-sketch" in model_lower:
-            return "sketch"
-        elif "control-structure" in model_lower:
-            return "structure"
-        elif "style-guide" in model_lower:
-            return "style"
-        elif "style-transfer" in model_lower:
-            return "style-transfer"
-        
-        # Default to inpaint
-        return "inpaint"
-
     def transform_image_edit_request(
         self,
         model: str,
@@ -234,17 +197,29 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
             if key.startswith("_") or value is None:
                 continue
 
-            # File-like optional param
-            if key == "mask":
-                if hasattr(value, 'read'):
-                    mask_bytes = value.read()
+            # File-like optional params (mask, init_image, style_image, etc.)
+            if key in ["mask", "init_image", "style_image"]:
+                # Handle case where value might be in a list
+                file_value = value
+                if isinstance(value, list) and len(value) > 0:
+                    file_value = value[0]
+                
+                if hasattr(file_value, 'read'):
+                    file_bytes = file_value.read()
+                elif isinstance(file_value, bytes):
+                    file_bytes = file_value
+                elif isinstance(file_value, str):
+                    # Already a base64 string
+                    data[key] = file_value
+                    continue
                 else:
-                    mask_bytes = value
-                if isinstance(mask_bytes, bytes):
-                    mask_b64 = base64.b64encode(mask_bytes).decode('utf-8')
+                    file_bytes = file_value
+                
+                if isinstance(file_bytes, bytes):
+                    file_b64 = base64.b64encode(file_bytes).decode('utf-8')
                 else:
-                    mask_b64 = mask_bytes
-                data["mask"] = mask_b64
+                    file_b64 = file_bytes
+                data[key] = file_b64
                 continue
 
             # Supported text fields
@@ -270,8 +245,6 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
                 "composition_fidelity",
                 "style_strength",
                 "change_strength",
-                "init_image",
-                "style_image",
             ]:
                 data[key] = value  # type: ignore
 
@@ -293,6 +266,8 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         """
         try:
             response_data = raw_response.json()
+            with open("response_data.json", "w") as f:
+                json.dump(response_data, f)
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error parsing Bedrock Stability response: {e}",

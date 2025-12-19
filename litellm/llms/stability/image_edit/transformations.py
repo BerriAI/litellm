@@ -201,7 +201,20 @@ class StabilityImageEditConfig(BaseImageEditConfig):
 
             # File-like optional param
             if key == "mask":
-                files["mask"] = value  # type: ignore
+                # Handle case where mask might be in a list
+                mask_value = value
+                if isinstance(value, list) and len(value) > 0:
+                    mask_value = value[0]
+                files["mask"] = mask_value  # type: ignore
+                continue
+
+            # File-like optional params (init_image, style_image, etc.)
+            if key in ["init_image", "style_image"]:
+                # Handle case where value might be in a list
+                file_value = value
+                if isinstance(value, list) and len(value) > 0:
+                    file_value = value[0]
+                files[key] = file_value  # type: ignore
                 continue
 
             # Supported text fields
@@ -221,8 +234,6 @@ class StabilityImageEditConfig(BaseImageEditConfig):
                 "grow_mask",
                 "select_prompt",
                 "control_strength",
-                "init_image",
-                "style_image",
                 "composition_fidelity",
                 "change_strength"
             ]:
