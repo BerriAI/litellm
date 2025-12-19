@@ -144,9 +144,7 @@ class SkillsInjectionHook(CustomLogger):
             LiteLLM_SkillsTable or None if not found
         """
         try:
-            from litellm.proxy.management_endpoints.skills_management_endpoints import (
-                LiteLLMSkillsHandler,
-            )
+            from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
 
             return await LiteLLMSkillsHandler.fetch_skill_from_db(skill_id)
         except Exception as e:
