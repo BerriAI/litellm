@@ -530,7 +530,7 @@ def test_backward_compatibility_regular_nova_model():
 def test_amazon_titan_image_gen():
     from litellm import image_generation
 
-    model_id = "bedrock/amazon.titan-image-generator-v1"
+    model_id = "bedrock/stability.stable-image-core-v1:1"
 
     response = litellm.image_generation(
         model=model_id,
