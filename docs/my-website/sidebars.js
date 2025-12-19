@@ -674,6 +674,7 @@ const sidebars = {
         "providers/amazon_nova",
         "providers/anyscale",
         "providers/baseten",
+        "providers/black_forest_labs_img_edit",
         "providers/bytez",
         "providers/cerebras",
         "providers/clarifai",
