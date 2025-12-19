@@ -21,6 +21,7 @@ from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
 from litellm.rag.ingestion.bedrock_ingestion import BedrockRAGIngestion
 from litellm.rag.ingestion.gemini_ingestion import GeminiRAGIngestion
 from litellm.rag.ingestion.openai_ingestion import OpenAIRAGIngestion
+from litellm.rag.ingestion.ragflow_ingestion import RAGFlowRAGIngestion
 from litellm.types.rag import RAGIngestOptions, RAGIngestResponse
 from litellm.utils import client
 
@@ -33,6 +34,7 @@ INGESTION_REGISTRY: Dict[str, Type[BaseRAGIngestion]] = {
     "openai": OpenAIRAGIngestion,
     "bedrock": BedrockRAGIngestion,
     "gemini": GeminiRAGIngestion,
+    "ragflow": RAGFlowRAGIngestion,
 }
 
 
