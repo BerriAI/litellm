@@ -1,38 +1,57 @@
 version: 2
 
-# Paths to exclude from scanning
-paths_ignore:
-  - "**/*.whl"
-  - "**/*.pyc"
-  - "**/__pycache__/**"
-  - "**/node_modules/**"
-  - "**/dist/**"
-  - "**/build/**"
-  - "**/.git/**"
-  - "**/venv/**"
-  - "**/.venv/**"
+secret:
+  # Exclude files and paths by globbing
+  ignored_paths:
+    - "**/*.whl"
+    - "**/*.pyc"
+    - "**/__pycache__/**"
+    - "**/node_modules/**"
+    - "**/dist/**"
+    - "**/build/**"
+    - "**/.git/**"
+    - "**/venv/**"
+    - "**/.venv/**"
 
-# Exclude specific secret matches (false positives)
-exclude:
-  # Environment variable references in code (not actual secrets)
-  - secret.match: "os.environ/[A-Z_]+"
-  
-  - secret.match: "os.environ\\[['\"][A-Z_]+['\"]\\]"
-  
-  # OIDC/CircleCI paths (test authentication paths, not secrets)
-  - secret.match: "oidc/circleci.*"
-  
-  # GCS pub/sub folder name (test folder name, not a password)
-  - secret.match: "gcs_pub_sub_body"
-  
-  # OpenAI model names (model identifiers, not secrets)
-  - secret.match: "text-(davinci|curie|babbage|ada)-\\d{3}"
-  
-  # Test/mock/fake/example/dummy prefixed values
-  - secret.match: "(test|mock|fake|example|dummy)-.*"
-  
-  # Stripe-like test keys
-  - secret.match: "sk-(test|mock|fake)-.*"
-  
-  # Simple test sequence keys
-  - secret.match: "sk-1234[5]?"
+  # Ignore security incidents with the SHA256 of the occurrence (false positives)
+  ignored_matches:
+    # === Current detected false positives (SHA-based) ===
+    
+    # gcs_pub_sub_body - folder name, not a password
+    - name: GCS pub/sub test folder name
+      match: 75f377c456eede69e5f6e47399ccee6016a2a93cc5dd11db09cc5b1359ae569a
+    
+    # os.environ/APORIA_API_KEY_1 - environment variable reference
+    - name: Environment variable reference APORIA_API_KEY_1
+      match: e2ddeb8b88eca97a402559a2be2117764e11c074d86159ef9ad2375dea188094
+    
+    # os.environ/APORIA_API_KEY_2 - environment variable reference
+    - name: Environment variable reference APORIA_API_KEY_2
+      match: 09aa39a29e050b86603aa55138af1ff08fb86a4582aa965c1bd0672e1575e052
+    
+    # oidc/circleci_v2/ - test authentication path, not a secret
+    - name: OIDC CircleCI test path
+      match: feb3475e1f89a65b7b7815ac4ec597e18a9ec1847742ad445c36ca617b536e15
+    
+    # text-davinci-003 - OpenAI model identifier, not a secret
+    - name: OpenAI model identifier text-davinci-003
+      match: c489000cf6c7600cee0eefb80ad0965f82921cfb47ece880930eb7e7635cf1f1
+    
+    # === Preventive patterns for test keys (pattern-based) ===
+    
+    # Test API keys (124 instances across 45 files)
+    - name: Test API keys with sk-test prefix
+      match: sk-test-
+    
+    # Mock API keys
+    - name: Mock API keys with sk-mock prefix
+      match: sk-mock-
+    
+    # Fake API keys
+    - name: Fake API keys with sk-fake prefix
+      match: sk-fake-
+    
+    # Generic test API key patterns
+    - name: Test API key patterns
+      match: test-api-key
+
