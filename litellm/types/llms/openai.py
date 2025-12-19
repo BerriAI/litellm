@@ -903,6 +903,7 @@ class ChatCompletionRequest(TypedDict, total=False):
     functions: List
     user: str
     metadata: dict  # litellm specific param
+    reasoning_effort: str  # OpenAI o1/o3 reasoning parameter
 
 
 class ChatCompletionDeltaChunk(TypedDict, total=False):
