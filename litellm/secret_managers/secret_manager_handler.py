@@ -159,8 +159,35 @@ def get_secret_from_manager( # noqa: PLR0915
     elif key_manager == "local":
         secret = os.getenv(secret_name)
         
-    else:  # assume the default is infisicial client
-        secret = client.get_secret(secret_name).secret_value
+    elif key_manager == KeyManagementSystem.INFISICAL.value:
+        from litellm.secret_managers.infisical_secret_manager import InfisicalSecretManager
+        if isinstance(client, InfisicalSecretManager):
+            secret = client.sync_read_secret(secret_name=secret_name)
+            if secret is None:
+                raise ValueError(f"No secret found in Infisical Secret Manager for {secret_name}")
+        else:
+             # Backward compatibility or direct client usage? 
+             # The existing else block assumed it was infisical client directly.
+             # If it is the raw sdk client
+             try:
+                 secret = client.getSecret(secret_name).secretValue
+             except:
+                 try: 
+                    # Try with options if it is the new sdk client
+                    # But we don't have project/env info here easily if it is raw client
+                    secret = client.get_secret(secret_name).secret_value
+                 except:
+                    raise ValueError(f"Invalid Infisical Client or Secret Manager: {type(client)}")
+
+    else:  # assume the default is infisicial client (Old behavior)
+        try:
+             secret = client.get_secret(secret_name).secret_value
+        except Exception:
+             # Try new sdk
+             try:
+                 secret = client.getSecret(secret_name).secretValue
+             except Exception:
+                 raise ValueError(f"Unknown Secret Manager Client: {type(client)}")
         
     return secret
 

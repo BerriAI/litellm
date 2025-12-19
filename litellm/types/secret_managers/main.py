@@ -14,6 +14,7 @@ class KeyManagementSystem(enum.Enum):
     LOCAL = "local"
     AWS_KMS = "aws_kms"
     CUSTOM = "custom"
+    INFISICAL = "infisical"
 
 
 class KeyManagementSettings(LiteLLMPydanticObjectBase):
@@ -72,3 +73,22 @@ class KeyManagementSettings(LiteLLMPydanticObjectBase):
 
     aws_sts_endpoint: Optional[str] = None
     """Custom STS endpoint URL (useful for VPC endpoints or testing)"""
+
+    # Infisical Settings
+    infisical_site_url: Optional[str] = None
+    """Infisical Site URL (e.g. 'https://app.infisical.com')"""
+
+    infisical_client_id: Optional[str] = None
+    """Infisical Client ID"""
+
+    infisical_client_secret: Optional[str] = None
+    """Infisical Client Secret"""
+
+    infisical_project_id: Optional[str] = None
+    """Infisical Project ID"""
+
+    infisical_environment_slug: Optional[str] = None
+    """Infisical Environment Slug (e.g. 'dev', 'prod')"""
+
+    infisical_secret_path: Optional[str] = "/"
+    """Infisical Secret Path (default: '/')"""

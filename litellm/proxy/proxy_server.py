@@ -2882,6 +2882,15 @@ class ProxyConfig:
                 )
 
                 load_custom_secret_manager(config_file_path=config_file_path)
+            elif key_management_system == KeyManagementSystem.INFISICAL.value:
+                from litellm.secret_managers.infisical_secret_manager import (
+                    InfisicalSecretManager,
+                )
+
+                InfisicalSecretManager.load_infisical_secret_manager(
+                    use_infisical_secret_manager=True,
+                    key_management_settings=litellm._key_management_settings,
+                )
             else:
                 raise ValueError("Invalid Key Management System selected")
 
