@@ -113,18 +113,21 @@ class SkillPromptInjectionHandler:
         return files
 
     def inject_skill_content_to_messages(
-        self, data: dict, skill_contents: List[str]
+        self, data: dict, skill_contents: List[str], use_anthropic_format: bool = False
     ) -> dict:
         """
         Inject skill content into the system prompt.
         
-        For non-Anthropic models, we inject the skill's SKILL.md content
-        into the system message so the model has access to the skill's
-        knowledge and instructions.
+        For Anthropic messages API (use_anthropic_format=True):
+        - Injects into top-level 'system' parameter (not in messages array)
+        
+        For OpenAI-style APIs (use_anthropic_format=False):
+        - Injects into messages array with role="system"
         
         Args:
             data: The request data dict
             skill_contents: List of skill content strings to inject
+            use_anthropic_format: If True, use top-level 'system' param for Anthropic
             
         Returns:
             Modified data dict with skill content in system prompt
@@ -132,12 +135,22 @@ class SkillPromptInjectionHandler:
         if not skill_contents:
             return data
         
+        # Build the skill injection text
+        skill_section = "\n\n---\n\n# Available Skills\n\n" + "\n\n---\n\n".join(skill_contents)
+        
+        if use_anthropic_format:
+            # Anthropic messages API: use top-level 'system' parameter
+            current_system = data.get("system", "")
+            if current_system:
+                data["system"] = current_system + skill_section
+            else:
+                data["system"] = skill_section.strip()
+            return data
+        
+        # OpenAI-style: inject into messages array
         messages = data.get("messages", [])
         if not messages:
             return data
-        
-        # Build the skill injection text
-        skill_section = "\n\n---\n\n# Available Skills\n\n" + "\n\n---\n\n".join(skill_contents)
         
         # Find or create system message
         system_msg_idx = None
