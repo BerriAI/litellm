@@ -1066,7 +1066,6 @@ from .utils import client
 from .llms.bytez.chat.transformation import BytezChatConfig
 from .llms.custom_llm import CustomLLM
 from .llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig
-from .llms.github.chat.transformation import GithubChatConfig
 from .llms.compactifai.chat.transformation import CompactifAIChatConfig
 from .llms.empower.chat.transformation import EmpowerChatConfig
 from .llms.huggingface.chat.transformation import HuggingFaceChatConfig

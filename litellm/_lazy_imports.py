@@ -159,6 +159,7 @@ LLM_CONFIG_NAMES = (
     "AmazonConverseConfig",
     "OpenAILikeChatConfig",
     "GaladrielChatConfig",
+    "GithubChatConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -668,5 +669,13 @@ def _lazy_import_llm_configs(name: str) -> Any:
 
         _globals["GaladrielChatConfig"] = _GaladrielChatConfig
         return _GaladrielChatConfig
+
+    if name == "GithubChatConfig":
+        from .llms.github.chat.transformation import (
+            GithubChatConfig as _GithubChatConfig,
+        )
+
+        _globals["GithubChatConfig"] = _GithubChatConfig
+        return _GithubChatConfig
 
     raise AttributeError(f"LLM config lazy import: unknown attribute {name!r}")
