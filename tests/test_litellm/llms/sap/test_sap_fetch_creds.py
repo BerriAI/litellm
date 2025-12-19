@@ -13,7 +13,7 @@ expected_creds = {'client_id': "mockclientid",
                   'client_secret': "mockclientsecret",
                   'auth_url': 'https://test.sap.hana.ondemand.com/oauth/token',
                   'base_url': 'https://testurl.hana.ondemand.com/v2',
-                  'resource_group': 'gen-ai-hub-sdk'}
+                  'resource_group': 'default'}
 
 mock_sap_vcap_service_key_dict = {
     'aicore': [{
