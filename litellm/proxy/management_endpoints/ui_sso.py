@@ -1173,8 +1173,44 @@ async def insert_sso_user(
     if user_defined_values is None:
         raise ValueError("user_defined_values is None")
 
+    # Check if role_mappings is configured in SSO settings
+    role_mappings_configured = False
+    try:
+        from litellm.proxy.utils import get_prisma_client_or_throw
+        
+        prisma_client = get_prisma_client_or_throw(
+            "Prisma client is None, connect a database to your proxy"
+        )
+        
+        # Get SSO config from dedicated table
+        sso_db_record = await prisma_client.db.litellm_ssoconfig.find_unique(
+            where={"id": "sso_config"}
+        )
+        
+        if sso_db_record and sso_db_record.sso_settings:
+            sso_settings_dict = dict(sso_db_record.sso_settings)
+            role_mappings_data = sso_settings_dict.get("role_mappings")
+            role_mappings_configured = role_mappings_data is not None
+    except Exception as e:
+        # If we can't check role_mappings, continue with existing logic
+        verbose_proxy_logger.debug(
+            f"Could not check role_mappings configuration: {e}. Using default behavior."
+        )
+
+    # Apply default_internal_user_params
     if litellm.default_internal_user_params:
-        user_defined_values.update(litellm.default_internal_user_params)  # type: ignore
+        # If role_mappings is configured and user_role is already set from SSO, preserve it
+        if role_mappings_configured and user_defined_values.get("user_role") is not None:
+            # Preserve the SSO-extracted role, but apply other defaults
+            preserved_role = user_defined_values.get("user_role")
+            user_defined_values.update(litellm.default_internal_user_params)  # type: ignore
+            user_defined_values["user_role"] = preserved_role  # Restore preserved role
+            verbose_proxy_logger.debug(
+                f"Preserved SSO-extracted role '{preserved_role}' (role_mappings configured)"
+            )
+        else:
+            # Default behavior: update all values including role
+            user_defined_values.update(litellm.default_internal_user_params)  # type: ignore
 
     # Set budget for internal users
     if user_defined_values.get("user_role") == LitellmUserRoles.INTERNAL_USER.value:
@@ -1812,7 +1848,15 @@ class SSOAuthenticationHandler:
             )
             user_id = getattr(result, "id", None)
             user_email = getattr(result, "email", None)
-            user_role = getattr(result, generic_user_role_attribute_name, None)  # type: ignore
+            if user_role is None:
+                _role_from_attr = getattr(result, generic_user_role_attribute_name, None)  # type: ignore
+                if _role_from_attr is not None:
+                    # Convert enum to string if needed
+                    user_role = (
+                        _role_from_attr.value
+                        if isinstance(_role_from_attr, LitellmUserRoles)
+                        else _role_from_attr
+                    )
 
         if user_id is None and result is not None:
             _first_name = getattr(result, "first_name", "") or ""
