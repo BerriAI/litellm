@@ -1,7 +1,7 @@
 version: 2
 
 # Paths to exclude from scanning
-paths-ignore:
+paths_ignore:
   - "**/*.whl"
   - "**/*.pyc"
   - "**/__pycache__/**"
@@ -12,35 +12,27 @@ paths-ignore:
   - "**/venv/**"
   - "**/.venv/**"
 
-# Match-level exclusions (ignoring false positives)
-matches-ignore:
-  # Environment variable references in code
-  - name: "Environment variable references"
-    match: "os.environ/[A-Z_]+"
+# Exclude specific secret matches (false positives)
+exclude:
+  # Environment variable references in code (not actual secrets)
+  - secret.match: "os.environ/[A-Z_]+"
   
-  - name: "Environment variable dict access"
-    match: "os.environ\\[['\"][A-Z_]+['\"]\\]"
+  - secret.match: "os.environ\\[['\"][A-Z_]+['\"]\\]"
   
-  # OIDC/CircleCI paths (test data)
-  - name: "OIDC CircleCI paths"
-    match: "oidc/circleci"
+  # OIDC/CircleCI paths (test authentication paths, not secrets)
+  - secret.match: "oidc/circleci.*"
   
-  # GCS pub/sub folder name (test folder)
-  - name: "GCS pub/sub folder"
-    match: "gcs_pub_sub_body"
+  # GCS pub/sub folder name (test folder name, not a password)
+  - secret.match: "gcs_pub_sub_body"
   
-  # OpenAI model names (not secrets)
-  - name: "OpenAI model identifiers"
-    match: "text-(davinci|curie|babbage|ada)-\\d{3}"
+  # OpenAI model names (model identifiers, not secrets)
+  - secret.match: "text-(davinci|curie|babbage|ada)-\\d{3}"
   
-  # Test/mock/fake/example/dummy patterns
-  - name: "Test prefixed values"
-    match: "(test|mock|fake|example|dummy)-"
+  # Test/mock/fake/example/dummy prefixed values
+  - secret.match: "(test|mock|fake|example|dummy)-.*"
   
   # Stripe-like test keys
-  - name: "Stripe test keys"
-    match: "sk-(test|mock|fake)-"
+  - secret.match: "sk-(test|mock|fake)-.*"
   
   # Simple test sequence keys
-  - name: "Test sequence keys"
-    match: "sk-1234[5]?"
+  - secret.match: "sk-1234[5]?"
