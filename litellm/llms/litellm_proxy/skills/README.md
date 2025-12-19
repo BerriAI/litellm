@@ -91,17 +91,17 @@ The `SkillsInjectionHook` uses two hooks:
 
 ```
 litellm/llms/litellm_proxy/skills/
-├── __init__.py          # Exports LiteLLMSkillsHandler, LiteLLMSkillsTransformationHandler
-├── handler.py           # Database CRUD operations (Prisma)
-├── transformation.py    # SDK transformation layer (sync/async, logging)
-└── README.md            # This file
+├── __init__.py           # Exports all skill components
+├── handler.py            # LiteLLMSkillsHandler - database CRUD operations (Prisma)
+├── transformation.py     # LiteLLMSkillsTransformationHandler - SDK transformation layer
+├── prompt_injection.py   # SkillPromptInjectionHandler - SKILL.md extraction and injection
+├── sandbox_executor.py   # SkillsSandboxExecutor - Docker sandbox code execution
+├── code_execution.py     # CodeExecutionHandler - automatic agentic loop
+└── README.md             # This file
 
 litellm/proxy/hooks/litellm_skills/
-├── __init__.py                    # Exports SkillsInjectionHook
-├── main.py                        # Main hook with pre/post-call handling
-├── prompt_injection_handler.py    # SKILL.md extraction and injection
-├── sandbox_executor.py            # Docker sandbox code execution
-└── code_execution_handler.py      # Automatic agentic loop handler
+├── __init__.py           # Re-exports from SDK + SkillsInjectionHook
+└── main.py               # SkillsInjectionHook - CustomLogger hook for proxy
 ```
 
 ## Components
