@@ -27777,6 +27777,14 @@
         ],
         "source": "https://cloud.google.com/generative-ai-app-builder/pricing"
     },
+    "vertex_ai/deepseek-ai/deepseek-ocr-maas": {
+        "litellm_provider": "vertex_ai",
+        "mode": "ocr",
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 1.2e-06,
+        "ocr_cost_per_page": 3e-04,
+        "source": "https://cloud.google.com/vertex-ai/pricing"
+    },
     "vertex_ai/openai/gpt-oss-120b-maas": {
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "vertex_ai-openai_models",
