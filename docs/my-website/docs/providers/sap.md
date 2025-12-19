@@ -220,6 +220,17 @@ model="sap/gemini-2.5-pro"
 # Incorrect - missing prefix
 model="gpt-4o"  # ❌ Won't work
 ```
+3. **Environment variables** - Set the following list of credentials in .env file
+<pre>
+AICORE_AUTH_URL = "https://* * * .authentication.sap.hana.ondemand.com/oauth/token",
+AICORE_CLIENT_ID  = " *** ",
+AICORE_CLIENT_SECRET = " *** ",
+AICORE_RESOURCE_GROUP = " *** ",
+AICORE_BASE_URL = "https://api.ai.***.cfapps.sap.hana.ondemand.com/v2"
+</pre>
+
+Other credential configuration options are also available. For more information, see the [SAP AI Core Documentation](https://help.sap.com/doc/generative-ai-hub-sdk/CLOUD/en-US/_reference/README_sphynx.html#configuration).
+## Usage - LiteLLM Python SDK
 
 ### Proxy Usage
 
