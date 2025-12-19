@@ -1140,6 +1140,60 @@ class MakeMCPServersPublicRequest(LiteLLMPydanticObjectBase):
     mcp_server_ids: List[str]
 
 
+######## Skills API Types ########
+
+
+class NewSkillRequest(LiteLLMPydanticObjectBase):
+    """Request to create a new skill in LiteLLM database"""
+
+    display_title: Optional[str] = None
+    description: Optional[str] = None
+    instructions: Optional[str] = None
+    file_content: Optional[bytes] = None  # Binary content of skill files (zip)
+    file_name: Optional[str] = None  # Original filename
+    file_type: Optional[str] = None  # MIME type (e.g., "application/zip")
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class UpdateSkillRequest(LiteLLMPydanticObjectBase):
+    """Request to update an existing skill"""
+
+    skill_id: str
+    display_title: Optional[str] = None
+    description: Optional[str] = None
+    instructions: Optional[str] = None
+    file_content: Optional[bytes] = None  # Binary content of skill files (zip)
+    file_name: Optional[str] = None  # Original filename
+    file_type: Optional[str] = None  # MIME type
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class LiteLLM_SkillsTable(LiteLLMPydanticObjectBase):
+    """Represents a LiteLLM_SkillsTable record"""
+
+    skill_id: str
+    display_title: Optional[str] = None
+    description: Optional[str] = None
+    instructions: Optional[str] = None
+    source: str = "custom"
+    latest_version: Optional[str] = None
+    file_content: Optional[bytes] = None  # Binary content of skill files (zip)
+    file_name: Optional[str] = None  # Original filename
+    file_type: Optional[str] = None  # MIME type
+    metadata: Optional[Dict[str, Any]] = None
+    created_at: Optional[datetime] = None
+    created_by: Optional[str] = None
+    updated_at: Optional[datetime] = None
+    updated_by: Optional[str] = None
+
+
+class ListSkillsRequest(LiteLLMPydanticObjectBase):
+    """Request to list skills from LiteLLM database"""
+
+    limit: Optional[int] = 20
+    offset: Optional[int] = 0
+
+
 class NewUserRequestTeam(LiteLLMPydanticObjectBase):
     team_id: str
     max_budget_in_team: Optional[float] = None
@@ -1393,6 +1447,7 @@ class NewTeamRequest(TeamBase):
     prompts: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
     allowed_passthrough_routes: Optional[list] = None
+    secret_manager_settings: Optional[dict] = None
     model_rpm_limit: Optional[Dict[str, int]] = None
     rpm_limit_type: Optional[
         Literal["guaranteed_throughput", "best_effort_throughput"]
@@ -1459,6 +1514,8 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     team_member_tpm_limit: Optional[int] = None
     team_member_key_duration: Optional[str] = None
     allowed_passthrough_routes: Optional[list] = None
+    secret_manager_settings: Optional[dict] = None
+    prompts: Optional[List[str]] = None
     model_rpm_limit: Optional[Dict[str, int]] = None
     model_tpm_limit: Optional[Dict[str, int]] = None
     allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
@@ -2482,6 +2539,7 @@ class CallInfo(LiteLLMPydanticObjectBase):
 class WebhookEvent(CallInfo):
     event: Literal[
         "budget_crossed",
+        "max_budget_alert",
         "soft_budget_crossed",
         "threshold_crossed",
         "projected_limit_exceeded",
@@ -3349,6 +3407,7 @@ LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
     "team_member_key_duration",
     "prompts",
     "logging",
+    "secret_manager_settings",
     "allowed_passthrough_routes",
 ]
 

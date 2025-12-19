@@ -30,10 +30,14 @@ vi.mock("../molecules/notifications_manager", () => {
   return { default: Notifications };
 });
 
-// Roles: ensure 'admin' has write access
-vi.mock("../../utils/roles", () => ({
-  rolesWithWriteAccess: ["admin"],
-}));
+// Roles: ensure 'admin' has write access and include all role helper functions
+vi.mock("../../utils/roles", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../utils/roles")>();
+  return {
+    ...actual,
+    rolesWithWriteAccess: ["admin"],
+  };
+});
 
 // Helpers used in rendering
 vi.mock("@/utils/dataUtils", () => ({
@@ -217,6 +221,40 @@ vi.mock("../common_components/AutoRotationView", async () => {
   (AutoRotationView as any).displayName = "AutoRotationView";
   return { __esModule: true, default: AutoRotationView };
 });
+
+// Mock Next.js router to avoid "invariant expected app router to be mounted" error
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({
+    push: vi.fn(),
+    replace: vi.fn(),
+    refresh: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    prefetch: vi.fn(),
+  }),
+}));
+
+// Mock useTeams hook
+vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
+  default: vi.fn(() => ({
+    teams: [],
+    setTeams: vi.fn(),
+  })),
+}));
+
+// Mock useAuthorized hook to avoid Next.js router dependency
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: vi.fn(() => ({
+    accessToken: "access_abc",
+    userId: "user_1",
+    userRole: "admin",
+    premiumUser: true,
+    token: "token_123",
+    userEmail: "test@example.com",
+    disabledPersonalKeyCreation: false,
+    showSSOBanner: false,
+  })),
+}));
 
 // KeyEditView mock: triggers onSubmit with our injected form values
 vi.mock("./key_edit_view", async () => {

@@ -96,8 +96,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                     validated_input.append(item.model_dump(exclude_none=True))
                 elif isinstance(item, dict):
                     # Handle reasoning items specifically to filter out status=None
-                    verbose_logger.debug(f"Handling reasoning item: {item}")
                     if item.get("type") == "reasoning":
+                        verbose_logger.debug(f"Handling reasoning item: {item}")
                         # Type assertion since we know it's a dict at this point
                         dict_item = cast(Dict[str, Any], item)
                         filtered_item = self._handle_reasoning_item(dict_item)

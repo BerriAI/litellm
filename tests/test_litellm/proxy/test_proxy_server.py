@@ -126,6 +126,114 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
     )
 
 
+def test_login_v2_returns_json_on_proxy_exception(monkeypatch):
+    """Test that /v2/login returns JSON error when ProxyException is raised"""
+    from litellm.proxy._types import ProxyException, ProxyErrorTypes
+
+    mock_prisma_client = MagicMock()
+    mock_authenticate_user = AsyncMock(
+        side_effect=ProxyException(
+            message="Invalid credentials",
+            type=ProxyErrorTypes.auth_error,
+            param="password",
+            code=401,
+        )
+    )
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.authenticate_user",
+        mock_authenticate_user,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    client = TestClient(app)
+    response = client.post(
+        "/v2/login",
+        json={"username": "alice", "password": "wrong"},
+    )
+
+    assert response.status_code == 401
+    assert response.headers["content-type"] == "application/json"
+    data = response.json()
+    assert "error" in data
+    assert data["error"]["message"] == "Invalid credentials"
+    assert data["error"]["type"] == "auth_error"
+
+
+def test_login_v2_returns_json_on_http_exception(monkeypatch):
+    """Test that /v2/login converts HTTPException to JSON error response"""
+    from fastapi import HTTPException
+
+    mock_prisma_client = MagicMock()
+    mock_authenticate_user = AsyncMock(
+        side_effect=HTTPException(status_code=401, detail="Unauthorized")
+    )
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.authenticate_user",
+        mock_authenticate_user,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    client = TestClient(app)
+    response = client.post(
+        "/v2/login",
+        json={"username": "alice", "password": "secret"},
+    )
+
+    assert response.status_code == 401
+    assert response.headers["content-type"] == "application/json"
+    data = response.json()
+    assert "error" in data
+    assert isinstance(data["error"], dict)
+
+
+def test_login_v2_returns_json_on_unexpected_exception(monkeypatch):
+    """Test that /v2/login returns JSON error when unexpected exception occurs"""
+    mock_prisma_client = MagicMock()
+    mock_authenticate_user = AsyncMock(side_effect=ValueError("Unexpected error"))
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.authenticate_user",
+        mock_authenticate_user,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    client = TestClient(app)
+    response = client.post(
+        "/v2/login",
+        json={"username": "alice", "password": "secret"},
+    )
+
+    assert response.status_code == 500
+    assert response.headers["content-type"] == "application/json"
+    data = response.json()
+    assert "error" in data
+    assert isinstance(data["error"], dict)
+    assert "Unexpected error" in data["error"]["message"]
+
+
+def test_login_v2_returns_json_on_invalid_json_body(monkeypatch):
+    """Test that /v2/login returns JSON error when request body is invalid JSON"""
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
+
+    client = TestClient(app)
+    response = client.post(
+        "/v2/login",
+        content="invalid json",
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 500
+    assert response.headers["content-type"] == "application/json"
+    data = response.json()
+    assert "error" in data
+    assert isinstance(data["error"], dict)
+
+
 def test_fallback_login_has_no_deprecation_banner(client_no_auth):
     response = client_no_auth.get("/fallback/login")
 

@@ -1,9 +1,5 @@
 model_list:
-  - model_name: gemini/*
+  - model_name: anthropic/*
     litellm_params:
-      model: gemini/*
+      model: anthropic/*
 
-
-
-litellm_settings:
-  callbacks: ["langfuse"]
