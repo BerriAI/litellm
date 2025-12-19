@@ -4437,7 +4437,7 @@ class ProxyStartupEvent:
             )
 
     @classmethod
-    async def initialize_scheduled_background_jobs(
+    async def initialize_scheduled_background_jobs(  # noqa: PLR0915
         cls,
         general_settings: dict,
         prisma_client: PrismaClient,
