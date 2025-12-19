@@ -198,10 +198,13 @@ LiteLLM stores secret under the `prefix_for_stored_virtual_keys` path (default: 
 
 <Image img={require('../../img/hcorp_virtual_key.png')} />
 
-### Team-specific overrides (proxy)
+### Team-specific overrides
 
-When running the LiteLLM proxy you can override the Vault location per team. Set
-`Secret Manager Settings` on the team with the following structure:
+When running the LiteLLM proxy you can override the Vault location per team. Use the [Team-Level Secret Manager Settings](./overview.md#team-level-secret-manager-settings) flow in the dashboard and configure the panel shown below:
+
+<Image img={require('../../img/secret_manager_hashicorp_vault_settings.png')} />
+
+Use the following structure for the JSON payload:
 
 ```json
 {

@@ -358,6 +358,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     top_p: Optional[float]
     mcp_servers: Optional[List[AnthropicMcpServerTool]]
     context_management: Optional[Dict[str, Any]]
+    container: Optional[Dict[str, Any]]  # Container config with skills for code execution
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):

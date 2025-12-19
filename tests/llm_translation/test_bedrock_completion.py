@@ -295,7 +295,7 @@ def bedrock_session_token_creds():
         aws_role_name = (
             "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci"
         )
-        aws_web_identity_token = "oidc/circleci_v2/"
+        aws_web_identity_token = "test-oidc-token-123"
 
         creds = bllm.get_credentials(
             aws_region_name=aws_region_name,

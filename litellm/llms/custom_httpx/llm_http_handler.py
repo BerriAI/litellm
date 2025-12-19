@@ -3761,7 +3761,7 @@ class BaseLLMHTTPHandler:
             input=prompt,
             api_key="",
             additional_args={
-                "complete_input_dict": data,
+                "complete_input_dict": files,
                 "api_base": api_base,
                 "headers": headers,
             },

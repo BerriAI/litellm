@@ -23,7 +23,9 @@ from litellm.proxy._types import (
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
     get_batch_id_from_unified_batch_id,
+    get_content_type_from_file_object,
     get_model_id_from_unified_batch_id,
+    normalize_mime_type_for_provider,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -33,6 +35,7 @@ from litellm.types.llms.openai import (
     FileObject,
     OpenAIFileObject,
     OpenAIFilesPurpose,
+    ResponsesAPIResponse,
 )
 from litellm.types.utils import (
     CallTypesLiteral,
@@ -40,10 +43,6 @@ from litellm.types.utils import (
     LiteLLMFineTuningJob,
     LLMResponseTypes,
     SpecialEnums,
-)
-from litellm.proxy.openai_files_endpoints.common_utils import (
-    get_content_type_from_file_object,
-    normalize_mime_type_for_provider,
 )
 
 if TYPE_CHECKING:
@@ -133,10 +132,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     async def store_unified_object_id(
         self,
         unified_object_id: str,
-        file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob],
+        file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob, "ResponsesAPIResponse"],
         litellm_parent_otel_span: Optional[Span],
         model_object_id: str,
-        file_purpose: Literal["batch", "fine-tune"],
+        file_purpose: Literal["batch", "fine-tune", "response"],
         user_api_key_dict: UserAPIKeyAuth,
     ) -> None:
         verbose_logger.info(
@@ -946,7 +945,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             
             # File is stored in a storage backend, download and convert to base64
             try:
-                from litellm.llms.base_llm.files.storage_backend_factory import get_storage_backend
+                from litellm.llms.base_llm.files.storage_backend_factory import (
+                    get_storage_backend,
+                )
                 
                 storage_backend_name = db_file.storage_backend
                 storage_url = db_file.storage_url

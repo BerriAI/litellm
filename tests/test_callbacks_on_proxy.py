@@ -26,7 +26,7 @@ async def config_update(session, routing_strategy=None):
         },
         "general_settings": {
             "alert_to_webhook_url": {
-                "llm_exceptions": "https://hooks.slack.com/services/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"
+                "llm_exceptions": "example-slack-webhook-url"
             },
             "alert_types": ["llm_exceptions", "db_exceptions"],
         },

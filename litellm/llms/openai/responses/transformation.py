@@ -96,8 +96,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                     validated_input.append(item.model_dump(exclude_none=True))
                 elif isinstance(item, dict):
                     # Handle reasoning items specifically to filter out status=None
-                    verbose_logger.debug(f"Handling reasoning item: {item}")
                     if item.get("type") == "reasoning":
+                        verbose_logger.debug(f"Handling reasoning item: {item}")
                         # Type assertion since we know it's a dict at this point
                         dict_item = cast(Dict[str, Any], item)
                         filtered_item = self._handle_reasoning_item(dict_item)
@@ -411,7 +411,6 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             )
         raw_response_headers = dict(raw_response.headers)
         processed_headers = process_response_headers(raw_response_headers)
-        
         response = ResponsesAPIResponse(**raw_response_json)
         response._hidden_params["additional_headers"] = processed_headers
         response._hidden_params["headers"] = raw_response_headers

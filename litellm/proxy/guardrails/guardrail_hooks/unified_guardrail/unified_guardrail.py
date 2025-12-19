@@ -128,7 +128,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             endpoint_guardrail_translation_mappings = (
                 load_guardrail_translation_mappings()
             )
-        if CallTypes(call_type) not in endpoint_guardrail_translation_mappings:
+        if call_type is not None and CallTypes(call_type) not in endpoint_guardrail_translation_mappings:
             return data
 
         endpoint_translation = endpoint_guardrail_translation_mappings[
@@ -180,10 +180,10 @@ class UnifiedLLMGuardrails(CustomLogger):
         call_type: Optional[CallTypesLiteral] = None
         if user_api_key_dict.request_route is not None:
             call_types = get_call_types_for_route(user_api_key_dict.request_route)
-            if call_types is not None and len(call_types) > 0:
-                call_type = call_types[0]
+            if call_types is not None and len(call_types) > 0: # type: ignore
+                call_type = call_types[0] # type: ignore
         if call_type is None:
-            call_type = _infer_call_type(call_type=None, completion_response=response)
+            call_type = _infer_call_type(call_type=None, completion_response=response)  # type: ignore
 
         if call_type is None:
             return response
@@ -308,10 +308,10 @@ class UnifiedLLMGuardrails(CustomLogger):
             if call_type is None and user_api_key_dict.request_route is not None:
                 call_types = get_call_types_for_route(user_api_key_dict.request_route)
                 if call_types is not None:
-                    call_type = call_types[0]
+                    call_type = call_types[0].value
 
             if call_type is None:
-                call_type = _infer_call_type(call_type=None, completion_response=item)
+                call_type = _infer_call_type(call_type=None, completion_response=item)  # type: ignore
 
             # If call type not supported, just pass through all chunks
             if (

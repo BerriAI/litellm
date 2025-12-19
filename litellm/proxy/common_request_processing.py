@@ -885,14 +885,16 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     def _get_pre_call_type(
-        route_type: Literal["acompletion", "aembedding", "aresponses"],
-    ) -> Literal["completion", "embeddings", "responses"]:
+        route_type: Literal["acompletion", "aembedding", "aresponses", "allm_passthrough_route"],
+    ) -> Literal["completion", "embeddings", "responses", "allm_passthrough_route"]:
         if route_type == "acompletion":
             return "completion"
         elif route_type == "aembedding":
             return "embeddings"
         elif route_type == "aresponses":
             return "responses"
+        elif route_type == "allm_passthrough_route":
+            return "allm_passthrough_route"
 
     #########################################################
     # Proxy Level Streaming Data Generator
