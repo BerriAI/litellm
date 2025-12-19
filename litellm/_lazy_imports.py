@@ -181,6 +181,8 @@ LLM_CONFIG_NAMES = (
     "HuggingFaceRerankConfig",
     "DatabricksConfig",
     "DatabricksEmbeddingConfig",
+    "PredibaseConfig",
+    "ReplicateConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -866,5 +868,21 @@ def _lazy_import_llm_configs(name: str) -> Any:
 
         _globals["DatabricksEmbeddingConfig"] = _DatabricksEmbeddingConfig
         return _DatabricksEmbeddingConfig
+
+    if name == "PredibaseConfig":
+        from .llms.predibase.chat.transformation import (
+            PredibaseConfig as _PredibaseConfig,
+        )
+
+        _globals["PredibaseConfig"] = _PredibaseConfig
+        return _PredibaseConfig
+
+    if name == "ReplicateConfig":
+        from .llms.replicate.chat.transformation import (
+            ReplicateConfig as _ReplicateConfig,
+        )
+
+        _globals["ReplicateConfig"] = _ReplicateConfig
+        return _ReplicateConfig
 
     raise AttributeError(f"LLM config lazy import: unknown attribute {name!r}")
