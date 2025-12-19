@@ -15,7 +15,7 @@ import json
 import secrets
 import traceback
 from datetime import datetime, timedelta, timezone
-from typing import List, Literal, Optional, Tuple, cast
+from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
@@ -2444,19 +2444,19 @@ async def delete_verification_tokens(
     return {"deleted_keys": deleted_tokens}, _keys_being_deleted
 
 
-async def _persist_deleted_verification_tokens(
+def _transform_verification_tokens_to_deleted_records(
     keys: List[LiteLLM_VerificationToken],
-    prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: Optional[str] = None,
-) -> None:
+) -> List[Dict[str, Any]]:
+    """Transform verification tokens into deleted token records ready for persistence."""
     if not keys:
-        return
+        return []
 
     deleted_at = datetime.now(timezone.utc)
     records = []
     for key in keys:
-        key_payload = _dump_verification_token_payload(key)
+        key_payload = key.model_dump()
         deleted_record = LiteLLM_DeletedVerificationToken(
             **key_payload,
             deleted_at=deleted_at,
@@ -2464,40 +2464,53 @@ async def _persist_deleted_verification_tokens(
             deleted_by_api_key=user_api_key_dict.api_key,
             litellm_changed_by=litellm_changed_by,
         )
-        record = prisma_client.jsonify_object(deleted_record.model_dump())
+        record = deleted_record.model_dump()
+
+        # Map org_id to organization_id (model uses org_id, but schema expects organization_id)
         org_id_value = record.pop("org_id", None)
         if org_id_value is not None:
             record["organization_id"] = org_id_value
-        for rel_key in (
-            "litellm_budget_table",
-            "litellm_organization_table",
-            "object_permission",
-        ):
+
+        for json_field in ["aliases", "config", "permissions", "metadata", "model_spend", "model_max_budget"]:
+            if json_field in record and record[json_field] is not None:
+                record[json_field] = json.dumps(record[json_field])
+
+        for rel_key in ("litellm_budget_table", "litellm_organization_table", "object_permission", "id"):
             record.pop(rel_key, None)
-        if record.get("id") is None:
-            record.pop("id", None)
+
         records.append(record)
 
-    await asyncio.gather(
-        *[
-            prisma_client.db.litellm_deletedverificationtoken.create(data=record)
-            for record in records
-        ]
+    return records
+
+
+async def _save_deleted_verification_token_records(
+    records: List[Dict[str, Any]],
+    prisma_client: PrismaClient,
+) -> None:
+    """Save deleted verification token records to the database."""
+    if not records:
+        return
+    await prisma_client.db.litellm_deletedverificationtoken.create_many(
+        data=records
     )
 
 
-def _dump_verification_token_payload(
-    token_object: LiteLLM_VerificationToken,
-) -> Dict:
-    try:
-        return token_object.model_dump()
-    except AttributeError:
-        if hasattr(token_object, "dict"):
-            return token_object.dict()
-        return {
-            key: getattr(token_object, key)
-            for key in getattr(token_object, "__dict__", {}).keys()
-        }
+async def _persist_deleted_verification_tokens(
+    keys: List[LiteLLM_VerificationToken],
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_changed_by: Optional[str] = None,
+) -> None:
+    """Persist deleted verification token records by transforming and saving them."""
+    records = _transform_verification_tokens_to_deleted_records(
+        keys=keys,
+        user_api_key_dict=user_api_key_dict,
+        litellm_changed_by=litellm_changed_by,
+    )
+    await _save_deleted_verification_token_records(
+        records=records,
+        prisma_client=prisma_client,
+    )
 
 
 async def delete_key_aliases(
