@@ -10,6 +10,7 @@ import tempfile
 
 from litellm import sap_service_key
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm._logging import verbose_logger
 
 AUTH_ENDPOINT_SUFFIX = "/oauth/token"
 
@@ -154,6 +155,7 @@ def _resolve_value(
     env: Dict[str, str],
     config: Dict[str, Any],
     service_like: Optional[Dict[str, Any]],
+    vcap_service: Optional[Dict[str, Any]]
 ) -> Optional[str]:
     # 1) explicit kwargs
     if cred.name in kwargs and kwargs[cred.name] is not None:
@@ -165,22 +167,35 @@ def _resolve_value(
             val = _get_nested(service_like, cred.vcap_key)
             if val is not None:
                 return val
-        except KeyError as e:
-            raise KeyError(f"Unable to find {cred.name} in service key") from e
+        except KeyError:
+            verbose_logger.debug(f"Unable to find {cred.name} in service key")
+            return None
         except json.JSONDecodeError:
-            raise KeyError(f"{service_like} is not valid JSON. Please fix or remove it!")
+            raise KeyError("service key variable is not valid JSON. Please fix or remove it!")
 
     # 3) environment variables (primary name)
     env_key = _env_name(cred.name)
     if env_key in env and env[env_key] is not None:
         return env[env_key]
 
-    # 4) config file (accept both prefixed and plain keys)
+    # 4) VCAP service
+    if vcap_service and cred.vcap_key:
+        try:
+            val = _get_nested(vcap_service, ("credentials",) + cred.vcap_key)
+            if val is not None:
+                return val
+        except KeyError:
+            verbose_logger.debug(f"Unable to find {cred.name} in vcap service")
+            return None
+        except json.JSONDecodeError:
+            raise KeyError("vcap service variable is not valid JSON. Please fix or remove it!")
+
+    # 5) config file (accept both prefixed and plain keys)
     for key in (env_key, cred.name):
         if key in config and config[key] is not None:
             return config[key]
 
-    # 5) default
+    # 6) default
     return cred.default
 
 
@@ -188,25 +203,23 @@ def fetch_credentials(service_key: Optional[str] = None, profile: Optional[str] 
     """
     Resolution order per key:
       kwargs
+      > service key
       > env (AICORE_<NAME>)
+      > vcap service key
       > config (AICORE_<NAME> or plain <name>)
-      > service-like source from JSON in $AICORE_SERVICE_KEY (same structure as a VCAP service object)
-        falling back to service entry in $VCAP_SERVICES with label 'aicore'
       > default
     """
     config = init_conf(profile)
     env = os.environ  # snapshot for testability
-    service_like = None
 
 
-    # Prefer AICORE_SERVICE_KEY if present; otherwise fall back to the VCAP service.
-    service_like = service_key or sap_service_key or _load_json_env(SERVICE_KEY_ENV_VAR) or _get_vcap_service(
-            VCAP_AICORE_SERVICE_NAME
-    )
+    service_like = service_key or sap_service_key or _load_json_env(SERVICE_KEY_ENV_VAR)
+    vcap_service = _get_vcap_service(VCAP_AICORE_SERVICE_NAME)
 
     out: Dict[str, str] = {}
     for cred in CREDENTIAL_VALUES:
-        value = _resolve_value(cred, kwargs=kwargs, env=env, config=config, service_like=service_like)  # type: ignore
+        value = _resolve_value(cred, kwargs=kwargs, env=env, config=config, service_like=service_like, # type: ignore
+                               vcap_service=vcap_service)
         if value is None:
             continue
         if cred.transform_fn:
@@ -258,7 +271,9 @@ def get_token_creator(
     # Sanity check
     if not auth_url or not client_id:
         raise ValueError(
-            "fetch_credentials did not return valid 'auth_url' or 'client_id'"
+            "SAP AI Core credentials not found."
+            "Please provide credentials by setting appropriate environment variables "
+            "(e.g. AICORE_CLIENT_ID, AICORE_CLIENT_SECRET, etc.)"
         )
 
     modes = [
@@ -268,6 +283,7 @@ def get_token_creator(
     ]
     if sum(bool(m) for m in modes) != 1:
         raise ValueError(
+            "SAP AI Core credentials are incomplete."
             "Invalid credentials: provide exactly one of client_secret, "
             "(cert_str & key_str), or (cert_file_path & key_file_path)."
         )

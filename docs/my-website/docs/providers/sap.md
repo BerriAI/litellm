@@ -31,6 +31,8 @@ AICORE_CLIENT_SECRET = " *** ",
 AICORE_RESOURCE_GROUP = " *** ",
 AICORE_BASE_URL = "https://api.ai.***.cfapps.sap.hana.ondemand.com/v2"
 </pre>
+
+Other credential configuration options are also available. For more information, see the [SAP AI Core Documentation](https://help.sap.com/doc/generative-ai-hub-sdk/CLOUD/en-US/_reference/README_sphynx.html#configuration).
 ## Usage - LiteLLM Python SDK
 
 ```python showLineNumbers title="SAP Chat Completion"
