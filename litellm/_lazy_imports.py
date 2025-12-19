@@ -163,6 +163,8 @@ LLM_CONFIG_NAMES = (
     "AzureAnthropicConfig",
     "BytezChatConfig",
     "CompactifAIChatConfig",
+    "EmpowerChatConfig",
+    "AiohttpOpenAIChatConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -704,5 +706,21 @@ def _lazy_import_llm_configs(name: str) -> Any:
 
         _globals["CompactifAIChatConfig"] = _CompactifAIChatConfig
         return _CompactifAIChatConfig
+
+    if name == "EmpowerChatConfig":
+        from .llms.empower.chat.transformation import (
+            EmpowerChatConfig as _EmpowerChatConfig,
+        )
+
+        _globals["EmpowerChatConfig"] = _EmpowerChatConfig
+        return _EmpowerChatConfig
+
+    if name == "AiohttpOpenAIChatConfig":
+        from .llms.aiohttp_openai.chat.transformation import (
+            AiohttpOpenAIChatConfig as _AiohttpOpenAIChatConfig,
+        )
+
+        _globals["AiohttpOpenAIChatConfig"] = _AiohttpOpenAIChatConfig
+        return _AiohttpOpenAIChatConfig
 
     raise AttributeError(f"LLM config lazy import: unknown attribute {name!r}")
