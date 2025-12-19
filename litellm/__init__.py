@@ -1474,6 +1474,8 @@ if TYPE_CHECKING:
     from litellm.caching.caching import Cache
     
     # Type stubs for lazy-loaded configs to help mypy
+    from .llms.bedrock.chat.converse_transformation import AmazonConverseConfig as AmazonConverseConfig
+    from .llms.openai_like.chat.handler import OpenAILikeChatConfig as OpenAILikeChatConfig
     from .llms.galadriel.chat.transformation import GaladrielChatConfig as GaladrielChatConfig
     from .llms.github.chat.transformation import GithubChatConfig as GithubChatConfig
     from .llms.azure_ai.anthropic.transformation import AzureAnthropicConfig as AzureAnthropicConfig
