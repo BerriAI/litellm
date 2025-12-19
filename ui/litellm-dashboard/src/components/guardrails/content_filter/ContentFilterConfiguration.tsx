@@ -9,6 +9,7 @@ import CustomPatternModal from "./CustomPatternModal";
 import KeywordModal from "./KeywordModal";
 import PatternTable from "./PatternTable";
 import KeywordTable from "./KeywordTable";
+import ContentCategoryConfiguration from "./ContentCategoryConfiguration";
 
 const { Title, Text } = Typography;
 
@@ -35,6 +36,21 @@ interface BlockedWord {
   description?: string;
 }
 
+interface ContentCategory {
+  name: string;
+  display_name: string;
+  description: string;
+  default_action: string;
+}
+
+interface SelectedContentCategory {
+  id: string;
+  category: string;
+  display_name: string;
+  action: "BLOCK" | "MASK";
+  severity_threshold: "high" | "medium" | "low";
+}
+
 interface ContentFilterConfigurationProps {
   prebuiltPatterns: PrebuiltPattern[];
   categories: string[];
@@ -48,7 +64,12 @@ interface ContentFilterConfigurationProps {
   onBlockedWordUpdate: (id: string, field: string, value: any) => void;
   onFileUpload?: (content: string) => void;
   accessToken: string | null;
-  showStep?: "patterns" | "keywords";
+  showStep?: "patterns" | "keywords" | "categories";
+  contentCategories?: ContentCategory[];
+  selectedContentCategories?: SelectedContentCategory[];
+  onContentCategoryAdd?: (category: SelectedContentCategory) => void;
+  onContentCategoryRemove?: (id: string) => void;
+  onContentCategoryUpdate?: (id: string, field: string, value: any) => void;
 }
 
 const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
@@ -65,6 +86,11 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
   onFileUpload,
   accessToken,
   showStep,
+  contentCategories = [],
+  selectedContentCategories = [],
+  onContentCategoryAdd,
+  onContentCategoryRemove,
+  onContentCategoryUpdate,
 }) => {
   const [patternModalVisible, setPatternModalVisible] = useState(false);
   const [keywordModalVisible, setKeywordModalVisible] = useState(false);
@@ -167,13 +193,14 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
 
   const showPatterns = !showStep || showStep === "patterns";
   const showKeywords = !showStep || showStep === "keywords";
+  const showCategories = !showStep || showStep === "categories";
 
   return (
     <div className="space-y-6">
       {!showStep && (
         <div>
           <Text type="secondary">
-            Configure patterns and keywords to detect and filter sensitive information in requests and responses.
+            Configure patterns, keywords, and content categories to detect and filter sensitive information in requests and responses.
           </Text>
         </div>
       )}
@@ -242,6 +269,17 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
             onRemove={onBlockedWordRemove}
           />
         </Card>
+      )}
+
+      {showCategories && contentCategories.length > 0 && onContentCategoryAdd && onContentCategoryRemove && onContentCategoryUpdate && (
+        <ContentCategoryConfiguration
+          availableCategories={contentCategories}
+          selectedCategories={selectedContentCategories}
+          onCategoryAdd={onContentCategoryAdd}
+          onCategoryRemove={onContentCategoryRemove}
+          onCategoryUpdate={onContentCategoryUpdate}
+          accessToken={accessToken}
+        />
       )}
 
       <PatternModal

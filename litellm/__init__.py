@@ -134,6 +134,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "weave_otel",
     "pagerduty",
     "humanloop",
+    "azure_sentinel",
     "gcs_pubsub",
     "agentops",
     "anthropic_cache_control_hook",
@@ -557,6 +558,8 @@ ovhcloud_embedding_models: Set = set()
 lemonade_models: Set = set()
 docker_model_runner_models: Set = set()
 amazon_nova_models: Set = set()
+stability_models: Set = set()
+github_copilot_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -801,6 +804,10 @@ def add_known_models():
             docker_model_runner_models.add(key)
         elif value.get("litellm_provider") == "amazon_nova":
             amazon_nova_models.add(key)
+        elif value.get("litellm_provider") == "stability":
+            stability_models.add(key)
+        elif value.get("litellm_provider") == "github_copilot":
+            github_copilot_models.add(key)
 
 
 add_known_models()
@@ -1003,6 +1010,8 @@ models_by_provider: dict = {
     "lemonade": lemonade_models,
     "clarifai": clarifai_models,
     "amazon_nova": amazon_nova_models,
+    "stability": stability_models,
+    "github_copilot": github_copilot_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1194,9 +1203,9 @@ from .llms.bedrock.chat.invoke_transformations.amazon_openai_transformation impo
     AmazonBedrockOpenAIConfig,
 )
 
-from .llms.bedrock.image.amazon_stability1_transformation import AmazonStabilityConfig
-from .llms.bedrock.image.amazon_stability3_transformation import AmazonStability3Config
-from .llms.bedrock.image.amazon_nova_canvas_transformation import AmazonNovaCanvasConfig
+from .llms.bedrock.image_generation.amazon_stability1_transformation import AmazonStabilityConfig
+from .llms.bedrock.image_generation.amazon_stability3_transformation import AmazonStability3Config
+from .llms.bedrock.image_generation.amazon_nova_canvas_transformation import AmazonNovaCanvasConfig
 from .llms.bedrock.embed.amazon_titan_g1_transformation import AmazonTitanG1Config
 from .llms.bedrock.embed.amazon_titan_multimodal_transformation import (
     AmazonTitanMultimodalEmbeddingG1Config,

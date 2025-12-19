@@ -1,12 +1,16 @@
 import asyncio
-from typing import Any, AsyncIterator, cast
+import time
+from typing import Any, AsyncIterator, Optional, cast
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from litellm._logging import verbose_proxy_logger
+from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.responses.main import DeleteResponseResult
 
 router = APIRouter()
@@ -151,7 +155,7 @@ async def responses_api(
     # Normal response flow
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -169,6 +173,70 @@ async def responses_api(
             user_api_base=user_api_base,
             version=version,
         )
+        
+        # Store in managed objects table if background mode is enabled
+        if data.get("background") and isinstance(response, ResponsesAPIResponse):
+            if response.status in ["queued", "in_progress"]:
+                from litellm_enterprise.proxy.hooks.managed_files import (  # type: ignore
+                    _PROXY_LiteLLMManagedFiles,
+                )                
+                managed_files_obj = cast(
+                    Optional[_PROXY_LiteLLMManagedFiles],
+                    proxy_logging_obj.get_proxy_hook("managed_files"),
+                )
+                
+                if managed_files_obj and llm_router:
+                    try:
+                        # Get the actual deployment model_id from hidden params
+                        hidden_params = getattr(response, "_hidden_params", {}) or {}
+                        model_id = hidden_params.get("model_id", None)
+                        
+                        if not model_id:
+                            verbose_proxy_logger.warning(
+                                f"No model_id found in response hidden params for response {response.id}, skipping managed object storage"
+                            )
+                            raise Exception("No model_id found in response hidden params")
+                        # Store in managed objects table
+                        await managed_files_obj.store_unified_object_id(
+                            unified_object_id=response.id,
+                            file_object=response,
+                            litellm_parent_otel_span=None,
+                            model_object_id=response.id,
+                            file_purpose="response",
+                            user_api_key_dict=user_api_key_dict,
+                        )
+                        
+                        verbose_proxy_logger.info(
+                            f"Stored background response {response.id} in managed objects table with unified_id={response.id}"
+                        )
+                    except Exception as e:
+                        verbose_proxy_logger.error(
+                            f"Failed to store background response in managed objects table: {str(e)}"
+                        )
+        
+        return response
+    except ModifyResponseException as e:
+        # Guardrail passthrough: return violation message in Responses API format (200)
+        _data = e.request_data
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=_data,
+        )
+
+        violation_text = e.message
+        response_obj = ResponsesAPIResponse(
+            id=f"resp_{uuid4()}",
+            object="response",
+            created_at=int(time.time()),
+            model=e.model or data.get("model"),
+            output=cast(Any, [{"content": [{"type": "text", "text": violation_text}]}]),
+            status="completed",
+            usage=ResponseAPIUsage(
+                input_tokens=0, output_tokens=0, total_tokens=0
+            ),
+        )
+        return response_obj
     except Exception as e:
         raise await processor._handle_llm_api_exception(
             e=e,

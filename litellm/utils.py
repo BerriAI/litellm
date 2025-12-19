@@ -1,15 +1,6 @@
 # from __future__ import annotations must be the first non-comment statement
 from __future__ import annotations
 
-# +-----------------------------------------------+
-# |                                               |
-# |           Give Feedback / Get Help            |
-# | https://github.com/BerriAI/litellm/issues/new |
-# |                                               |
-# +-----------------------------------------------+
-#
-#  Thank you users! We ❤️ you! - Krrish & Ishaan
-
 import ast
 import asyncio
 import base64
@@ -63,6 +54,11 @@ import litellm.litellm_core_utils.audio_utils.utils
 import litellm.litellm_core_utils.json_validation_rule
 import litellm.llms
 import litellm.llms.gemini
+from litellm._lazy_imports import (
+    _get_default_encoding,
+    _get_modified_max_tokens,
+    _get_token_counter_new,
+)
 from litellm._uuid import uuid
 from litellm.caching._internal_lru_cache import lru_cache_wrapper
 from litellm.caching.caching import DualCache
@@ -102,11 +98,6 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dot_notation_indexing import (
     delete_nested_value,
     is_nested_path,
-)
-from litellm._lazy_imports import (
-    _get_default_encoding,
-    _get_modified_max_tokens,
-    _get_token_counter_new,
 )
 from litellm.litellm_core_utils.exception_mapping_utils import (
     _get_response_headers,
@@ -217,6 +208,20 @@ from litellm.types.utils import (
     all_litellm_params,
 )
 
+# +-----------------------------------------------+
+# |                                               |
+# |           Give Feedback / Get Help            |
+# | https://github.com/BerriAI/litellm/issues/new |
+# |                                               |
+# +-----------------------------------------------+
+#
+#  Thank you users! We ❤️ you! - Krrish & Ishaan
+
+
+
+
+
+
 try:
     # Python 3.9+
     with resources.files("litellm.litellm_core_utils.tokenizers").joinpath(
@@ -271,6 +276,7 @@ if TYPE_CHECKING:
     # their modules at runtime during `litellm` import.
     from litellm.llms.base_llm.files.transformation import BaseFilesConfig
     from litellm.proxy._types import AllowedModelRegion
+
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
@@ -303,7 +309,6 @@ from .caching.caching import (
     RedisSemanticCache,
     S3Cache,
 )
-
 from .exceptions import (
     APIConnectionError,
     APIError,
@@ -7258,6 +7263,8 @@ class ProviderConfigManager:
                 return litellm.AzureOpenAIGPT5Config()
             return litellm.AzureOpenAIConfig()
         elif litellm.LlmProviders.AZURE_AI == provider:
+            if "claude" in model.lower():
+                return litellm.AzureAnthropicConfig()
             return litellm.AzureAIStudioConfig()
         elif litellm.LlmProviders.AZURE_TEXT == provider:
             return litellm.AzureOpenAITextConfig()
@@ -7959,6 +7966,18 @@ class ProviderConfigManager:
             )
 
             return get_vertex_ai_image_edit_config(model)
+        elif LlmProviders.STABILITY == provider:
+            from litellm.llms.stability.image_edit import (
+                get_stability_image_edit_config,
+            )
+
+            return get_stability_image_edit_config(model)
+        elif LlmProviders.BEDROCK == provider:
+            from litellm.llms.bedrock.image_edit.stability_transformation import (
+                BedrockStabilityImageEditConfig,
+            )
+
+            return BedrockStabilityImageEditConfig()
         return None
 
     @staticmethod
@@ -7977,9 +7996,13 @@ class ProviderConfigManager:
 
             return get_azure_ai_ocr_config(model=model)
 
+        if provider == litellm.LlmProviders.VERTEX_AI:
+            from litellm.llms.vertex_ai.ocr.common_utils import get_vertex_ai_ocr_config
+
+            return get_vertex_ai_ocr_config(model=model)
+        
         PROVIDER_TO_CONFIG_MAP = {
             litellm.LlmProviders.MISTRAL: MistralOCRConfig,
-            litellm.LlmProviders.VERTEX_AI: VertexAIOCRConfig,
         }
         config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:
@@ -7997,6 +8020,7 @@ class ProviderConfigManager:
         from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
         from litellm.llms.firecrawl.search.transformation import FirecrawlSearchConfig
         from litellm.llms.google_pse.search.transformation import GooglePSESearchConfig
+        from litellm.llms.linkup.search.transformation import LinkupSearchConfig
         from litellm.llms.parallel_ai.search.transformation import (
             ParallelAISearchConfig,
         )
@@ -8013,6 +8037,7 @@ class ProviderConfigManager:
             SearchProviders.DATAFORSEO: DataForSEOSearchConfig,
             SearchProviders.FIRECRAWL: FirecrawlSearchConfig,
             SearchProviders.SEARXNG: SearXNGSearchConfig,
+            SearchProviders.LINKUP: LinkupSearchConfig,
         }
         config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:
@@ -8401,9 +8426,10 @@ def should_run_mock_completion(
 def __getattr__(name: str) -> Any:
     """Lazy import handler for utils module"""
     if name == "encoding":
-        from litellm.main import encoding as _encoding
         # Cache it in the module's __dict__ for subsequent accesses
         import sys
+
+        from litellm.main import encoding as _encoding
         sys.modules[__name__].__dict__["encoding"] = _encoding
         return _encoding
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

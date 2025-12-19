@@ -167,24 +167,28 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     )
             elif role == "tool":
                 # Convert tool message to function call output format
-                # Transform content to responses format (handles str, list, and other types)
-                # _convert_content_to_responses_format always returns List[Dict[str, Any]]
+                # The Responses API expects 'output' to be a string, not a list
                 if content is None:
-                    transformed_output: list[dict[str, Any]] = []
-                elif isinstance(content, (str, list)):
-                    transformed_output = self._convert_content_to_responses_format(
-                        content, "tool"
-                    )
+                    output_str = ""
+                elif isinstance(content, str):
+                    output_str = content
+                elif isinstance(content, list):
+                    # If content is a list, extract text parts and join them
+                    text_parts = []
+                    for item in content:
+                        if isinstance(item, str):
+                            text_parts.append(item)
+                        elif isinstance(item, dict) and item.get("type") == "text":
+                            text_parts.append(item.get("text", ""))
+                    output_str = " ".join(text_parts) if text_parts else str(content)
                 else:
-                    # Fallback: convert unexpected types to string first
-                    transformed_output = self._convert_content_to_responses_format(
-                        str(content), "tool"
-                    )
+                    # Fallback: convert unexpected types to string
+                    output_str = str(content)
                 input_items.append(
                     {
                         "type": "function_call_output",
                         "call_id": tool_call_id,
-                        "output": transformed_output,
+                        "output": output_str,
                     }
                 )
             elif role == "assistant" and tool_calls and isinstance(tool_calls, list):
@@ -345,6 +349,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         index = 0
         reasoning_content: Optional[str] = None
 
+        # Collect all tool calls to put them in a single choice
+        # (Chat Completions API expects all tool calls in one message)
+        accumulated_tool_calls: List[Dict[str, Any]] = []
+        tool_call_index = 0
+
         for item in output_items:
             if isinstance(item, ResponseReasoningItem):
                 for summary_item in item.summary:
@@ -378,20 +387,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
                 tool_call_dict = LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
                     tool_call_item=item,
-                    index=index,
+                    index=tool_call_index,
                 )
-
-                msg = Message(
-                    content=None,
-                    tool_calls=[tool_call_dict],
-                    reasoning_content=reasoning_content,
-                )
-
-                choices.append(
-                    Choices(message=msg, finish_reason="tool_calls", index=index)
-                )
-                reasoning_content = None  # flush reasoning content
-                index += 1
+                accumulated_tool_calls.append(tool_call_dict)
+                tool_call_index += 1
 
             elif isinstance(item, dict) and handle_raw_dict_callback is not None:
                 # Handle raw dict responses (e.g., from GPT-5 Codex)
@@ -400,6 +399,18 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     choices.append(choice)
             else:
                 pass  # don't fail request if item in list is not supported
+
+        # If we accumulated tool calls, create a single choice with all of them
+        if accumulated_tool_calls:
+            msg = Message(
+                content=None,
+                tool_calls=accumulated_tool_calls,
+                reasoning_content=reasoning_content,
+            )
+            choices.append(
+                Choices(message=msg, finish_reason="tool_calls", index=index)
+            )
+            reasoning_content = None
 
         return choices
 
@@ -492,7 +503,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     def _convert_content_str_to_input_text(
         self, content: str, role: str
     ) -> Dict[str, Any]:
-        if role == "user" or role == "system":
+        if role == "user" or role == "system" or role == "tool":
             return {"type": "input_text", "text": content}
         else:
             return {"type": "output_text", "text": content}

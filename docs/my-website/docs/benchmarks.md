@@ -172,7 +172,7 @@ class MyUser(HttpUser):
 
 ## Logging Callbacks
 
-### [GCS Bucket Logging](https://docs.litellm.ai/docs/proxy/bucket)
+### [GCS Bucket Logging](https://docs.litellm.ai/docs/observability/gcs_bucket_integration)
 
 Using GCS Bucket has **no impact on latency, RPS compared to Basic Litellm Proxy**
 

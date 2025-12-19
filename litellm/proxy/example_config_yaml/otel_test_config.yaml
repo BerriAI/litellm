@@ -78,6 +78,15 @@ guardrails:
     litellm_params:
       guardrail: custom_guardrail.myCustomGuardrail
       mode: "post_call"
+  # Load balancing guardrails - two guardrails with same name
+  - guardrail_name: "lb-test-guard"
+    litellm_params:
+      guardrail: custom_guardrail.GuardrailForLBTestingA
+      mode: "pre_call"
+  - guardrail_name: "lb-test-guard"
+    litellm_params:
+      guardrail: custom_guardrail.GuardrailForLBTestingB
+      mode: "pre_call"
 
 router_settings:
   enable_tag_filtering: True # 👈 Key Change
