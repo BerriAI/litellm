@@ -411,7 +411,6 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             )
         raw_response_headers = dict(raw_response.headers)
         processed_headers = process_response_headers(raw_response_headers)
-        
         response = ResponsesAPIResponse(**raw_response_json)
         response._hidden_params["additional_headers"] = processed_headers
         response._hidden_params["headers"] = raw_response_headers

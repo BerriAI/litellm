@@ -4522,7 +4522,7 @@ class ProxyStartupEvent:
         ### MONITOR SPEND LOGS QUEUE (queue-size-based job) ###
         if general_settings.get("disable_spend_logs", False) is False:
             from litellm.proxy.utils import _monitor_spend_logs_queue
-            
+
             # Start background task to monitor spend logs queue size
             asyncio.create_task(
                 _monitor_spend_logs_queue(
@@ -4629,6 +4629,37 @@ class ProxyStartupEvent:
                 verbose_proxy_logger.error(f"Failed to setup batch cost checking: {e}")
                 verbose_proxy_logger.debug(
                     "Checking batch cost for LiteLLM Managed Files is an Enterprise Feature. Skipping..."
+                )
+                pass
+
+        ### CHECK RESPONSES COST ###
+        if llm_router is not None:
+            try:
+                from litellm_enterprise.proxy.common_utils.check_responses_cost import (
+                    CheckResponsesCost,
+                )
+
+                check_responses_cost_job = CheckResponsesCost(
+                    proxy_logging_obj=proxy_logging_obj,
+                    prisma_client=prisma_client,
+                    llm_router=llm_router,
+                )
+                scheduler.add_job(
+                    check_responses_cost_job.check_responses_cost,
+                    "interval",
+                    seconds=proxy_batch_polling_interval
+                    + random.randint(0, 30),  # Add small random offset
+                    # REMOVED jitter parameter - major cause of memory leak
+                    id="check_responses_cost_job",
+                    replace_existing=True,
+                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+                )
+                verbose_proxy_logger.info("Responses cost check job scheduled successfully")
+
+            except Exception as e:
+                verbose_proxy_logger.error(f"Failed to setup responses cost checking: {e}")
+                verbose_proxy_logger.debug(
+                    "Checking responses cost for LiteLLM Managed Files is an Enterprise Feature. Skipping..."
                 )
                 pass
 
