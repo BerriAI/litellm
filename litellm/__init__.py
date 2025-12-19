@@ -1484,6 +1484,35 @@ if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo as _ModelInfoType
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.caching.caching import Cache
+    
+    # Type stubs for lazy-loaded configs to help mypy
+    from .llms.galadriel.chat.transformation import GaladrielChatConfig as GaladrielChatConfig
+    from .llms.github.chat.transformation import GithubChatConfig as GithubChatConfig
+    from .llms.azure_ai.anthropic.transformation import AzureAnthropicConfig as AzureAnthropicConfig
+    from .llms.bytez.chat.transformation import BytezChatConfig as BytezChatConfig
+    from .llms.compactifai.chat.transformation import CompactifAIChatConfig as CompactifAIChatConfig
+    from .llms.empower.chat.transformation import EmpowerChatConfig as EmpowerChatConfig
+    from .llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig as AiohttpOpenAIChatConfig
+    from .llms.huggingface.chat.transformation import HuggingFaceChatConfig as HuggingFaceChatConfig
+    from .llms.huggingface.embedding.transformation import HuggingFaceEmbeddingConfig as HuggingFaceEmbeddingConfig
+    from .llms.oobabooga.chat.transformation import OobaboogaConfig as OobaboogaConfig
+    from .llms.maritalk import MaritalkConfig as MaritalkConfig
+    from .llms.openrouter.chat.transformation import OpenrouterConfig as OpenrouterConfig
+    from .llms.datarobot.chat.transformation import DataRobotConfig as DataRobotConfig
+    from .llms.anthropic.chat.transformation import AnthropicConfig as AnthropicConfig
+    from .llms.anthropic.completion.transformation import AnthropicTextConfig as AnthropicTextConfig
+    from .llms.groq.stt.transformation import GroqSTTConfig as GroqSTTConfig
+    from .llms.triton.completion.transformation import TritonConfig as TritonConfig
+    from .llms.triton.completion.transformation import TritonGenerateConfig as TritonGenerateConfig
+    from .llms.triton.completion.transformation import TritonInferConfig as TritonInferConfig
+    from .llms.triton.embedding.transformation import TritonEmbeddingConfig as TritonEmbeddingConfig
+    from .llms.huggingface.rerank.transformation import HuggingFaceRerankConfig as HuggingFaceRerankConfig
+    from .llms.databricks.chat.transformation import DatabricksConfig as DatabricksConfig
+    from .llms.databricks.embed.transformation import DatabricksEmbeddingConfig as DatabricksEmbeddingConfig
+    from .llms.predibase.chat.transformation import PredibaseConfig as PredibaseConfig
+    from .llms.replicate.chat.transformation import ReplicateConfig as ReplicateConfig
+    from .llms.snowflake.chat.transformation import SnowflakeConfig as SnowflakeConfig
+    from .llms.cohere.rerank.transformation import CohereRerankConfig as CohereRerankConfig
     from litellm.caching.llm_caching_handler import LLMClientCache
     from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
     from litellm.types.utils import (
