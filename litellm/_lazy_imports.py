@@ -185,6 +185,8 @@ LLM_CONFIG_NAMES = (
     "ReplicateConfig",
     "SnowflakeConfig",
     "CohereRerankConfig",
+    "CohereRerankV2Config",
+    "AzureAIRerankConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -902,5 +904,21 @@ def _lazy_import_llm_configs(name: str) -> Any:
 
         _globals["CohereRerankConfig"] = _CohereRerankConfig
         return _CohereRerankConfig
+
+    if name == "CohereRerankV2Config":
+        from .llms.cohere.rerank_v2.transformation import (
+            CohereRerankV2Config as _CohereRerankV2Config,
+        )
+
+        _globals["CohereRerankV2Config"] = _CohereRerankV2Config
+        return _CohereRerankV2Config
+
+    if name == "AzureAIRerankConfig":
+        from .llms.azure_ai.rerank.transformation import (
+            AzureAIRerankConfig as _AzureAIRerankConfig,
+        )
+
+        _globals["AzureAIRerankConfig"] = _AzureAIRerankConfig
+        return _AzureAIRerankConfig
 
     raise AttributeError(f"LLM config lazy import: unknown attribute {name!r}")

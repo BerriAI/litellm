@@ -1065,8 +1065,6 @@ from .utils import client
 
 from .llms.custom_llm import CustomLLM
 from .llms.anthropic.common_utils import AnthropicModelInfo
-from .llms.cohere.rerank_v2.transformation import CohereRerankV2Config
-from .llms.azure_ai.rerank.transformation import AzureAIRerankConfig
 from .llms.infinity.rerank.transformation import InfinityRerankConfig
 from .llms.jina_ai.rerank.transformation import JinaAIRerankConfig
 from .llms.deepinfra.rerank.transformation import DeepinfraRerankConfig
@@ -1513,6 +1511,8 @@ if TYPE_CHECKING:
     from .llms.replicate.chat.transformation import ReplicateConfig as ReplicateConfig
     from .llms.snowflake.chat.transformation import SnowflakeConfig as SnowflakeConfig
     from .llms.cohere.rerank.transformation import CohereRerankConfig as CohereRerankConfig
+    from .llms.cohere.rerank_v2.transformation import CohereRerankV2Config as CohereRerankV2Config
+    from .llms.azure_ai.rerank.transformation import AzureAIRerankConfig as AzureAIRerankConfig
     from litellm.caching.llm_caching_handler import LLMClientCache
     from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
     from litellm.types.utils import (
