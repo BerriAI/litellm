@@ -839,6 +839,7 @@ def image_edit(
         if custom_llm_provider == "bedrock":
             if model is None:
                 raise Exception("Model needs to be set for bedrock")
+            image_edit_request_params.update(non_default_params)
             return bedrock_image_edit.image_edit(  # type: ignore
                 model=model,
                 image=images,
