@@ -9,7 +9,7 @@ import zipfile
 from io import BytesIO
 from typing import Any, Dict, List, Optional
 
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import verbose_logger
 from litellm.proxy._types import LiteLLM_SkillsTable
 
 
@@ -64,7 +64,7 @@ class SkillPromptInjectionHandler:
                         if content:
                             return f"## Skill: {skill.display_title or skill.skill_id}\n\n{content}"
         except Exception as e:
-            verbose_proxy_logger.warning(
+            verbose_logger.warning(
                 f"SkillPromptInjectionHandler: Error extracting content from skill {skill.skill_id}: {e}"
             )
         
@@ -106,7 +106,7 @@ class SkillPromptInjectionHandler:
                     if clean_path:
                         files[clean_path] = zf.read(name)
         except Exception as e:
-            verbose_proxy_logger.warning(
+            verbose_logger.warning(
                 f"SkillPromptInjectionHandler: Error extracting files from skill {skill.skill_id}: {e}"
             )
         
