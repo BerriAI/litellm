@@ -165,6 +165,8 @@ LLM_CONFIG_NAMES = (
     "CompactifAIChatConfig",
     "EmpowerChatConfig",
     "AiohttpOpenAIChatConfig",
+    "HuggingFaceChatConfig",
+    "HuggingFaceEmbeddingConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -722,5 +724,21 @@ def _lazy_import_llm_configs(name: str) -> Any:
 
         _globals["AiohttpOpenAIChatConfig"] = _AiohttpOpenAIChatConfig
         return _AiohttpOpenAIChatConfig
+
+    if name == "HuggingFaceChatConfig":
+        from .llms.huggingface.chat.transformation import (
+            HuggingFaceChatConfig as _HuggingFaceChatConfig,
+        )
+
+        _globals["HuggingFaceChatConfig"] = _HuggingFaceChatConfig
+        return _HuggingFaceChatConfig
+
+    if name == "HuggingFaceEmbeddingConfig":
+        from .llms.huggingface.embedding.transformation import (
+            HuggingFaceEmbeddingConfig as _HuggingFaceEmbeddingConfig,
+        )
+
+        _globals["HuggingFaceEmbeddingConfig"] = _HuggingFaceEmbeddingConfig
+        return _HuggingFaceEmbeddingConfig
 
     raise AttributeError(f"LLM config lazy import: unknown attribute {name!r}")

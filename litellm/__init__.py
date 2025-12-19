@@ -1064,8 +1064,6 @@ from .utils import client
 # (which imports tiktoken) at import time
 
 from .llms.custom_llm import CustomLLM
-from .llms.huggingface.chat.transformation import HuggingFaceChatConfig
-from .llms.huggingface.embedding.transformation import HuggingFaceEmbeddingConfig
 from .llms.oobabooga.chat.transformation import OobaboogaConfig
 from .llms.maritalk import MaritalkConfig
 from .llms.openrouter.chat.transformation import OpenrouterConfig
