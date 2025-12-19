@@ -12,6 +12,33 @@ secret:
     - "**/.git/**"
     - "**/venv/**"
     - "**/.venv/**"
+    
+    # Large data/metadata files that don't need scanning
+    - "**/model_prices_and_context_window*.json"
+    - "**/*_metadata/*.txt"
+    - "**/tokenizers/*.json"
+    - "**/tokenizers/*"
+    - "miniconda.sh"
+    
+    # Build outputs and static assets
+    - "litellm/proxy/_experimental/out/**"
+    - "ui/litellm-dashboard/public/**"
+    - "**/swagger/*.js"
+    - "**/*.woff"
+    - "**/*.woff2"
+    - "**/*.avif"
+    - "**/*.webp"
+    
+    # Test data files
+    - "**/tests/**/data_map.txt"
+    - "tests/**/*.txt"
+    
+    # Documentation and other non-code files
+    - "docs/**"
+    - "**/*.md"
+    - "**/*.lock"
+    - "poetry.lock"
+    - "package-lock.json"
 
   # Ignore security incidents with the SHA256 of the occurrence (false positives)
   ignored_matches:
