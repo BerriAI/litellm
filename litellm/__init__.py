@@ -1065,8 +1065,6 @@ from .utils import client
 
 from .llms.custom_llm import CustomLLM
 from .llms.anthropic.common_utils import AnthropicModelInfo
-from .llms.snowflake.chat.transformation import SnowflakeConfig
-from .llms.cohere.rerank.transformation import CohereRerankConfig
 from .llms.cohere.rerank_v2.transformation import CohereRerankV2Config
 from .llms.azure_ai.rerank.transformation import AzureAIRerankConfig
 from .llms.infinity.rerank.transformation import InfinityRerankConfig

@@ -183,6 +183,8 @@ LLM_CONFIG_NAMES = (
     "DatabricksEmbeddingConfig",
     "PredibaseConfig",
     "ReplicateConfig",
+    "SnowflakeConfig",
+    "CohereRerankConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -884,5 +886,21 @@ def _lazy_import_llm_configs(name: str) -> Any:
 
         _globals["ReplicateConfig"] = _ReplicateConfig
         return _ReplicateConfig
+
+    if name == "SnowflakeConfig":
+        from .llms.snowflake.chat.transformation import (
+            SnowflakeConfig as _SnowflakeConfig,
+        )
+
+        _globals["SnowflakeConfig"] = _SnowflakeConfig
+        return _SnowflakeConfig
+
+    if name == "CohereRerankConfig":
+        from .llms.cohere.rerank.transformation import (
+            CohereRerankConfig as _CohereRerankConfig,
+        )
+
+        _globals["CohereRerankConfig"] = _CohereRerankConfig
+        return _CohereRerankConfig
 
     raise AttributeError(f"LLM config lazy import: unknown attribute {name!r}")
