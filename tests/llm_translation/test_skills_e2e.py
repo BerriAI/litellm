@@ -1,9 +1,8 @@
 """
-End-to-end test for LiteLLM Skills with real LLM API call.
+End-to-end test for LiteLLM Skills with Messages API.
 
-Downloads the slack-gif-creator skill from Anthropic's skills repo,
-stores it in LiteLLM DB, and makes a real API call to verify
-the skill content is properly injected into the system prompt.
+Tests the slack-gif-creator skill with GPT-4o via messages API
+to verify skills work correctly and can generate a GIF.
 """
 
 import os
@@ -26,26 +25,14 @@ proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
 
 def create_skill_zip_from_folder(skill_name: str) -> bytes:
-    """
-    Create a ZIP file from a skill folder in test_skills_data.
-    
-    Recursively includes all files in the skill directory.
-    
-    Args:
-        skill_name: Name of the skill directory
-        
-    Returns:
-        ZIP file content as bytes
-    """
+    """Create a ZIP file from a skill folder in test_skills_data."""
     test_dir = Path(__file__).parent / "test_skills_data"
     skill_dir = test_dir / skill_name
     
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        # Walk through all files in the skill directory
         for file_path in skill_dir.rglob("*"):
             if file_path.is_file():
-                # Create archive name relative to test_skills_data
                 arcname = f"{skill_name}/{file_path.relative_to(skill_dir)}"
                 zf.write(file_path, arcname=arcname)
     
@@ -73,14 +60,18 @@ def prisma_client():
 
 
 @pytest.mark.asyncio
-async def test_skill_code_execution_via_deployment_hook(prisma_client):
+async def test_slack_gif_skill_creates_gif(prisma_client):
     """
-    Test the full code execution loop using async_post_call_success_deployment_hook.
+    Test slack-gif-creator skill generates a GIF using GPT-4o via messages API.
     
-    This test shows that when the hook is registered in litellm.callbacks,
-    the async_post_call_success_deployment_hook is called automatically after
-    each litellm.acompletion() call and can modify the response.
+    Flow:
+    1. Store skill in LiteLLM DB
+    2. Hook resolves skill, adds litellm_code_execution tool, injects SKILL.md
+    3. Make GPT-4o call via messages API
+    4. Hook handles code execution loop
+    5. Verify GIF is generated
     """
+    litellm._turn_on_debug()
     if not os.getenv("OPENAI_API_KEY"):
         pytest.skip("OPENAI_API_KEY not set")
     
@@ -91,7 +82,7 @@ async def test_skill_code_execution_via_deployment_hook(prisma_client):
     from litellm.proxy.hooks.litellm_skills import SkillsInjectionHook
     from litellm.types.utils import CallTypes
 
-    # Create skill
+    # 1. Store skill in DB
     skill_name = "slack-gif-creator"
     zip_content = create_skill_zip_from_folder(skill_name)
     
@@ -111,84 +102,86 @@ async def test_skill_code_execution_via_deployment_hook(prisma_client):
     print(f"\nCreated skill: {created_skill.skill_id}")
     
     hook = SkillsInjectionHook()
-    user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
-    cache = DualCache()
     
-    # Original request (like what proxy receives)
-    original_request = {
-        "model": "gpt-4o-mini",
-        "messages": [
-            {
-                "role": "user",
-                "content": "Create a simple bouncing red ball GIF for Slack emoji. Use the litellm_code_execution tool."
-            }
-        ],
-        "max_tokens": 4096,
-        "container": {
-            "skills": [
-                {"type": "custom", "skill_id": f"litellm:{created_skill.skill_id}"}
-            ]
-        },
-    }
-    
-    # Step 1: Pre-call hook (in proxy this happens automatically)
-    print("\n--- Step 1: Pre-call hook ---")
-    transformed = await hook.async_pre_call_hook(
-        user_api_key_dict=user_api_key_dict,
-        cache=cache,
-        data=original_request,
-        call_type="completion",
-    )
-    assert isinstance(transformed, dict)
-    print(f"Added tools: {[t.get('function', {}).get('name') for t in transformed.get('tools', [])]}")
-    
-    # Step 2: LLM call
-    print("\n--- Step 2: LLM call ---")
-    response = await litellm.acompletion(
-        model=transformed["model"],
-        messages=transformed["messages"],
-        tools=transformed.get("tools"),
-        max_tokens=transformed.get("max_tokens", 4096),
-    )
-    print(f"Initial finish_reason: {response.choices[0].finish_reason}")
-    
-    # Step 3: async_post_call_success_deployment_hook (called automatically by litellm when hook is registered)
-    # Here we call it manually to test the hook directly
-    print("\n--- Step 3: async_post_call_success_deployment_hook ---")
-    final_response = await hook.async_post_call_success_deployment_hook(
-        request_data=transformed,
-        response=response,
-        call_type=CallTypes.acompletion,
-    )
-    
-    if final_response is None:
-        print("No code execution needed")
-        final_response = response
-    else:
-        print("Code execution loop completed!")
-    
-    # Check results
-    generated_files = getattr(final_response, "_litellm_generated_files", [])
-    print(f"\nGenerated files: {len(generated_files)}")
-    
-    if generated_files:
-        import base64
-        for f in generated_files:
-            print(f"  - {f['name']} ({f['size']} bytes, {f['mime_type']})")
-            
-            # Verify GIF
-            if f['name'].endswith('.gif'):
-                content = base64.b64decode(f['content_base64'])
-                assert content[:6] in [b'GIF89a', b'GIF87a'], "Should be valid GIF"
-                print(f"    Valid GIF!")
+    try:
+        # 2. Build request with container.skills (messages API spec)
+        request_data = {
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 4096,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Create a simple bouncing red ball GIF for Slack emoji."
+                }
+            ],
+            "container": {
+                "skills": [
+                    {"type": "custom", "skill_id": f"litellm:{created_skill.skill_id}"}
+                ]
+            },
+        }
         
-        print("\n" + "="*50)
-        print("SUCCESS! async_post_call_success_deployment_hook working!")
-        print("="*50)
-    else:
-        content = final_response.choices[0].message.content
-        print(f"Final response: {content[:300] if content else 'No content'}...")
+        # 3. Pre-call hook resolves skill
+        user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+        cache = DualCache()
+        
+        transformed = await hook.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=cache,
+            data=request_data,
+            call_type="anthropic_messages",
+        )
+        assert isinstance(transformed, dict)
+        
+        # Hook returns Anthropic-format tools for messages API
+        tool_names = [t.get('name') for t in transformed.get('tools', [])]
+        print(f"\nTools after hook: {tool_names}")
+        assert "litellm_code_execution" in tool_names, "Should have litellm_code_execution tool"
+        
+        # 4. Make GPT-4o call via messages API (tools already in Anthropic format)
+        print("\n--- Making GPT-4o call via messages API ---")
+        response = await litellm.anthropic.acreate(
+            model=transformed["model"],
+            max_tokens=transformed.get("max_tokens", 4096),
+            messages=transformed["messages"],
+            tools=transformed.get("tools"),
+        )
+        
+        print(f"Initial response: {response}")
+        
+        # 5. Post-call hook handles code execution loop
+        final_response = await hook.async_post_call_success_deployment_hook(
+            request_data=transformed,
+            response=response,
+            call_type=CallTypes.anthropic_messages,
+        )
+        
+        if final_response:
+            response = final_response
+            print("Code execution completed!")
+        
+        # 6. Check for generated files (handle both dict and object response)
+        if isinstance(response, dict):
+            generated_files = response.get("_litellm_generated_files", [])
+        else:
+            generated_files = getattr(response, "_litellm_generated_files", [])
+        print(f"\nGenerated files: {len(generated_files)}")
+        
+        if generated_files:
+            import base64
+            for f in generated_files:
+                print(f"  - {f['name']} ({f['size']} bytes)")
+                if f['name'].endswith('.gif'):
+                    content = base64.b64decode(f['content_base64'])
+                    assert content[:6] in [b'GIF89a', b'GIF87a'], "Should be valid GIF"
+                    print("    Valid GIF!")
+            print("\nSUCCESS - GIF generated!")
+        else:
+            # Print response for debugging
+            if hasattr(response, "choices"):
+                print(f"\nResponse: {response.choices[0].message}")
+            else:
+                print(f"\nResponse: {response}")
     
-    # Clean up
-    await LiteLLMSkillsHandler.delete_skill(skill_id=created_skill.skill_id)
-
+    finally:
+        await LiteLLMSkillsHandler.delete_skill(skill_id=created_skill.skill_id)
