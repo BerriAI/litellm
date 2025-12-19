@@ -171,6 +171,8 @@ LLM_CONFIG_NAMES = (
     "MaritalkConfig",
     "OpenrouterConfig",
     "DataRobotConfig",
+    "AnthropicConfig",
+    "AnthropicTextConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -776,5 +778,21 @@ def _lazy_import_llm_configs(name: str) -> Any:
 
         _globals["DataRobotConfig"] = _DataRobotConfig
         return _DataRobotConfig
+
+    if name == "AnthropicConfig":
+        from .llms.anthropic.chat.transformation import (
+            AnthropicConfig as _AnthropicConfig,
+        )
+
+        _globals["AnthropicConfig"] = _AnthropicConfig
+        return _AnthropicConfig
+
+    if name == "AnthropicTextConfig":
+        from .llms.anthropic.completion.transformation import (
+            AnthropicTextConfig as _AnthropicTextConfig,
+        )
+
+        _globals["AnthropicTextConfig"] = _AnthropicTextConfig
+        return _AnthropicTextConfig
 
     raise AttributeError(f"LLM config lazy import: unknown attribute {name!r}")
