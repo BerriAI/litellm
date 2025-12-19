@@ -3550,8 +3550,16 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         default=None,
         description="If no team_id given, default permissions/spend-tracking to this team.s",
     )
+    team_alias_jwt_field: Optional[str] = Field(
+        default=None,
+        description="The field in the JWT token that stores the team name/alias. Will be resolved to team_id via database lookup.",
+    )
 
     org_id_jwt_field: Optional[str] = None
+    org_alias_jwt_field: Optional[str] = Field(
+        default=None,
+        description="The field in the JWT token that stores the organization name/alias. Will be resolved to org_id via database lookup.",
+    )
     user_id_jwt_field: Optional[str] = None
     user_email_jwt_field: Optional[str] = None
     user_allowed_email_domain: Optional[str] = None
