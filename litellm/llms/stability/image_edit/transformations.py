@@ -18,7 +18,6 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.llms.stability import (
     OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO,
     STABILITY_EDIT_ENDPOINTS,
-    StabilityImageEditRequest,
 )
 from litellm.types.utils import FileTypes, ImageObject, ImageResponse
 from litellm.utils import get_model_info
