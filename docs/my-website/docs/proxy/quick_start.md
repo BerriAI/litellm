@@ -400,7 +400,7 @@ from anthropic import Anthropic
 
 client = Anthropic(
     base_url="http://localhost:4000", # proxy endpoint
-    api_key="sk-s4xN1IiLTCytwtZFJaYQrA", # litellm proxy virtual key
+    api_key="sk-test-proxy-key-123", # litellm proxy virtual key (example)
 )
 
 message = client.messages.create(
