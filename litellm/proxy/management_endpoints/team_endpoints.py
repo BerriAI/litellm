@@ -34,6 +34,7 @@ from litellm.proxy._types import (
     LiteLLM_OrganizationTableWithMembers,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
+    LiteLLM_DeletedTeamTable,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LitellmTableNames,
@@ -87,7 +88,7 @@ from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
 )
-from litellm.proxy.utils import PrismaClient, handle_exception_on_proxy
+from litellm.proxy.utils import PrismaClient, handle_exception_on_proxy, jsonify_object
 from litellm.router import Router
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
@@ -2357,6 +2358,13 @@ async def delete_team(
         team_row_pydantic = LiteLLM_TeamTable(**team_row_base.model_dump())
         team_rows.append(team_row_pydantic)
 
+    await _persist_deleted_team_records(
+        teams=team_rows,
+        prisma_client=prisma_client,
+        user_api_key_dict=user_api_key_dict,
+        litellm_changed_by=litellm_changed_by,
+    )
+
     # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
     # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
     if litellm.store_audit_logs is True:
@@ -2419,6 +2427,70 @@ async def delete_team(
     )
     return deleted_teams
 
+
+
+def _transform_teams_to_deleted_records(
+    teams: List[LiteLLM_TeamTable],
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_changed_by: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Transform teams into deleted team records ready for persistence."""
+    if not teams:
+        return []
+
+    deleted_at = datetime.now(timezone.utc)
+    records = []
+    for team in teams:
+        team_payload = team.model_dump()
+        deleted_record = LiteLLM_DeletedTeamTable(
+            **team_payload,
+            deleted_at=deleted_at,
+            deleted_by=user_api_key_dict.user_id,
+            deleted_by_api_key=user_api_key_dict.api_key,
+            litellm_changed_by=litellm_changed_by,
+        )
+        record = deleted_record.model_dump()
+
+        for json_field in ["members_with_roles", "metadata", "model_spend", "model_max_budget"]:
+            if json_field in record and record[json_field] is not None:
+                record[json_field] = json.dumps(record[json_field])
+
+        for rel_key in ("litellm_model_table", "object_permission", "id"):
+            record.pop(rel_key, None)
+
+        records.append(record)
+
+    return records
+
+
+async def _save_deleted_team_records(
+    records: List[Dict[str, Any]],
+    prisma_client: PrismaClient,
+) -> None:
+    """Save deleted team records to the database."""
+    if not records:
+        return
+    await prisma_client.db.litellm_deletedteamtable.create_many(
+        data=records
+    )
+
+
+async def _persist_deleted_team_records(
+    teams: List[LiteLLM_TeamTable],
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_changed_by: Optional[str] = None,
+) -> None:
+    """Persist deleted team records by transforming and saving them."""
+    records = _transform_teams_to_deleted_records(
+        teams=teams,
+        user_api_key_dict=user_api_key_dict,
+        litellm_changed_by=litellm_changed_by,
+    )
+    await _save_deleted_team_records(
+        records=records,
+        prisma_client=prisma_client,
+    )
 
 def validate_membership(
     user_api_key_dict: UserAPIKeyAuth, team_table: LiteLLM_TeamTable

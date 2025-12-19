@@ -1633,6 +1633,21 @@ class LiteLLM_TeamTableCachedObj(LiteLLM_TeamTable):
     last_refreshed_at: Optional[float] = None
 
 
+class LiteLLM_DeletedTeamTable(LiteLLM_TeamTable):
+    """
+    Recording of deleted teams for audit purposes. Mirrors LiteLLM_TeamTable
+    plus metadata captured at deletion time.
+    """
+
+    id: Optional[str] = None
+    deleted_at: Optional[datetime] = None
+    deleted_by: Optional[str] = None
+    deleted_by_api_key: Optional[str] = None
+    litellm_changed_by: Optional[str] = None
+
+    model_config = ConfigDict(protected_namespaces=())
+
+
 class TeamRequest(LiteLLMPydanticObjectBase):
     teams: List[str]
 
