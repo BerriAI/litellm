@@ -1,53 +1,40 @@
 # Test Key Patterns Standard
 
-Standard patterns for test/mock keys and credentials in the LiteLLM codebase. All test keys MUST follow these patterns to be automatically excluded from secret detection.
+Standard patterns for test/mock keys and credentials in the LiteLLM codebase to avoid triggering secret detection.
 
-## Standard Patterns
+## How GitGuardian Works
 
-- **Prefix patterns**: `test-*`, `mock-*`, `fake-*`, `example-*`, `dummy-*`
-- **API key patterns**: `sk-test-*`, `sk-mock-*`, `sk-fake-*`
-- **Simple test values**: `sk-1234`, `sk-12345`, `postgres`
-- **Environment variable references**: `os.environ/KEY_NAME`, `os.environ['KEY_NAME']`
+GitGuardian uses **machine learning and entropy analysis**, not just pattern matching:
+- **Low entropy** values (like `sk-1234`, `postgres`) are automatically ignored
+- **High entropy** values (realistic-looking secrets) trigger detection
+- **Context-aware** detection understands code syntax like `os.environ["KEY"]`
 
-## GitGuardian Dashboard Configuration
+## Recommended Test Key Patterns
 
-These patterns are configured in GitGuardian dashboard under "Secrets" → "Pattern exclusions":
+### Option 1: Low Entropy Values (Simplest)
+These won't trigger GitGuardian's ML detector:
 
-```
-^test-.*$
-^mock-.*$
-^fake-.*$
-^example-.*$
-^sk-test-.*$
-^sk-mock-.*$
-^sk-fake-.*$
-^sk-1234$
-^sk-12345$
-^dummy-.*$
-^postgres$
-^os\.environ.*
-```
-
-## Usage
-
-- **Test files**: Use `test-*`, `mock-*`, `sk-test-*`, or simple values like `sk-1234`
-- **Documentation**: Use `example-*` prefix for example tokens
-- **CI/CD configs**: Use `postgres` for test database credentials
-- **Configuration files**: Use `os.environ/KEY_NAME` for environment variable references
-
-## Examples
-
-✅ **Good** (excluded):
 ```python
-api_key = "test-token-123"
-api_key = "sk-test-abcdef1234567890"
-api_key = "example-api-key-xyz"
-api_key = os.environ["OPENAI_API_KEY"]
-api_key = "os.environ/ANTHROPIC_API_KEY"
+api_key = "sk-1234"
+api_key = "sk-12345"
+database_password = "postgres"
+token = "test123"
 ```
 
-❌ **Bad** (will be flagged):
+### Option 2: High Entropy with Test Prefixes
+If you need realistic-looking test keys with high entropy, use these prefixes:
+
 ```python
-api_key = "sk-abcdef1234567890"  # No test prefix
-api_key = "88dc28d0f03...f1243fe6b4b"  # High entropy, no test prefix
+api_key = "sk-test-abc123def456ghi789..."  # OpenAI-style test key
+api_key = "sk-mock-1234567890abcdef1234..."  # Mock key
+api_key = "sk-fake-xyz789uvw456rst123..."  # Fake key
+token = "test-api-key-with-high-entropy"
 ```
+
+## Configured Ignore Patterns
+
+These patterns are in `.gitguardian.yaml` for high-entropy test keys:
+- `sk-test-*` - OpenAI-style test keys
+- `sk-mock-*` - Mock API keys  
+- `sk-fake-*` - Fake API keys
+- `test-api-key` - Generic test tokens
