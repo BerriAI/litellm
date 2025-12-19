@@ -8,7 +8,7 @@ from litellm.llms.base_llm.image_edit.transformation import (
     BaseImageEditConfig,
 )
 
-from .transformation import StabilityImageEditConfig
+from .transformations import StabilityImageEditConfig
 
 __all__ = [
     "StabilityImageEditConfig",
