@@ -7,6 +7,7 @@ the Vertex AI endpoint doesn't have internet access.
 import os
 import json
 import tempfile
+import pytest
 from base_ocr_unit_tests import BaseOCRTest
 
 
@@ -77,6 +78,7 @@ class TestVertexAIDeepSeekOCR(BaseOCRTest):
     Inherits from BaseOCRTest and provides Vertex AI-specific configuration.
     
     Note: DeepSeek OCR uses the chat completion API format through the openapi endpoint.
+    Note: DeepSeek OCR does not support PDF URLs - only image URLs and base64 data.
     """
 
     def get_base_ocr_call_args(self) -> dict:
@@ -88,6 +90,17 @@ class TestVertexAIDeepSeekOCR(BaseOCRTest):
             "model": "vertex_ai/deepseek-ocr-maas",
             "vertex_location": "us-central1",
         }
+
+    # Skip PDF URL tests for DeepSeek OCR as it doesn't support PDF URLs
+    @pytest.mark.skip(reason="DeepSeek OCR does not support PDF URLs")
+    async def test_basic_ocr_with_url(self, sync_mode):
+        """Skip this test for DeepSeek OCR - PDF URLs not supported"""
+        pass
+
+    @pytest.mark.skip(reason="DeepSeek OCR does not support PDF URLs")
+    def test_ocr_response_structure(self):
+        """Skip this test for DeepSeek OCR - PDF URLs not supported"""
+        pass
 
 
 def test_vertex_ai_ocr_routing():
