@@ -294,6 +294,11 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             self.async_log_success_event, kwargs, response_obj, start_time, end_time
         )
 
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        return run_async_function(
+            self.async_log_failure_event, kwargs, response_obj, start_time, end_time
+        )
+
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         standard_callback_dynamic_params = kwargs.get(
             "standard_callback_dynamic_params"
