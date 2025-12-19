@@ -1065,8 +1065,6 @@ from .utils import client
 
 from .llms.custom_llm import CustomLLM
 from .llms.anthropic.common_utils import AnthropicModelInfo
-from .llms.deepinfra.rerank.transformation import DeepinfraRerankConfig
-from .llms.hosted_vllm.rerank.transformation import HostedVLLMRerankConfig
 from .llms.nvidia_nim.rerank.transformation import NvidiaNimRerankConfig
 from .llms.nvidia_nim.rerank.ranking_transformation import NvidiaNimRankingConfig
 from .llms.vertex_ai.rerank.transformation import VertexAIRerankConfig
@@ -1513,6 +1511,8 @@ if TYPE_CHECKING:
     from .llms.azure_ai.rerank.transformation import AzureAIRerankConfig as AzureAIRerankConfig
     from .llms.infinity.rerank.transformation import InfinityRerankConfig as InfinityRerankConfig
     from .llms.jina_ai.rerank.transformation import JinaAIRerankConfig as JinaAIRerankConfig
+    from .llms.deepinfra.rerank.transformation import DeepinfraRerankConfig as DeepinfraRerankConfig
+    from .llms.hosted_vllm.rerank.transformation import HostedVLLMRerankConfig as HostedVLLMRerankConfig
     from litellm.caching.llm_caching_handler import LLMClientCache
     from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
     from litellm.types.utils import (

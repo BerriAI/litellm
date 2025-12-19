@@ -189,6 +189,8 @@ LLM_CONFIG_NAMES = (
     "AzureAIRerankConfig",
     "InfinityRerankConfig",
     "JinaAIRerankConfig",
+    "DeepinfraRerankConfig",
+    "HostedVLLMRerankConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -938,5 +940,21 @@ def _lazy_import_llm_configs(name: str) -> Any:
 
         _globals["JinaAIRerankConfig"] = _JinaAIRerankConfig
         return _JinaAIRerankConfig
+
+    if name == "DeepinfraRerankConfig":
+        from .llms.deepinfra.rerank.transformation import (
+            DeepinfraRerankConfig as _DeepinfraRerankConfig,
+        )
+
+        _globals["DeepinfraRerankConfig"] = _DeepinfraRerankConfig
+        return _DeepinfraRerankConfig
+
+    if name == "HostedVLLMRerankConfig":
+        from .llms.hosted_vllm.rerank.transformation import (
+            HostedVLLMRerankConfig as _HostedVLLMRerankConfig,
+        )
+
+        _globals["HostedVLLMRerankConfig"] = _HostedVLLMRerankConfig
+        return _HostedVLLMRerankConfig
 
     raise AttributeError(f"LLM config lazy import: unknown attribute {name!r}")
