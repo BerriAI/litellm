@@ -696,6 +696,29 @@ def image_edit(
     """
     local_vars = locals()
     try:
+        openai_params = [
+                "user",
+                "request_timeout",
+                "api_base",
+                "api_version",
+                "api_key",
+                "deployment_id",
+                "organization",
+                "base_url",
+                "default_headers",
+                "timeout",
+                "max_retries",
+                "n",
+                "quality",
+                "size",
+                "style",
+                "async_call",
+            ]
+        litellm_params = all_litellm_params
+        default_params = openai_params + litellm_params
+        non_default_params = {
+            k: v for k, v in kwargs.items() if k not in default_params
+        }  # model-specific params - pass them straight to the model/provider
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("async_call", False) is True
@@ -789,7 +812,6 @@ def image_edit(
         image_edit_optional_params: ImageEditOptionalRequestParams = (
             _get_ImageEditRequestUtils().get_requested_image_edit_optional_param(local_vars)
         )
-
         # Get optional parameters for the responses API
         image_edit_request_params: Dict = (
             _get_ImageEditRequestUtils().get_optional_params_image_edit(
@@ -831,7 +853,23 @@ def image_edit(
                 extra_headers=extra_headers,
                 api_key=kwargs.get("api_key"),
             )
-
+        elif custom_llm_provider == "stability":
+            image_edit_request_params.update(non_default_params)
+            return base_llm_http_handler.image_edit_handler(
+            model=model,
+            image=images,
+            prompt=prompt,
+            image_edit_provider_config=image_edit_provider_config,
+            image_edit_optional_request_params=image_edit_request_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
+            logging_obj=litellm_logging_obj,
+            extra_headers=extra_headers,
+            extra_body=extra_body,
+            timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
+            _is_async=_is_async,
+            client=kwargs.get("client"),
+        )
         # Call the handler with _is_async flag instead of directly calling the async handler
         return base_llm_http_handler.image_edit_handler(
             model=model,
