@@ -167,28 +167,27 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     )
             elif role == "tool":
                 # Convert tool message to function call output format
-                # The Responses API expects 'output' to be a string, not a list
+                # The Responses API expects 'output' to be a list with input_text/input_image types
+                # Using list format for consistency across text and multimodal content
+                tool_output: List[Dict[str, Any]]
                 if content is None:
-                    output_str = ""
+                    tool_output = []
                 elif isinstance(content, str):
-                    output_str = content
+                    # Convert string to list with input_text
+                    tool_output = [{"type": "input_text", "text": content}]
                 elif isinstance(content, list):
-                    # If content is a list, extract text parts and join them
-                    text_parts = []
-                    for item in content:
-                        if isinstance(item, str):
-                            text_parts.append(item)
-                        elif isinstance(item, dict) and item.get("type") == "text":
-                            text_parts.append(item.get("text", ""))
-                    output_str = " ".join(text_parts) if text_parts else str(content)
+                    # Transform list content to Responses API format
+                    tool_output = self._convert_content_to_responses_format(
+                        content, "user"  # Use "user" role to get input_* types
+                    )
                 else:
-                    # Fallback: convert unexpected types to string
-                    output_str = str(content)
+                    # Fallback: convert unexpected types to input_text
+                    tool_output = [{"type": "input_text", "text": str(content)}]
                 input_items.append(
                     {
                         "type": "function_call_output",
                         "call_id": tool_call_id,
-                        "output": output_str,
+                        "output": tool_output,
                     }
                 )
             elif role == "assistant" and tool_calls and isinstance(tool_calls, list):
