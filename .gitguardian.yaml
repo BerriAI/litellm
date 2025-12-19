@@ -26,10 +26,17 @@ secret-patterns:
   - pattern: "^sk-1234[5]?$"
     description: "Simple test sequence keys (sk-1234, sk-12345)"
   
-  # Environment variable references in code
-  - pattern: "^os\\.environ.*$"
+  # Environment variable references in code (with slashes)
+  - pattern: "^os\\.environ[/\\[].*$"
     description: "Python os.environ references (not actual secrets)"
   
+  # OIDC/CircleCI paths (test data)
+  - pattern: "^oidc/circleci.*$"
+    description: "OIDC CircleCI authentication paths used in tests"
+  
+  # GCS pub/sub folder name (test folder)
+  - pattern: "^gcs_pub_sub_body$"
+    description: "GCS pub/sub test data folder name"
   
   # OpenAI model names (not secrets)
   - pattern: "^text-(davinci|curie|babbage|ada)-\\d{3}$"
