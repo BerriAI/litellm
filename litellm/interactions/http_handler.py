@@ -4,7 +4,6 @@ HTTP Handler for Interactions API requests.
 This module handles the HTTP communication for the Google Interactions API.
 """
 
-import json
 from typing import (
     Any,
     AsyncIterator,
@@ -18,7 +17,6 @@ from typing import (
 import httpx
 
 import litellm
-from litellm._logging import verbose_logger
 from litellm.constants import request_timeout
 from litellm.interactions.streaming_iterator import (
     InteractionsAPIStreamingIterator,

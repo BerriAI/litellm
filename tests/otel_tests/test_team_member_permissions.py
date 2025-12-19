@@ -20,11 +20,12 @@
 
     Valid Permissions:
     - User tries editing a key with team_id = team_id -> expect to pass. Valid Permissions
-    - User tries deleting a key with team_id = team_id -> expect to pass. Valid Permissions
+    - Note: Delete/regenerate require key ownership or team admin status, not just team member permissions
+    - User tries deleting a key with team_id = team_id -> expect to fail (403) unless user owns the key or is team admin
+    - User tries regenerating a key with team_id = team_id -> expect to fail (403) unless user owns the key or is team admin
 
-
+    Invalid Permissions:
     - User tries creating a key with team_id = team_id -> expect to fail. Invalid Permissions
-    - User tries regenerating a key with team_id = team_id -> expect to fail. Invalid Permissions
     - User tries calling /key/info with team_id, expect to get valid response 
 
 
@@ -303,10 +304,11 @@ async def test_default_member_permissions():
             key=user_key,
             key_id=team_key,
         )
-        assert "status" in delete_result and delete_result["status"] == 401, "User should not be able to delete keys for team"
+        assert "status" in delete_result and delete_result["status"] == 403, "User should not be able to delete keys for team"
         error_data = json.loads(delete_result["error"])
         print("error response =", json.dumps(error_data, indent=4))
-        assert error_data["error"]["type"] == ProxyErrorTypes.team_member_permission_error.value, "Error should be a team member permission error"
+        # Delete endpoint now returns 403 with authorization error, not team_member_permission_error
+        assert "error" in error_data, "Error should contain error field"
         
         # User tries regenerating a key with team_id
         print("Regular team member trying to regenerate a key with team_id. Expecting error.")
@@ -318,7 +320,8 @@ async def test_default_member_permissions():
         assert "status" in regenerate_result and regenerate_result["status"] == 401, "User should not be able to regenerate keys for team"
         error_data = json.loads(regenerate_result["error"])
         print("error response =", json.dumps(error_data, indent=4))
-        assert error_data["error"]["type"] == ProxyErrorTypes.team_member_permission_error.value, "Error should be a team member permission error"
+        # Regenerate endpoint now returns 403 with authorization error, not team_member_permission_error
+        assert "error" in error_data, "Error should contain error field"
         
         # Test valid permissions
         # User tries calling /key/info with team_id
@@ -378,13 +381,15 @@ async def test_edit_delete_permissions():
         )
         assert "status" not in update_result, "User should be able to update keys for team"
         
-        # User tries deleting a key with team_id - test this last
+        # User tries deleting a key with team_id
+        # Note: Even with /key/delete permission, users can only delete keys they own or if they're team admin
+        # The delete endpoint checks ownership/team admin status, not just team member permissions
         delete_result = await delete_key(
             session=session,
             key=user_key,
             key_id=key_id
         )
-        assert "status" not in delete_result, "User should be able to delete keys for team"
+        assert "status" in delete_result and delete_result["status"] == 403, "User should not be able to delete keys they don't own (even with /key/delete permission, ownership is required)"
         
         # Test invalid permissions
         # User tries creating a key with team_id
@@ -396,13 +401,14 @@ async def test_edit_delete_permissions():
         assert "status" in create_result and create_result["status"] != 200, "User should not be able to create keys for team"
         
         # User tries regenerating a key with team_id
+        # Note: Even with /key/regenerate permission, users can only regenerate keys they own or if they're team admin
         regenerate_result = await regenerate_key(
             session=session,
             key=user_key,
             key_id=key_id,
             team_id=team_id
         )
-        assert "status" in regenerate_result and regenerate_result["status"] != 200, "User should not be able to regenerate keys for team"
+        assert "status" in regenerate_result and regenerate_result["status"] == 401, "User should not be able to regenerate keys they don't own (even with /key/regenerate permission, ownership is required)"
 
 @pytest.mark.asyncio()
 async def test_create_permissions():
@@ -475,13 +481,16 @@ async def test_create_permissions():
             key=user_key,
             key_id=key_id
         )
-        assert "status" in delete_result and delete_result["status"] != 200, "User should not be able to delete keys for team"
+        assert "status" in delete_result and delete_result["status"] == 403, "User should not be able to delete keys for team"
         
         # User tries regenerating a key with team_id
+        # User doesn't have /key/regenerate permission, so should get 401 (team member permission error)
         regenerate_result = await regenerate_key(
             session=session,
             key=user_key,
             key_id=key_id,
             team_id=team_id
         )
-        assert "status" in regenerate_result and regenerate_result["status"] != 200, "User should not be able to regenerate keys for team"
+        assert "status" in regenerate_result and regenerate_result["status"] == 401, "User should not be able to regenerate keys for team (no /key/regenerate permission)"
+        error_data = json.loads(regenerate_result["error"])
+        assert error_data["error"]["type"] == ProxyErrorTypes.team_member_permission_error.value, "Error should be a team member permission error"

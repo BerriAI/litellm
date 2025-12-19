@@ -391,6 +391,10 @@ class LakeraV2GuardrailConfigModel(BaseModel):
         default=True,
         description="Whether to include developer information in the response",
     )
+    on_flagged: Optional[Literal["block", "monitor"]] = Field(
+        default="block",
+        description="Action to take when content is flagged: 'block' (raise exception) or 'monitor' (log only)",
+    )
 
 
 class LassoGuardrailConfigModel(BaseModel):

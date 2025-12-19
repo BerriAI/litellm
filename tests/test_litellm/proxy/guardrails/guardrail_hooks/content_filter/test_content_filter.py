@@ -196,7 +196,7 @@ class TestContentFilterGuardrail:
                 input_type="request",
             )
 
-        assert exc_info.value.status_code == 400
+        assert exc_info.value.status_code == 403
         assert "us_ssn" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
@@ -501,7 +501,7 @@ class TestContentFilterGuardrail:
             ):
                 pass
 
-        assert exc_info.value.status_code == 400
+        assert exc_info.value.status_code == 403
         assert "us_ssn" in str(exc_info.value.detail)
 
     def test_init_with_plain_dicts(self):
@@ -669,7 +669,7 @@ class TestContentFilterGuardrail:
                 input_type="request",
             )
 
-        assert exc_info.value.status_code == 400
+        assert exc_info.value.status_code == 403
         assert "danger_word" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio

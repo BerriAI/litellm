@@ -692,12 +692,15 @@ class ModelResponseIterator:
                     text = content_block_start["content_block"]["text"]
                 elif content_block_start["content_block"]["type"] == "tool_use" or content_block_start["content_block"]["type"] == "server_tool_use":
                     self.tool_index += 1
+                    # Some server_tool_use blocks (e.g. web_search) may omit `input` at start;
+                    # default to {} to avoid KeyError and let deltas populate arguments.
+                    tool_input = content_block_start["content_block"].get("input", {})
                     tool_use = ChatCompletionToolCallChunk(
                         id=content_block_start["content_block"]["id"],
                         type="function",
                         function=ChatCompletionToolCallFunctionChunk(
                             name=content_block_start["content_block"]["name"],
-                            arguments=str(content_block_start["content_block"]["input"]),
+                            arguments=str(tool_input),
                         ),
                         index=self.tool_index,
                     )

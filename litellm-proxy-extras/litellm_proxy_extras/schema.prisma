@@ -728,3 +728,21 @@ model LiteLLM_UISettings {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 }
+
+// Skills table for storing LiteLLM-managed skills
+model LiteLLM_SkillsTable {
+  skill_id       String   @id @default(uuid())
+  display_title  String?
+  description    String?
+  instructions   String?  // The skill instructions/prompt (from SKILL.md)
+  source         String   @default("custom")  // "custom" or "anthropic"
+  latest_version String?
+  file_content   Bytes?   // Binary content of the skill files (zip)
+  file_name      String?  // Original filename
+  file_type      String?  // MIME type (e.g., "application/zip")
+  metadata       Json?    @default("{}")
+  created_at     DateTime @default(now())
+  created_by     String?
+  updated_at     DateTime @default(now()) @updatedAt
+  updated_by     String?
+}

@@ -6,7 +6,7 @@ authors:
   - name: Sameer Kankute
     title: SWE @ LiteLLM (LLM Translation)
     url: https://www.linkedin.com/in/sameer-kankute/
-    image_url: https://media.licdn.com/dms/image/v2/D4D03AQHB_loQYd5gjg/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1719137160975?e=1765411200&v=beta&t=c8396f--_lH6Fb_pVvx_jGholPfcl0bvwmNynbNdnII
+    image_url: https://pbs.twimg.com/profile_images/2001352686994907136/ONgNuSk5_400x400.jpg
   - name: Krrish Dholakia
     title: "CEO, LiteLLM"
     url: https://www.linkedin.com/in/krish-d/

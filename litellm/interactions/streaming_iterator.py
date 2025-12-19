@@ -8,11 +8,10 @@ from the Google Interactions API, similar to the responses API streaming iterato
 import asyncio
 import json
 from datetime import datetime
-from typing import Any, Dict, Iterator, Optional
+from typing import Any, Dict, Optional
 
 import httpx
 
-import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import STREAM_SSE_DONE_STRING
 from litellm.litellm_core_utils.asyncify import run_async_function
@@ -22,7 +21,6 @@ from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_b
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.interactions.transformation import BaseInteractionsAPIConfig
 from litellm.types.interactions import (
-    InteractionsAPIResponse,
     InteractionsAPIStreamingResponse,
 )
 from litellm.utils import CustomStreamWrapper
