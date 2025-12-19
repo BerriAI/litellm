@@ -1,6 +1,6 @@
 from unittest.mock import patch, MagicMock
 
-from litellm.llms.bedrock.image.image_handler import BedrockImageGeneration
+from litellm.llms.bedrock.image_generation.image_handler import BedrockImageGeneration
 
 def test_bedrock_image_prepare_request_with_arn() -> None:
     dummy_arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abcdefghi123"
