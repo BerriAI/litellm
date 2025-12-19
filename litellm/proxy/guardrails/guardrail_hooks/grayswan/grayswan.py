@@ -69,6 +69,7 @@ class GraySwanGuardrail(CustomGuardrail):
         streaming_end_of_stream_only: bool = False,
         streaming_sampling_rate: int = 5,
         fail_open: Optional[bool] = True,
+        guardrail_timeout: Optional[float] = 30.0,
         **kwargs: Any,
     ) -> None:
         self.async_handler = get_async_httpx_client(
@@ -103,6 +104,7 @@ class GraySwanGuardrail(CustomGuardrail):
         self.categories = categories
         self.policy_id = policy_id
         self.fail_open = True if fail_open is None else bool(fail_open)
+        self.guardrail_timeout = 30.0 if guardrail_timeout is None else float(guardrail_timeout)
 
         # Streaming configuration
         self.streaming_end_of_stream_only = streaming_end_of_stream_only
@@ -373,7 +375,7 @@ class GraySwanGuardrail(CustomGuardrail):
                 url=self.monitor_url,
                 headers=headers,
                 json=payload,
-                timeout=30.0,
+                timeout=self.guardrail_timeout,
             )
             response.raise_for_status()
             result = response.json()
