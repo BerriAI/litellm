@@ -1926,11 +1926,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     cors_allow_origins: Optional[List[str]] = Field(
         None,
-        description="CORS allowlist origins for the proxy. When set, only these origins receive CORS headers.",
+        description="CORS allowlist origins for the proxy. Defaults to all origins ('*') when unset. When set, only these origins receive CORS headers.",
     )
     cors_allow_credentials: Optional[bool] = Field(
         None,
-        description="Allow CORS credentials. Requires explicit cors_allow_origins (no wildcard).",
+        description="Allow CORS credentials. Defaults to False. Requires explicit cors_allow_origins (no wildcard).",
     )
     cors_allow_methods: Optional[List[str]] = Field(
         None,

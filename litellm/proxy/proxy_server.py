@@ -954,9 +954,10 @@ cors_allow_credentials = _get_cors_allow_credentials()
 cors_allow_methods = _get_cors_allow_list("LITELLM_CORS_ALLOW_METHODS") or ["*"]
 cors_allow_headers = _get_cors_allow_list("LITELLM_CORS_ALLOW_HEADERS") or ["*"]
 
-if "*" in cors_allow_origins and cors_allow_credentials:
+has_wildcard_origin = any("*" in origin for origin in cors_allow_origins)
+if has_wildcard_origin and cors_allow_credentials:
     verbose_proxy_logger.warning(
-        "CORS config rejects allow_credentials with wildcard origins. "
+        "CORS config rejects allow_credentials with wildcard origins or patterns. "
         "Set general_settings.cors_allow_origins to explicit origins to enable credentials."
     )
     cors_allow_credentials = False
