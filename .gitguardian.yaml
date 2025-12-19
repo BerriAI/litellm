@@ -1,60 +1,35 @@
-# GitGuardian configuration for LiteLLM
-# This file configures which files/directories ggshield should ignore
-# Conservative approach: Only exclude build artifacts, binaries, and cache files
-
-secret:
-  ignored_paths:
-    # Python build artifacts and distributions
-    - '**/*.whl'
-    - '**/*.egg'
-    - '**/*.egg-info'
-    - '**/dist/**'
-    - '**/build/**'
-
-    # Python cache and bytecode
-    - '**/__pycache__/**'
-    - '**/*.pyc'
-    - '**/*.pyo'
-    - '**/*.pyd'
-
-    # Binary files and media
-    - '**/*.woff'
-    - '**/*.woff2'
-    - '**/*.ttf'
-    - '**/*.otf'
-    - '**/*.eot'
-    - '**/*.webp'
-    - '**/*.avif'
-    - '**/*.png'
-    - '**/*.jpg'
-    - '**/*.jpeg'
-    - '**/*.gif'
-    - '**/*.ico'
-    - '**/*.svg'
-
-    # Large data files (tokenizers, models, etc.)
-    - '**/tokenizers/**'
-    - '**/*_tokenizer.json'
-    - '**/*_models.txt'
-
-    # Node modules and build artifacts
-    - '**/node_modules/**'
-    - '**/.next/**'
-    - '**/out/**'
-
-    # Test artifacts (not test files themselves)
-    - '**/test-results/**'
-    - '**/.pytest_cache/**'
-    - '**/.coverage'
-
-    # Documentation build outputs only
-    - '**/docs/my-website/.docusaurus/**'
-    - '**/docs/my-website/build/**'
-
-    # IDE and editor files
-    - '**/.vscode/**'
-    - '**/.idea/**'
-    - '**/*.swp'
-    - '**/*.swo'
-    - '**/*~'
 version: 2
+
+# Paths to exclude from scanning
+paths-ignore:
+  - "**/*.whl"
+  - "**/*.pyc"
+  - "**/__pycache__/**"
+  - "**/node_modules/**"
+  - "**/dist/**"
+  - "**/build/**"
+  - "**/.git/**"
+  - "**/venv/**"
+  - "**/.venv/**"
+
+# Secret pattern exclusions - simplified from multiple individual patterns
+secret-patterns:
+  # Consolidated test/mock/fake/example/dummy patterns
+  - pattern: "^(test|mock|fake|example|dummy)-.*$"
+    description: "Test, mock, fake, example, and dummy prefixed secrets"
+  
+  # Consolidated Stripe-like test key patterns
+  - pattern: "^sk-(test|mock|fake)-.*$"
+    description: "Stripe-like test, mock, and fake API keys"
+  
+  # Test sequence keys
+  - pattern: "^sk-1234[5]?$"
+    description: "Simple test sequence keys (sk-1234, sk-12345)"
+  
+  # Environment variable references in code
+  - pattern: "^os\\.environ.*$"
+    description: "Python os.environ references (not actual secrets)"
+  
+  # Generic database placeholder
+  - pattern: "^postgres$"
+    description: "Generic postgres placeholder"
