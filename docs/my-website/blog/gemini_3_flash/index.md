@@ -236,6 +236,11 @@ response = completion(
 print(response)
 ```
 
+:::note
+If using this model via vertex_ai, keep the location as global as this is the only supported location as of now.
+:::
+
+
 ## `reasoning_effort` Mapping for Gemini 3+
 
 | reasoning_effort | thinking_level | 
