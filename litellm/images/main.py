@@ -671,7 +671,7 @@ def image_variation(
 
 
 @client
-def image_edit(
+def image_edit(  # noqa: PLR0915
     image: Union[FileTypes, List[FileTypes]],
     prompt: str,
     model: Optional[str] = None,
