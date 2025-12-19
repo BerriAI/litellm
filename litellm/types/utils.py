@@ -3039,6 +3039,7 @@ class SearchProviders(str, Enum):
     DATAFORSEO = "dataforseo"
     FIRECRAWL = "firecrawl"
     SEARXNG = "searxng"
+    LINKUP = "linkup"
 
 
 # Create a set of all search provider values for quick lookup
