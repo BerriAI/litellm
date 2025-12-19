@@ -191,6 +191,8 @@ LLM_CONFIG_NAMES = (
     "JinaAIRerankConfig",
     "DeepinfraRerankConfig",
     "HostedVLLMRerankConfig",
+    "NvidiaNimRerankConfig",
+    "NvidiaNimRankingConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -956,5 +958,21 @@ def _lazy_import_llm_configs(name: str) -> Any:
 
         _globals["HostedVLLMRerankConfig"] = _HostedVLLMRerankConfig
         return _HostedVLLMRerankConfig
+
+    if name == "NvidiaNimRerankConfig":
+        from .llms.nvidia_nim.rerank.transformation import (
+            NvidiaNimRerankConfig as _NvidiaNimRerankConfig,
+        )
+
+        _globals["NvidiaNimRerankConfig"] = _NvidiaNimRerankConfig
+        return _NvidiaNimRerankConfig
+
+    if name == "NvidiaNimRankingConfig":
+        from .llms.nvidia_nim.rerank.ranking_transformation import (
+            NvidiaNimRankingConfig as _NvidiaNimRankingConfig,
+        )
+
+        _globals["NvidiaNimRankingConfig"] = _NvidiaNimRankingConfig
+        return _NvidiaNimRankingConfig
 
     raise AttributeError(f"LLM config lazy import: unknown attribute {name!r}")
