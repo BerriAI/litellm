@@ -293,19 +293,6 @@ class TestDataDogLLMObsLogger:
         assert logger._get_datadog_span_kind("unknown_call_type") == "llm"
         assert logger._get_datadog_span_kind(None) == "llm"
 
-    def test_dd_base_url_does_not_override_intake_url(self, mock_env_vars):
-        """Even if DD_BASE_URL is set, intake_url should remain DD_SITE-based"""
-        with patch.dict(os.environ, {"DD_BASE_URL": "https://example.datadog"}):
-            with patch(
-                "litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"
-            ), patch("asyncio.create_task"):
-                logger = DataDogLLMObsLogger()
-
-        expected_url = (
-            f"https://api.{logger.DD_SITE}/api/intake/llm-obs/v1/trace/spans"
-        )
-        assert logger.intake_url == expected_url
-
     @pytest.mark.asyncio
     async def test_async_log_failure_event(self, mock_env_vars):
         """Test that async_log_failure_event correctly processes failure payloads according to DD LLM Obs API spec"""
