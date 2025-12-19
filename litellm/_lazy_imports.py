@@ -169,6 +169,8 @@ LLM_CONFIG_NAMES = (
     "HuggingFaceEmbeddingConfig",
     "OobaboogaConfig",
     "MaritalkConfig",
+    "OpenrouterConfig",
+    "DataRobotConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -758,5 +760,21 @@ def _lazy_import_llm_configs(name: str) -> Any:
 
         _globals["MaritalkConfig"] = _MaritalkConfig
         return _MaritalkConfig
+
+    if name == "OpenrouterConfig":
+        from .llms.openrouter.chat.transformation import (
+            OpenrouterConfig as _OpenrouterConfig,
+        )
+
+        _globals["OpenrouterConfig"] = _OpenrouterConfig
+        return _OpenrouterConfig
+
+    if name == "DataRobotConfig":
+        from .llms.datarobot.chat.transformation import (
+            DataRobotConfig as _DataRobotConfig,
+        )
+
+        _globals["DataRobotConfig"] = _DataRobotConfig
+        return _DataRobotConfig
 
     raise AttributeError(f"LLM config lazy import: unknown attribute {name!r}")
