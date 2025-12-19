@@ -1130,7 +1130,54 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
 
 
 router = APIRouter()
-origins = ["*"]
+
+
+def _get_cors_allow_list(env_key: str) -> Optional[List[str]]:
+    raw_value = os.getenv(env_key)
+    if raw_value is None:
+        return None
+    if raw_value.strip() == "":
+        return []
+    return [value.strip() for value in raw_value.split(",") if value.strip()]
+
+
+def _get_cors_allow_credentials() -> bool:
+    raw_value = os.getenv("LITELLM_CORS_ALLOW_CREDENTIALS")
+    if raw_value is None:
+        return True
+    if raw_value.strip() == "":
+        return False
+    return raw_value.strip().lower() in {"1", "true", "yes"}
+
+
+configured_cors_allow_origins = _get_cors_allow_list("LITELLM_CORS_ALLOW_ORIGINS")
+configured_cors_allow_methods = _get_cors_allow_list("LITELLM_CORS_ALLOW_METHODS")
+configured_cors_allow_headers = _get_cors_allow_list("LITELLM_CORS_ALLOW_HEADERS")
+cors_credentials_was_configured = (
+    os.getenv("LITELLM_CORS_ALLOW_CREDENTIALS") is not None
+)
+
+cors_allow_origins = (
+    ["*"] if configured_cors_allow_origins is None else configured_cors_allow_origins
+)
+cors_allow_credentials = _get_cors_allow_credentials()
+cors_allow_methods = (
+    ["*"] if configured_cors_allow_methods is None else configured_cors_allow_methods
+)
+cors_allow_headers = (
+    ["*"] if configured_cors_allow_headers is None else configured_cors_allow_headers
+)
+
+has_wildcard_origin = any("*" in origin for origin in cors_allow_origins)
+should_validate_cors_credentials = (
+    configured_cors_allow_origins is not None or cors_credentials_was_configured
+)
+if should_validate_cors_credentials and has_wildcard_origin and cors_allow_credentials:
+    verbose_proxy_logger.warning(
+        "CORS config rejects allow_credentials with wildcard origins or patterns. "
+        "Set general_settings.cors_allow_origins to explicit origins to enable credentials."
+    )
+    cors_allow_credentials = False
 
 
 # get current directory
@@ -1456,10 +1503,10 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=cors_allow_origins,
+    allow_credentials=cors_allow_credentials,
+    allow_methods=cors_allow_methods,
+    allow_headers=cors_allow_headers,
     expose_headers=LITELLM_UI_ALLOW_HEADERS,
 )
 
