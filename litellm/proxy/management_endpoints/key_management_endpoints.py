@@ -1771,6 +1771,7 @@ async def delete_key_fn(
                 tokens=data.keys,
                 user_api_key_cache=user_api_key_cache,
                 user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=litellm_changed_by,
             )
             num_keys_to_be_deleted = len(data.keys)
             deleted_keys = data.keys
@@ -1780,6 +1781,7 @@ async def delete_key_fn(
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=litellm_changed_by,
             )
             num_keys_to_be_deleted = len(data.key_aliases)
             deleted_keys = data.key_aliases
@@ -2341,6 +2343,7 @@ async def delete_verification_tokens(
     tokens: List,
     user_api_key_cache: DualCache,
     user_api_key_dict: UserAPIKeyAuth,
+    litellm_changed_by: Optional[str] = None,
 ) -> Tuple[Optional[Dict], List[LiteLLM_VerificationToken]]:
     """
     Helper that deletes the list of tokens from the database
@@ -2377,38 +2380,43 @@ async def delete_verification_tokens(
                     detail={"error": "No keys found"},
                 )
 
-            # Assuming 'db' is your Prisma Client instance
-            # check if admin making request - don't filter by user-id
+            if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+                authorized_keys = _keys_being_deleted
+            else:
+                authorized_keys: List[LiteLLM_VerificationToken] = []
+                for key in _keys_being_deleted:
+                    if await can_delete_verification_token(
+                        key_info=key,
+                        user_api_key_cache=user_api_key_cache,
+                        user_api_key_dict=user_api_key_dict,
+                        prisma_client=prisma_client,
+                    ):
+                        authorized_keys.append(key)
+                    else:
+                        raise HTTPException(
+                            status_code=status.HTTP_403_FORBIDDEN,
+                            detail={
+                                "error": "You are not authorized to delete this key"
+                            },
+                        )
+            await _persist_deleted_verification_tokens(
+                keys=authorized_keys,
+                prisma_client=prisma_client,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=litellm_changed_by,
+            )
+
             if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
                 deleted_tokens = await prisma_client.delete_data(tokens=tokens)
-            # else
             else:
-                tasks = []
-                deleted_tokens = []
-                for key in _keys_being_deleted:
+                deletion_tasks = [
+                    prisma_client.delete_data(tokens=[key.token])
+                    for key in authorized_keys
+                ]
+                await asyncio.gather(*deletion_tasks)
 
-                    async def _delete_key(key: LiteLLM_VerificationToken):
-                        if await can_delete_verification_token(
-                            key_info=key,
-                            user_api_key_cache=user_api_key_cache,
-                            user_api_key_dict=user_api_key_dict,
-                            prisma_client=prisma_client,
-                        ):
-                            await prisma_client.delete_data(tokens=[key.token])
-                            deleted_tokens.append(key.token)
-                        else:
-                            raise HTTPException(
-                                status_code=status.HTTP_403_FORBIDDEN,
-                                detail={
-                                    "error": "You are not authorized to delete this key"
-                                },
-                            )
-
-                    tasks.append(_delete_key(key))
-                await asyncio.gather(*tasks)
-
-                _num_deleted_tokens = len(deleted_tokens)
-                if _num_deleted_tokens != len(tokens):
+                deleted_tokens = [key.token for key in authorized_keys]
+                if len(deleted_tokens) != len(tokens):
                     failed_tokens = [
                         token for token in tokens if token not in deleted_tokens
                     ]
@@ -2436,11 +2444,68 @@ async def delete_verification_tokens(
     return {"deleted_keys": deleted_tokens}, _keys_being_deleted
 
 
+async def _persist_deleted_verification_tokens(
+    keys: List[LiteLLM_VerificationToken],
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_changed_by: Optional[str] = None,
+) -> None:
+    if not keys:
+        return
+
+    deleted_at = datetime.now(timezone.utc)
+    records = []
+    for key in keys:
+        key_payload = _dump_verification_token_payload(key)
+        deleted_record = LiteLLM_DeletedVerificationToken(
+            **key_payload,
+            deleted_at=deleted_at,
+            deleted_by=user_api_key_dict.user_id,
+            deleted_by_api_key=user_api_key_dict.api_key,
+            litellm_changed_by=litellm_changed_by,
+        )
+        record = prisma_client.jsonify_object(deleted_record.model_dump())
+        org_id_value = record.pop("org_id", None)
+        if org_id_value is not None:
+            record["organization_id"] = org_id_value
+        for rel_key in (
+            "litellm_budget_table",
+            "litellm_organization_table",
+            "object_permission",
+        ):
+            record.pop(rel_key, None)
+        if record.get("id") is None:
+            record.pop("id", None)
+        records.append(record)
+
+    await asyncio.gather(
+        *[
+            prisma_client.db.litellm_deletedverificationtoken.create(data=record)
+            for record in records
+        ]
+    )
+
+
+def _dump_verification_token_payload(
+    token_object: LiteLLM_VerificationToken,
+) -> Dict:
+    try:
+        return token_object.model_dump()
+    except AttributeError:
+        if hasattr(token_object, "dict"):
+            return token_object.dict()
+        return {
+            key: getattr(token_object, key)
+            for key in getattr(token_object, "__dict__", {}).keys()
+        }
+
+
 async def delete_key_aliases(
     key_aliases: List[str],
     user_api_key_cache: DualCache,
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
+    litellm_changed_by: Optional[str] = None,
 ) -> Tuple[Optional[Dict], List[LiteLLM_VerificationToken]]:
     _keys_being_deleted = await prisma_client.db.litellm_verificationtoken.find_many(
         where={"key_alias": {"in": key_aliases}}
@@ -2451,6 +2516,7 @@ async def delete_key_aliases(
         tokens=tokens,
         user_api_key_cache=user_api_key_cache,
         user_api_key_dict=user_api_key_dict,
+        litellm_changed_by=litellm_changed_by,
     )
 
 

@@ -2018,6 +2018,21 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(protected_namespaces=())
 
 
+class LiteLLM_DeletedVerificationToken(LiteLLM_VerificationToken):
+    """
+    Recording of deleted keys for audit purposes. Mirrors LiteLLM_VerificationToken
+    plus metadata captured at deletion time.
+    """
+
+    id: Optional[str] = None
+    deleted_at: Optional[datetime] = None
+    deleted_by: Optional[str] = None
+    deleted_by_api_key: Optional[str] = None
+    litellm_changed_by: Optional[str] = None
+
+    model_config = ConfigDict(protected_namespaces=())
+
+
 class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     """
     Combined view of litellm verification token + litellm team table (select values)
