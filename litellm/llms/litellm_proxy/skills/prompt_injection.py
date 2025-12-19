@@ -250,3 +250,43 @@ class SkillPromptInjectionHandler:
 
         return tool
 
+    def convert_skill_to_anthropic_tool(self, skill: LiteLLM_SkillsTable) -> Dict[str, Any]:
+        """
+        Convert a LiteLLM skill to an Anthropic-style tool (messages API format).
+
+        Args:
+            skill: The skill from LiteLLM database
+
+        Returns:
+            Anthropic-style tool definition with name, description, input_schema
+        """
+        func_name = skill.skill_id.replace("-", "_").replace(" ", "_")
+
+        description = (
+            skill.instructions
+            or skill.description
+            or skill.display_title
+            or f"Skill: {skill.skill_id}"
+        )
+
+        max_desc_length = 1024
+        if len(description) > max_desc_length:
+            description = description[: max_desc_length - 3] + "..."
+
+        input_schema: Dict[str, Any] = {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        }
+
+        if skill.metadata and isinstance(skill.metadata, dict):
+            params = skill.metadata.get("parameters")
+            if params and isinstance(params, dict):
+                input_schema = params
+
+        return {
+            "name": func_name,
+            "description": description,
+            "input_schema": input_schema,
+        }
+
