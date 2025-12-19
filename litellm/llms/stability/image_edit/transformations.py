@@ -91,7 +91,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
                 mapped_params["_n"] = v
             elif k == "response_format":
                 # Only b64 supported at Stability; store for postprocessing
-                mapped_params["_response_format"] = v
+                mapped_params["output_format"] = v
             elif k not in supported_params:
                 if not drop_params:
                     raise ValueError(
@@ -209,11 +209,22 @@ class StabilityImageEditConfig(BaseImageEditConfig):
                 "negative_prompt",
                 "aspect_ratio",
                 "seed",
-                "output_format",
-                "model",
                 "mode",
                 "strength",
                 "style_preset",
+                "left",
+                "bottom",
+                "right",
+                "top",
+                "creativity",
+                "search_prompt",
+                "grow_mask",
+                "select_prompt",
+                "control_strength",
+                "init_image",
+                "style_image",
+                "composition_fidelity",
+                "change_strength"
             ]:
                 data[key] = value  # type: ignore
 
