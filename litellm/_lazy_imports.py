@@ -179,6 +179,8 @@ LLM_CONFIG_NAMES = (
     "TritonInferConfig",
     "TritonEmbeddingConfig",
     "HuggingFaceRerankConfig",
+    "DatabricksConfig",
+    "DatabricksEmbeddingConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -848,5 +850,21 @@ def _lazy_import_llm_configs(name: str) -> Any:
 
         _globals["HuggingFaceRerankConfig"] = _HuggingFaceRerankConfig
         return _HuggingFaceRerankConfig
+
+    if name == "DatabricksConfig":
+        from .llms.databricks.chat.transformation import (
+            DatabricksConfig as _DatabricksConfig,
+        )
+
+        _globals["DatabricksConfig"] = _DatabricksConfig
+        return _DatabricksConfig
+
+    if name == "DatabricksEmbeddingConfig":
+        from .llms.databricks.embed.transformation import (
+            DatabricksEmbeddingConfig as _DatabricksEmbeddingConfig,
+        )
+
+        _globals["DatabricksEmbeddingConfig"] = _DatabricksEmbeddingConfig
+        return _DatabricksEmbeddingConfig
 
     raise AttributeError(f"LLM config lazy import: unknown attribute {name!r}")

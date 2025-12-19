@@ -1065,8 +1065,6 @@ from .utils import client
 
 from .llms.custom_llm import CustomLLM
 from .llms.anthropic.common_utils import AnthropicModelInfo
-from .llms.databricks.chat.transformation import DatabricksConfig
-from .llms.databricks.embed.transformation import DatabricksEmbeddingConfig
 from .llms.predibase.chat.transformation import PredibaseConfig
 from .llms.replicate.chat.transformation import ReplicateConfig
 from .llms.snowflake.chat.transformation import SnowflakeConfig
