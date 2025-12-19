@@ -1,334 +1,195 @@
 """
 Handler for LiteLLM database-backed skills operations.
 
-This handler provides sync/async methods for skills CRUD operations
-when custom_llm_provider="litellm" is specified.
-
-Pattern follows litellm/responses/litellm_completion_transformation/handler.py
+This module contains the actual database operations for skills CRUD.
+Used by the transformation layer and skills injection hook.
 """
 
-from typing import TYPE_CHECKING, Any, Coroutine, Dict, List, Optional, Union
+import uuid
+from typing import Any, Dict, List, Optional
 
-from litellm.types.llms.anthropic_skills import (
-    DeleteSkillResponse,
-    ListSkillsResponse,
-    Skill,
-)
-from litellm.types.utils import LlmProviders
-
-if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm._logging import verbose_logger
+from litellm.proxy._types import LiteLLM_SkillsTable, NewSkillRequest
 
 
-class LiteLLMSkillsTransformationHandler:
+class LiteLLMSkillsHandler:
     """
-    Handler for transforming skills API requests to LiteLLM database operations.
-    
-    This is used when custom_llm_provider="litellm" to store/retrieve skills
-    from the LiteLLM proxy database instead of calling an external API.
+    Handler for LiteLLM database-backed skills operations.
+
+    This class provides static methods for CRUD operations on skills
+    stored in the LiteLLM proxy database (LiteLLM_SkillsTable).
     """
 
-    @property
-    def custom_llm_provider(self) -> str:
-        """Return the provider name for logging."""
-        return LlmProviders.LITELLM_PROXY.value
+    @staticmethod
+    async def _get_prisma_client():
+        """Get the prisma client from proxy server."""
+        from litellm.proxy.proxy_server import prisma_client
 
-    def create_skill_handler(
-        self,
-        display_title: Optional[str] = None,
-        description: Optional[str] = None,
-        instructions: Optional[str] = None,
-        files: Optional[List[Any]] = None,
-        file_content: Optional[bytes] = None,
-        file_name: Optional[str] = None,
-        file_type: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        if prisma_client is None:
+            raise ValueError(
+                "Prisma client is not initialized. "
+                "Database connection required for LiteLLM skills."
+            )
+        return prisma_client
+
+    @staticmethod
+    async def create_skill(
+        data: NewSkillRequest,
         user_id: Optional[str] = None,
-        _is_async: bool = False,
-        logging_obj: Optional["LiteLLMLoggingObj"] = None,
-        litellm_call_id: Optional[str] = None,
-        **kwargs,
-    ) -> Union[Skill, Coroutine[Any, Any, Skill]]:
+    ) -> LiteLLM_SkillsTable:
         """
-        Create a skill in LiteLLM database.
-        
+        Create a new skill in the LiteLLM database.
+
         Args:
-            display_title: Display title for the skill
-            description: Description of the skill
-            instructions: Instructions/prompt for the skill
-            files: Files to upload (for compatibility with Anthropic API)
-            file_content: Binary content of skill files
-            file_name: Original filename
-            file_type: MIME type
-            metadata: Additional metadata
-            user_id: User ID for tracking
-            _is_async: Whether to return a coroutine
-            
+            data: NewSkillRequest with skill details
+            user_id: Optional user ID for tracking
+
         Returns:
-            Skill object or coroutine that returns Skill
+            LiteLLM_SkillsTable record
         """
-        # Pre-call logging
-        if logging_obj:
-            logging_obj.update_environment_variables(
-                model=None,
-                optional_params={"display_title": display_title},
-                litellm_params={"litellm_call_id": litellm_call_id},
-                custom_llm_provider=self.custom_llm_provider,
-            )
+        prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
 
-        if _is_async:
-            return self._async_create_skill(
-                display_title=display_title,
-                description=description,
-                instructions=instructions,
-                file_content=file_content,
-                file_name=file_name,
-                file_type=file_type,
-                metadata=metadata,
-                user_id=user_id,
-            )
-        
-        import asyncio
-        return asyncio.get_event_loop().run_until_complete(
-            self._async_create_skill(
-                display_title=display_title,
-                description=description,
-                instructions=instructions,
-                file_content=file_content,
-                file_name=file_name,
-                file_type=file_type,
-                metadata=metadata,
-                user_id=user_id,
-            )
+        skill_id = f"skill_{uuid.uuid4()}"
+
+        skill_data: Dict[str, Any] = {
+            "skill_id": skill_id,
+            "display_title": data.display_title,
+            "description": data.description,
+            "instructions": data.instructions,
+            "source": "custom",
+            "created_by": user_id,
+            "updated_by": user_id,
+        }
+
+        # Handle metadata
+        if data.metadata is not None:
+            from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+            skill_data["metadata"] = safe_dumps(data.metadata)
+
+        # Handle file content
+        if data.file_content is not None:
+            skill_data["file_content"] = data.file_content
+        if data.file_name is not None:
+            skill_data["file_name"] = data.file_name
+        if data.file_type is not None:
+            skill_data["file_type"] = data.file_type
+
+        verbose_logger.debug(
+            f"LiteLLMSkillsHandler: Creating skill {skill_id} with title={data.display_title}"
         )
 
-    async def _async_create_skill(
-        self,
-        display_title: Optional[str] = None,
-        description: Optional[str] = None,
-        instructions: Optional[str] = None,
-        file_content: Optional[bytes] = None,
-        file_name: Optional[str] = None,
-        file_type: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        user_id: Optional[str] = None,
-    ) -> Skill:
-        """Async implementation of create_skill."""
-        # Lazy import to avoid SDK dependency on proxy
-        from litellm.proxy._types import NewSkillRequest
-        from litellm.proxy.management_endpoints.skills_management_endpoints import (
-            LiteLLMSkillsHandler,
-        )
+        new_skill = await prisma_client.db.litellm_skillstable.create(data=skill_data)
 
-        skill_request = NewSkillRequest(
-            display_title=display_title,
-            description=description,
-            instructions=instructions,
-            file_content=file_content,
-            file_name=file_name,
-            file_type=file_type,
-            metadata=metadata,
-        )
+        return LiteLLM_SkillsTable(**new_skill.model_dump())
 
-        db_skill = await LiteLLMSkillsHandler.create_skill(
-            data=skill_request,
-            user_id=user_id,
-        )
-
-        return self._db_skill_to_response(db_skill)
-
-    def list_skills_handler(
-        self,
+    @staticmethod
+    async def list_skills(
         limit: int = 20,
         offset: int = 0,
-        _is_async: bool = False,
-        logging_obj: Optional["LiteLLMLoggingObj"] = None,
-        litellm_call_id: Optional[str] = None,
-        **kwargs,
-    ) -> Union[ListSkillsResponse, Coroutine[Any, Any, ListSkillsResponse]]:
+    ) -> List[LiteLLM_SkillsTable]:
         """
-        List skills from LiteLLM database.
-        
+        List skills from the LiteLLM database.
+
         Args:
             limit: Maximum number of skills to return
             offset: Number of skills to skip
-            _is_async: Whether to return a coroutine
-            logging_obj: LiteLLM logging object
-            litellm_call_id: Call ID for logging
-            
+
         Returns:
-            ListSkillsResponse or coroutine that returns ListSkillsResponse
+            List of LiteLLM_SkillsTable records
         """
-        # Pre-call logging
-        if logging_obj:
-            logging_obj.update_environment_variables(
-                model=None,
-                optional_params={"limit": limit, "offset": offset},
-                litellm_params={"litellm_call_id": litellm_call_id},
-                custom_llm_provider=self.custom_llm_provider,
-            )
+        prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
 
-        if _is_async:
-            return self._async_list_skills(limit=limit, offset=offset)
-        
-        import asyncio
-        return asyncio.get_event_loop().run_until_complete(
-            self._async_list_skills(limit=limit, offset=offset)
+        verbose_logger.debug(
+            f"LiteLLMSkillsHandler: Listing skills with limit={limit}, offset={offset}"
         )
 
-    async def _async_list_skills(
-        self,
-        limit: int = 20,
-        offset: int = 0,
-    ) -> ListSkillsResponse:
-        """Async implementation of list_skills."""
-        # Lazy import to avoid SDK dependency on proxy
-        from litellm.proxy.management_endpoints.skills_management_endpoints import (
-            LiteLLMSkillsHandler,
+        skills = await prisma_client.db.litellm_skillstable.find_many(
+            take=limit,
+            skip=offset,
+            order={"created_at": "desc"},
         )
 
-        db_skills = await LiteLLMSkillsHandler.list_skills(
-            limit=limit,
-            offset=offset,
-        )
+        return [LiteLLM_SkillsTable(**s.model_dump()) for s in skills]
 
-        skills = [self._db_skill_to_response(s) for s in db_skills]
-        return ListSkillsResponse(
-            data=skills,
-            has_more=len(skills) >= limit,
-            next_page=None,
-        )
-
-    def get_skill_handler(
-        self,
-        skill_id: str,
-        _is_async: bool = False,
-        logging_obj: Optional["LiteLLMLoggingObj"] = None,
-        litellm_call_id: Optional[str] = None,
-        **kwargs,
-    ) -> Union[Skill, Coroutine[Any, Any, Skill]]:
+    @staticmethod
+    async def get_skill(skill_id: str) -> LiteLLM_SkillsTable:
         """
-        Get a skill from LiteLLM database.
-        
+        Get a skill by ID from the LiteLLM database.
+
         Args:
             skill_id: The skill ID to retrieve
-            _is_async: Whether to return a coroutine
-            logging_obj: LiteLLM logging object
-            litellm_call_id: Call ID for logging
-            
+
         Returns:
-            Skill or coroutine that returns Skill
-        """
-        # Pre-call logging
-        if logging_obj:
-            logging_obj.update_environment_variables(
-                model=None,
-                optional_params={"skill_id": skill_id},
-                litellm_params={"litellm_call_id": litellm_call_id},
-                custom_llm_provider=self.custom_llm_provider,
-            )
+            LiteLLM_SkillsTable record
 
-        if _is_async:
-            return self._async_get_skill(skill_id=skill_id)
-        
-        import asyncio
-        return asyncio.get_event_loop().run_until_complete(
-            self._async_get_skill(skill_id=skill_id)
+        Raises:
+            ValueError: If skill not found
+        """
+        prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
+
+        verbose_logger.debug(f"LiteLLMSkillsHandler: Getting skill {skill_id}")
+
+        skill = await prisma_client.db.litellm_skillstable.find_unique(
+            where={"skill_id": skill_id}
         )
 
-    async def _async_get_skill(self, skill_id: str) -> Skill:
-        """Async implementation of get_skill."""
-        # Lazy import to avoid SDK dependency on proxy
-        from litellm.proxy.management_endpoints.skills_management_endpoints import (
-            LiteLLMSkillsHandler,
-        )
+        if skill is None:
+            raise ValueError(f"Skill not found: {skill_id}")
 
-        db_skill = await LiteLLMSkillsHandler.get_skill(skill_id=skill_id)
-        return self._db_skill_to_response(db_skill)
+        return LiteLLM_SkillsTable(**skill.model_dump())
 
-    def delete_skill_handler(
-        self,
-        skill_id: str,
-        _is_async: bool = False,
-        logging_obj: Optional["LiteLLMLoggingObj"] = None,
-        litellm_call_id: Optional[str] = None,
-        **kwargs,
-    ) -> Union[DeleteSkillResponse, Coroutine[Any, Any, DeleteSkillResponse]]:
+    @staticmethod
+    async def delete_skill(skill_id: str) -> Dict[str, str]:
         """
-        Delete a skill from LiteLLM database.
-        
+        Delete a skill by ID from the LiteLLM database.
+
         Args:
             skill_id: The skill ID to delete
-            _is_async: Whether to return a coroutine
-            logging_obj: LiteLLM logging object
-            litellm_call_id: Call ID for logging
-            
+
         Returns:
-            DeleteSkillResponse or coroutine that returns DeleteSkillResponse
+            Dict with id and type of deleted skill
+
+        Raises:
+            ValueError: If skill not found
         """
-        # Pre-call logging
-        if logging_obj:
-            logging_obj.update_environment_variables(
-                model=None,
-                optional_params={"skill_id": skill_id},
-                litellm_params={"litellm_call_id": litellm_call_id},
-                custom_llm_provider=self.custom_llm_provider,
-            )
+        prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
 
-        if _is_async:
-            return self._async_delete_skill(skill_id=skill_id)
-        
-        import asyncio
-        return asyncio.get_event_loop().run_until_complete(
-            self._async_delete_skill(skill_id=skill_id)
+        verbose_logger.debug(f"LiteLLMSkillsHandler: Deleting skill {skill_id}")
+
+        # Check if skill exists
+        skill = await prisma_client.db.litellm_skillstable.find_unique(
+            where={"skill_id": skill_id}
         )
 
-    async def _async_delete_skill(self, skill_id: str) -> DeleteSkillResponse:
-        """Async implementation of delete_skill."""
-        # Lazy import to avoid SDK dependency on proxy
-        from litellm.proxy.management_endpoints.skills_management_endpoints import (
-            LiteLLMSkillsHandler,
-        )
+        if skill is None:
+            raise ValueError(f"Skill not found: {skill_id}")
 
-        result = await LiteLLMSkillsHandler.delete_skill(skill_id=skill_id)
-        return DeleteSkillResponse(
-            id=result["id"],
-            type=result.get("type", "skill_deleted"),
-        )
+        # Delete the skill
+        await prisma_client.db.litellm_skillstable.delete(where={"skill_id": skill_id})
 
-    def _db_skill_to_response(self, db_skill: Any) -> Skill:
+        return {"id": skill_id, "type": "skill_deleted"}
+
+    @staticmethod
+    async def fetch_skill_from_db(skill_id: str) -> Optional[LiteLLM_SkillsTable]:
         """
-        Convert a database skill record to Anthropic-compatible Skill response.
-        
+        Fetch a skill from the database (used by skills injection hook).
+
+        This is a convenience method that returns None instead of raising
+        an exception if the skill is not found.
+
         Args:
-            db_skill: LiteLLM_SkillsTable record
-            
+            skill_id: The skill ID to fetch
+
         Returns:
-            Skill object
+            LiteLLM_SkillsTable or None if not found
         """
-        created_at = ""
-        updated_at = ""
-        
-        if hasattr(db_skill, "created_at") and db_skill.created_at:
-            created_at = (
-                db_skill.created_at.isoformat()
-                if hasattr(db_skill.created_at, "isoformat")
-                else str(db_skill.created_at)
+        try:
+            return await LiteLLMSkillsHandler.get_skill(skill_id)
+        except ValueError:
+            return None
+        except Exception as e:
+            verbose_logger.warning(
+                f"LiteLLMSkillsHandler: Error fetching skill {skill_id}: {e}"
             )
-        if hasattr(db_skill, "updated_at") and db_skill.updated_at:
-            updated_at = (
-                db_skill.updated_at.isoformat()
-                if hasattr(db_skill.updated_at, "isoformat")
-                else str(db_skill.updated_at)
-            )
-
-        return Skill(
-            id=db_skill.skill_id,
-            created_at=created_at,
-            updated_at=updated_at,
-            display_title=db_skill.display_title,
-            latest_version=db_skill.latest_version,
-            source=db_skill.source or "custom",
-            type="skill",
-        )
-
+            return None
