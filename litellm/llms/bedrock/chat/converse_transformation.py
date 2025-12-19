@@ -366,7 +366,7 @@ class AmazonConverseConfig(BaseConfig):
 
         ## Filter out 'cross-region' from model name
         base_model = BedrockModelInfo.get_base_model(model)
-
+        # print(f"DEBUG: base_model={base_model}")
         if (
             base_model.startswith("anthropic")
             or base_model.startswith("mistral")
@@ -376,16 +376,29 @@ class AmazonConverseConfig(BaseConfig):
             or base_model.startswith("meta.llama3-3")
             or base_model.startswith("meta.llama4")
             or base_model.startswith("amazon.nova")
+            or base_model.startswith("moonshot")
+            or base_model.startswith("minimax")
+            or base_model.startswith("google")
+            or base_model.startswith("nvidia")
+            or base_model.startswith("qwen")
+            or base_model.startswith("openai")
             or supports_function_calling(
                 model=model, custom_llm_provider=self.custom_llm_provider
             )
         ):
             supported_params.append("tools")
 
-        if litellm.utils.supports_tool_choice(
-            model=model, custom_llm_provider=self.custom_llm_provider
-        ) or litellm.utils.supports_tool_choice(
-            model=base_model, custom_llm_provider=self.custom_llm_provider
+        if (
+            base_model.startswith("moonshot")
+            or base_model.startswith("minimax")
+            or base_model.startswith("google")
+            or base_model.startswith("qwen")
+            or litellm.utils.supports_tool_choice(
+                model=model, custom_llm_provider=self.custom_llm_provider
+            )
+            or litellm.utils.supports_tool_choice(
+                model=base_model, custom_llm_provider=self.custom_llm_provider
+            )
         ):
             # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             supported_params.append("tool_choice")
@@ -685,10 +698,7 @@ class AmazonConverseConfig(BaseConfig):
             )
 
         final_is_thinking_enabled = self.is_thinking_enabled(optional_params)
-        if (
-            final_is_thinking_enabled
-            and "tool_choice" in optional_params
-        ):
+        if final_is_thinking_enabled and "tool_choice" in optional_params:
             tool_choice_block = optional_params["tool_choice"]
             if isinstance(tool_choice_block, dict):
                 if "any" in tool_choice_block or "tool" in tool_choice_block:
@@ -950,7 +960,10 @@ class AmazonConverseConfig(BaseConfig):
         if original_tools:
             for tool in original_tools:
                 tool_type = tool.get("type", "")
-                if tool_type in ("tool_search_tool_regex_20251119", "tool_search_tool_bm25_20251119"):
+                if tool_type in (
+                    "tool_search_tool_regex_20251119",
+                    "tool_search_tool_bm25_20251119",
+                ):
                     # Tool search not supported in Converse API - skip it
                     continue
                 filtered_tools.append(tool)
@@ -1022,9 +1035,11 @@ class AmazonConverseConfig(BaseConfig):
                 )
 
         # Prepare and separate parameters
-        inference_params, additional_request_params, request_metadata = (
-            self._prepare_request_params(optional_params, model)
-        )
+        (
+            inference_params,
+            additional_request_params,
+            request_metadata,
+        ) = self._prepare_request_params(optional_params, model)
 
         original_tools = inference_params.pop("tools", [])
 
@@ -1310,7 +1325,9 @@ class AmazonConverseConfig(BaseConfig):
 
         return message, returned_finish_reason
 
-    def _translate_message_content(self, content_blocks: List[ContentBlock]) -> Tuple[
+    def _translate_message_content(
+        self, content_blocks: List[ContentBlock], model: str = ""
+    ) -> Tuple[
         str,
         List[ChatCompletionToolCallChunk],
         Optional[List[BedrockConverseReasoningContentBlock]],
@@ -1318,11 +1335,17 @@ class AmazonConverseConfig(BaseConfig):
         """
         Translate the message content to a string and a list of tool calls and reasoning content blocks
 
+        Args:
+            content_blocks: List of content blocks from Bedrock response
+            model: Model identifier (used for cleaning proprietary tokens)
+
         Returns:
-            content_str: str
+            content_str: str (cleaned of proprietary tokens)
             tools: List[ChatCompletionToolCallChunk]
             reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]]
         """
+        from ..tool_parsers import clean_tool_tokens_from_text
+
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
         reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]] = (
@@ -1372,6 +1395,10 @@ class AmazonConverseConfig(BaseConfig):
                 if reasoningContentBlocks is None:
                     reasoningContentBlocks = []
                 reasoningContentBlocks.append(content["reasoningContent"])
+
+        # Clean proprietary tool call tokens from text (Kimi, MiniMax, etc.)
+        if model:
+            content_str = clean_tool_tokens_from_text(content_str, model)
 
         return content_str, tools, reasoningContentBlocks
 
@@ -1457,7 +1484,7 @@ class AmazonConverseConfig(BaseConfig):
                 content_str,
                 tools,
                 reasoningContentBlocks,
-            ) = self._translate_message_content(message["content"])
+            ) = self._translate_message_content(message["content"], model=model)
 
         if reasoningContentBlocks is not None:
             chat_completion_message["provider_specific_fields"] = {

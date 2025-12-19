@@ -2418,3 +2418,168 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 ```bash
 https://some-api-url/models
 ```
+
+### Kimi-K2-Thinking and MiniMax M2 Models
+
+LiteLLM supports proprietary thinking features for Kimi-K2-Thinking and MiniMax M2 models on Bedrock.
+
+| Property | Details |
+|----------|---------|
+| Model IDs | `moonshot.kimi-k2-thinking`, `minimax.minimax-m2` |
+| Provider Route | `bedrock/converse/moonshot.kimi-k2-thinking`, `bedrock/converse/minimax.minimax-m2` |
+| Special Features | Thinking/reasoning parameters, proprietary tool call parsing |
+
+#### Supported Features
+
+**Kimi-K2-Thinking:**
+-Thinking Content: Supports `thinking` and `reasoning_effort` parameters
+-Tool Call Parsing: Automatically converts proprietary `<|tool_call_*|>` markers to OpenAI-compatible format
+-Stream Processing: Handles streaming token format conversion
+
+**MiniMax M2:**
+-Reasoning Parameters: Supports `reasoning_content` and `reasoning_effort` parameters
+-Parameter Mapping: Automatic mapping of thinking parameters to MiniMax-compatible format
+
+#### Usage
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+**Kimi Model**
+```python
+import os
+from litellm import completion
+
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+# Use Kimi with thinking capabilities
+response = completion(
+    model="bedrock/converse/moonshot.kimi-k2-thinking",
+    messages=[{"role": "user", "content": "What's the weather like today?"}],
+    thinking={"type": "enabled"},
+    reasoning_effort="medium"
+)
+print(response.choices[0].message.content)
+```
+
+**MiniMax Model**
+```python
+from litellm import completion
+
+# Use MiniMax with reasoning capabilities
+response = completion(
+    model="bedrock/converse/minimax.minimax-m2",
+    messages=[{"role": "user", "content": "Analyze this problem step by step"}],
+    reasoning_content="think step by step",
+    reasoning_effort="high"
+)
+print(response.choices[0].message.content)
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="PROXY">
+
+**1. Setup config.yaml**
+
+```yaml
+model_list:
+  - model_name: kimi-k2-thinking
+    litellm_params:
+      model: bedrock/converse/moonshot.kimi-k2-thinking
+      api_key: os.environ/AWS_BEARER_TOKEN_BEDROCK
+
+  - model_name: minimax-m2
+    litellm_params:
+      model: bedrock/converse/minimax.minimax-m2
+      api_key: os.environ/AWS_BEARER_TOKEN_BEDROCK
+```
+
+**2. Start proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+**3. Test it!**
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+  --header 'Authorization: Bearer sk-1234' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "model": "kimi-k2-thinking",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Solve this equation: 2x + 5 = 13"
+      }
+    ],
+    "reasoning_effort": "high"
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+#### Example Response with Thinking Content
+
+```python
+{
+    "id": "chatcmpl-abc123",
+    "model": "moonshot.kimi-k2-thinking",
+    "choices": [
+        {
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "The solution is x = 4.",
+                "reasoning_content": "To solve 2x + 5 = 13, I first subtract 5 from both sides...",
+                "tool_calls": []  # Tool calls are parsed from proprietary format
+            },
+            "finish_reason": "stop"
+        }
+    ],
+    "usage": {
+        "prompt_tokens": 25,
+        "completion_tokens": 50,
+        "total_tokens": 75
+    }
+}
+```
+
+### New Bedrock Models (Dec 2025)
+
+LiteLLM supports the following newly added Bedrock models:
+
+| Provider | Model IDs | Tool Support |
+|----------|-----------|--------------|
+| Google | `google.gemma-3-4b-it`, `google.gemma-3-12b-it`, `google.gemma-3-27b-it` | ✅ |
+| Mistral | `mistral.mistral-large-3-675b-instruct`, `mistral.ministral-3-3b-instruct`, `mistral.ministral-3-8b-instruct` | ✅ |
+| Mistral | `mistral.magistral-small-2509`, `mistral.voxtral-mini-3b-2507`, `mistral.voxtral-small-24b-2507`, `mistral.ministral-3-14b-instruct` | ❌ |
+| MiniMax | `minimax.minimax-m2` | ✅ |
+| Moonshot | `moonshot.kimi-k2-thinking` | ✅ |
+| NVIDIA | `nvidia.nemotron-nano-9b-v2`, `nvidia.nemotron-nano-12b-v2` | ❌ |
+| OpenAI | `openai.gpt-oss-safeguard-20b` | ❌ |
+| OpenAI | `openai.gpt-oss-safeguard-120b` | ✅ |
+| Qwen | `qwen.qwen3-coder-30b-a3b-v1:0`, `qwen.qwen3-235b-a22b-2507-v1:0`, `qwen.qwen3-32b-v1:0`, `qwen.qwen3-vl-235b-a22b`, `qwen.qwen3-next-80b-a3b` | ✅ |
+
+**Usage:**
+
+```python
+import os
+from litellm import completion
+
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = "us-west-2"
+
+# Note: Use 'bedrock/converse/' prefix to ensure Converse API is used for new models
+response = completion(
+    model="bedrock/converse/qwen.qwen3-vl-235b-a22b",
+    messages=[{"role": "user", "content": "Hello"}]
+)
+```
+

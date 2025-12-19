@@ -903,6 +903,7 @@ class ChatCompletionRequest(TypedDict, total=False):
     functions: List
     user: str
     metadata: dict  # litellm specific param
+    reasoning_effort: str  # litellm specific param for reasoning models
 
 
 class ChatCompletionDeltaChunk(TypedDict, total=False):
