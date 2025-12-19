@@ -855,7 +855,7 @@ def test_azure_image_generation_cost_calculator():
                 ImageObject(
                     b64_json=None,
                     revised_prompt="A futuristic, techno-inspired green duck wearing cool modern sunglasses. The duck has a sleek, metallic appearance with glowing neon green accents, standing on a high-tech urban background with holographic billboards and illuminated city lights in the distance. The duck's feathers have a glossy, high-tech sheen, resembling a robotic design but still maintaining its avian features. The scene has a vibrant, cyberpunk aesthetic with a neon color palette.",
-                    url="https://dalleprodsec.blob.core.windows.net/private/images/caa17dc4-357d-4257-8938-eeea9baa8d0a/generated_00.png?se=2025-10-31T00%3A47%3A59Z&sig=KHRjLz3vMahbw94JtxL02S6t2AueeRMaiqj4z35HKDM%3D&ske=2025-11-05T00%3A26%3A20Z&skoid=e52d5ed7-0657-4f62-bc12-7e5dbb260a96&sks=b&skt=2025-10-29T00%3A26%3A20Z&sktid=33e01921-4d64-4f8c-a055-5bdaffd5e33d&skv=2020-10-02&sp=r&spr=https&sr=b&sv=2020-10-02",
+                    url="test-azure-blob-url-with-sas-token",
                 )
             ],
             output_format=None,

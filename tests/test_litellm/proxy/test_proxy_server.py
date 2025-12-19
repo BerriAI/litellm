@@ -559,7 +559,7 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
         assert master_key == test_master_key
 
     # Test Case 2: Master key from environment variable
-    test_env_master_key = "sk-67890"
+    test_env_master_key = "sk-test-67890"
 
     # Create empty config
     empty_config = {"general_settings": {}}
