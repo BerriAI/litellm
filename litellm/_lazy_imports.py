@@ -193,6 +193,8 @@ LLM_CONFIG_NAMES = (
     "HostedVLLMRerankConfig",
     "NvidiaNimRerankConfig",
     "NvidiaNimRankingConfig",
+    "VertexAIRerankConfig",
+    "FireworksAIRerankConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -974,5 +976,21 @@ def _lazy_import_llm_configs(name: str) -> Any:
 
         _globals["NvidiaNimRankingConfig"] = _NvidiaNimRankingConfig
         return _NvidiaNimRankingConfig
+
+    if name == "VertexAIRerankConfig":
+        from .llms.vertex_ai.rerank.transformation import (
+            VertexAIRerankConfig as _VertexAIRerankConfig,
+        )
+
+        _globals["VertexAIRerankConfig"] = _VertexAIRerankConfig
+        return _VertexAIRerankConfig
+
+    if name == "FireworksAIRerankConfig":
+        from .llms.fireworks_ai.rerank.transformation import (
+            FireworksAIRerankConfig as _FireworksAIRerankConfig,
+        )
+
+        _globals["FireworksAIRerankConfig"] = _FireworksAIRerankConfig
+        return _FireworksAIRerankConfig
 
     raise AttributeError(f"LLM config lazy import: unknown attribute {name!r}")
