@@ -364,8 +364,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 source = content_item.get("source", {})
                 if isinstance(source, dict):
                     # Encode the guardrailed text back to base64
-                    encoded_data = self._encode_document_data(guardrailed_document)
-                    source["data"] = encoded_data
+                    source["data"] = guardrailed_document
 
             elif content_item.get("type") == "file":
                 # ChatCompletionFileObject format
@@ -374,8 +373,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     # Check which field was used (file_id or file_data)
                     if "file_data" in file_obj:
                         # Update file_data with encoded guardrailed text
-                        encoded_data = self._encode_document_data(guardrailed_document)
-                        file_obj["file_data"] = encoded_data
+                        file_obj["file_data"] = guardrailed_document
                     elif "file_id" in file_obj:
                         # For file_id (URLs), we keep it as-is since guardrails
                         # typically process the content, not change the reference

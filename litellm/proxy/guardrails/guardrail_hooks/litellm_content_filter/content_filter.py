@@ -675,11 +675,21 @@ class ContentFilterGuardrail(CustomGuardrail):
             )
             return data
 
-    def _encode_document_data(self, data: str) -> str:
+    def _encode_document_data(
+        self, data: str, mime_type: str = "application/pdf"
+    ) -> str:
         """
-        Encode document data to base64.
+        Encode document data to base64 in OpenAI-compatible format.
+
+        Args:
+            data: The document data to encode
+            mime_type: The MIME type of the document (default: application/pdf)
+
+        Returns:
+            Data URI string in format: data:{mime_type};base64,{encoded_data}
         """
-        return base64.b64encode(data.encode("utf-8")).decode("utf-8")
+        base64_data = base64.b64encode(data.encode("utf-8")).decode("utf-8")
+        return f"data:{mime_type};base64,{base64_data}"
 
     async def _extract_document_content_from_url(self, url: str) -> str:
         """
@@ -853,6 +863,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         Raises:
             HTTPException: If sensitive content is detected and action is BLOCK
         """
+
         texts = inputs.get("texts", [])
         images = inputs.get("images", [])
         documents = inputs.get("documents", [])
