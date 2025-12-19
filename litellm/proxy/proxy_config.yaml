@@ -1,10 +1,5 @@
 model_list:
-  - model_name: gemini/*
+  - model_name: anthropic/*
     litellm_params:
-      model: gemini/*
+      model: anthropic/*
 
-litellm_settings:
-  callbacks: ["dynamic_rate_limiter_v3"]
-  priority_reservation:
-    "prod": 0.9 # 90% reserved for production
-    "dev": 0.1 # 10% reserved for development

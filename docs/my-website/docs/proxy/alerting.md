@@ -215,16 +215,16 @@ general_settings:
   alerting: ["slack"]
   alerting_threshold: 0.0001 # (Seconds) set an artificially low threshold for testing alerting
   alert_to_webhook_url: {
-    "llm_exceptions": "https://hooks.slack.com/services/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",
-    "llm_too_slow": "https://hooks.slack.com/services/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",
-    "llm_requests_hanging": "https://hooks.slack.com/services/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",
-    "budget_alerts": "https://hooks.slack.com/services/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",
-    "db_exceptions": "https://hooks.slack.com/services/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",
-    "daily_reports": "https://hooks.slack.com/services/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",
-    "spend_reports": "https://hooks.slack.com/services/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",
-    "cooldown_deployment": "https://hooks.slack.com/services/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",
-    "new_model_added": "https://hooks.slack.com/services/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",
-    "outage_alerts": "https://hooks.slack.com/services/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",
+    "llm_exceptions": "example-slack-webhook-url",
+    "llm_too_slow": "example-slack-webhook-url",
+    "llm_requests_hanging": "example-slack-webhook-url",
+    "budget_alerts": "example-slack-webhook-url",
+    "db_exceptions": "example-slack-webhook-url",
+    "daily_reports": "example-slack-webhook-url",
+    "spend_reports": "example-slack-webhook-url",
+    "cooldown_deployment": "example-slack-webhook-url",
+    "new_model_added": "example-slack-webhook-url",
+    "outage_alerts": "example-slack-webhook-url",
   }
 
 litellm_settings:
@@ -399,7 +399,7 @@ curl -X GET --location 'http://0.0.0.0:4000/health/services?service=webhook' \
 {
   "spend": 1, # the spend for the 'event_group'
   "max_budget": 0, # the 'max_budget' set for the 'event_group'
-  "token": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+  "token": "example-api-key-123",
   "user_id": "default_user_id",
   "team_id": null,
   "user_email": null,
