@@ -177,6 +177,8 @@ LLM_CONFIG_NAMES = (
     "TritonConfig",
     "TritonGenerateConfig",
     "TritonInferConfig",
+    "TritonEmbeddingConfig",
+    "HuggingFaceRerankConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -830,5 +832,21 @@ def _lazy_import_llm_configs(name: str) -> Any:
 
         _globals["TritonInferConfig"] = _TritonInferConfig
         return _TritonInferConfig
+
+    if name == "TritonEmbeddingConfig":
+        from .llms.triton.embedding.transformation import (
+            TritonEmbeddingConfig as _TritonEmbeddingConfig,
+        )
+
+        _globals["TritonEmbeddingConfig"] = _TritonEmbeddingConfig
+        return _TritonEmbeddingConfig
+
+    if name == "HuggingFaceRerankConfig":
+        from .llms.huggingface.rerank.transformation import (
+            HuggingFaceRerankConfig as _HuggingFaceRerankConfig,
+        )
+
+        _globals["HuggingFaceRerankConfig"] = _HuggingFaceRerankConfig
+        return _HuggingFaceRerankConfig
 
     raise AttributeError(f"LLM config lazy import: unknown attribute {name!r}")

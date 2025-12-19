@@ -1065,8 +1065,6 @@ from .utils import client
 
 from .llms.custom_llm import CustomLLM
 from .llms.anthropic.common_utils import AnthropicModelInfo
-from .llms.triton.embedding.transformation import TritonEmbeddingConfig
-from .llms.huggingface.rerank.transformation import HuggingFaceRerankConfig
 from .llms.databricks.chat.transformation import DatabricksConfig
 from .llms.databricks.embed.transformation import DatabricksEmbeddingConfig
 from .llms.predibase.chat.transformation import PredibaseConfig
