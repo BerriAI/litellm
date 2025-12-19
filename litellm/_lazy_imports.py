@@ -167,6 +167,8 @@ LLM_CONFIG_NAMES = (
     "AiohttpOpenAIChatConfig",
     "HuggingFaceChatConfig",
     "HuggingFaceEmbeddingConfig",
+    "OobaboogaConfig",
+    "MaritalkConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -740,5 +742,21 @@ def _lazy_import_llm_configs(name: str) -> Any:
 
         _globals["HuggingFaceEmbeddingConfig"] = _HuggingFaceEmbeddingConfig
         return _HuggingFaceEmbeddingConfig
+
+    if name == "OobaboogaConfig":
+        from .llms.oobabooga.chat.transformation import (
+            OobaboogaConfig as _OobaboogaConfig,
+        )
+
+        _globals["OobaboogaConfig"] = _OobaboogaConfig
+        return _OobaboogaConfig
+
+    if name == "MaritalkConfig":
+        from .llms.maritalk import (
+            MaritalkConfig as _MaritalkConfig,
+        )
+
+        _globals["MaritalkConfig"] = _MaritalkConfig
+        return _MaritalkConfig
 
     raise AttributeError(f"LLM config lazy import: unknown attribute {name!r}")
