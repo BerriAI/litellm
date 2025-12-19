@@ -122,9 +122,6 @@ class SkillsInjectionHook(CustomLogger):
         # Check if using messages API spec (anthropic_messages call type)
         # Messages API always uses Anthropic-style tool format
         use_anthropic_format = call_type == "anthropic_messages"
-        
-        # Determine if this is an Anthropic model
-        model = data.get("model", "")
 
         if len(litellm_skills) > 0:
             data = self._process_for_messages_api(
@@ -610,7 +607,6 @@ class SkillsInjectionHook(CustomLogger):
         if main_module:
             # Convert path to import: "core/gif_builder.py" -> "core.gif_builder"
             import_path = main_module.replace("/", ".").replace(".py", "")
-            module_name = main_module.split("/")[-1].replace(".py", "")
             
             # Generate code that imports and uses the module
             code = f"""

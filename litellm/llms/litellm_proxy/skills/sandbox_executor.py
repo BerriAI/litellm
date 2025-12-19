@@ -90,7 +90,6 @@ class SkillsSandboxExecutor:
             
             with SandboxSession(**session_kwargs) as session:
                 # 1. Copy skill files into sandbox using copy_to_runtime
-                import shutil
                 import tempfile
 
                 # Create a temp directory to stage files
@@ -126,7 +125,7 @@ subprocess.run(['pip', 'install'] + '{req_packages}'.split(), check=True)
 """
                     result = session.run(pip_code)
                     verbose_logger.debug(
-                        f"SkillsSandboxExecutor: Installed requirements"
+                        "SkillsSandboxExecutor: Installed requirements"
                     )
                 
                 # 3. Execute the code
@@ -147,7 +146,7 @@ sys.path.insert(0, '/sandbox')
                 
                 if success:
                     verbose_logger.debug(
-                        f"SkillsSandboxExecutor: Code execution succeeded"
+                        "SkillsSandboxExecutor: Code execution succeeded"
                     )
                 else:
                     verbose_logger.debug(

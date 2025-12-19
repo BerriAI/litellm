@@ -14,7 +14,7 @@ Generated files are returned directly in the response - no separate storage need
 import base64
 import json
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
 
