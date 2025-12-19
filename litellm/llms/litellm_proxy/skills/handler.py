@@ -91,7 +91,7 @@ class LiteLLMSkillsHandler:
 
         # Handle file content - wrap bytes in Base64 for Prisma
         if data.file_content is not None:
-            from prisma import Base64
+            from prisma.fields import Base64
 
             skill_data["file_content"] = Base64.encode(data.file_content)
         if data.file_name is not None:
