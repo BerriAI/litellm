@@ -2236,21 +2236,21 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     allowed_routes: Optional[List] = Field(
         None, description="Proxy API Endpoints you want users to be able to access"
     )
-    cors_allow_origins: Optional[List[str]] = Field(
+    cors_allow_origins: Optional[Union[str, List[str]]] = Field(
         None,
-        description="CORS allowlist origins for the proxy. When set, only these origins receive CORS headers.",
+        description='CORS allowlist origins for the proxy. Defaults to `["*"]` when unset. Set this to `[]` to disable CORS for all origins, or provide explicit origins to restrict access.',
     )
     cors_allow_credentials: Optional[bool] = Field(
         None,
-        description="Allow CORS credentials. Requires explicit cors_allow_origins (no wildcard).",
+        description="Allow CORS credentials. Defaults to the proxy's existing behavior when unset. Wildcard origins or patterns disable credentials when custom CORS settings are configured.",
     )
-    cors_allow_methods: Optional[List[str]] = Field(
+    cors_allow_methods: Optional[Union[str, List[str]]] = Field(
         None,
-        description="CORS allowlist methods for the proxy. Defaults to '*' when unset.",
+        description='CORS allowlist methods for the proxy. Defaults to `"*"` when unset.',
     )
-    cors_allow_headers: Optional[List[str]] = Field(
+    cors_allow_headers: Optional[Union[str, List[str]]] = Field(
         None,
-        description="CORS allowlist headers for the proxy. Defaults to '*' when unset.",
+        description='CORS allowlist headers for the proxy. Defaults to `"*"` when unset.',
     )
     reject_clientside_metadata_tags: Optional[bool] = Field(
         None,

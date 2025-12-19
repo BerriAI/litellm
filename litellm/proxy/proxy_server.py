@@ -1168,6 +1168,8 @@ cors_allow_headers = (
     ["*"] if configured_cors_allow_headers is None else configured_cors_allow_headers
 )
 
+# Preserve the proxy's existing wildcard+credentials default unless the
+# operator explicitly configures CORS origins or credentials.
 has_wildcard_origin = any("*" in origin for origin in cors_allow_origins)
 should_validate_cors_credentials = (
     configured_cors_allow_origins is not None or cors_credentials_was_configured

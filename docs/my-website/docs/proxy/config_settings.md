@@ -218,10 +218,10 @@ router_settings:
 | enforce_user_param | boolean | If true, requires all OpenAI endpoint requests to have a 'user' param. [Doc on call hooks](call_hooks)|
 | reject_clientside_metadata_tags | boolean | If true, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata. |
 | allowed_routes | array of strings | List of allowed proxy API routes a user can access [Doc on controlling allowed routes](enterprise#control-available-public-private-routes)|
-| cors_allow_origins | List[str] | CORS allowlist origins for the proxy. When set, only these origins receive CORS headers. |
-| cors_allow_credentials | boolean | Allow CORS credentials. Requires explicit `cors_allow_origins` (no wildcard). |
-| cors_allow_methods | List[str] | CORS allowlist methods for the proxy. Defaults to `"*"` when unset. |
-| cors_allow_headers | List[str] | CORS allowlist headers for the proxy. Defaults to `"*"` when unset. |
+| cors_allow_origins | Union[str, List[str]] | CORS allowlist origins for the proxy. Defaults to `["*"]` when unset. Set this to `[]` to disable CORS for all origins, or provide explicit origins to restrict access. |
+| cors_allow_credentials | boolean | Allow CORS credentials. Defaults to the proxy's existing behavior when unset. Wildcard origins or patterns disable credentials when custom CORS settings are configured. |
+| cors_allow_methods | Union[str, List[str]] | CORS allowlist methods for the proxy. Defaults to `"*"` when unset. |
+| cors_allow_headers | Union[str, List[str]] | CORS allowlist headers for the proxy. Defaults to `"*"` when unset. |
 | key_management_system | string | Specifies the key management system. [Doc Secret Managers](../secret) |
 | master_key | string | The master key for the proxy [Set up Virtual Keys](virtual_keys) |
 | database_url | string | The URL for the database connection [Set up Virtual Keys](virtual_keys) |
