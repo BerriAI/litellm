@@ -21704,7 +21704,7 @@
         "output_cost_per_token": 6e-07,
         "supports_function_calling": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": false
     },
     "openai.gpt-oss-safeguard-20b": {
         "input_cost_per_token": 7e-08,
