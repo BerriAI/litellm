@@ -2875,6 +2875,12 @@ class ProxyConfig:
                 )
 
                 CyberArkSecretManager()
+            elif key_management_system == KeyManagementSystem.INFISICAL.value:
+                from litellm.secret_managers.infisical_secret_manager import (
+                    InfisicalSecretManager,
+                )
+
+                InfisicalSecretManager()
             elif key_management_system == KeyManagementSystem.CUSTOM.value:
                 ### LOAD CUSTOM SECRET MANAGER ###
                 from litellm.secret_managers.custom_secret_manager_loader import (

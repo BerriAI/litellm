@@ -140,6 +140,15 @@ def get_secret_from_manager( # noqa: PLR0915
             print_verbose(f"An error occurred - {str(e)}")
             raise e
             
+    elif key_manager == KeyManagementSystem.INFISICAL.value:
+        try:
+            secret = client.sync_read_secret(secret_name=secret_name)
+            if secret is None:
+                raise ValueError(f"No secret found in Infisical Secret Manager for {secret_name}")
+        except Exception as e:
+            print_verbose(f"An error occurred - {str(e)}")
+            raise e
+            
     elif key_manager == KeyManagementSystem.CUSTOM.value:
         # Check if client is a CustomSecretManager instance
         from litellm.integrations.custom_secret_manager import CustomSecretManager
