@@ -106,15 +106,14 @@ class SkillsInjectionHook(CustomLogger):
                 continue
 
             skill_id = skill.get("skill_id", "")
-            if skill_id.startswith("litellm:"):
+            if skill_id.startswith("litellm_"):
                 # Fetch from LiteLLM DB
-                actual_id = skill_id.replace("litellm:", "", 1)
-                db_skill = await self._fetch_skill_from_db(actual_id)
+                db_skill = await self._fetch_skill_from_db(skill_id)
                 if db_skill:
                     litellm_skills.append(db_skill)
                 else:
                     verbose_proxy_logger.warning(
-                        f"SkillsInjectionHook: Skill '{actual_id}' not found in LiteLLM DB"
+                        f"SkillsInjectionHook: Skill '{skill_id}' not found in LiteLLM DB"
                     )
             else:
                 # Native Anthropic skill - pass through
@@ -126,40 +125,16 @@ class SkillsInjectionHook(CustomLogger):
         
         # Determine if this is an Anthropic model
         model = data.get("model", "")
-        is_anthropic = self._is_anthropic_model(model)
 
-        if is_anthropic and not use_anthropic_format:
-            data = self._process_anthropic_model(data, litellm_skills, anthropic_skills)
-        else:
-            # For messages API or non-Anthropic models
-            data = self._process_for_messages_api(data, litellm_skills, use_anthropic_format)
+        if len(litellm_skills) > 0:
+            data = self._process_for_messages_api(
+                data=data,
+                litellm_skills=litellm_skills,
+                use_anthropic_format=use_anthropic_format,
+            )
 
         return data
 
-    def _process_anthropic_model(
-        self,
-        data: dict,
-        litellm_skills: List[LiteLLM_SkillsTable],
-        anthropic_skills: List[Dict[str, Any]],
-    ) -> dict:
-        """Process skills for Anthropic models."""
-        if anthropic_skills:
-            data["container"]["skills"] = anthropic_skills
-        else:
-            # No native skills, remove container if only litellm skills were requested
-            if litellm_skills and not anthropic_skills:
-                # Convert LiteLLM skills to tools for Anthropic too
-                tools = data.get("tools", [])
-                for skill in litellm_skills:
-                    tools.append(self.prompt_handler.convert_skill_to_tool(skill))
-                data["tools"] = tools
-                data.pop("container", None)
-
-        verbose_proxy_logger.debug(
-            f"SkillsInjectionHook: Anthropic model - {len(anthropic_skills)} native skills, "
-            f"{len(litellm_skills)} LiteLLM skills converted to tools"
-        )
-        return data
 
     def _process_for_messages_api(
         self,
@@ -176,7 +151,6 @@ class SkillsInjectionHook(CustomLogger):
         - Stores skill files in metadata for sandbox execution
         """
         from litellm.llms.litellm_proxy.skills.code_execution import (
-            get_litellm_code_execution_tool,
             get_litellm_code_execution_tool_anthropic,
         )
         
@@ -870,3 +844,6 @@ print('No executable skill module found')
 # Global instance for registration
 skills_injection_hook = SkillsInjectionHook()
 
+import litellm
+
+litellm.logging_callback_manager.add_litellm_callback(skills_injection_hook)
