@@ -714,8 +714,8 @@ def image_edit(
                 "style",
                 "async_call",
             ]
-        litellm_params = all_litellm_params
-        default_params = openai_params + litellm_params
+        litellm_params_list = all_litellm_params
+        default_params = openai_params + litellm_params_list
         non_default_params = {
             k: v for k, v in kwargs.items() if k not in default_params
         }  # model-specific params - pass them straight to the model/provider
