@@ -27,6 +27,10 @@ import TabItem from '@theme/TabItem';
 
 LiteLLM now supports `gemini-3-flash-preview` and all the new API changes along with it.
 
+:::Note
+If you only want cost tracking, you need no change in your current Litellm version. But if you want the support for new features introduced along with it like thinking levels, you will need to use v1.80.8-stable.1 or above.
+:::
+
 ## Deploy this version
 
 <Tabs>
