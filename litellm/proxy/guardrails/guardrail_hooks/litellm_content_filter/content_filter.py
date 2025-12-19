@@ -538,12 +538,14 @@ class ContentFilterGuardrail(CustomGuardrail):
             HTTPException: If sensitive content is detected and action is BLOCK
         """
         # Collect all exceptions from loaded categories
+
         all_exceptions = []
         for category in self.loaded_categories.values():
             all_exceptions.extend(category.exceptions)
 
         # Check category keywords
         category_keyword_match = self._check_category_keywords(text, all_exceptions)
+
         if category_keyword_match:
             keyword, category, severity, action = category_keyword_match
             if action == ContentFilterAction.BLOCK:
@@ -569,6 +571,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                     text,
                     flags=re.IGNORECASE,
                 )
+
                 verbose_proxy_logger.info(
                     f"Masked category keyword '{keyword}' from {category} (severity: {severity})"
                 )
@@ -592,6 +595,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                     pattern_name=pattern_name.upper()
                 )
                 text = compiled_pattern.sub(redaction_tag, text)
+
                 verbose_proxy_logger.info(
                     f"Masked all {pattern_name} matches in content"
                 )
@@ -652,44 +656,112 @@ class ContentFilterGuardrail(CustomGuardrail):
 
     def _decode_document_data(self, data: str) -> str:
         """
-        Decode document data from base64 if applicable.
+        Decode document data from base64 and extract text using pypdf.
 
         Args:
-            data: Document data, either base64 encoded or plain text
+            data: Document data, base64 encoded PDF
 
         Returns:
-            Decoded text content
+            Extracted text content from the PDF
         """
         import base64
+        import io
+
+        from pypdf import PdfReader
 
         try:
-            # Try to decode as base64
+            # Decode base64 data to bytes
             decoded_bytes = base64.b64decode(data)
-            # Try to decode as UTF-8 text
-            return decoded_bytes.decode("utf-8")
-        except Exception:
-            # If decoding fails, return the original data
-            # (it might already be plain text or in a different format)
-            verbose_proxy_logger.debug(
-                "Failed to decode document data as base64, returning as-is"
+
+            # Create a file-like object from the bytes
+            pdf_file = io.BytesIO(decoded_bytes)
+
+            # Read the PDF
+            reader = PdfReader(pdf_file)
+
+            # Extract text from all pages
+            text_content = ""
+            for page in reader.pages:
+                text_content += page.extract_text() + "\n"
+
+            return text_content.strip()
+        except Exception as e:
+            verbose_proxy_logger.error(
+                f"Failed to decode and extract text from PDF document: {str(e)}"
             )
-            return data
+            raise e
 
     def _encode_document_data(
         self, data: str, mime_type: str = "application/pdf"
     ) -> str:
         """
         Encode document data to base64 in OpenAI-compatible format.
+        Creates a PDF from the text content and encodes it.
 
         Args:
-            data: The document data to encode
+            data: The text content to convert to PDF and encode
             mime_type: The MIME type of the document (default: application/pdf)
 
         Returns:
             Data URI string in format: data:{mime_type};base64,{encoded_data}
         """
-        base64_data = base64.b64encode(data.encode("utf-8")).decode("utf-8")
-        return f"data:{mime_type};base64,{base64_data}"
+        import io
+
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.utils import simpleSplit
+        from reportlab.pdfgen import canvas
+
+        try:
+            # Create a BytesIO buffer to store the PDF
+            buffer = io.BytesIO()
+
+            # Create a PDF canvas
+            pdf_canvas = canvas.Canvas(buffer, pagesize=letter)
+            width, height = letter
+
+            # Set up text parameters
+            text_object = pdf_canvas.beginText(40, height - 40)
+            text_object.setFont("Helvetica", 10)
+
+            # Split text into lines that fit the page width
+            max_width = width - 80  # Leave margins
+            lines = []
+            for paragraph in data.split("\n"):
+                if paragraph.strip():
+                    wrapped_lines = simpleSplit(paragraph, "Helvetica", 10, max_width)
+                    lines.extend(wrapped_lines)
+                else:
+                    lines.append("")  # Preserve empty lines
+
+            # Add text to PDF, handling pagination
+            y_position = height - 40
+            for line in lines:
+                if y_position < 40:  # Start new page if needed
+                    text_object = pdf_canvas.beginText(40, height - 40)
+                    text_object.setFont("Helvetica", 10)
+                    pdf_canvas.drawText(text_object)
+                    pdf_canvas.showPage()
+                    y_position = height - 40
+                    text_object = pdf_canvas.beginText(40, y_position)
+                    text_object.setFont("Helvetica", 10)
+
+                text_object.textLine(line)
+                y_position -= 12
+
+            pdf_canvas.drawText(text_object)
+            pdf_canvas.save()
+
+            # Get PDF bytes and encode to base64
+            pdf_bytes = buffer.getvalue()
+            base64_data = base64.b64encode(pdf_bytes).decode("utf-8")
+
+            return f"data:{mime_type};base64,{base64_data}"
+
+        except Exception as e:
+            verbose_proxy_logger.error(
+                f"Failed to create PDF and encode document data: {str(e)}"
+            )
+            raise e
 
     async def _extract_document_content_from_url(self, url: str) -> str:
         """
@@ -772,14 +844,14 @@ class ContentFilterGuardrail(CustomGuardrail):
             else:
                 # Already processed (base64 decoded or plain text)
                 # Try to decode in case it's base64
-                decoded_content = self._decode_document_data(doc)
+                b64_data = doc.split("base64,")[1]
+                decoded_content = self._decode_document_data(b64_data)
+
                 processed_documents.append(decoded_content)
 
         return processed_documents
 
-    async def _filter_and_encode_documents(
-        self, documents: List[str]
-    ) -> Optional[List[str]]:
+    async def _filter_documents(self, documents: List[str]):
         """
         Process, filter, and re-encode documents.
 
@@ -808,11 +880,9 @@ class ContentFilterGuardrail(CustomGuardrail):
         processed_documents = await self._process_documents(documents)
 
         # Filter each document through content filter
-        filtered_documents = []
         for processed_document in processed_documents:
             try:
-                masked_document = self._filter_single_text(processed_document)
-                filtered_documents.append(masked_document)
+                self._filter_single_text(processed_document)
             except HTTPException as e:
                 # Add document context to error message
                 if isinstance(e.detail, dict) and "error" in e.detail:
@@ -830,13 +900,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                     )
                 raise e
 
-        # Re-encode documents to base64
-        encoded_documents = []
-        for document in filtered_documents:
-            base64_document = self._encode_document_data(document)
-            encoded_documents.append(base64_document)
-
-        return encoded_documents
+        return
 
     async def apply_guardrail(
         self,
@@ -870,10 +934,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         # Process, filter, and re-encode documents
         if documents:
-            encoded_documents = await self._filter_and_encode_documents(documents)
-            if encoded_documents is not None:
-                inputs["documents"] = encoded_documents
-
+            await self._filter_documents(documents)
         if (
             images
             and self.image_model
