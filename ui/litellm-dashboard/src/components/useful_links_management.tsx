@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from "react";
 import { Modal } from "antd";
-import { PlusCircleIcon, PencilIcon, TrashIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
+import { PlusCircleIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
 import { isAdminRole } from "../utils/roles";
 import { getPublicModelHubInfo, updateUsefulLinksCall, getProxyBaseUrl } from "./networking";
 import { Card, Title, Text, Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
 import NotificationsManager from "./molecules/notifications_manager";
+import TableIconActionButton from "./common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 
 interface UsefulLinksManagementProps {
   accessToken: string | null;
@@ -15,6 +16,7 @@ interface Link {
   id: string;
   displayName: string;
   url: string;
+  index?: number;
 }
 
 const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessToken, userRole }) => {
@@ -23,6 +25,8 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
   const [editingLink, setEditingLink] = useState<Link | null>(null);
   const [loading, setLoading] = useState(false);
   const [isExpanded, setIsExpanded] = useState(true);
+  const [isRearranging, setIsRearranging] = useState(false);
+  const [originalLinksOrder, setOriginalLinksOrder] = useState<Link[]>([]);
 
   const fetchUsefulLinks = async () => {
     if (!accessToken) return;
@@ -35,11 +39,32 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
         const usefulLinks = response.useful_links || {};
 
         // Convert object to array of links with ids
-        const linksArray = Object.entries(usefulLinks).map(([displayName, url], index) => ({
-          id: `${index}-${displayName}`,
-          displayName,
-          url: url as string,
-        }));
+        // Handle both old format (Dict[str, str]) and new format (Dict[str, {url, index}])
+        const linksArray = Object.entries(usefulLinks)
+          .map(([displayName, value]) => {
+            // Check if it's the new format with {url, index}
+            if (typeof value === "object" && value !== null && "url" in value) {
+              return {
+                id: `${(value as any).index ?? 0}-${displayName}`,
+                displayName,
+                url: (value as any).url as string,
+                index: (value as any).index ?? 0,
+              };
+            } else {
+              // Old format: just a string URL
+              return {
+                id: `0-${displayName}`,
+                displayName,
+                url: value as string,
+                index: 0,
+              };
+            }
+          })
+          .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
+          .map((link, index) => ({
+            ...link,
+            id: `${index}-${link.displayName}`,
+          }));
 
         setLinks(linksArray);
       } else {
@@ -66,10 +91,14 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
     if (!accessToken) return false;
 
     try {
-      // Convert array back to object format
-      const linksObject: Record<string, string> = {};
-      updatedLinks.forEach((link) => {
-        linksObject[link.displayName] = link.url;
+      // Convert array back to object format with index for ordering
+      // New format: { "displayName": { "url": "...", "index": 0 } }
+      const linksObject: Record<string, { url: string; index: number }> = {};
+      updatedLinks.forEach((link, index) => {
+        linksObject[link.displayName] = {
+          url: link.url,
+          index: index,
+        };
       });
 
       await updateUsefulLinksCall(accessToken, linksObject);
@@ -187,6 +216,42 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
     window.open(url, "_blank");
   };
 
+  const handleStartRearranging = () => {
+    if (editingLink) {
+      setEditingLink(null);
+    }
+    setOriginalLinksOrder([...links]);
+    setIsRearranging(true);
+  };
+
+  const handleCancelRearranging = () => {
+    setLinks([...originalLinksOrder]);
+    setIsRearranging(false);
+    setOriginalLinksOrder([]);
+  };
+
+  const handleSaveRearranging = async () => {
+    if (await saveLinksToBackend(links)) {
+      setIsRearranging(false);
+      setOriginalLinksOrder([]);
+      NotificationsManager.success("Link order saved successfully");
+    }
+  };
+
+  const handleMoveUp = (index: number) => {
+    if (index === 0) return;
+    const newLinks = [...links];
+    [newLinks[index - 1], newLinks[index]] = [newLinks[index], newLinks[index - 1]];
+    setLinks(newLinks);
+  };
+
+  const handleMoveDown = (index: number) => {
+    if (index === links.length - 1) return;
+    const newLinks = [...links];
+    [newLinks[index], newLinks[index + 1]] = [newLinks[index + 1], newLinks[index]];
+    setLinks(newLinks);
+  };
+
   return (
     <Card className="mb-6">
       <div className="flex items-center justify-between cursor-pointer" onClick={() => setIsExpanded(!isExpanded)}>
@@ -211,21 +276,6 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
             <Text className="text-sm font-medium text-gray-700 mb-2">Add New Link</Text>
             <div className="grid grid-cols-3 gap-4">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">URL</label>
-                <input
-                  type="text"
-                  value={newLink.url}
-                  onChange={(e) =>
-                    setNewLink({
-                      ...newLink,
-                      url: e.target.value,
-                    })
-                  }
-                  placeholder="https://example.com"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
-                />
-              </div>
-              <div>
                 <label className="block text-xs text-gray-500 mb-1">Display Name</label>
                 <input
                   type="text"
@@ -237,6 +287,21 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
                     })
                   }
                   placeholder="Friendly name"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">URL</label>
+                <input
+                  type="text"
+                  value={newLink.url}
+                  onChange={(e) =>
+                    setNewLink({
+                      ...newLink,
+                      url: e.target.value,
+                    })
+                  }
+                  placeholder="https://example.com"
                   className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
                 />
               </div>
@@ -252,7 +317,32 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
               </div>
             </div>
           </div>
-          <Text className="text-sm font-medium text-gray-700 mb-2">Manage Existing Links</Text>
+          <div className="flex items-center justify-between mb-2">
+            <Text className="text-sm font-medium text-gray-700">Manage Existing Links</Text>
+            {!isRearranging ? (
+              <button
+                onClick={handleStartRearranging}
+                className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded hover:bg-purple-100 flex items-center"
+              >
+                Rearrange Order
+              </button>
+            ) : (
+              <div className="flex space-x-2">
+                <button
+                  onClick={handleSaveRearranging}
+                  className="text-xs bg-green-600 text-white px-3 py-1.5 rounded hover:bg-green-700"
+                >
+                  Save Order
+                </button>
+                <button
+                  onClick={handleCancelRearranging}
+                  className="text-xs bg-gray-50 text-gray-600 px-3 py-1.5 rounded hover:bg-gray-100"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
           <div className="rounded-lg custom-border relative">
             <div className="overflow-x-auto">
               <Table className="[&_td]:py-0.5 [&_th]:py-1">
@@ -264,7 +354,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {links.map((link) => (
+                  {links.map((link, index) => (
                     <TableRow key={link.id} className="h-8">
                       {editingLink && editingLink.id === link.id ? (
                         <>
@@ -316,26 +406,47 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
                           <TableCell className="py-0.5 text-sm text-gray-900">{link.displayName}</TableCell>
                           <TableCell className="py-0.5 text-sm text-gray-500">{link.url}</TableCell>
                           <TableCell className="py-0.5 whitespace-nowrap">
-                            <div className="flex space-x-2">
-                              <button
-                                onClick={() => setCurrentLink(link.url)}
-                                className="text-xs bg-green-50 text-green-600 px-2 py-1 rounded hover:bg-green-100"
-                              >
-                                Use
-                              </button>
-                              <button
-                                onClick={() => handleEditLink(link)}
-                                className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100"
-                              >
-                                <PencilIcon className="w-3 h-3" />
-                              </button>
-                              <button
-                                onClick={() => deleteLink(link.id)}
-                                className="text-xs bg-red-50 text-red-600 px-2 py-1 rounded hover:bg-red-100"
-                              >
-                                <TrashIcon className="w-3 h-3" />
-                              </button>
-                            </div>
+                            {isRearranging ? (
+                              <div className="flex space-x-2">
+                                <TableIconActionButton
+                                  variant="Up"
+                                  onClick={() => handleMoveUp(index)}
+                                  tooltipText="Move up"
+                                  disabled={index === 0}
+                                  disabledTooltipText="Already at the top"
+                                  dataTestId={`move-up-${link.id}`}
+                                />
+                                <TableIconActionButton
+                                  variant="Down"
+                                  onClick={() => handleMoveDown(index)}
+                                  tooltipText="Move down"
+                                  disabled={index === links.length - 1}
+                                  disabledTooltipText="Already at the bottom"
+                                  dataTestId={`move-down-${link.id}`}
+                                />
+                              </div>
+                            ) : (
+                              <div className="flex space-x-2">
+                                <TableIconActionButton
+                                  variant="Open"
+                                  onClick={() => setCurrentLink(link.url)}
+                                  tooltipText="Open link"
+                                  dataTestId={`open-link-${link.id}`}
+                                />
+                                <TableIconActionButton
+                                  variant="Edit"
+                                  onClick={() => handleEditLink(link)}
+                                  tooltipText="Edit link"
+                                  dataTestId={`edit-link-${link.id}`}
+                                />
+                                <TableIconActionButton
+                                  variant="Delete"
+                                  onClick={() => deleteLink(link.id)}
+                                  tooltipText="Delete link"
+                                  dataTestId={`delete-link-${link.id}`}
+                                />
+                              </div>
+                            )}
                           </TableCell>
                         </>
                       )}

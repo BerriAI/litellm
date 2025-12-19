@@ -1,52 +1,5 @@
 model_list:
-  - model_name: qwen-25vl-72b
+  - model_name: anthropic/*
     litellm_params:
-      model: bedrock/openai/arn:aws:bedrock:us-east-1:046319184608:imported-model/0m2lasirsp6z
+      model: anthropic/*
 
-    
-
-# like MCPs/vector stores
-search_tools:
-  - search_tool_name: litellm-search
-    litellm_params:
-      search_provider: perplexity
-      api_key: os.environ/PERPLEXITYAI_API_KEY
-  - search_tool_name: firecrawl-search
-    litellm_params:
-      search_provider: firecrawl
-      api_key: os.environ/FIRECRAWL_API_KEY
-  
-
-litellm_settings:
-  max_end_user_budget_id: "2f6634cd-c631-4d3b-96c7-ad510ea06eaf"
-  # Comprehensive logging settings
-  store_audit_logs: true
-  verbose: true
-  log_level: "DEBUG"  # Options: DEBUG, INFO, WARNING, ERROR
-  callbacks: ["s3_v2", "smtp_email"]
-  s3_callback_params:
-    s3_endpoint_url: "https://localhost:443"  # Replace with your Minio server URL and port
-    s3_aws_access_key_id: "minioadmin"
-    s3_aws_secret_access_key: "minioadmin"
-    s3_region_name: "minio"  # This can be any value for Minio
-    s3_bucket_name: "litellm-test"  # Replace with your bucket name
-    s3_use_ssl: False
-    s3_verify: False
-  cache: True
-  cache_params:
-    type: local
-  drop_params: True
-
-
-general_settings:
-  store_prompts_in_spend_logs: True
-
-
-vector_store_registry:
-  - vector_store_name: "bedrock-litellm-website-knowledgebase"
-    litellm_params:
-      vector_store_id: "T37J8R4WTM"
-      custom_llm_provider: "bedrock"
-      vector_store_description: "Bedrock vector store for the Litellm website knowledgebase"
-      vector_store_metadata:
-        source: "https://www.litellm.com/docs"

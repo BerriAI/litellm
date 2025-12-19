@@ -6,7 +6,7 @@ authors:
   - name: Sameer Kankute
     title: SWE @ LiteLLM (LLM Translation)
     url: https://www.linkedin.com/in/sameer-kankute/
-    image_url: https://media.licdn.com/dms/image/v2/D4D03AQHB_loQYd5gjg/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1719137160975?e=1765411200&v=beta&t=c8396f--_lH6Fb_pVvx_jGholPfcl0bvwmNynbNdnII
+    image_url: https://pbs.twimg.com/profile_images/2001352686994907136/ONgNuSk5_400x400.jpg
   - name: Krrish Dholakia
     title: "CEO, LiteLLM"
     url: https://www.linkedin.com/in/krish-d/
@@ -33,7 +33,7 @@ This guide covers Anthropic's latest model (Claude Opus 4.5) and its advanced fe
 | Input Examples | Claude Opus 4.5, Sonnet 4.5 |
 | Effort Parameter | Claude Opus 4.5 only |
 
-Supported Providers: [Anthropic](../../docs/providers/anthropic), [Bedrock](../../docs/providers/bedrock), [Vertex AI](../../docs/providers/vertex_partner#vertex-ai---anthropic-claude).
+Supported Providers: [Anthropic](../../docs/providers/anthropic), [Bedrock](../../docs/providers/bedrock), [Vertex AI](../../docs/providers/vertex_partner#vertex-ai---anthropic-claude), [Azure AI](../../docs/providers/azure_ai).
 
 ## Usage
 
@@ -327,6 +327,81 @@ curl --location 'http://0.0.0.0:4000/v1/messages' \
 </TabItem>
 </Tabs>
 
+## Usage - Azure Anthropic (Azure Foundry Claude)
+
+LiteLLM funnels Azure Claude deployments through the `azure_ai/` provider so Claude Opus models on Azure Foundry keep working with Tool Search, Effort, streaming, and the rest of the advanced feature set. Point `AZURE_AI_API_BASE` to `https://<resource>.services.ai.azure.com/anthropic` (LiteLLM appends `/v1/messages` automatically) and authenticate with `AZURE_AI_API_KEY` or an Azure AD token.
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM Python SDK">
+
+```python
+import os
+from litellm import completion
+
+# Configure Azure credentials
+os.environ["AZURE_AI_API_KEY"] = "your-azure-ai-api-key"
+os.environ["AZURE_AI_API_BASE"] = "https://my-resource.services.ai.azure.com/anthropic"
+
+response = completion(
+    model="azure_ai/claude-opus-4-1",
+    messages=[{"role": "user", "content": "Explain how Azure Anthropic hosts Claude Opus differently from the public Anthropic API."}],
+    max_tokens=1200,
+    temperature=0.7,
+    stream=True,
+)
+
+for chunk in response:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="", flush=True)
+```
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+**1. Set environment variables**
+
+```bash
+export AZURE_AI_API_KEY="your-azure-ai-api-key"
+export AZURE_AI_API_BASE="https://my-resource.services.ai.azure.com/anthropic"
+```
+
+**2. Configure the proxy**
+
+```yaml
+model_list:
+  - model_name: claude-4-azure
+    litellm_params:
+      model: azure_ai/claude-opus-4-1
+      api_key: os.environ/AZURE_AI_API_KEY
+      api_base: os.environ/AZURE_AI_API_BASE
+```
+
+**3. Start LiteLLM**
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+**4. Test the Azure Claude route**
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+  --header 'Content-Type: application/json' \
+  --header 'Authorization: Bearer $LITELLM_KEY' \
+  --data '{
+    "model": "claude-4-azure",
+    "messages": [
+      {
+        "role": "user",
+        "content": "How do I use Claude Opus 4 via Azure Anthropic in LiteLLM?"
+      }
+    ],
+    "max_tokens": 1024
+  }'
+```
+
+</TabItem>
+</Tabs>
 
 
 ## Tool Search {#tool-search}
@@ -897,14 +972,13 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 ## Effort Parameter: Control Token Usage {#effort-parameter}
 
-Controls aspects like how much effort the model puts into its response, via `output_config={"effort": ..}`.
+Control how much effort Claude puts into its response using the `reasoning_effort` parameter. This allows you to trade off between response thoroughness and token efficiency.
 
 :::info
-
-Soon, we will map OpenAI's `reasoning_effort` parameter to this.
+LiteLLM automatically maps `reasoning_effort` to Anthropic's `output_config` format and adds the required `effort-2025-11-24` beta header for Claude Opus 4.5.
 :::
 
-Potential Values for `effort` parameter: `"high"`, `"medium"`, `"low"`.
+Potential values for `reasoning_effort` parameter: `"high"`, `"medium"`, `"low"`.
 
 ### Usage Example
 
@@ -920,7 +994,7 @@ message = "Analyze the trade-offs between microservices and monolithic architect
 response_high = litellm.completion(
     model="anthropic/claude-opus-4-5-20251101",
     messages=[{"role": "user", "content": message}],
-    output_config={"effort": "high"}
+    reasoning_effort="high"
 )
 
 print("High effort response:")
@@ -931,7 +1005,7 @@ print(f"Tokens used: {response_high.usage.completion_tokens}\n")
 response_medium = litellm.completion(
     model="anthropic/claude-opus-4-5-20251101",
     messages=[{"role": "user", "content": message}],
-    output_config={"effort": "medium"}
+    reasoning_effort="medium"
 )
 
 print("Medium effort response:")
@@ -942,7 +1016,7 @@ print(f"Tokens used: {response_medium.usage.completion_tokens}\n")
 response_low = litellm.completion(
     model="anthropic/claude-opus-4-5-20251101",
     messages=[{"role": "user", "content": message}],
-    output_config={"effort": "low"}
+    reasoning_effort="low"
 )
 
 print("Low effort response:")
@@ -987,295 +1061,9 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
         "role": "user",
         "content": "Analyze the trade-offs between microservices and monolithic architectures"
       }],
-      "output_config": {
-        "effort": "high"
-      }
+      "reasoning_effort": "high"
     }
 '
 ```
 </TabItem>
 </Tabs>
-
-
-## Cost Tracking: Monitor Tool Search Usage {#cost-tracking}
-
-### Understanding Tool Search Costs
-
-Tool search operations are tracked separately in the usage object, allowing you to monitor and optimize costs.
-
-It is available in the `usage` object, under `server_tool_use.tool_search_requests`.
-
-Anthropic charges $0.0001 per tool search request. 
-
-### Tracking Example
-
-<Tabs>
-<TabItem value="sdk" label="LiteLLM Python SDK">
-
-```python
-import litellm
-
-tools = [
-    {
-        "type": "tool_search_tool_regex_20251119",
-        "name": "tool_search_tool_regex"
-    },
-    # ... 100 deferred tools
-]
-
-response = litellm.completion(
-    model="anthropic/claude-sonnet-4-5-20250929",
-    messages=[{
-        "role": "user",
-        "content": "Find and use the weather tool for San Francisco"
-    }],
-    tools=tools
-)
-
-# Standard token usage
-print("Token Usage:")
-print(f"  Input tokens:  {response.usage.prompt_tokens}")
-print(f"  Output tokens: {response.usage.completion_tokens}")
-print(f"  Total tokens:  {response.usage.total_tokens}")
-
-# Tool search specific usage
-if hasattr(response.usage, 'server_tool_use') and response.usage.server_tool_use:
-    print(f"\nTool Search Usage:")
-    print(f"  Search requests: {response.usage.server_tool_use.tool_search_requests}")
-    
-    # Calculate cost (example pricing)
-    input_cost = response.usage.prompt_tokens * 0.000003  # $3 per 1M tokens
-    output_cost = response.usage.completion_tokens * 0.000015  # $15 per 1M tokens
-    search_cost = response.usage.server_tool_use.tool_search_requests * 0.0001  # Example
-    
-    total_cost = input_cost + output_cost + search_cost
-    
-    print(f"\nCost Breakdown:")
-    print(f"  Input tokens:   ${input_cost:.6f}")
-    print(f"  Output tokens:  ${output_cost:.6f}")
-    print(f"  Tool searches:  ${search_cost:.6f}")
-    print(f"  Total:          ${total_cost:.6f}")
-```
-
-</TabItem>
-<TabItem value="proxy" label="LiteLLM Proxy">
-
-1. Setup config.yaml
-
-```yaml
-model_list:
-  - model_name: claude-4
-    litellm_params:
-      model: anthropic/claude-opus-4-5-20251101
-      api_key: os.environ/ANTHROPIC_API_KEY
-```
-
-2. Start the proxy
-
-```bash
-litellm --config /path/to/config.yaml
-```
-
-3. Test it!
-
-```bash
-curl --location 'http://0.0.0.0:4000/chat/completions' \
---header 'Content-Type: application/json' \
---header 'Authorization: Bearer $LITELLM_KEY' \
---data ' {
-      "model": "claude-4",
-      "messages": [{
-        "role": "user",
-        "content": "Find and use the weather tool for San Francisco"
-      }],
-      "tools": [
-        {
-          "type": "tool_search_tool_regex_20251119",
-          "name": "tool_search_tool_regex"
-        },
-        # ... 100 deferred tools
-      ]
-    }
-'
-```
-
-Expected Response:
-
-```json
-{
-    ...,
-    "usage": {
-        ...,
-        "server_tool_use": {
-            "tool_search_requests": 1
-        }
-    }
-}
-```
-
-</TabItem>
-</Tabs>
-
-### Cost Optimization Tips
-
-1. **Keep frequently used tools non-deferred** (3-5 tools)
-2. **Use tool search for large catalogs** (10+ tools)
-3. **Monitor search requests** to identify optimization opportunities
-4. **Combine with effort parameter** for maximum efficiency
-
-
----
-
-## Combining Features {#combining-features}
-
-### The Power of Integration
-
-These features work together seamlessly. Here's a real-world example combining all of them:
-
-<Tabs>
-<TabItem value="sdk" label="LiteLLM Python SDK">
-
-```python
-import litellm
-import json
-
-# Large tool catalog with search, programmatic calling, and examples
-tools = [
-    # Enable tool search
-    {
-        "type": "tool_search_tool_regex_20251119",
-        "name": "tool_search_tool_regex"
-    },
-    # Enable programmatic calling
-    {
-        "type": "code_execution_20250825",
-        "name": "code_execution"
-    },
-    # Database tool with all features
-    {
-        "type": "function",
-        "function": {
-            "name": "query_database",
-            "description": "Execute SQL queries against the analytics database. Returns JSON array of results.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "sql": {
-                        "type": "string",
-                        "description": "SQL SELECT statement"
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Maximum rows to return"
-                    }
-                },
-                "required": ["sql"]
-            }
-        },
-        "defer_loading": True,  # Tool search
-        "allowed_callers": ["code_execution_20250825"],  # Programmatic calling
-        "input_examples": [  # Input examples
-            {
-                "sql": "SELECT region, SUM(revenue) as total FROM sales GROUP BY region",
-                "limit": 100
-            }
-        ]
-    },
-    # ... 50 more tools with defer_loading
-]
-
-# Make request with effort control
-response = litellm.completion(
-    model="anthropic/claude-opus-4-5-20251101",
-    messages=[{
-        "role": "user",
-        "content": "Analyze sales by region for the last quarter and identify top performers"
-    }],
-    tools=tools,
-    output_config={"effort": "medium"}  # Balanced efficiency
-)
-
-# Track comprehensive usage
-print("Complete Usage Metrics:")
-print(f"  Input tokens:     {response.usage.prompt_tokens}")
-print(f"  Output tokens:    {response.usage.completion_tokens}")
-print(f"  Total tokens:     {response.usage.total_tokens}")
-
-if hasattr(response.usage, 'server_tool_use') and response.usage.server_tool_use:
-    print(f"  Tool searches:    {response.usage.server_tool_use.tool_search_requests}")
-
-print(f"\nResponse: {response.choices[0].message.content}")
-```
-
-</TabItem>
-<TabItem value="proxy" label="LiteLLM Proxy">
-
-1. Setup config.yaml
-
-```yaml
-model_list:
-  - model_name: claude-4
-    litellm_params:
-      model: anthropic/claude-opus-4-5-20251101
-      api_key: os.environ/ANTHROPIC_API_KEY
-```
-
-2. Start the proxy
-
-```bash
-litellm --config /path/to/config.yaml
-```
-
-3. Test it!
-
-```bash
-curl --location 'http://0.0.0.0:4000/chat/completions' \
---header 'Content-Type: application/json' \
---header 'Authorization: Bearer $LITELLM_KEY' \
---data ' {
-      "model": "claude-4",
-      "messages": [{
-        "role": "user",
-        "content": "Analyze sales by region for the last quarter and identify top performers"
-      }],
-      "tools": [
-        {
-          "type": "tool_search_tool_regex_20251119",
-          "name": "tool_search_tool_regex"
-        },
-        # ... 100 deferred tools
-      ],
-      "output_config": {
-        "effort": "medium"
-      }
-    }
-'
-```
-
-Expected Response:
-
-```json
-{
-    ...,
-    "usage": {
-        ...,    
-        "server_tool_use": {
-            "tool_search_requests": 1
-        }
-    }
-}
-```
-
-</TabItem>
-</Tabs>
-
-### Real-World Benefits
-
-This combination enables:
-
-1. **Massive scale** - Handle 1000+ tools efficiently
-2. **Low latency** - Programmatic calling reduces round trips
-3. **High accuracy** - Input examples ensure correct tool usage
-4. **Cost control** - Effort parameter optimizes token spend
-5. **Full visibility** - Track all usage metrics
-

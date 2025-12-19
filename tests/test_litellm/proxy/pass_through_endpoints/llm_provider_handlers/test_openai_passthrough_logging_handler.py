@@ -130,6 +130,19 @@ class TestOpenAIPassthroughLoggingHandler:
         assert OpenAIPassthroughLoggingHandler.is_openai_image_editing_route("http://localhost:4000/openai/v1/images/edits") == False
         assert OpenAIPassthroughLoggingHandler.is_openai_image_editing_route("") == False
 
+    def test_is_openai_responses_route(self):
+        """Test OpenAI responses API route detection"""
+        # Positive cases
+        assert OpenAIPassthroughLoggingHandler.is_openai_responses_route("https://api.openai.com/v1/responses") == True
+        assert OpenAIPassthroughLoggingHandler.is_openai_responses_route("https://openai.azure.com/v1/responses") == True
+        assert OpenAIPassthroughLoggingHandler.is_openai_responses_route("https://api.openai.com/responses") == True
+        
+        # Negative cases
+        assert OpenAIPassthroughLoggingHandler.is_openai_responses_route("https://api.openai.com/v1/chat/completions") == False
+        assert OpenAIPassthroughLoggingHandler.is_openai_responses_route("https://api.openai.com/v1/images/generations") == False
+        assert OpenAIPassthroughLoggingHandler.is_openai_responses_route("http://localhost:4000/openai/v1/responses") == False
+        assert OpenAIPassthroughLoggingHandler.is_openai_responses_route("") == False
+
     @patch('litellm.completion_cost')
     @patch('litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload')
     def test_openai_passthrough_handler_success(self, mock_get_standard_logging, mock_completion_cost):
@@ -368,6 +381,178 @@ class TestOpenAIPassthroughLoggingHandler:
         # Test instance method
         handler = OpenAIPassthroughLoggingHandler()
         assert handler.get_provider_config("gpt-4o") is not None
+
+    @patch('litellm.completion_cost')
+    @patch('litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload')
+    def test_azure_passthrough_tags_metadata_model_provider(self, mock_get_standard_logging, mock_completion_cost):
+        """Test that tags, metadata, model, and custom_llm_provider are preserved for Azure passthrough in UI"""
+        # Arrange
+        mock_completion_cost.return_value = 0.000045
+        mock_get_standard_logging.return_value = {"test": "logging_payload"}
+        
+        mock_httpx_response = self._create_mock_httpx_response()
+        mock_logging_obj = self._create_mock_logging_obj()
+        
+        # Create payload with metadata tags
+        passthrough_payload = PassthroughStandardLoggingPayload(
+            url="https://openai.azure.com/v1/chat/completions",
+            request_body={
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "Hello"}]
+            },
+            request_method="POST",
+        )
+        
+        # Set up kwargs with existing litellm_params containing metadata tags
+        kwargs = {
+            "passthrough_logging_payload": passthrough_payload,
+            "model": "gpt-4o",
+            "custom_llm_provider": "azure",  # Azure passthrough
+            "litellm_params": {
+                "metadata": {
+                    "tags": ["production", "azure-deployment"],
+                    "user_id": "user_123"
+                },
+                "proxy_server_request": {
+                    "body": {
+                        "user": "test_user"
+                    }
+                }
+            }
+        }
+
+        # Act
+        result = OpenAIPassthroughLoggingHandler.openai_passthrough_handler(
+            httpx_response=mock_httpx_response,
+            response_body=self.mock_openai_response,
+            logging_obj=mock_logging_obj,
+            url_route="https://openai.azure.com/v1/chat/completions",
+            result="",
+            start_time=self.start_time,
+            end_time=self.end_time,
+            cache_hit=False,
+            request_body={"model": "gpt-4o", "messages": [{"role": "user", "content": "Hello"}]},
+            **kwargs
+        )
+
+        # Assert - Verify tags, model, and custom_llm_provider are preserved
+        assert result is not None
+        assert "kwargs" in result
+        
+        # Verify model and custom_llm_provider are set correctly
+        assert result["kwargs"]["model"] == "gpt-4o"
+        assert result["kwargs"]["custom_llm_provider"] == "azure"  # Should preserve Azure, not default to "openai"
+        assert result["kwargs"]["response_cost"] == 0.000045
+        
+        # Verify metadata tags are preserved in litellm_params
+        assert "litellm_params" in result["kwargs"]
+        assert "metadata" in result["kwargs"]["litellm_params"]
+        assert "tags" in result["kwargs"]["litellm_params"]["metadata"]
+        assert result["kwargs"]["litellm_params"]["metadata"]["tags"] == ["production", "azure-deployment"]
+        assert result["kwargs"]["litellm_params"]["metadata"]["user_id"] == "user_123"
+        
+        # Verify logging object has correct values for UI display
+        assert mock_logging_obj.model_call_details["model"] == "gpt-4o"
+        assert mock_logging_obj.model_call_details["custom_llm_provider"] == "azure"
+        assert mock_logging_obj.model_call_details["response_cost"] == 0.000045
+        
+        # Verify cost calculation was called with correct custom_llm_provider
+        mock_completion_cost.assert_called_once()
+        call_args = mock_completion_cost.call_args
+        assert call_args[1]["custom_llm_provider"] == "azure"
+
+    @patch('litellm.completion_cost')
+    @patch('litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload')
+    @patch('litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrough_logging_handler.OpenAIPassthroughLoggingHandler.get_provider_config')
+    def test_responses_api_cost_tracking(self, mock_get_provider_config, mock_get_standard_logging, mock_completion_cost):
+        """Test cost tracking for responses API route"""
+        # Arrange
+        mock_completion_cost.return_value = 0.000050
+        mock_get_standard_logging.return_value = {"test": "logging_payload"}
+        
+        # Mock the provider config's transform_response to return a valid ModelResponse
+        from litellm import ModelResponse
+        mock_model_response = ModelResponse(
+            id="resp_abc123",
+            model="gpt-4o-2024-08-06",
+            choices=[{
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello! How can I help you today?"
+                }
+            }],
+            usage={
+                "prompt_tokens": 20,
+                "completion_tokens": 15,
+                "total_tokens": 35
+            }
+        )
+        
+        mock_provider_config = MagicMock()
+        mock_provider_config.transform_response.return_value = mock_model_response
+        mock_get_provider_config.return_value = mock_provider_config
+        
+        # Mock responses API response
+        mock_responses_response = {
+            "id": "resp_abc123",
+            "object": "response",
+            "created": 1677652288,
+            "model": "gpt-4o-2024-08-06",
+            "output": [
+                {
+                    "type": "text",
+                    "text": "Hello! How can I help you today?"
+                }
+            ],
+            "usage": {
+                "input_tokens": 20,
+                "output_tokens": 15
+            }
+        }
+        
+        mock_httpx_response = self._create_mock_httpx_response(mock_responses_response)
+        mock_logging_obj = self._create_mock_logging_obj()
+        passthrough_payload = self._create_passthrough_logging_payload()
+        
+        kwargs = {
+            "passthrough_logging_payload": passthrough_payload,
+            "model": "gpt-4o",
+            "custom_llm_provider": "openai",
+        }
+
+        # Act
+        result = OpenAIPassthroughLoggingHandler.openai_passthrough_handler(
+            httpx_response=mock_httpx_response,
+            response_body=mock_responses_response,
+            logging_obj=mock_logging_obj,
+            url_route="https://api.openai.com/v1/responses",
+            result="",
+            start_time=self.start_time,
+            end_time=self.end_time,
+            cache_hit=False,
+            request_body={"model": "gpt-4o", "input": "Tell me about AI"},
+            **kwargs
+        )
+
+        # Assert
+        assert result is not None
+        assert "result" in result
+        assert "kwargs" in result
+        assert result["kwargs"]["response_cost"] == 0.000050
+        assert result["kwargs"]["model"] == "gpt-4o"
+        assert result["kwargs"]["custom_llm_provider"] == "openai"
+        
+        # Verify cost calculation was called with responses call type
+        mock_completion_cost.assert_called_once()
+        call_args = mock_completion_cost.call_args
+        assert call_args[1]["call_type"] == "responses"
+        assert call_args[1]["model"] == "gpt-4o"
+        assert call_args[1]["custom_llm_provider"] == "openai"
+        
+        # Verify logging object was updated
+        assert mock_logging_obj.model_call_details["response_cost"] == 0.000050
+        assert mock_logging_obj.model_call_details["model"] == "gpt-4o"
+        assert mock_logging_obj.model_call_details["custom_llm_provider"] == "openai"
 
 
 class TestOpenAIPassthroughIntegration:

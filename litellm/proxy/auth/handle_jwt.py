@@ -480,6 +480,71 @@ class JWTHandler:
         else:
             return False
 
+    async def get_oidc_userinfo(self, token: str) -> dict:
+        """
+        Fetch user information from OIDC UserInfo endpoint.
+        
+        This follows the OpenID Connect protocol where an access token
+        is sent to the identity provider's UserInfo endpoint to retrieve
+        user identity information.
+        
+        Args:
+            token: The access token to use for authentication
+            
+        Returns:
+            dict: User information from the UserInfo endpoint
+            
+        Raises:
+            Exception: If UserInfo endpoint is not configured or request fails
+        """
+        if not self.litellm_jwtauth.oidc_userinfo_endpoint:
+            raise Exception(
+                "OIDC UserInfo endpoint not configured. Set 'oidc_userinfo_endpoint' in JWT auth config."
+            )
+        
+        # Check cache first
+        cache_key = f"oidc_userinfo_{token[:20]}"  # Use first 20 chars of token as cache key
+        cached_userinfo = await self.user_api_key_cache.async_get_cache(cache_key)
+        
+        if cached_userinfo is not None:
+            verbose_proxy_logger.debug("Returning cached OIDC UserInfo")
+            return cached_userinfo
+        
+        verbose_proxy_logger.debug(
+            f"Calling OIDC UserInfo endpoint: {self.litellm_jwtauth.oidc_userinfo_endpoint}"
+        )
+        
+        try:
+            # Call the UserInfo endpoint with the access token
+            response = await self.http_handler.get(
+                url=self.litellm_jwtauth.oidc_userinfo_endpoint,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/json",
+                },
+            )
+            
+            if response.status_code != 200:
+                raise Exception(
+                    f"OIDC UserInfo endpoint returned status {response.status_code}: {response.text}"
+                )
+            
+            userinfo = response.json()
+            verbose_proxy_logger.debug(f"Received OIDC UserInfo: {userinfo}")
+            
+            # Cache the userinfo response
+            await self.user_api_key_cache.async_set_cache(
+                key=cache_key,
+                value=userinfo,
+                ttl=self.litellm_jwtauth.oidc_userinfo_cache_ttl,
+            )
+            
+            return userinfo
+            
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error fetching OIDC UserInfo: {str(e)}")
+            raise Exception(f"Failed to fetch OIDC UserInfo: {str(e)}")
+
     async def auth_jwt(self, token: str) -> dict:
         # Supported algos: https://pyjwt.readthedocs.io/en/stable/algorithms.html
         # "Warning: Make sure not to mix symmetric and asymmetric algorithms that interpret
@@ -965,6 +1030,47 @@ class JWTAuthManager:
         return True
 
     @staticmethod
+    def get_team_id_from_header(
+        request_headers: Optional[dict],
+        allowed_team_ids: Set[str],
+    ) -> Optional[str]:
+        """
+        Extract team_id from x-litellm-team-id header if present.
+        Validates that the team is in the user's allowed teams from JWT.
+
+        Args:
+            request_headers: Dictionary of request headers
+            allowed_team_ids: Set of team IDs the user is allowed to access (from JWT)
+
+        Returns:
+            The team_id from header if valid, None otherwise
+
+        Raises:
+            HTTPException: If team_id is provided but not in allowed_team_ids
+        """
+        if not request_headers:
+            return None
+
+        # Normalize headers to lowercase for case-insensitive lookup
+        normalized_headers = {k.lower(): v for k, v in request_headers.items()}
+        header_team_id = normalized_headers.get("x-litellm-team-id")
+
+        if not header_team_id:
+            return None
+
+        # Validate that the team_id is in the allowed teams
+        if header_team_id not in allowed_team_ids:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Team '{header_team_id}' from x-litellm-team-id header is not in your JWT's allowed teams. Allowed teams: {list(allowed_team_ids)}",
+            )
+
+        verbose_proxy_logger.debug(
+            f"Using team_id from x-litellm-team-id header: {header_team_id}"
+        )
+        return header_team_id
+
+    @staticmethod
     async def map_user_to_teams(
         user_object: Optional[LiteLLM_UserTable],
         team_object: Optional[LiteLLM_TeamTable],
@@ -1075,9 +1181,19 @@ class JWTAuthManager:
         user_api_key_cache: DualCache,
         parent_otel_span: Optional[Span],
         proxy_logging_obj: ProxyLogging,
+        request_headers: Optional[dict] = None,
     ) -> JWTAuthBuilderResult:
         """Main authentication and authorization builder"""
-        jwt_valid_token: dict = await jwt_handler.auth_jwt(token=api_key)
+        # Check if OIDC UserInfo endpoint is enabled
+        if jwt_handler.litellm_jwtauth.oidc_userinfo_enabled:
+            verbose_proxy_logger.debug(
+                "OIDC UserInfo is enabled. Fetching user info from UserInfo endpoint."
+            )
+            # Use the access token to fetch user info from OIDC UserInfo endpoint
+            jwt_valid_token: dict = await jwt_handler.get_oidc_userinfo(token=api_key)
+        else:
+            # Default behavior: decode and validate the JWT token
+            jwt_valid_token = await jwt_handler.auth_jwt(token=api_key)
 
         # Check custom validate
         if jwt_handler.litellm_jwtauth.custom_validate:
@@ -1142,9 +1258,28 @@ class JWTAuthManager:
             return admin_result
 
         # Get team with model access
-        ## SPECIFIC TEAM ID
+        ## Check if team_id is specified via x-litellm-team-id header
+        all_team_ids = JWTAuthManager.get_all_team_ids(jwt_handler, jwt_valid_token)
+        specific_team_id = jwt_handler.get_team_id(token=jwt_valid_token, default_value=None)
+        if specific_team_id:
+            all_team_ids.add(specific_team_id)
 
-        if not team_id:
+        header_team_id = JWTAuthManager.get_team_id_from_header(
+            request_headers=request_headers,
+            allowed_team_ids=all_team_ids,
+        )
+        if header_team_id:
+            team_id = header_team_id
+            team_object = await get_team_object(
+                team_id=team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
+            )
+        elif not team_id:
+            ## SPECIFIC TEAM ID
             (
                 team_id,
                 team_object,
@@ -1159,7 +1294,6 @@ class JWTAuthManager:
 
         if not team_object and not team_id:
             ## CHECK USER GROUP ACCESS
-            all_team_ids = JWTAuthManager.get_all_team_ids(jwt_handler, jwt_valid_token)
             team_id, team_object = await JWTAuthManager.find_team_with_model_access(
                 team_ids=all_team_ids,
                 requested_model=request_data.get("model"),

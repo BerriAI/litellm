@@ -62,6 +62,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         self.rules: List[ToolPermissionRule] = []
         self._compiled_rule_patterns: Dict[str, Dict[str, re.Pattern]] = {}
+        self._compiled_rule_targets: Dict[str, Dict[str, Optional[re.Pattern]]] = {}
         if rules:
             for rule_item in rules:
                 if isinstance(rule_item, ToolPermissionRule):
@@ -69,6 +70,30 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 else:
                     rule = ToolPermissionRule(**rule_item)
                 self.rules.append(rule)
+
+                compiled_target_patterns: Dict[str, Optional[re.Pattern]] = {
+                    "tool_name": None,
+                    "tool_type": None,
+                }
+                if rule.tool_name is not None:
+                    try:
+                        compiled_target_patterns["tool_name"] = re.compile(
+                            rule.tool_name
+                        )
+                    except re.error as exc:
+                        raise ValueError(
+                            f"Invalid regex for tool_name in rule '{rule.id}': {exc}"
+                        ) from exc
+                if rule.tool_type is not None:
+                    try:
+                        compiled_target_patterns["tool_type"] = re.compile(
+                            rule.tool_type
+                        )
+                    except re.error as exc:
+                        raise ValueError(
+                            f"Invalid regex for tool_type in rule '{rule.id}': {exc}"
+                        ) from exc
+                self._compiled_rule_targets[rule.id] = compiled_target_patterns
 
                 if rule.allowed_param_patterns:
                     compiled_patterns: Dict[str, re.Pattern] = {}
@@ -100,59 +125,75 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         return ToolPermissionGuardrailConfigModel
 
-    def _matches_pattern(self, tool_name: str, pattern: str) -> bool:
-        """
-        Check if a tool name matches a pattern
-
-        Supports patterns like:
-        - "Bash" - exact match
-        - "mcp__*" - prefix pattern (matches names starting wich "mcp__")
-        - "*_read" - suffix wildcard (matches names ending with "_read")
-        - "mcp__github_*_read" - infix wildcard (matches names like "mcp__github_mark_all_notifications_read")
-
-        Args:
-            tool_name: Name of the tool to check
-            pattern: Pattern to match against
-
-        Returns:
-            True if the tool name matches the pattern
-        """
-        # Handle exact matches
-        if tool_name == pattern:
+    def _matches_regex(
+        self, pattern: Optional[re.Pattern], value: Optional[str]
+    ) -> bool:
+        if pattern is None:
             return True
+        if value is None:
+            return False
+        return bool(pattern.fullmatch(value))
 
-        if "*" in pattern:
-            # Escape regex special chars except '*'
-            escaped_pattern = re.escape(pattern)
-            # Turn \* into .*
-            regex_pattern = escaped_pattern.replace(r"\*", ".*")
-            return bool(re.fullmatch(regex_pattern, tool_name))
+    def _rule_matches_tool(
+        self,
+        rule: ToolPermissionRule,
+        *,
+        tool_name: Optional[str],
+        tool_type: Optional[str] = None,
+    ) -> tuple[bool, bool]:
+        target_patterns = self._compiled_rule_targets.get(rule.id, {})
+        name_pattern = target_patterns.get("tool_name")
+        type_pattern = target_patterns.get("tool_type")
 
-        return False
+        name_required = rule.tool_name is not None
+        type_required = rule.tool_type is not None
+
+        name_matched = (
+            self._matches_regex(name_pattern, tool_name) if name_required else True
+        )
+        type_matched = (
+            self._matches_regex(type_pattern, tool_type) if type_required else True
+        )
+
+        overall_match = name_matched and type_matched
+        should_check_params = name_required and name_matched
+
+        return overall_match, should_check_params
 
     def _check_tool_permission(
-        self, tool_name: str
+        self,
+        tool_name: Optional[str],
+        tool_type: Optional[str] = None,
     ) -> tuple[bool, Optional[str], Optional[str]]:
         """
         Check if a tool is allowed based on the configured rules
 
         Args:
             tool_name: Name of the tool to check
+            tool_type: Type of the tool to check
 
         Returns:
             Tuple of (is_allowed, rule_id, message)
         """
-        verbose_proxy_logger.debug(f"Checking permission for tool: {tool_name}")
+        verbose_proxy_logger.debug(
+            f"Checking permission for tool: {tool_name or tool_type}"
+        )
 
         # Check each rule in order
         for rule in self.rules:
-            if self._matches_pattern(tool_name, rule.tool_name):
+            matches, _ = self._rule_matches_tool(
+                rule,
+                tool_name=tool_name,
+                tool_type=tool_type,
+            )
+            if matches:
                 is_allowed = rule.decision == "allow"
-                default_message = f"Tool '{tool_name}' {'allowed' if is_allowed else 'denied'} by rule '{rule.id}'"
+                tool_identifier = tool_name or tool_type or "unknown_tool"
+                default_message = f"Tool '{tool_identifier}' {'allowed' if is_allowed else 'denied'} by rule '{rule.id}'"
                 message = self.render_violation_message(
                     default=default_message,
                     context={
-                        "tool_name": tool_name,
+                        "tool_name": tool_name or tool_identifier,
                         "rule_id": rule.id,
                     },
                 )
@@ -161,11 +202,12 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         # No rule matched, use default action
         is_allowed = self.default_action == "allow"
-        default_message = f"Tool '{tool_name}' {'allowed' if is_allowed else 'denied'} by default action"
+        tool_identifier = tool_name or tool_type or "unknown_tool"
+        default_message = f"Tool '{tool_identifier}' {'allowed' if is_allowed else 'denied'} by default action"
         message = self.render_violation_message(
             default=default_message,
             context={
-                "tool_name": tool_name,
+                "tool_name": tool_name or tool_identifier,
                 "rule_id": None,
             },
         )
@@ -228,7 +270,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         *,
         arguments: Dict[str, Any],
         rule: ToolPermissionRule,
-        tool_name: str,
+        tool_name: Optional[str],
     ) -> tuple[bool, Optional[str]]:
         compiled_patterns = self._compiled_rule_patterns.get(rule.id)
         if not compiled_patterns:
@@ -249,7 +291,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
                     return (
                         False,
                         f"Value '{raw_value}' for path '{path}' does not match allowed pattern"
-                        f" '{compiled_pattern.pattern}' for tool '{tool_name}'",
+                        f" '{compiled_pattern.pattern}' for tool '{tool_name or 'unknown_tool'}'",
                     )
 
         return True, None
@@ -258,19 +300,27 @@ class ToolPermissionGuardrail(CustomGuardrail):
         self, tool_call: ChatCompletionMessageToolCall
     ) -> tuple[bool, Optional[str], Optional[str]]:
         tool_name = tool_call.function.name if tool_call.function else None
-        if not tool_name:
+        tool_type = getattr(tool_call, "type", None)
+        if not tool_name and not tool_type:
             return self.default_action == "allow", None, None
+
+        tool_identifier = tool_name or tool_type or "unknown_tool"
 
         last_pattern_failure_msg: Optional[str] = None
 
         for rule in self.rules:
-            if not self._matches_pattern(tool_name, rule.tool_name):
+            matches, should_check_params = self._rule_matches_tool(
+                rule,
+                tool_name=tool_name,
+                tool_type=tool_type,
+            )
+            if not matches:
                 continue
 
-            if rule.allowed_param_patterns:
+            if rule.allowed_param_patterns and should_check_params:
                 arguments = self._parse_tool_call_arguments(tool_call)
                 if not arguments:
-                    last_pattern_failure_msg = f"Tool '{tool_name}' is missing arguments required by rule '{rule.id}'"
+                    last_pattern_failure_msg = f"Tool '{tool_identifier}' is missing arguments required by rule '{rule.id}'"
                     continue
 
                 patterns_match, failure_message = self._patterns_match_for_rule(
@@ -283,10 +333,10 @@ class ToolPermissionGuardrail(CustomGuardrail):
                     continue
 
             is_allowed = rule.decision == "allow"
-            default_message = f"Tool '{tool_name}' {'allowed' if is_allowed else 'denied'} by rule '{rule.id}'"
+            default_message = f"Tool '{tool_identifier}' {'allowed' if is_allowed else 'denied'} by rule '{rule.id}'"
             message = self.render_violation_message(
                 default=default_message,
-                context={"tool_name": tool_name, "rule_id": rule.id},
+                context={"tool_name": tool_identifier, "rule_id": rule.id},
             )
             return is_allowed, rule.id, message
 
@@ -294,11 +344,11 @@ class ToolPermissionGuardrail(CustomGuardrail):
         default_message = (
             last_pattern_failure_msg
             if (last_pattern_failure_msg and not is_allowed)
-            else f"Tool '{tool_name}' {'allowed' if is_allowed else 'denied'} by default action"
+            else f"Tool '{tool_identifier}' {'allowed' if is_allowed else 'denied'} by default action"
         )
         message = self.render_violation_message(
             default=default_message,
-            context={"tool_name": tool_name, "rule_id": None},
+            context={"tool_name": tool_identifier, "rule_id": None},
         )
         return is_allowed, None, message
 
@@ -469,8 +519,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
             if tool["type"] != "function":
                 continue
             tool_name: str = tool["function"]["name"]
+            tool_type: Optional[str] = tool.get("type")
 
-            is_allowed, _, message = self._check_tool_permission(tool_name)
+            is_allowed, _, message = self._check_tool_permission(tool_name, tool_type)
 
             if not is_allowed and message is not None:
                 verbose_proxy_logger.warning(f"Tool Permission Guardrail: {message}")

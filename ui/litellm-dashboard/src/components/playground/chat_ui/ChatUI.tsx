@@ -51,6 +51,12 @@ import { fetchAvailableModels, ModelGroup } from "../llm_calls/fetch_models";
 import { makeOpenAIImageEditsRequest } from "../llm_calls/image_edits";
 import { makeOpenAIImageGenerationRequest } from "../llm_calls/image_generation";
 import { makeOpenAIResponsesRequest } from "../llm_calls/responses_api";
+import CodeInterpreterOutput from "./CodeInterpreterOutput";
+import { useCodeInterpreter } from "./useCodeInterpreter";
+import { Agent, fetchAvailableAgents } from "../llm_calls/fetch_agents";
+import { makeA2AStreamMessageRequest } from "../llm_calls/a2a_send_message";
+import A2AMetrics from "./A2AMetrics";
+import { A2ATaskMetadata } from "./types";
 import MCPEventsDisplay, { MCPEvent } from "./MCPEventsDisplay";
 import { EndpointType, getEndpointType } from "./mode_endpoint_mapping";
 import ReasoningContent from "./ReasoningContent";
@@ -61,6 +67,7 @@ import { createDisplayMessage, createMultimodalMessage } from "./ResponsesImageU
 import { SearchResultsDisplay } from "./SearchResultsDisplay";
 import SessionManagement from "./SessionManagement";
 import { MessageType } from "./types";
+import CodeInterpreterTool from "./CodeInterpreterTool";
 
 const { TextArea } = Input;
 const { Dragger } = Upload;
@@ -124,6 +131,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [selectedModel, setSelectedModel] = useState<string | undefined>(undefined);
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
+  const [agentInfo, setAgentInfo] = useState<Agent[]>([]);
+  const [selectedAgent, setSelectedAgent] = useState<string | undefined>(undefined);
   const customModelTimeout = useRef<NodeJS.Timeout | null>(null);
   const [endpointType, setEndpointType] = useState<string>(
     () => sessionStorage.getItem("endpointType") || EndpointType.CHAT,
@@ -191,6 +200,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [temperature, setTemperature] = useState<number>(1.0);
   const [maxTokens, setMaxTokens] = useState<number>(2048);
   const [useAdvancedParams, setUseAdvancedParams] = useState<boolean>(false);
+  
+  // Code Interpreter state (using custom hook)
+  const codeInterpreter = useCodeInterpreter();
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -289,6 +301,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       sessionStorage.removeItem("responsesSessionId");
     }
     sessionStorage.setItem("useApiSessionManagement", JSON.stringify(useApiSessionManagement));
+    // Note: codeInterpreterEnabled and selectedContainerId are persisted by useCodeInterpreter hook
   }, [
     apiKeySource,
     apiKey,
@@ -339,6 +352,29 @@ const ChatUI: React.FC<ChatUIProps> = ({
     loadModels();
     loadMCPTools();
   }, [accessToken, userID, userRole, apiKeySource, apiKey, token]);
+
+  // Fetch agents when A2A endpoint is selected
+  useEffect(() => {
+    const userApiKey = apiKeySource === "session" ? accessToken : apiKey;
+    if (!userApiKey || endpointType !== EndpointType.A2A_AGENTS) {
+      return;
+    }
+
+    const loadAgents = async () => {
+      try {
+        const agents = await fetchAvailableAgents(userApiKey);
+        setAgentInfo(agents);
+        // Clear selection if current agent not in list
+        if (selectedAgent && !agents.some((a) => a.agent_name === selectedAgent)) {
+          setSelectedAgent(undefined);
+        }
+      } catch (error) {
+        console.error("Error fetching agents:", error);
+      }
+    };
+
+    loadAgents();
+  }, [accessToken, apiKeySource, apiKey, endpointType]);
 
   useEffect(() => {
     // Scroll to the bottom of the chat whenever chatHistory updates
@@ -462,6 +498,23 @@ const ChatUI: React.FC<ChatUIProps> = ({
         };
         console.log("Updated message:", updatedMessage);
 
+        return [...prevHistory.slice(0, prevHistory.length - 1), updatedMessage];
+      }
+
+      return prevHistory;
+    });
+  };
+
+  const updateA2AMetadata = (a2aMetadata: A2ATaskMetadata) => {
+    console.log("Received A2A metadata:", a2aMetadata);
+    setChatHistory((prevHistory) => {
+      const lastMessage = prevHistory[prevHistory.length - 1];
+
+      if (lastMessage && lastMessage.role === "assistant") {
+        const updatedMessage = {
+          ...lastMessage,
+          a2aMetadata,
+        };
         return [...prevHistory.slice(0, prevHistory.length - 1), updatedMessage];
       }
 
@@ -684,6 +737,18 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return;
     }
 
+    // For A2A agents, require agent selection
+    if (endpointType === EndpointType.A2A_AGENTS && !selectedAgent) {
+      NotificationsManager.fromBackend("Please select an agent to send a message");
+      return;
+    }
+
+    // Require model selection for Responses API
+    if (endpointType === EndpointType.RESPONSES && !selectedModel) {
+      NotificationsManager.fromBackend("Please select a model before sending a request");
+      return;
+    }
+
     if (!token || !userRole || !userID) {
       return;
     }
@@ -691,7 +756,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     const effectiveApiKey = apiKeySource === "session" ? accessToken : apiKey;
 
     if (!effectiveApiKey) {
-      NotificationsManager.fromBackend("Please provide an API key or select Current UI Session");
+      NotificationsManager.fromBackend("Please provide a Virtual Key or select Current UI Session");
       return;
     }
 
@@ -757,6 +822,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
     setChatHistory([...chatHistory, displayMessage]);
     setMCPEvents([]); // Clear previous MCP events for new conversation turn
+    codeInterpreter.clearResult(); // Clear previous code interpreter results
     setIsLoading(true);
 
     try {
@@ -862,6 +928,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
             useApiSessionManagement ? responsesSessionId : null, // Only pass session ID if API mode is enabled
             handleResponseId, // Pass callback to capture new response ID
             handleMCPEvent, // Pass MCP event handler
+            codeInterpreter.enabled, // Enable Code Interpreter tool
+            codeInterpreter.setResult, // Handle code interpreter output
           );
         } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
           const apiChatHistory = [
@@ -907,6 +975,20 @@ const ChatUI: React.FC<ChatUIProps> = ({
             );
           }
         }
+      }
+
+      // Handle A2A agent calls (separate from model-based calls) - use streaming
+      if (endpointType === EndpointType.A2A_AGENTS && selectedAgent) {
+        await makeA2AStreamMessageRequest(
+          selectedAgent,
+          inputMessage,
+          (chunk, model) => updateTextUI("assistant", chunk, model),
+          effectiveApiKey,
+          signal,
+          updateTimingData,
+          updateTotalLatency,
+          updateA2AMetadata,
+        );
       }
     } catch (error) {
       if (signal.aborted) {
@@ -1003,7 +1085,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             <div className="space-y-4">
               <div>
                 <Text className="font-medium block mb-2 text-gray-700 flex items-center">
-                  <KeyOutlined className="mr-2" /> API Key Source
+                  <KeyOutlined className="mr-2" /> Virtual Key Source
                 </Text>
                 <Select
                   disabled={disabledPersonalKeyCreation}
@@ -1021,7 +1103,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 {apiKeySource === "custom" && (
                   <TextInput
                     className="mt-2"
-                    placeholder="Enter custom API key"
+                    placeholder="Enter custom Virtual Key"
                     type="password"
                     onValueChange={setApiKey}
                     value={apiKey}
@@ -1038,11 +1120,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   endpointType={endpointType}
                   onEndpointChange={(value) => {
                     setEndpointType(value);
-                    // Clear model selection when switching endpoint type
+                    // Clear model/agent selection when switching endpoint type
                     setSelectedModel(undefined);
+                    setSelectedAgent(undefined);
                     setShowCustomModelInput(false);
                     try {
                       sessionStorage.removeItem("selectedModel");
+                      sessionStorage.removeItem("selectedAgent");
                     } catch {}
                   }}
                   className="mb-4"
@@ -1077,103 +1161,145 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 />
               </div>
 
-              <div>
-                <Text className="font-medium block mb-2 text-gray-700 flex items-center justify-between">
-                  <span className="flex items-center">
-                    <RobotOutlined className="mr-2" /> Select Model
-                  </span>
-                  {isChatModel() ? (
-                    <Popover
-                      content={
-                        <AdditionalModelSettings
-                          temperature={temperature}
-                          maxTokens={maxTokens}
-                          useAdvancedParams={useAdvancedParams}
-                          onTemperatureChange={setTemperature}
-                          onMaxTokensChange={setMaxTokens}
-                          onUseAdvancedParamsChange={setUseAdvancedParams}
+              {/* Model Selector - shown when NOT using A2A Agents */}
+              {endpointType !== EndpointType.A2A_AGENTS && (
+                <div>
+                  <Text className="font-medium block mb-2 text-gray-700 flex items-center justify-between">
+                    <span className="flex items-center">
+                      <RobotOutlined className="mr-2" /> Select Model
+                    </span>
+                    {isChatModel() ? (
+                      <Popover
+                        content={
+                          <AdditionalModelSettings
+                            temperature={temperature}
+                            maxTokens={maxTokens}
+                            useAdvancedParams={useAdvancedParams}
+                            onTemperatureChange={setTemperature}
+                            onMaxTokensChange={setMaxTokens}
+                            onUseAdvancedParamsChange={setUseAdvancedParams}
+                          />
+                        }
+                        title="Model Settings"
+                        trigger="click"
+                        placement="right"
+                      >
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<SettingOutlined />}
+                          className="text-gray-500 hover:text-gray-700"
                         />
-                      }
-                      title="Model Settings"
-                      trigger="click"
-                      placement="right"
-                    >
-                      <Button
-                        type="text"
-                        size="small"
-                        icon={<SettingOutlined />}
-                        className="text-gray-500 hover:text-gray-700"
-                      />
-                    </Popover>
-                  ) : (
-                    <Tooltip title="Advanced parameters are only supported for chat models currently">
-                      <Button
-                        type="text"
-                        size="small"
-                        icon={<SettingOutlined />}
-                        className="text-gray-300 cursor-not-allowed"
-                        disabled
-                      />
-                    </Tooltip>
-                  )}
-                </Text>
-                <Select
-                  value={selectedModel}
-                  placeholder="Select a Model"
-                  onChange={onModelChange}
-                  options={[
-                    ...Array.from(
-                      new Set(
-                        modelInfo
-                          .filter((option) => {
-                            if (!option.mode) {
-                              //If no mode, show all models
-                              return true;
-                            }
-                            const optionEndpoint = getEndpointType(option.mode);
-                            // Show chat models for responses/anthropic_messages endpoints as they are compatible
-                            if (
-                              endpointType === EndpointType.RESPONSES ||
-                              endpointType === EndpointType.ANTHROPIC_MESSAGES
-                            ) {
-                              return optionEndpoint === endpointType || optionEndpoint === EndpointType.CHAT;
-                            }
-                            // Show image models for image_edits endpoint as they are compatible
-                            if (endpointType === EndpointType.IMAGE_EDITS) {
-                              return optionEndpoint === endpointType || optionEndpoint === EndpointType.IMAGE;
-                            }
-                            return optionEndpoint === endpointType;
-                          })
-                          .map((option) => option.model_group),
-                      ),
-                    ).map((model_group, index) => ({
-                      value: model_group,
-                      label: model_group,
-                      key: index,
-                    })),
-                    { value: "custom", label: "Enter custom model", key: "custom" },
-                  ]}
-                  style={{ width: "100%" }}
-                  showSearch={true}
-                  className="rounded-md"
-                />
-                {showCustomModelInput && (
-                  <TextInput
-                    className="mt-2"
-                    placeholder="Enter custom model name"
-                    onValueChange={(value) => {
-                      // Using setTimeout to create a simple debounce effect
-                      if (customModelTimeout.current) {
-                        clearTimeout(customModelTimeout.current);
-                      }
-
-                      customModelTimeout.current = setTimeout(() => {
-                        setSelectedModel(value);
-                      }, 500); // 500ms delay after typing stops
-                    }}
+                      </Popover>
+                    ) : (
+                      <Tooltip title="Advanced parameters are only supported for chat models currently">
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<SettingOutlined />}
+                          className="text-gray-300 cursor-not-allowed"
+                          disabled
+                        />
+                      </Tooltip>
+                    )}
+                  </Text>
+                  <Select
+                    value={selectedModel}
+                    placeholder="Select a Model"
+                    onChange={onModelChange}
+                    options={[
+                      { value: "custom", label: "Enter custom model", key: "custom" },
+                      ...Array.from(
+                        new Set(
+                          modelInfo
+                            .filter((option) => {
+                              if (!option.mode) {
+                                //If no mode, show all models
+                                return true;
+                              }
+                              const optionEndpoint = getEndpointType(option.mode);
+                              // Show chat models for responses/anthropic_messages endpoints as they are compatible
+                              if (
+                                endpointType === EndpointType.RESPONSES ||
+                                endpointType === EndpointType.ANTHROPIC_MESSAGES
+                              ) {
+                                return optionEndpoint === endpointType || optionEndpoint === EndpointType.CHAT;
+                              }
+                              // Show image models for image_edits endpoint as they are compatible
+                              if (endpointType === EndpointType.IMAGE_EDITS) {
+                                return optionEndpoint === endpointType || optionEndpoint === EndpointType.IMAGE;
+                              }
+                              return optionEndpoint === endpointType;
+                            })
+                            .map((option) => option.model_group),
+                        ),
+                      ).map((model_group, index) => ({
+                        value: model_group,
+                        label: model_group,
+                        key: index,
+                      })),
+                    ]}
+                    style={{ width: "100%" }}
+                    showSearch={true}
+                    className="rounded-md"
                   />
-                )}
-              </div>
+                  {showCustomModelInput && (
+                    <TextInput
+                      className="mt-2"
+                      placeholder="Enter custom model name"
+                      onValueChange={(value) => {
+                        // Using setTimeout to create a simple debounce effect
+                        if (customModelTimeout.current) {
+                          clearTimeout(customModelTimeout.current);
+                        }
+
+                        customModelTimeout.current = setTimeout(() => {
+                          setSelectedModel(value);
+                        }, 500); // 500ms delay after typing stops
+                      }}
+                    />
+                  )}
+                </div>
+              )}
+
+              {/* Agent Selector - shown ONLY for A2A Agents endpoint */}
+              {endpointType === EndpointType.A2A_AGENTS && (
+                <div>
+                  <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+                    <RobotOutlined className="mr-2" /> Select Agent
+                  </Text>
+                  <Select
+                    value={selectedAgent}
+                    placeholder="Select an Agent"
+                    onChange={(value) => setSelectedAgent(value)}
+                    options={agentInfo.map((agent) => ({
+                      value: agent.agent_name,
+                      label: agent.agent_name || agent.agent_id,
+                      key: agent.agent_id,
+                    }))}
+                    style={{ width: "100%" }}
+                    showSearch={true}
+                    className="rounded-md"
+                    optionLabelProp="label"
+                  >
+                    {agentInfo.map((agent) => (
+                      <Select.Option key={agent.agent_id} value={agent.agent_name} label={agent.agent_name || agent.agent_id}>
+                        <div className="flex flex-col py-1">
+                          <span className="font-medium">{agent.agent_name || agent.agent_id}</span>
+                          {agent.agent_card_params?.description && (
+                            <span className="text-xs text-gray-500 mt-1">{agent.agent_card_params.description}</span>
+                          )}
+                        </div>
+                      </Select.Option>
+                    ))}
+                  </Select>
+                  {agentInfo.length === 0 && (
+                    <Text className="text-xs text-gray-500 mt-2 block">
+                      No agents found. Create agents via /v1/agents endpoint.
+                    </Text>
+                  )}
+                </div>
+              )}
 
               <div>
                 <Text className="font-medium block mb-2 text-gray-700 flex items-center">
@@ -1278,6 +1404,20 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   accessToken={accessToken || ""}
                 />
               </div>
+
+              {/* Code Interpreter Toggle - Only for Responses endpoint */}
+              {endpointType === EndpointType.RESPONSES && (
+                <div>
+                  <CodeInterpreterTool
+                    accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
+                    enabled={codeInterpreter.enabled}
+                    onEnabledChange={codeInterpreter.setEnabled}
+                    selectedContainerId={null}
+                    onContainerChange={() => {}}
+                    selectedModel={selectedModel || ""}
+                  />
+                </div>
+              )}
             </div>
           </div>
 
@@ -1357,6 +1497,19 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       {message.role === "assistant" && message.searchResults && (
                         <SearchResultsDisplay searchResults={message.searchResults} />
                       )}
+
+                      {/* Show Code Interpreter output for the last assistant message */}
+                      {message.role === "assistant" &&
+                        index === chatHistory.length - 1 &&
+                        codeInterpreter.result &&
+                        endpointType === EndpointType.RESPONSES && (
+                          <CodeInterpreterOutput
+                            code={codeInterpreter.result.code}
+                            containerId={codeInterpreter.result.containerId}
+                            annotations={codeInterpreter.result.annotations}
+                            accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
+                          />
+                        )}
 
                       <div
                         className="whitespace-pre-wrap break-words max-w-full message-content"
@@ -1440,7 +1593,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         )}
 
                         {message.role === "assistant" &&
-                          (message.timeToFirstToken || message.totalLatency || message.usage) && (
+                          (message.timeToFirstToken || message.totalLatency || message.usage) &&
+                          !message.a2aMetadata && (
                             <ResponseMetrics
                               timeToFirstToken={message.timeToFirstToken}
                               totalLatency={message.totalLatency}
@@ -1448,6 +1602,15 @@ const ChatUI: React.FC<ChatUIProps> = ({
                               toolName={message.toolName}
                             />
                           )}
+
+                        {/* A2A Metrics - show for A2A agent responses */}
+                        {message.role === "assistant" && message.a2aMetadata && (
+                          <A2AMetrics
+                            a2aMetadata={message.a2aMetadata}
+                            timeToFirstToken={message.timeToFirstToken}
+                            totalLatency={message.totalLatency}
+                          />
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1652,10 +1815,74 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 </div>
               )}
 
+              {/* Code Interpreter indicator and sample prompts when enabled */}
+              {endpointType === EndpointType.RESPONSES && codeInterpreter.enabled && (
+                <div className="mb-2 space-y-2">
+                  <div className="px-3 py-2 bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg border border-blue-200 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      {isLoading ? (
+                        <>
+                          <LoadingOutlined className="text-blue-500" spin />
+                          <span className="text-sm text-blue-700 font-medium">Running Python code...</span>
+                        </>
+                      ) : (
+                        <>
+                          <CodeOutlined className="text-blue-500" />
+                          <span className="text-sm text-blue-700 font-medium">Code Interpreter Active</span>
+                        </>
+                      )}
+                    </div>
+                    <button
+                      className="text-xs text-blue-500 hover:text-blue-700"
+                      onClick={() => codeInterpreter.setEnabled(false)}
+                    >
+                      Disable
+                    </button>
+                  </div>
+                  {/* Sample prompts - only show when not loading */}
+                  {!isLoading && (
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        "Generate sample sales data CSV and create a chart",
+                        "Create a PNG bar chart comparing AI gateway providers including LiteLLM",
+                        "Generate a CSV of LLM pricing data and visualize it as a line chart",
+                      ].map((prompt, idx) => (
+                        <button
+                          key={idx}
+                          className="text-xs px-3 py-1.5 bg-white border border-gray-200 rounded-full hover:bg-blue-50 hover:border-blue-300 hover:text-blue-600 transition-colors"
+                          onClick={() => setInputMessage(prompt)}
+                        >
+                          {prompt}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Suggested prompts - show when chat is empty and not loading */}
+              {chatHistory.length === 0 && !isLoading && (
+                <div className="flex items-center gap-2 mb-3 overflow-x-auto">
+                  {(endpointType === EndpointType.A2A_AGENTS
+                    ? ["What can you help me with?", "Tell me about yourself", "What tasks can you perform?"]
+                    : ["Write me a poem", "Explain quantum computing", "Draft a polite email requesting a meeting"]
+                  ).map((prompt) => (
+                    <button
+                      key={prompt}
+                      type="button"
+                      className="shrink-0 rounded-full border border-gray-200 px-3 py-1 text-xs font-medium text-gray-600 transition-colors hover:bg-blue-50 hover:border-blue-300 hover:text-blue-600 cursor-pointer"
+                      onClick={() => setInputMessage(prompt)}
+                    >
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               <div className="flex items-center gap-2">
                 <div className="flex items-center flex-1 bg-white border border-gray-300 rounded-xl px-3 py-1 min-h-[44px]">
-                  {/* Left: paperclip icon */}
-                  <div className="flex-shrink-0 mr-2">
+                  {/* Left: attachment and code interpreter icons */}
+                  <div className="flex-shrink-0 mr-2 flex items-center gap-1">
                     {endpointType === EndpointType.RESPONSES && !responsesUploadedImage && (
                       <ResponsesImageUpload
                         responsesUploadedImage={responsesUploadedImage}
@@ -1672,6 +1899,26 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         onRemoveImage={handleRemoveChatImage}
                       />
                     )}
+                    {/* Quick Code Interpreter toggle for Responses */}
+                    {endpointType === EndpointType.RESPONSES && (
+                      <Tooltip title={codeInterpreter.enabled ? "Code Interpreter enabled (click to disable)" : "Enable Code Interpreter"}>
+                        <button
+                          className={`p-1.5 rounded-md transition-colors ${
+                            codeInterpreter.enabled
+                              ? "bg-blue-100 text-blue-600"
+                              : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                          }`}
+                          onClick={() => {
+                            codeInterpreter.toggle();
+                            if (!codeInterpreter.enabled) {
+                              NotificationsManager.success("Code Interpreter enabled!");
+                            }
+                          }}
+                        >
+                          <CodeOutlined style={{ fontSize: "16px" }} />
+                        </button>
+                      </Tooltip>
+                    )}
                   </div>
 
                   {/* Middle: input field */}
@@ -1685,13 +1932,15 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       endpointType === EndpointType.RESPONSES ||
                       endpointType === EndpointType.ANTHROPIC_MESSAGES
                         ? "Type your message... (Shift+Enter for new line)"
-                        : endpointType === EndpointType.IMAGE_EDITS
-                          ? "Describe how you want to edit the image..."
-                          : endpointType === EndpointType.SPEECH
-                            ? "Enter text to convert to speech..."
-                            : endpointType === EndpointType.TRANSCRIPTION
-                              ? "Optional: Add context or prompt for transcription..."
-                              : "Describe the image you want to generate..."
+                        : endpointType === EndpointType.A2A_AGENTS
+                          ? "Send a message to the A2A agent..."
+                          : endpointType === EndpointType.IMAGE_EDITS
+                            ? "Describe how you want to edit the image..."
+                            : endpointType === EndpointType.SPEECH
+                              ? "Enter text to convert to speech..."
+                              : endpointType === EndpointType.TRANSCRIPTION
+                                ? "Optional: Add context or prompt for transcription..."
+                                : "Describe the image you want to generate..."
                     }
                     disabled={isLoading}
                     className="flex-1"

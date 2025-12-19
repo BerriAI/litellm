@@ -42,10 +42,11 @@ class PassThroughEndpointLogging:
             "streamRawPredict",
             "search",
             "batchPredictionJobs",
+            "predictLongRunning",
         ]
 
         # Anthropic
-        self.TRACKED_ANTHROPIC_ROUTES = ["/messages"]
+        self.TRACKED_ANTHROPIC_ROUTES = ["/messages", "/v1/messages/batches"]
 
         # Cohere
         self.TRACKED_COHERE_ROUTES = ["/v2/chat", "/v1/embed"]
@@ -57,7 +58,7 @@ class PassThroughEndpointLogging:
         self.TRACKED_LANGFUSE_ROUTES = ["/langfuse/"]
 
         # Gemini
-        self.TRACKED_GEMINI_ROUTES = ["generateContent", "streamGenerateContent"]
+        self.TRACKED_GEMINI_ROUTES = ["generateContent", "streamGenerateContent", "predictLongRunning"]
 
         # Vertex AI Live API WebSocket
         self.TRACKED_VERTEX_AI_LIVE_ROUTES = ["/vertex_ai/live"]
@@ -149,6 +150,7 @@ class PassThroughEndpointLogging:
                     start_time=start_time,
                     end_time=end_time,
                     cache_hit=cache_hit,
+                    request_body=request_body,
                     **kwargs,
                 )
             )
@@ -167,6 +169,7 @@ class PassThroughEndpointLogging:
                     start_time=start_time,
                     end_time=end_time,
                     cache_hit=cache_hit,
+                    request_body=request_body,
                     **kwargs,
                 )
             )

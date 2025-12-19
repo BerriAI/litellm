@@ -196,10 +196,12 @@ ignored_keys = [
     "endTime",
     "completionStartTime",
     "endTime",
+    "organization_id",
     "metadata.model_map_information",
     "metadata.usage_object",
     "metadata.cold_storage_object_key",
     "metadata.additional_usage_values.prompt_tokens_details.cache_creation_tokens",
+    "metadata.litellm_overhead_time_ms",
 ]
 
 MODEL_LIST = [
@@ -1163,6 +1165,7 @@ class TestSpendLogsPayload:
                     "proxy_server_request": "{}",
                     "status": "success",
                     "mcp_namespaced_tool_name": None,
+                    "agent_id": None,
                 }
             )
 
@@ -1256,6 +1259,7 @@ class TestSpendLogsPayload:
                     "proxy_server_request": "{}",
                     "status": "success",
                     "mcp_namespaced_tool_name": None,
+                    "agent_id": None,
                 }
             )
 
@@ -1347,6 +1351,7 @@ class TestSpendLogsPayload:
                     "proxy_server_request": "{}",
                     "status": "success",
                     "mcp_namespaced_tool_name": None,
+                    "agent_id": None,
                 }
             )
 

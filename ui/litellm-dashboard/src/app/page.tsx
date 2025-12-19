@@ -1,50 +1,47 @@
 "use client";
 
-import React, { Suspense, useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
-import { jwtDecode } from "jwt-decode";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Team } from "@/components/key_team_helpers/key_list";
-import Navbar from "@/components/navbar";
-import { ThemeProvider } from "@/contexts/ThemeContext";
-import UserDashboard from "@/components/user_dashboard";
-import OldModelDashboard from "@/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView";
-import ViewUserDashboard from "@/components/view_users";
-import Organizations from "@/components/organizations";
-import { fetchOrganizations } from "@/components/organizations";
-import AdminPanel from "@/components/admins";
-import Settings from "@/components/settings";
-import GeneralSettings from "@/components/general_settings";
-import PassThroughSettings from "@/components/pass_through_settings";
-import BudgetPanel from "@/components/budgets/budget_panel";
-import SpendLogsTable from "@/components/view_logs";
-import ModelHubTable from "@/components/model_hub_table";
-import PublicModelHub from "@/components/public_model_hub";
-import NewUsagePage from "@/components/new_usage";
 import APIReferenceView from "@/app/(dashboard)/api-reference/APIReferenceView";
-import PlaygroundPage from "@/app/(dashboard)/playground/page";
-import Usage from "@/components/usage";
-import CacheDashboard from "@/components/cache_dashboard";
-import { getUiConfig, proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
-import { Organization } from "@/components/networking";
-import GuardrailsPanel from "@/components/guardrails";
-import AgentsPanel from "@/components/agents";
-import PromptsPanel from "@/components/prompts";
-import TransformRequestPanel from "@/components/transform_request";
-import { fetchUserModels } from "@/components/organisms/create_key_button";
-import { fetchTeams } from "@/components/common_components/fetch_teams";
-import { MCPServers } from "@/components/mcp_tools";
-import TagManagement from "@/components/tag_management";
-import VectorStoreManagement from "@/components/vector_store_management";
-import UIThemeSettings from "@/components/ui_theme_settings";
-import { CostTrackingSettings } from "@/components/CostTrackingSettings";
-import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-import { cx } from "@/lib/cva.config";
-import useFeatureFlags from "@/hooks/useFeatureFlags";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
+import OldModelDashboard from "@/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView";
+import PlaygroundPage from "@/app/(dashboard)/playground/page";
+import AdminPanel from "@/components/admins";
+import AgentsPanel from "@/components/agents";
+import BudgetPanel from "@/components/budgets/budget_panel";
+import CacheDashboard from "@/components/cache_dashboard";
+import { fetchTeams } from "@/components/common_components/fetch_teams";
+import LoadingScreen from "@/components/common_components/LoadingScreen";
+import { CostTrackingSettings } from "@/components/CostTrackingSettings";
+import GeneralSettings from "@/components/general_settings";
+import GuardrailsPanel from "@/components/guardrails";
+import { Team } from "@/components/key_team_helpers/key_list";
+import { MCPServers } from "@/components/mcp_tools";
+import ModelHubTable from "@/components/model_hub_table";
+import Navbar from "@/components/navbar";
+import { getUiConfig, Organization, proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
+import NewUsagePage from "@/components/UsagePage/components/UsagePageView";
 import OldTeams from "@/components/OldTeams";
+import { fetchUserModels } from "@/components/organisms/create_key_button";
+import Organizations, { fetchOrganizations } from "@/components/organizations";
+import PassThroughSettings from "@/components/pass_through_settings";
+import PromptsPanel from "@/components/prompts";
+import PublicModelHub from "@/components/public_model_hub";
 import { SearchTools } from "@/components/search_tools";
+import Settings from "@/components/settings";
+import TagManagement from "@/components/tag_management";
+import TransformRequestPanel from "@/components/transform_request";
+import UIThemeSettings from "@/components/ui_theme_settings";
+import Usage from "@/components/usage";
+import UserDashboard from "@/components/user_dashboard";
+import VectorStoreManagement from "@/components/vector_store_management";
+import SpendLogsTable from "@/components/view_logs";
+import ViewUserDashboard from "@/components/view_users";
+import { ThemeProvider } from "@/contexts/ThemeContext";
+import { isJwtExpired } from "@/utils/jwtUtils";
 import { isAdminRole } from "@/utils/roles";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { jwtDecode } from "jwt-decode";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
 
 function getCookie(name: string) {
   // Safer cookie read + decoding; handles '=' inside values
@@ -61,19 +58,6 @@ function getCookie(name: string) {
 function deleteCookie(name: string, path = "/") {
   // Best-effort client-side clear (works for non-HttpOnly cookies without Domain)
   document.cookie = `${name}=; Max-Age=0; Path=${path}`;
-}
-
-function isJwtExpired(token: string): boolean {
-  try {
-    const decoded: any = jwtDecode(token);
-    if (decoded && typeof decoded.exp === "number") {
-      return decoded.exp * 1000 <= Date.now();
-    }
-    return false;
-  } catch {
-    // If we can't decode, treat as invalid/expired
-    return true;
-  }
 }
 
 function formatUserRole(userRole: string) {
@@ -113,19 +97,6 @@ interface ProxySettings {
 
 const queryClient = new QueryClient();
 
-function LoadingScreen() {
-  return (
-    <div className={cx("h-screen", "flex items-center justify-center gap-4")}>
-      <div className="text-lg font-medium py-2 pr-4 border-r border-r-gray-200">🚅 LiteLLM</div>
-
-      <div className="flex items-center justify-center gap-2">
-        <UiLoadingSpinner className="size-4" />
-        <span className="text-gray-600 text-sm">Loading...</span>
-      </div>
-    </div>
-  );
-}
-
 export default function CreateKeyPage() {
   const [userRole, setUserRole] = useState("");
   const [premiumUser, setPremiumUser] = useState(false);
@@ -147,7 +118,6 @@ export default function CreateKeyPage() {
   const [createClicked, setCreateClicked] = useState<boolean>(false);
   const [authLoading, setAuthLoading] = useState(true);
   const [userID, setUserID] = useState<string | null>(null);
-  const { refactoredUIFlag } = useFeatureFlags();
 
   const invitation_id = searchParams.get("invitation_id");
 
@@ -216,7 +186,7 @@ export default function CreateKeyPage() {
   useEffect(() => {
     if (redirectToLogin) {
       // Replace instead of assigning to avoid back-button loops
-      const dest = (proxyBaseUrl || "") + "/sso/key/generate";
+      const dest = (proxyBaseUrl || "") + "/ui/login";
       window.location.replace(dest);
     }
   }, [redirectToLogin]);
@@ -330,7 +300,7 @@ export default function CreateKeyPage() {
                 sidebarCollapsed={sidebarCollapsed}
                 onToggleSidebar={toggleSidebar}
               />
-              <div className="flex flex-1 overflow-auto">
+              <div className="flex flex-1">
                 <div className="mt-2">
                   <SidebarProvider setPage={updatePage} defaultSelectedKey={page} sidebarCollapsed={sidebarCollapsed} />
                 </div>
@@ -476,11 +446,8 @@ export default function CreateKeyPage() {
                   <VectorStoreManagement accessToken={accessToken} userRole={userRole} userID={userID} />
                 ) : page == "new_usage" ? (
                   <NewUsagePage
-                    userID={userID}
-                    userRole={userRole}
-                    accessToken={accessToken}
                     teams={(teams as Team[]) ?? []}
-                    premiumUser={premiumUser}
+                    organizations={(organizations as Organization[]) ?? []}
                   />
                 ) : (
                   <Usage

@@ -4,6 +4,14 @@ import { TokenUsage } from "../chat_ui/ResponseMetrics";
 import { getProxyBaseUrl } from "@/components/networking";
 import NotificationManager from "@/components/molecules/notifications_manager";
 import { MCPEvent } from "../chat_ui/MCPEventsDisplay";
+import {
+  CodeInterpreterResult,
+  CodeInterpreterState,
+  handleCodeInterpreterCall,
+  handleCodeInterpreterOutput,
+} from "./code_interpreter_handler";
+
+export type { CodeInterpreterResult } from "./code_interpreter_handler";
 
 export async function makeOpenAIResponsesRequest(
   messages: MessageType[],
@@ -22,9 +30,15 @@ export async function makeOpenAIResponsesRequest(
   previousResponseId?: string | null,
   onResponseId?: (responseId: string) => void,
   onMCPEvent?: (event: MCPEvent) => void,
+  codeInterpreterEnabled?: boolean,
+  onCodeInterpreterResult?: (result: CodeInterpreterResult) => void,
 ) {
   if (!accessToken) {
-    throw new Error("API key is required");
+    throw new Error("Virtual Key is required");
+  }
+
+  if (!selectedModel || selectedModel.trim() === "") {
+    throw new Error("Model is required. Please select a model before sending a request.");
   }
 
   // Base URL should be the current base_url
@@ -69,19 +83,27 @@ export async function makeOpenAIResponsesRequest(
       };
     });
 
-    // Format MCP tools if selected
-    const tools =
-      selectedMCPTools && selectedMCPTools.length > 0
-        ? [
-            {
-              type: "mcp",
-              server_label: "litellm",
-              server_url: `litellm_proxy/mcp`,
-              require_approval: "never",
-              allowed_tools: selectedMCPTools,
-            },
-          ]
-        : undefined;
+    // Build tools array
+    const tools: any[] = [];
+
+    // Add MCP tools if selected
+    if (selectedMCPTools && selectedMCPTools.length > 0) {
+      tools.push({
+        type: "mcp",
+        server_label: "litellm",
+        server_url: `litellm_proxy/mcp`,
+        require_approval: "never",
+        allowed_tools: selectedMCPTools,
+      });
+    }
+
+    // Add code_interpreter tool if enabled (OpenAI auto-creates container)
+    if (codeInterpreterEnabled) {
+      tools.push({
+        type: "code_interpreter",
+        container: { type: "auto" },
+      });
+    }
 
     // Create request to OpenAI responses API
     // Use 'any' type to avoid TypeScript issues with the experimental API
@@ -94,12 +116,13 @@ export async function makeOpenAIResponsesRequest(
         ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
         ...(vector_store_ids ? { vector_store_ids } : {}),
         ...(guardrails ? { guardrails } : {}),
-        ...(tools ? { tools, tool_choice: "required" } : {}),
+        ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
       },
       { signal },
     );
 
     let mcpToolUsed = "";
+    let codeInterpreterState: CodeInterpreterState = { code: "", containerId: "" };
 
     for await (const event of response) {
       console.log("Response event:", event);
@@ -136,6 +159,10 @@ export async function makeOpenAIResponsesRequest(
           mcpToolUsed = event.item.name;
           console.log("MCP tool used:", mcpToolUsed);
         }
+
+        // Handle code interpreter events
+        codeInterpreterState = handleCodeInterpreterCall(event, codeInterpreterState);
+        handleCodeInterpreterOutput(event, codeInterpreterState, onCodeInterpreterResult);
 
         // Handle output text delta
         // 1) drop any "role" streams

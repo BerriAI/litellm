@@ -17,16 +17,15 @@ from urllib.parse import urlparse
 from fastapi import HTTPException
 from httpx import HTTPStatusError
 from mcp import ReadResourceResult, Resource
+from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import (
-    CallToolRequestParams as MCPCallToolRequestParams,
+    CallToolResult,
     GetPromptRequestParams,
     GetPromptResult,
     Prompt,
     ResourceTemplate,
 )
-from mcp.types import CallToolResult
 from mcp.types import Tool as MCPTool
-
 from pydantic import AnyUrl
 
 import litellm
@@ -1273,19 +1272,19 @@ class MCPServerManager:
         prefix = get_server_prefix(server)
 
         for tool in tools:
-            prefixed_name = add_server_prefix_to_name(tool.name, prefix)
+            tool_copy = tool.model_copy(deep=True)
 
-            name_to_use = prefixed_name if add_prefix else tool.name
+            original_name = tool_copy.name
+            prefixed_name = add_server_prefix_to_name(original_name, prefix)
 
-            tool_obj = MCPTool(
-                name=name_to_use,
-                description=tool.description,
-                inputSchema=tool.inputSchema,
-            )
-            prefixed_tools.append(tool_obj)
+            name_to_use = prefixed_name if add_prefix else original_name
+
+            # Preserve all tool fields including metadata/_meta by avoiding mutation
+            tool_copy.name = name_to_use
+            prefixed_tools.append(tool_copy)
 
             # Update tool to server mapping for resolution (support both forms)
-            self.tool_name_to_mcp_server_name_mapping[tool.name] = prefix
+            self.tool_name_to_mcp_server_name_mapping[original_name] = prefix
             self.tool_name_to_mcp_server_name_mapping[prefixed_name] = prefix
 
         verbose_logger.info(
@@ -1735,7 +1734,7 @@ class MCPServerManager:
             if extra_headers is None:
                 extra_headers = {}
             for header in mcp_server.extra_headers:
-                if header in raw_headers:
+                if isinstance(header, str) and header in raw_headers:
                     extra_headers[header] = raw_headers[header]
 
         if mcp_server.static_headers:
@@ -1949,9 +1948,14 @@ class MCPServerManager:
             ) = split_server_prefix_from_name(tool_name)
             if original_tool_name in self.tool_name_to_mcp_server_name_mapping:
                 for server in self.get_registry().values():
-                    if normalize_server_name(server.name) == normalize_server_name(
-                        server_name_from_prefix
-                    ):
+                    if server.server_name is None:
+                        if normalize_server_name(server.name) == normalize_server_name(
+                            server_name_from_prefix
+                        ):
+                            return server
+                    elif normalize_server_name(
+                        server.server_name
+                    ) == normalize_server_name(server_name_from_prefix):
                         return server
 
         return None

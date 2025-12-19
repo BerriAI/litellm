@@ -1,3 +1,4 @@
+import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 import { ArrowLeftIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
@@ -5,7 +6,7 @@ import { Badge, Button, Card, Grid, Tab, TabGroup, TabList, TabPanel, TabPanels,
 import { Button as AntdButton, Form, Tooltip } from "antd";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { useEffect, useState } from "react";
-import { rolesWithWriteAccess } from "../../utils/roles";
+import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } from "../../utils/roles";
 import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "../callback_info_helpers";
 import AutoRotationView from "../common_components/AutoRotationView";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
@@ -54,6 +55,7 @@ export default function KeyInfoView({
   setAccessToken,
   backButtonText = "Back to Keys",
 }: KeyInfoViewProps) {
+  const { teams: teamsData } = useTeams();
   const [isEditing, setIsEditing] = useState(false);
   const [form] = Form.useForm();
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -142,6 +144,17 @@ export default function KeyInfoView({
           };
         }
         delete formValues.mcp_tool_permissions;
+      }
+
+      // Handle agent permissions
+      if (formValues.agents_and_groups !== undefined) {
+        const { agents, accessGroups } = formValues.agents_and_groups || { agents: [], accessGroups: [] };
+        formValues.object_permission = {
+          ...formValues.object_permission,
+          agents: agents || [],
+          agent_access_groups: accessGroups || [],
+        };
+        delete formValues.agents_and_groups;
       }
 
       formValues.max_budget = mapEmptyStringToNull(formValues.max_budget);
@@ -290,6 +303,15 @@ export default function KeyInfoView({
     return `${dateStr} at ${timeStr}`;
   };
 
+  const canModifyKey =
+    isProxyAdminRole(userRole || "") ||
+    (teamsData &&
+      isUserTeamAdminForSingleTeam(
+        teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0],
+        userID || "",
+      )) ||
+    userID === currentKeyData.user_id;
+
   return (
     <div className="w-full h-screen p-4">
       <div className="flex justify-between items-center mb-6">
@@ -297,7 +319,7 @@ export default function KeyInfoView({
           <Button icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
             {backButtonText}
           </Button>
-          <Title>{currentKeyData.key_alias || "API Key"}</Title>
+          <Title>{currentKeyData.key_alias || "Virtual Key"}</Title>
 
           <div className="flex items-center cursor-pointer mb-2 space-y-6">
             <div>
@@ -338,7 +360,7 @@ export default function KeyInfoView({
             )}
           </div>
         </div>
-        {userRole && rolesWithWriteAccess.includes(userRole) && (
+        {canModifyKey && (
           <div className="flex gap-2">
             <Tooltip
               title={!premiumUser ? "This is a LiteLLM Enterprise feature, and requires a valid key to use." : ""}
@@ -381,7 +403,7 @@ export default function KeyInfoView({
       {/* Delete Confirmation Modal */}
       {isDeleteModalOpen &&
         (() => {
-          const keyName = currentKeyData?.key_alias || currentKeyData?.token_id || "API Key";
+          const keyName = currentKeyData?.key_alias || currentKeyData?.token_id || "Virtual Key";
           const isValid = deleteConfirmInput === keyName;
           return (
             <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -415,7 +437,7 @@ export default function KeyInfoView({
                       </div>
                       <div>
                         <p className="text-base font-medium text-red-600">
-                          Warning: You are about to delete this API key.
+                          Warning: You are about to delete this Virtual Key.
                         </p>
                         <p className="text-base text-red-600 mt-2">
                           This action is irreversible and will immediately revoke access for any applications using this
@@ -423,7 +445,7 @@ export default function KeyInfoView({
                         </p>
                       </div>
                     </div>
-                    <p className="text-base text-gray-600 mb-5">Are you sure you want to delete this API key?</p>
+                    <p className="text-base text-gray-600 mb-5">Are you sure you want to delete this Virtual Key?</p>
                     <div className="mb-5">
                       <label className="block text-base font-medium text-gray-700 mb-2">
                         {`Type `}

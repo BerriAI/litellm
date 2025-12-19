@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Any, Dict, Iterable, List, Optional, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing_extensions import Literal, Required, TypedDict
 
 from .openai import (
@@ -358,6 +358,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     top_p: Optional[float]
     mcp_servers: Optional[List[AnthropicMcpServerTool]]
     context_management: Optional[Dict[str, Any]]
+    container: Optional[Dict[str, Any]]  # Container config with skills for code execution
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):
@@ -535,8 +536,7 @@ class AnthropicResponseContentBlockToolUse(BaseModel):
     input: dict
     provider_specific_fields: Optional[Dict[str, Any]] = None
 
-    class Config:
-        extra = "allow"  # Allow provider_specific_fields
+    model_config = ConfigDict(extra="allow") # Allow provider_specific_fields
 
 
 class AnthropicResponseContentBlockThinking(BaseModel):
@@ -627,8 +627,8 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     """
     Known beta header values for Anthropic.
     """
-
     WEB_FETCH_2025_09_10 = "web-fetch-2025-09-10"
+    WEB_SEARCH_2025_03_05 = "web-search-2025-03-05"
     CONTEXT_MANAGEMENT_2025_06_27 = "context-management-2025-06-27"
     STRUCTURED_OUTPUT_2025_09_25 = "structured-outputs-2025-11-13"
     ADVANCED_TOOL_USE_2025_11_20 = "advanced-tool-use-2025-11-20"

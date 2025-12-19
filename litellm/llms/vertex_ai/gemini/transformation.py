@@ -3,9 +3,9 @@ Transformation logic from OpenAI format to Gemini format.
 
 Why separate file? Make it easy to see how transformation works
 """
-
+import json
 import os
-from typing import TYPE_CHECKING, List, Literal, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple, Union, cast
 
 import httpx
 from pydantic import BaseModel
@@ -28,7 +28,6 @@ from litellm.types.files import (
     get_file_type_from_extension,
     is_gemini_1_5_accepted_file_type,
 )
-from litellm.types.utils import LlmProviders
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -48,7 +47,7 @@ from litellm.types.llms.vertex_ai import (
     ToolConfig,
     Tools,
 )
-from litellm.types.utils import GenericImageParsingChunk
+from litellm.types.utils import GenericImageParsingChunk, LlmProviders
 
 from ..common_utils import (
     _check_text_in_content,
@@ -64,24 +63,21 @@ else:
     LiteLLMLoggingObj = Any
 
 
-def _map_openai_detail_to_media_resolution(
+def _convert_detail_to_media_resolution_enum(
     detail: Optional[str],
-) -> Optional[Literal["low", "medium", "high"]]:
-    """
-    Map OpenAI's "detail" parameter to Gemini's "media_resolution" parameter.
-    """
+) -> Optional[Dict[str, str]]:
     if detail == "low":
-        return "low"
+        return {"level": "MEDIA_RESOLUTION_LOW"}
     elif detail == "high":
-        return "high"
-    # "auto" or None means let the model decide, so we don't set media_resolution
+        return {"level": "MEDIA_RESOLUTION_HIGH"}
     return None
 
 
 def _process_gemini_image(
     image_url: str, 
     format: Optional[str] = None,
-    media_resolution: Optional[Literal["low", "medium", "high"]] = None,
+    media_resolution_enum: Optional[Dict[str, str]] = None,
+    model: Optional[str] = None,
 ) -> PartType:
     """
     Given an image URL, return the appropriate PartType for Gemini
@@ -105,31 +101,43 @@ def _process_gemini_image(
             else:
                 mime_type = format
             file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
-
-            return PartType(file_data=file_data)
+            part: PartType = {"file_data": file_data}
+            
+            if media_resolution_enum is not None and model is not None:
+                from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+                if VertexGeminiConfig._is_gemini_3_or_newer(model):
+                    part_dict = dict(part)
+                    part_dict["media_resolution"] = media_resolution_enum
+                    return cast(PartType, part_dict)
+            return part
         elif (
             "https://" in image_url
             and (image_type := format or _get_image_mime_type_from_url(image_url))
             is not None
         ):
             file_data = FileDataType(file_uri=image_url, mime_type=image_type)
-            return PartType(file_data=file_data)
+            part = {"file_data": file_data}
+            
+            if media_resolution_enum is not None and model is not None:
+                from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+                if VertexGeminiConfig._is_gemini_3_or_newer(model):
+                    part_dict = dict(part)
+                    part_dict["media_resolution"] = media_resolution_enum
+                    return cast(PartType, part_dict)
+            return part
         elif "http://" in image_url or "https://" in image_url or "base64" in image_url:
-            # https links for unsupported mime types and base64 images
             image = convert_to_anthropic_image_obj(image_url, format=format)
             _blob: BlobType = {"data": image["data"], "mime_type": image["media_type"]}
-            if media_resolution is not None:
-                _blob["media_resolution"] = media_resolution
             
-            # Convert snake_case keys to camelCase for JSON serialization
-            # The TypedDict uses snake_case, but the API expects camelCase
-            _blob_dict = dict(_blob)
-            if "media_resolution" in _blob_dict:
-                _blob_dict["mediaResolution"] = _blob_dict.pop("media_resolution")
-            if "mime_type" in _blob_dict:
-                _blob_dict["mimeType"] = _blob_dict.pop("mime_type")
+            part = {"inline_data": cast(BlobType, _blob)}
             
-            return PartType(inline_data=cast(BlobType, _blob_dict))
+            if media_resolution_enum is not None and model is not None:
+                from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+                if VertexGeminiConfig._is_gemini_3_or_newer(model):
+                    part_dict = dict(part)
+                    part_dict["media_resolution"] = media_resolution_enum
+                    return cast(PartType, part_dict)
+            return part
         raise Exception("Invalid image received - {}".format(image_url))
     except Exception as e:
         raise e
@@ -235,18 +243,19 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             element = cast(ChatCompletionImageObject, element)
                             img_element = element
                             format: Optional[str] = None
-                            media_resolution: Optional[Literal["low", "medium", "high"]] = None
+                            media_resolution_enum: Optional[Dict[str, str]] = None
                             if isinstance(img_element["image_url"], dict):
                                 image_url = img_element["image_url"]["url"]
                                 format = img_element["image_url"].get("format")
                                 detail = img_element["image_url"].get("detail")
-                                media_resolution = _map_openai_detail_to_media_resolution(detail)
+                                media_resolution_enum = _convert_detail_to_media_resolution_enum(detail)
                             else:
                                 image_url = img_element["image_url"]
                             _part = _process_gemini_image(
                                 image_url=image_url, 
                                 format=format,
-                                media_resolution=media_resolution,
+                                media_resolution_enum=media_resolution_enum,
+                                model=model,
                             )
                             _parts.append(_part)
                         elif element["type"] == "input_audio":
@@ -271,6 +280,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 _part = _process_gemini_image(
                                     image_url=openai_image_str,
                                     format=audio_format_modified,
+                                    model=model,
                                 )
                                 _parts.append(_part)
                         elif element["type"] == "file":
@@ -287,6 +297,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 _part = _process_gemini_image(
                                     image_url=passed_file, 
                                     format=format,
+                                    model=model,
                                 )
                                 _parts.append(_part)
                             except Exception:
@@ -407,7 +418,11 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     messages[msg_i], last_message_with_tool_calls  # type: ignore
                 )
                 msg_i += 1
-                tool_call_responses.append(_part)
+                # Handle both single part and list of parts (for Computer Use with images)
+                if isinstance(_part, list):
+                    tool_call_responses.extend(_part)
+                else:
+                    tool_call_responses.append(_part)
             if msg_i < len(messages) and (
                 messages[msg_i]["role"] not in tool_call_message_roles
             ):

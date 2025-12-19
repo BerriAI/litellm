@@ -72,13 +72,15 @@ litellm --config config.yaml --port 4000
 
 ### Overview
 
-Pillar Security supports three execution modes for comprehensive protection:
+Pillar Security supports five execution modes for comprehensive protection:
 
 | Mode | When It Runs | What It Protects | Use Case
 |------|-------------|------------------|----------
 | **`pre_call`** | Before LLM call | User input only | Block malicious prompts, prevent prompt injection
 | **`during_call`** | Parallel with LLM call | User input only | Input monitoring with lower latency
 | **`post_call`** | After LLM response | Full conversation context | Output filtering, PII detection in responses
+| **`pre_mcp_call`** | Before MCP tool call | MCP tool inputs | Validate and sanitize MCP tool call arguments
+| **`during_mcp_call`** | During MCP tool call | MCP tool inputs | Real-time monitoring of MCP tool calls
 
 ### Why Dual Mode is Recommended
 
@@ -199,6 +201,85 @@ litellm_settings:
 ```
 
 </TabItem>
+<TabItem value="masking" label="Masking Mode - Auto-Sanitize PII">
+
+**Best for:**
+- 🔒 **PII Protection**: Automatically sanitize sensitive data before sending to LLM
+- ✅ **Continue Workflows**: Allow requests to proceed with masked content
+- 🛡️ **Zero Trust**: Never expose sensitive data to LLM models
+- 📊 **Compliance**: Meet data privacy requirements without blocking legitimate requests
+
+```yaml
+model_list:
+  - model_name: gpt-4.1-mini
+    litellm_params:
+      model: openai/gpt-4.1-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: "pillar-masking"
+    litellm_params:
+      guardrail: pillar
+      mode: "pre_call"                       # Scan input before LLM call
+      api_key: os.environ/PILLAR_API_KEY     # Your Pillar API key
+      api_base: os.environ/PILLAR_API_BASE   # Pillar API endpoint
+      on_flagged_action: "mask"             # Mask sensitive content instead of blocking
+      persist_session: true                  # Keep records for investigation
+      include_scanners: true                 # Understand which scanners triggered
+      include_evidence: true                 # Capture evidence for analysis
+      default_on: true                       # Enable for all requests
+
+general_settings:
+  master_key: "YOUR_LITELLM_PROXY_MASTER_KEY"
+
+litellm_settings:
+  set_verbose: true
+```
+
+**How it works:**
+1. User sends request with sensitive data: `"My email is john@example.com"`
+2. Pillar detects PII and returns masked version: `"My email is [MASKED_EMAIL]"`
+3. LiteLLM replaces original messages with masked messages
+4. Request proceeds to LLM with sanitized content
+5. User receives response without exposing sensitive data
+
+</TabItem>
+<TabItem value="mcp" label="MCP Call Protection">
+
+**Best for:**
+- 🤖 **Agent Workflows**: Protect MCP (Model Context Protocol) tool calls
+- 🔒 **Tool Input Validation**: Scan arguments passed to MCP tools
+- 🛡️ **Comprehensive Coverage**: Extend security to all LLM endpoints
+
+```yaml
+model_list:
+  - model_name: gpt-4.1-mini
+    litellm_params:
+      model: openai/gpt-4.1-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: "pillar-mcp-guard"
+    litellm_params:
+      guardrail: pillar
+      mode: "pre_mcp_call"                   # Scan MCP tool call inputs
+      api_key: os.environ/PILLAR_API_KEY     # Your Pillar API key
+      api_base: os.environ/PILLAR_API_BASE   # Pillar API endpoint
+      on_flagged_action: "block"             # Block malicious MCP calls
+      default_on: true                       # Enable for all MCP calls
+
+general_settings:
+  master_key: "YOUR_LITELLM_PROXY_MASTER_KEY"
+
+litellm_settings:
+  set_verbose: true
+```
+
+**MCP Modes:**
+- `pre_mcp_call`: Scan MCP tool call inputs before execution
+- `during_mcp_call`: Monitor MCP tool calls in real-time
+
+</TabItem>
 </Tabs>
 
 ## Configuration Reference
@@ -233,7 +314,7 @@ curl -X POST "http://localhost:4000/v1/chat/completions" \
   }'
 ```
 
-This provides clear, explicit conversation tracking that works seamlessly with LiteLLM's session management.
+This provides clear, explicit conversation tracking that works seamlessly with LiteLLM's session management. When using monitor mode, the session ID is returned in the `x-pillar-session-id` response header for easy correlation and tracking.
 
 ### Actions on Flagged Content
 
@@ -250,6 +331,82 @@ Logs the violation but allows the request to proceed:
 ```yaml
 on_flagged_action: "monitor"
 ```
+
+#### Mask
+Automatically sanitizes sensitive content (PII, secrets, etc.) in your messages before sending them to the LLM:
+
+```yaml
+on_flagged_action: "mask"
+```
+
+When masking is enabled, sensitive information is automatically replaced with masked versions, allowing requests to proceed safely without exposing sensitive data to the LLM.
+
+**Response Headers:**
+
+You can opt in to receiving detection details in response headers by configuring `include_scanners: true` and/or `include_evidence: true`. When enabled, these headers are included for **every request**—not just flagged ones—enabling comprehensive metrics, false positive analysis, and threat investigation.
+
+- **`x-pillar-flagged`**: Boolean string indicating Pillar's blocking recommendation (`"true"` or `"false"`)
+- **`x-pillar-scanners`**: URL-encoded JSON object showing scanner categories (e.g., `%7B%22jailbreak%22%3Atrue%7D`) — requires `include_scanners: true`
+- **`x-pillar-evidence`**: URL-encoded JSON array of detection evidence (may contain items even when `flagged` is `false`) — requires `include_evidence: true`
+- **`x-pillar-session-id`**: URL-encoded session ID for correlation and investigation
+
+:::info Understanding `flagged` vs Scanner Results
+The `flagged` field is Pillar's **policy-level blocking recommendation**, which may differ from individual scanner results:
+
+- **`flagged: true`** → Pillar recommends blocking based on your configured policies
+- **`flagged: false`** → Pillar does not recommend blocking, but individual scanners may still detect content
+
+For example, the `toxic_language` scanner might detect profanity (`scanners.toxic_language: true`) while `flagged` remains `false` if your Pillar policy doesn't block on toxic language alone. This allows you to:
+- Monitor threats without blocking users
+- Build metrics on detection rates vs block rates
+- Analyze false positive rates by comparing scanner results to user feedback
+:::
+
+The `x-pillar-scanners`, `x-pillar-evidence`, and `x-pillar-session-id` headers use URL encoding (percent-encoding) to convert JSON data into an ASCII-safe format. This is necessary because HTTP headers only support ISO-8859-1 characters and cannot contain raw JSON special characters (`{`, `"`, `:`) or Unicode text. To read these headers, first URL-decode the value, then parse it as JSON.
+
+LiteLLM truncates the `x-pillar-evidence` header to a maximum of 8 KB per header to avoid proxy limits. Note that most proxies and servers also enforce a total header size limit of approximately 32 KB across all headers combined. When truncation occurs, each affected evidence item includes an `"evidence_truncated": true` flag and the metadata contains `pillar_evidence_truncated: true`.
+
+**Example Response Headers (URL-encoded):**
+```http
+x-pillar-flagged: true
+x-pillar-session-id: abc-123-def-456
+x-pillar-scanners: %7B%22jailbreak%22%3Atrue%2C%22prompt_injection%22%3Afalse%2C%22toxic_language%22%3Afalse%7D
+x-pillar-evidence: %5B%7B%22category%22%3A%22prompt_injection%22%2C%22evidence%22%3A%22Ignore%20previous%20instructions%22%7D%5D
+```
+
+**After Decoding:**
+```json
+// x-pillar-scanners
+{"jailbreak": true, "prompt_injection": false, "toxic_language": false}
+
+// x-pillar-evidence
+[{"category": "prompt_injection", "evidence": "Ignore previous instructions"}]
+```
+
+**Decoding Example (Python):**
+
+```python
+from urllib.parse import unquote
+import json
+
+# Step 1: URL-decode the header value (converts %7B to {, %22 to ", etc.)
+# Step 2: Parse the resulting JSON string
+scanners = json.loads(unquote(response.headers["x-pillar-scanners"]))
+evidence = json.loads(unquote(response.headers["x-pillar-evidence"]))
+
+# Session ID is a plain string, so only URL-decode is needed (no JSON parsing)
+session_id = unquote(response.headers["x-pillar-session-id"])
+```
+
+:::tip
+LiteLLM mirrors the encoded values onto `metadata["pillar_response_headers"]` so you can inspect exactly what was returned. When truncation occurs, it sets `metadata["pillar_evidence_truncated"]` to `true` and marks affected evidence items with `"evidence_truncated": true`. Evidence text is shortened with a `...[truncated]` suffix, and entire evidence entries may be removed if necessary to stay under the 8 KB header limit. Check these flags to determine if full evidence details are available in your logs.
+:::
+
+This allows your application to:
+- Track threats without blocking legitimate users
+- Implement custom handling logic based on threat types
+- Build analytics and alerting on security events
+- Correlate threats across requests using session IDs
 
 ### Resilience and Error Handling
 
@@ -316,7 +473,8 @@ export PILLAR_TIMEOUT="5.0"
 **Quick takeaways**
 - Every request still runs *all* Pillar scanners; these options only change what comes back.
 - Choose richer responses when you need audit trails, lighter responses when latency or cost matters.
-- Blocking is controlled by LiteLLM’s `on_flagged_action` configuration—Pillar headers do not change block/monitor behaviour.
+- Actions (block/monitor/mask) are controlled by LiteLLM's `on_flagged_action` configuration—Pillar headers are automatically set based on your config.
+- When blocking (`on_flagged_action: "block"`), the `include_scanners` and `include_evidence` settings control what details are included in the exception response.
 
 Pillar Security executes the full scanner suite on each call. The settings below tune the Protect response headers LiteLLM sends, letting you balance fidelity, retention, and latency.
 
@@ -348,9 +506,10 @@ include_evidence: true    # → plr_evidence (default true in LiteLLM)
   ```
   Use when you only care about whether Pillar detected a threat.
 
-  > **📝 Note:** `flagged: true` means Pillar’s scanners recommend blocking. Pillar only reports this verdict—LiteLLM enforces your policy via the `on_flagged_action` configuration (no Pillar header controls it):
-  > - `on_flagged_action: "block"` → LiteLLM raises a 400 guardrail error
+  > **📝 Note:** `flagged: true` means Pillar's scanners recommend blocking. Pillar only reports this verdict—LiteLLM enforces your policy via the `on_flagged_action` configuration:
+  > - `on_flagged_action: "block"` → LiteLLM raises a 400 guardrail error (exception includes scanners/evidence based on `include_scanners`/`include_evidence` settings)
   > - `on_flagged_action: "monitor"` → LiteLLM logs the threat but still returns the LLM response
+  > - `on_flagged_action: "mask"` → LiteLLM replaces messages with masked versions and allows the request to proceed
 
 - **Scanner breakdown** (`include_scanners=true`)
   ```json
@@ -545,6 +704,79 @@ curl -X POST "http://localhost:4000/v1/chat/completions" \
 ```
 
 </TabItem>
+<TabItem value="monitor" label="Monitor Mode with Headers">
+
+**Monitor mode request with scanner detection:**
+
+```bash
+# Test with content that triggers scanner detection
+curl -v -X POST "http://localhost:4000/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_LITELLM_PROXY_MASTER_KEY" \
+  -d '{
+    "model": "gpt-4.1-mini",
+    "messages": [{"role": "user", "content": "how do I rob a bank?"}],
+    "max_tokens": 50
+  }'
+```
+
+**Expected response (Allowed with headers):**
+
+The request succeeds and returns the LLM response. Headers are included for **all requests** when `include_scanners` and `include_evidence` are enabled—even when `flagged` is `false`:
+
+```http
+HTTP/1.1 200 OK
+x-litellm-applied-guardrails: pillar-monitor-everything,pillar-monitor-everything
+x-pillar-flagged: false
+x-pillar-scanners: %7B%22jailbreak%22%3Afalse%2C%22safety%22%3Atrue%2C%22prompt_injection%22%3Afalse%2C%22pii%22%3Afalse%2C%22secret%22%3Afalse%2C%22toxic_language%22%3Afalse%7D
+x-pillar-evidence: %5B%7B%22category%22%3A%22safety%22%2C%22type%22%3A%22non_violent_crimes%22%2C%22end_idx%22%3A20%2C%22evidence%22%3A%22how%20do%20I%20rob%20a%20bank%3F%22%2C%22metadata%22%3A%7B%22start_idx%22%3A0%2C%22end_idx%22%3A20%7D%7D%5D
+x-pillar-session-id: d9433f86-b428-4ee7-93ee-e97a53f8a180
+```
+
+Notice that `x-pillar-flagged: false` but `safety: true` in the scanners. This is because `flagged` represents Pillar's policy-level blocking recommendation, while individual scanners report their own detections.
+
+```python
+from urllib.parse import unquote
+import json
+
+scanners = json.loads(unquote(response.headers["x-pillar-scanners"]))
+evidence = json.loads(unquote(response.headers["x-pillar-evidence"]))
+session_id = unquote(response.headers["x-pillar-session-id"])
+flagged = response.headers["x-pillar-flagged"] == "true"
+
+# Scanner detected safety issue, but policy didn't flag for blocking
+print(f"Flagged for blocking: {flagged}")  # False
+print(f"Safety issue detected: {scanners.get('safety')}")  # True
+print(f"Evidence: {evidence}")
+# [{'category': 'safety', 'type': 'non_violent_crimes', 'evidence': 'how do I rob a bank?', ...}]
+```
+
+```json
+{
+  "id": "chatcmpl-xyz123",
+  "object": "chat.completion",
+  "model": "gpt-4.1-mini",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "I'm sorry, but I can't assist with that request."
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 14,
+    "completion_tokens": 11,
+    "total_tokens": 25
+  }
+}
+```
+
+**Note:** In monitor mode, scanner results and evidence are included in response headers for every request, allowing you to build metrics and analyze detection patterns. The `flagged` field indicates whether Pillar's policy recommends blocking—your application can use the detailed scanner data for custom alerting, analytics, or false positive analysis.
+
+</TabItem>
 <TabItem value="secrets" label="Secrets">
 
 **Secret detection request:**
@@ -558,7 +790,7 @@ curl -X POST "http://localhost:4000/v1/chat/completions" \
     "messages": [
       {
         "role": "user", 
-        "content": "Generate python code that accesses my Github repo using this PAT: ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
+        "content": "Generate python code that accesses my Github repo using this PAT: example-github-token-123"
       }
     ],
     "max_tokens": 50
@@ -583,7 +815,7 @@ curl -X POST "http://localhost:4000/v1/chat/completions" \
             "type": "github_token",
             "start_idx": 66,
             "end_idx": 106,
-            "evidence": "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8",
+            "evidence": "example-github-token-123",
           }
         ]
       }

@@ -3,7 +3,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { Badge, Button, Icon } from "@tremor/react";
 import { Tooltip } from "antd";
 import { ModelData } from "../../model_dashboard/types";
-import { getProviderLogoAndName } from "../../provider_info_helpers";
+import { ProviderLogo } from "./ProviderLogo";
 
 export const columns = (
   userRole: string,
@@ -62,28 +62,7 @@ export const columns = (
             {/* Provider Icon */}
             <div className="flex-shrink-0 mt-0.5">
               {model.provider ? (
-                <img
-                  src={getProviderLogoAndName(model.provider).logo}
-                  alt={`${model.provider} logo`}
-                  className="w-4 h-4"
-                  onError={(e) => {
-                    const target = e.currentTarget as HTMLImageElement;
-                    const parent = target.parentElement;
-                    if (!parent || !parent.contains(target)) {
-                      return;
-                    }
-
-                    try {
-                      const fallbackDiv = document.createElement("div");
-                      fallbackDiv.className =
-                        "w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs";
-                      fallbackDiv.textContent = model.provider?.charAt(0) || "-";
-                      parent.replaceChild(fallbackDiv, target);
-                    } catch (error) {
-                      console.error("Failed to replace provider logo fallback:", error);
-                    }
-                  }}
-                />
+                <ProviderLogo provider={model.provider} />
               ) : (
                 <div className="w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs">-</div>
               )}
