@@ -175,6 +175,8 @@ LLM_CONFIG_NAMES = (
     "AnthropicTextConfig",
     "GroqSTTConfig",
     "TritonConfig",
+    "TritonGenerateConfig",
+    "TritonInferConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -812,5 +814,21 @@ def _lazy_import_llm_configs(name: str) -> Any:
 
         _globals["TritonConfig"] = _TritonConfig
         return _TritonConfig
+
+    if name == "TritonGenerateConfig":
+        from .llms.triton.completion.transformation import (
+            TritonGenerateConfig as _TritonGenerateConfig,
+        )
+
+        _globals["TritonGenerateConfig"] = _TritonGenerateConfig
+        return _TritonGenerateConfig
+
+    if name == "TritonInferConfig":
+        from .llms.triton.completion.transformation import (
+            TritonInferConfig as _TritonInferConfig,
+        )
+
+        _globals["TritonInferConfig"] = _TritonInferConfig
+        return _TritonInferConfig
 
     raise AttributeError(f"LLM config lazy import: unknown attribute {name!r}")
