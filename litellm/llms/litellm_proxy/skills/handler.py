@@ -71,7 +71,7 @@ class LiteLLMSkillsHandler:
         """
         prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
 
-        skill_id = f"skill_{uuid.uuid4()}"
+        skill_id = f"litellm_skill_{uuid.uuid4()}"
 
         skill_data: Dict[str, Any] = {
             "skill_id": skill_id,
