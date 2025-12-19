@@ -12,32 +12,35 @@ paths-ignore:
   - "**/venv/**"
   - "**/.venv/**"
 
-# Secret pattern exclusions - simplified from multiple individual patterns
-secret-patterns:
-  # Consolidated test/mock/fake/example/dummy patterns
-  - pattern: "^(test|mock|fake|example|dummy)-.*$"
-    description: "Test, mock, fake, example, and dummy prefixed secrets"
+# Match-level exclusions (ignoring false positives)
+matches-ignore:
+  # Environment variable references in code
+  - name: "Environment variable references"
+    match: "os.environ/[A-Z_]+"
   
-  # Consolidated Stripe-like test key patterns
-  - pattern: "^sk-(test|mock|fake)-.*$"
-    description: "Stripe-like test, mock, and fake API keys"
-  
-  # Test sequence keys
-  - pattern: "^sk-1234[5]?$"
-    description: "Simple test sequence keys (sk-1234, sk-12345)"
-  
-  # Environment variable references in code (with slashes)
-  - pattern: "^os\\.environ[/\\[].*$"
-    description: "Python os.environ references (not actual secrets)"
+  - name: "Environment variable dict access"
+    match: "os.environ\\[['\"][A-Z_]+['\"]\\]"
   
   # OIDC/CircleCI paths (test data)
-  - pattern: "^oidc/circleci.*$"
-    description: "OIDC CircleCI authentication paths used in tests"
+  - name: "OIDC CircleCI paths"
+    match: "oidc/circleci"
   
   # GCS pub/sub folder name (test folder)
-  - pattern: "^gcs_pub_sub_body$"
-    description: "GCS pub/sub test data folder name"
+  - name: "GCS pub/sub folder"
+    match: "gcs_pub_sub_body"
   
   # OpenAI model names (not secrets)
-  - pattern: "^text-(davinci|curie|babbage|ada)-\\d{3}$"
-    description: "OpenAI model identifiers (e.g., text-davinci-003)"
+  - name: "OpenAI model identifiers"
+    match: "text-(davinci|curie|babbage|ada)-\\d{3}"
+  
+  # Test/mock/fake/example/dummy patterns
+  - name: "Test prefixed values"
+    match: "(test|mock|fake|example|dummy)-"
+  
+  # Stripe-like test keys
+  - name: "Stripe test keys"
+    match: "sk-(test|mock|fake)-"
+  
+  # Simple test sequence keys
+  - name: "Test sequence keys"
+    match: "sk-1234[5]?"
