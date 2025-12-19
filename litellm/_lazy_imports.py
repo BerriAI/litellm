@@ -161,6 +161,8 @@ LLM_CONFIG_NAMES = (
     "GaladrielChatConfig",
     "GithubChatConfig",
     "AzureAnthropicConfig",
+    "BytezChatConfig",
+    "CompactifAIChatConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -686,5 +688,21 @@ def _lazy_import_llm_configs(name: str) -> Any:
 
         _globals["AzureAnthropicConfig"] = _AzureAnthropicConfig
         return _AzureAnthropicConfig
+
+    if name == "BytezChatConfig":
+        from .llms.bytez.chat.transformation import (
+            BytezChatConfig as _BytezChatConfig,
+        )
+
+        _globals["BytezChatConfig"] = _BytezChatConfig
+        return _BytezChatConfig
+
+    if name == "CompactifAIChatConfig":
+        from .llms.compactifai.chat.transformation import (
+            CompactifAIChatConfig as _CompactifAIChatConfig,
+        )
+
+        _globals["CompactifAIChatConfig"] = _CompactifAIChatConfig
+        return _CompactifAIChatConfig
 
     raise AttributeError(f"LLM config lazy import: unknown attribute {name!r}")

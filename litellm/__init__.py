@@ -1063,10 +1063,8 @@ from .utils import client
 # Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py
 # (which imports tiktoken) at import time
 
-from .llms.bytez.chat.transformation import BytezChatConfig
 from .llms.custom_llm import CustomLLM
 from .llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig
-from .llms.compactifai.chat.transformation import CompactifAIChatConfig
 from .llms.empower.chat.transformation import EmpowerChatConfig
 from .llms.huggingface.chat.transformation import HuggingFaceChatConfig
 from .llms.huggingface.embedding.transformation import HuggingFaceEmbeddingConfig
