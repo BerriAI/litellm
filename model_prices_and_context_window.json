@@ -15661,7 +15661,9 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 2.9e-07,
+        "supports_function_calling": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "google.gemma-3-27b-it": {
@@ -15672,7 +15674,9 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 3.8e-07,
+        "supports_function_calling": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "google.gemma-3-4b-it": {
@@ -15683,7 +15687,9 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 8e-08,
+        "supports_function_calling": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "google_pse/search": {
@@ -19542,7 +19548,10 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 1.2e-06,
-        "supports_system_messages": true
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
     },
     "mistral.magistral-small-2509": {
         "input_cost_per_token": 5e-07,
@@ -20190,8 +20199,10 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 2.5e-06,
+        "supports_function_calling": true,
         "supports_reasoning": true,
-        "supports_system_messages": true
+        "supports_system_messages": true,
+        "supports_tool_choice": true
     },
     "moonshot/kimi-k2-0711-preview": {
         "cache_read_input_token_cost": 1.5e-07,
@@ -23769,7 +23780,8 @@
         "mode": "chat",
         "output_cost_per_token": 1.2e-06,
         "supports_function_calling": true,
-        "supports_system_messages": true
+        "supports_system_messages": true,
+        "supports_tool_choice": true
     },
     "qwen.qwen3-vl-235b-a22b": {
         "input_cost_per_token": 5.3e-07,
@@ -23781,6 +23793,7 @@
         "output_cost_per_token": 2.66e-06,
         "supports_function_calling": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "recraft/recraftv2": {
