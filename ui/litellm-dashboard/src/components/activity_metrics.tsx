@@ -5,6 +5,8 @@ import React from "react";
 import { CustomLegend, CustomTooltip } from "./common_components/chartUtils";
 import { DailyData, KeyMetricWithMetadata, ModelActivityData, TopApiKeyData } from "./UsagePage/types";
 import { valueFormatter } from "./UsagePage/utils/value_formatters";
+import { Team } from "./key_team_helpers/key_list";
+import { resolveTeamAliasFromTeamID } from "@/utils/teamUtils";
 
 interface ActivityMetricsProps {
   modelMetrics: Record<string, ModelActivityData>;
@@ -337,16 +339,21 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, 
 };
 
 // Helper function to format key label
-const formatKeyLabel = (modelData: KeyMetricWithMetadata, model: string): string => {
+export const formatKeyLabel = (modelData: KeyMetricWithMetadata, model: string, teams: Team[]): string => {
   const keyAlias = modelData.metadata.key_alias || `key-hash-${model}`;
   const teamId = modelData.metadata.team_id;
-  return teamId ? `${keyAlias} (team_id: ${teamId})` : keyAlias;
+  if (teamId) {
+    const teamAlias = resolveTeamAliasFromTeamID(teamId, teams);
+    return teamAlias ? `${keyAlias} (team: ${teamAlias})` : `${keyAlias} (team_id: ${teamId})`;
+  }
+  return keyAlias;
 };
 
 // Process data function
 export const processActivityData = (
   dailyActivity: { results: DailyData[] },
   key: "models" | "api_keys" | "mcp_servers",
+  teams: Team[] = [],
 ): Record<string, ModelActivityData> => {
   const modelMetrics: Record<string, ModelActivityData> = {};
 
@@ -354,7 +361,7 @@ export const processActivityData = (
     Object.entries(day.breakdown[key] || {}).forEach(([model, modelData]) => {
       if (!modelMetrics[model]) {
         modelMetrics[model] = {
-          label: key === "api_keys" ? formatKeyLabel(modelData as KeyMetricWithMetadata, model) : model,
+          label: key === "api_keys" ? formatKeyLabel(modelData as KeyMetricWithMetadata, model, teams) : model,
           total_requests: 0,
           total_successful_requests: 0,
           total_failed_requests: 0,

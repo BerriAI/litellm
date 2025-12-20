@@ -37,6 +37,7 @@ import { BreakdownMetrics, DailyData, EntityMetricWithMetadata, KeyMetricWithMet
 import { valueFormatterSpend } from "../../utils/value_formatters";
 import TopKeyView from "./TopKeyView";
 import TopModelView from "./TopModelView";
+import useTeams from "@/app/(dashboard)/hooks/useTeams";
 
 interface EntityMetrics {
   metrics: {
@@ -104,9 +105,10 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       total_tokens: 0,
     },
   });
+  const { teams } = useTeams();
 
-  const modelMetrics = processActivityData(spendData, "models");
-  const keyMetrics = processActivityData(spendData, "api_keys");
+  const modelMetrics = processActivityData(spendData, "models", teams || []);
+  const keyMetrics = processActivityData(spendData, "api_keys", teams || []);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
 
   const fetchSpendData = async () => {
