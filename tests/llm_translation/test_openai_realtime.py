@@ -32,60 +32,39 @@ async def test_openai_realtime_direct_call_no_intent():
             self.messages_received = []
             self.received_session_created = False
             self.connection_successful = False
+            self._receive_called = False
             
         async def accept(self):
             # Not needed for client-side websocket
             pass
             
         async def send_text(self, message):
+            # This is called by the realtime handler when forwarding messages FROM OpenAI TO the client
+            # Messages from OpenAI come through backend_ws and are forwarded here via send_text()
             self.messages_sent.append(message)
-            # Parse the message to see what we're sending
             try:
                 msg_data = json.loads(message)
-                print(f"Sent to OpenAI: {msg_data.get('type', 'unknown')}")
+                msg_type = msg_data.get('type', 'unknown')
+                print(f"Received from OpenAI (via send_text): {msg_type}")
+                
+                # Check if this is the session.created message we're waiting for
+                if msg_type == "session.created" and not self.received_session_created:
+                    self.messages_received.append(msg_data)
+                    self.received_session_created = True
+                    self.connection_successful = True
+                    print(f"✅ Successfully received session.created from OpenAI")
             except json.JSONDecodeError:
                 pass
             
         async def receive_text(self):
-            # This will be called by the realtime handler when it receives messages from OpenAI
-            # We'll simulate getting messages for a short time, then close
-            await asyncio.sleep(0.8)  # Give a bit more time for real responses
+            # This is called by client_ack_messages() to read messages FROM the client
+            # Since this test doesn't send any client messages, we'll wait a bit then close
+            if not self._receive_called:
+                self._receive_called = True
+                # Wait a bit to allow the backend_to_client_send_messages task to receive session.created
+                await asyncio.sleep(1.0)
             
-            # If this is our first call, simulate receiving session.created from OpenAI
-            if not self.received_session_created:
-                # This simulates what OpenAI would send on successful connection
-                response = {
-                    "type": "session.created", 
-                    "session": {
-                        "id": "sess_test123",
-                        "object": "realtime.session",
-                        "model": "gpt-4o-realtime-preview-2024-10-01",
-                        "expires_at": 1234567890,
-                        "modalities": ["text", "audio"],
-                        "instructions": "",
-                        "voice": "alloy",
-                        "input_audio_format": "pcm16",
-                        "output_audio_format": "pcm16",
-                        "input_audio_transcription": None,
-                        "turn_detection": {
-                            "type": "server_vad",
-                            "threshold": 0.5,
-                            "prefix_padding_ms": 300,
-                            "silence_duration_ms": 200
-                        },
-                        "tools": [],
-                        "tool_choice": "auto",
-                        "temperature": 0.8,
-                        "max_response_output_tokens": "inf"
-                    }
-                }
-                self.messages_received.append(response)
-                self.received_session_created = True
-                self.connection_successful = True
-                print(f"Received from OpenAI: {response['type']}")
-                return json.dumps(response)
-            
-            # After validating we got session.created, close the connection
+            # After waiting, close the connection to end the test
             print("Test validation complete - closing connection")
             raise websockets.exceptions.ConnectionClosed(None, None)
             
@@ -161,58 +140,39 @@ async def test_openai_realtime_direct_call_with_intent():
             self.messages_received = []
             self.received_session_created = False
             self.connection_successful = False
+            self._receive_called = False
             
         async def accept(self):
             # Not needed for client-side websocket
             pass
             
         async def send_text(self, message):
+            # This is called by the realtime handler when forwarding messages FROM OpenAI TO the client
+            # Messages from OpenAI come through backend_ws and are forwarded here via send_text()
             self.messages_sent.append(message)
-            # Parse the message to see what we're sending
             try:
                 msg_data = json.loads(message)
-                print(f"Sent to OpenAI (with intent): {msg_data.get('type', 'unknown')}")
+                msg_type = msg_data.get('type', 'unknown')
+                print(f"Received from OpenAI (via send_text, with intent): {msg_type}")
+                
+                # Check if this is the session.created message we're waiting for
+                if msg_type == "session.created" and not self.received_session_created:
+                    self.messages_received.append(msg_data)
+                    self.received_session_created = True
+                    self.connection_successful = True
+                    print(f"✅ Successfully received session.created from OpenAI (with intent)")
             except json.JSONDecodeError:
                 pass
             
         async def receive_text(self):
-            # This will be called by the realtime handler when it receives messages from OpenAI
-            await asyncio.sleep(0.8)  # Give time for real responses
+            # This is called by client_ack_messages() to read messages FROM the client
+            # Since this test doesn't send any client messages, we'll wait a bit then close
+            if not self._receive_called:
+                self._receive_called = True
+                # Wait a bit to allow the backend_to_client_send_messages task to receive session.created
+                await asyncio.sleep(1.0)
             
-            # If this is our first call, simulate receiving session.created from OpenAI
-            if not self.received_session_created:
-                response = {
-                    "type": "session.created", 
-                    "session": {
-                        "id": "sess_intent_test123",
-                        "object": "realtime.session",
-                        "model": "gpt-4o-realtime-preview-2024-10-01",
-                        "expires_at": 1234567890,
-                        "modalities": ["text", "audio"],
-                        "instructions": "",
-                        "voice": "alloy",
-                        "input_audio_format": "pcm16",
-                        "output_audio_format": "pcm16",
-                        "input_audio_transcription": None,
-                        "turn_detection": {
-                            "type": "server_vad",
-                            "threshold": 0.5,
-                            "prefix_padding_ms": 300,
-                            "silence_duration_ms": 200
-                        },
-                        "tools": [],
-                        "tool_choice": "auto",
-                        "temperature": 0.8,
-                        "max_response_output_tokens": "inf"
-                    }
-                }
-                self.messages_received.append(response)
-                self.received_session_created = True
-                self.connection_successful = True
-                print(f"Received from OpenAI (with intent): {response['type']}")
-                return json.dumps(response)
-            
-            # After validating we got session.created, close the connection
+            # After waiting, close the connection to end the test
             print("Test validation complete (with intent) - closing connection")
             raise websockets.exceptions.ConnectionClosed(None, None)
             
