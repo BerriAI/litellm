@@ -511,16 +511,26 @@ class ModelResponseIterator:
         # Accumulate web_search_tool_result blocks for multi-turn reconstruction
         # See: https://github.com/BerriAI/litellm/issues/17737
         self.web_search_results: List[Dict[str, Any]] = []
+        
+        # Track if we sent initial tool args in content_block_start
+        # Used to prevent double '{}' accumulation
+        self.sent_initial_tool_args: bool = False
 
     def check_empty_tool_call_args(self) -> bool:
         """
         Check if the tool call block so far has been an empty string
         """
         args = ""
-        # if text content block -> skip
-        if len(self.content_blocks) == 0:
+        # Check if we sent initial args in content_block_start
+        # If we did, return False (not empty) - args were already sent
+        if hasattr(self, 'sent_initial_tool_args') and self.sent_initial_tool_args:
             return False
-
+        
+        # If no content blocks AND no initial args were sent, it's empty - return True
+        if len(self.content_blocks) == 0:
+            return True
+        
+        # if text content block or thinking block -> skip
         if (
             self.content_blocks[0]["delta"]["type"] == "text_delta"
             or self.content_blocks[0]["delta"]["type"] == "thinking_delta"
@@ -686,6 +696,7 @@ class ModelResponseIterator:
 
                 content_block_start = self.get_content_block_start(chunk=chunk)
                 self.content_blocks = []  # reset content blocks when new block starts
+                self.sent_initial_tool_args = False  # reset flag for new block
                 # Track current content block type for filtering deltas
                 self.current_content_block_type = content_block_start["content_block"]["type"]
                 if content_block_start["content_block"]["type"] == "text":
@@ -695,12 +706,18 @@ class ModelResponseIterator:
                     # Some server_tool_use blocks (e.g. web_search) may omit `input` at start;
                     # default to {} to avoid KeyError and let deltas populate arguments.
                     tool_input = content_block_start["content_block"].get("input", {})
+                    # Fix: Only send non-empty tool arguments in content_block_start
+                    # This prevents double '{}' accumulation: '{}' + '{}' = '{}{}' (invalid JSON)
+                    # Track if we sent initial args so content_block_stop knows whether to send '{}'
+                    # See: https://github.com/BerriAI/litellm/issues/XXXXX
+                    self.sent_initial_tool_args = bool(tool_input)  # Track if we sent args
+                    tool_args = json.dumps(tool_input) if tool_input else ""
                     tool_use = ChatCompletionToolCallChunk(
                         id=content_block_start["content_block"]["id"],
                         type="function",
                         function=ChatCompletionToolCallFunctionChunk(
                             name=content_block_start["content_block"]["name"],
-                            arguments=str(tool_input),
+                            arguments=tool_args,
                         ),
                         index=self.tool_index,
                     )
