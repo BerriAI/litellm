@@ -92,8 +92,8 @@ def test_multiturn_tool_calls():
     response_id = response.id
     tool_call_id = None
     for item in response.output:
-        if 'type' in item and item['type'] == 'function_call':
-            tool_call_id = item.get('call_id')
+        if hasattr(item, 'type') and item.type == 'function_call':
+            tool_call_id = getattr(item, 'call_id', None)
             if tool_call_id:
                 break
     
