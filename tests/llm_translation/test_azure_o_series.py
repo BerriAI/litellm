@@ -24,7 +24,7 @@ class TestAzureOpenAIO3Mini(BaseOSeriesModelsTest, BaseLLMChatTest):
             "model": "azure/o3-mini",
             "api_key": os.getenv("AZURE_API_KEY"),
             "api_base": os.getenv("AZURE_API_BASE"),
-            "api_version": "2025-01-01-preview"
+            "api_version": "2024-12-01-preview"
         }
 
     def get_client(self):
