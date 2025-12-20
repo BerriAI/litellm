@@ -354,7 +354,7 @@ async def test_register_client_remote_registration_success():
 
     request_payload = {
         "client_name": "Litellm Proxy",
-        "grant_types": ["authorization_code"],
+        "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
         "token_endpoint_auth_method": "client_secret_post",
     }
@@ -603,6 +603,7 @@ async def test_oauth_authorization_server_respects_x_forwarded_proto():
     assert response["authorization_endpoint"].startswith("https://litellm.example.com/")
     assert response["token_endpoint"].startswith("https://litellm.example.com/")
     assert response["registration_endpoint"].startswith("https://litellm.example.com/")
+    assert response["grant_types_supported"] == ["authorization_code", "refresh_token"]
 
 
 @pytest.mark.asyncio
