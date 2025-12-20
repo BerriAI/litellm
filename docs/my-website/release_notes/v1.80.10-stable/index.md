@@ -56,6 +56,15 @@ pip install litellm==1.80.10
 
 ---
 
+### Performance: 50% Reduction in Memory Usage and Import Latency for the LiteLLM SDK
+
+We've completely restructured `litellm.__init__.py` to defer heavy imports until they're actually needed, implementing lazy loading for **109 components**.
+
+This refactoring includes **41 provider config classes**, **40 utility functions**, cache implementations (Redis, DualCache, InMemoryCache), HTTP handlers, logging, types, and other heavy dependencies. Heavy libraries like tiktoken and boto3 are now loaded on-demand rather than eagerly at import time.
+
+This makes LiteLLM especially beneficial for serverless functions, Lambda deployments, and containerized environments where cold start times and memory footprint matter.
+
+
 ### Agent Gateway - 4 New Agent Providers
 
 <Image
