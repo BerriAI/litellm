@@ -1,5 +1,5 @@
 import pytest
-from litellm.llms.bedrock.image.amazon_nova_canvas_transformation import AmazonNovaCanvasConfig
+from litellm.llms.bedrock.image_generation.amazon_nova_canvas_transformation import AmazonNovaCanvasConfig
 from litellm.types.utils import ImageResponse
 
 def test_transform_request_body_text_to_image():

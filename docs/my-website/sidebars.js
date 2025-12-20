@@ -42,6 +42,7 @@ const sidebars = {
       label: "Guardrails",
       items: [
         "proxy/guardrails/quick_start",
+        "proxy/guardrails/guardrail_load_balancing",
         {
           type: "category",
           "label": "Contributing to Guardrails",
@@ -52,6 +53,7 @@ const sidebars = {
           ]
         },
         "proxy/guardrails/test_playground",
+        "proxy/guardrails/litellm_content_filter",
         ...[
           "proxy/guardrails/aim_security",
           "proxy/guardrails/onyx_security",
@@ -63,7 +65,6 @@ const sidebars = {
           "proxy/guardrails/grayswan",
           "proxy/guardrails/hiddenlayer",
           "proxy/guardrails/lasso_security",
-          "proxy/guardrails/litellm_content_filter",
           "proxy/guardrails/guardrails_ai",
           "proxy/guardrails/lakera_ai",
           "proxy/guardrails/model_armor",
@@ -412,12 +413,7 @@ const sidebars = {
           items: [
             "a2a",
             "a2a_cost_tracking",
-            "a2a_agent_permissions",
-            {
-              type: "link",
-              label: "Adding LangGraph Agents",
-              href: "/docs/providers/langgraph#litellm-a2a-gateway",
-            },
+            "a2a_agent_permissions"
           ],
         },
         "assistants",
@@ -477,6 +473,7 @@ const sidebars = {
           "generateContent",
           "apply_guardrail",
           "bedrock_invoke",
+          "interactions",
         {
           type: "category",
           label: "/images",
@@ -548,6 +545,7 @@ const sidebars = {
             "search/dataforseo",
             "search/firecrawl",
             "search/searxng",
+            "search/linkup",
           ]
         },
         "skills",
@@ -637,6 +635,7 @@ const sidebars = {
             "providers/vertex_speech",
             "providers/vertex_batch",
             "providers/vertex_ocr",
+            "providers/vertex_ai_agent_engine",
           ]
         },
         {
@@ -672,6 +671,7 @@ const sidebars = {
         "providers/ai21",
         "providers/aiml",
         "providers/aleph_alpha",
+        "providers/amazon_nova",
         "providers/anyscale",
         "providers/baseten",
         "providers/bytez",
@@ -743,6 +743,7 @@ const sidebars = {
         "providers/petals",
         "providers/publicai",
         "providers/predibase",
+        "providers/pydantic_ai_agent",
         "providers/ragflow",
         "providers/recraft",
         "providers/replicate",
@@ -762,7 +763,14 @@ const sidebars = {
         "providers/triton-inference-server",
         "providers/v0",
         "providers/vercel_ai_gateway",
-        "providers/vllm",
+        {
+          type: "category",
+          label: "vLLM",
+          items: [
+            "providers/vllm",
+            "providers/vllm_batches",
+          ]
+        },
         "providers/volcano",
         "providers/voyage",
         "providers/wandb_inference",

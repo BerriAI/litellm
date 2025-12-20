@@ -16,7 +16,6 @@ from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.guardrails import (
     DynamicGuardrailParams,
-    GenericGuardrailAPIInputs,
     GuardrailEventHooks,
     LitellmParams,
     Mode,
@@ -25,6 +24,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import (
     CallTypes,
+    GenericGuardrailAPIInputs,
     GuardrailStatus,
     LLMResponseTypes,
     StandardLoggingGuardrailInformation,
@@ -240,6 +240,28 @@ class CustomGuardrail(CustomLogger):
             return metadata["disable_global_guardrail"]
         return False
 
+    def _is_valid_response_type(self, result: Any) -> bool:
+        """
+        Check if result is a valid LLMResponseTypes instance.
+        
+        Safely handles TypedDict types which don't support isinstance checks.
+        For non-LiteLLM responses (like passthrough httpx.Response), returns True
+        to allow them through.
+        """
+        if result is None:
+            return False
+        
+        try:
+            # Try isinstance check on valid types that support it
+            response_types = get_args(LLMResponseTypes)
+            return isinstance(result, response_types)
+        except TypeError as e:
+            # TypedDict types don't support isinstance checks
+            # In this case, we can't validate the type, so we allow it through
+            if "TypedDict" in str(e):
+                return True
+            raise
+
     def get_guardrail_from_metadata(
         self, data: dict
     ) -> Union[List[str], List[Dict[str, DynamicGuardrailParams]]]:
@@ -342,7 +364,7 @@ class CustomGuardrail(CustomLogger):
             response=response,
         )
 
-        if result is None or not isinstance(result, get_args(LLMResponseTypes)):
+        if not self._is_valid_response_type(result):
             return response
 
         return result

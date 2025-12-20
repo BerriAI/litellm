@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
-import { render } from "@testing-library/react";
-import { describe, it, expect, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import ModelsAndEndpointsView from "./ModelsAndEndpointsView";
 
 // Minimal stubs to avoid Next.js router and network usage during render
@@ -57,21 +57,40 @@ vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
   }),
 }));
 
+const mockUseModelsInfo = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
+  useModelsInfo: () => mockUseModelsInfo(),
+}));
+
+const mockUseUISettings = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
+  useUISettings: () => mockUseUISettings(),
+}));
+
 const createQueryClient = () =>
   new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
 
 describe("ModelsAndEndpointsView", () => {
-  it("should render the models and endpoints view", async () => {
-    // JSDOM polyfill for libraries expecting ResizeObserver (e.g., recharts)
-    // Note: ResizeObserver is now globally mocked in setupTests.ts, but keeping this for backwards compatibility
+  beforeEach(() => {
+    mockUseModelsInfo.mockReturnValue({
+      data: { data: [] },
+      isLoading: false,
+      refetch: vi.fn(),
+    });
+    mockUseUISettings.mockReturnValue({
+      data: { values: {} },
+    });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (global as any).ResizeObserver = class {
       observe() {}
       unobserve() {}
       disconnect() {}
     };
+  });
+
+  it("should render the models and endpoints view", async () => {
     const queryClient = createQueryClient();
     const { findByText } = render(
       <QueryClientProvider client={queryClient}>

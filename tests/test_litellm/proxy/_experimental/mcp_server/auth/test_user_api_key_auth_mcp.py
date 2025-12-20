@@ -332,7 +332,7 @@ class TestMCPRequestHandler:
         async def mock_user_api_key_auth(api_key, request):
             return UserAPIKeyAuth(
                 token=(
-                    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                    "test-token-sha256-empty-hash"
                     if api_key
                     else None
                 ),
@@ -691,7 +691,7 @@ class TestMCPCustomHeaderName:
             # Create an async mock for user_api_key_auth
             async def mock_user_api_key_auth(api_key, request):
                 return UserAPIKeyAuth(
-                    token="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                    token="test-token-sha256-empty-hash",
                     api_key=api_key,
                     user_id="test-user-id",
                     team_id="test-team-id",
@@ -866,7 +866,7 @@ class TestMCPAccessGroupsE2E:
         # Create an async mock for user_api_key_auth
         async def mock_user_api_key_auth(api_key, request):
             return UserAPIKeyAuth(
-                token="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                token="test-token-sha256-empty-hash",
                 api_key=api_key,
                 user_id="test-user-id",
                 team_id="test-team-id",
@@ -917,7 +917,7 @@ class TestMCPAccessGroupsE2E:
         # Create an async mock for user_api_key_auth
         async def mock_user_api_key_auth(api_key, request):
             return UserAPIKeyAuth(
-                token="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                token="test-token-sha256-empty-hash",
                 api_key=api_key,
                 user_id="test-user-id",
                 team_id="test-team-id",
@@ -1258,3 +1258,133 @@ async def test_get_allowed_mcp_servers_for_team_with_no_object_permission():
         
         # Verify the helper was called
         mock_get_team_perm.assert_called_once_with(mock_user_auth)
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_for_team_without_user_auth_returns_empty():
+    """Ensure helper returns empty list when no user auth is provided."""
+
+    result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(None)
+
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_for_team_without_team_id_returns_empty():
+    """Ensure helper returns empty list when user lacks a team_id."""
+
+    mock_user_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id=None,
+    )
+
+    result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(
+        mock_user_auth
+    )
+
+    assert result == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "user_api_key_auth, prisma_client_value, scenario",
+    [
+        (None, object(), "no_user"),
+        (
+            UserAPIKeyAuth(api_key="test-key", user_id="test-user"),
+            object(),
+            "no_object_permission_id",
+        ),
+        (
+            UserAPIKeyAuth(
+                api_key="test-key",
+                user_id="test-user",
+                object_permission_id="perm-123",
+            ),
+            None,
+            "no_prisma_client",
+        ),
+    ],
+)
+async def test_get_allowed_mcp_servers_for_key_guard_conditions(
+    user_api_key_auth, prisma_client_value, scenario
+):
+    """Ensure guard clauses return [] before hitting get_object_permission."""
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_object_permission",
+        new_callable=AsyncMock,
+    ) as mock_get_perm:
+        with patch(
+            "litellm.proxy.proxy_server.prisma_client", prisma_client_value
+        ):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(
+                user_api_key_auth
+            )
+
+    assert result == []
+    mock_get_perm.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_for_key_returns_empty_when_db_returns_none():
+    """Ensure [] is returned when get_object_permission yields None."""
+
+    user_api_key_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        object_permission_id="perm-123",
+    )
+
+    mock_prisma = object()
+
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client", mock_prisma
+    ), patch(
+        "litellm.proxy.auth.auth_checks.get_object_permission",
+        new_callable=AsyncMock,
+    ) as mock_get_perm:
+        mock_get_perm.return_value = None
+
+        result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(
+            user_api_key_auth
+        )
+
+    assert result == []
+    mock_get_perm.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_for_key_prefers_in_memory_permission():
+    """Ensure in-memory object_permission is used without hitting the DB."""
+
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+    perms = LiteLLM_ObjectPermissionTable(
+        object_permission_id="perm-in-memory",
+        mcp_servers=["direct-server"],
+        mcp_access_groups=["grp-alpha"],
+    )
+    user_api_key_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        object_permission=perms,
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_object_permission",
+        new_callable=AsyncMock,
+    ) as mock_get_perm:
+        with patch.object(
+            MCPRequestHandler, "_get_mcp_servers_from_access_groups"
+        ) as mock_access_groups:
+            mock_access_groups.return_value = ["group-server"]
+
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(
+                user_api_key_auth
+            )
+
+    assert set(result) == {"direct-server", "group-server"}
+    mock_get_perm.assert_not_called()
+    mock_access_groups.assert_called_once_with(["grp-alpha"])

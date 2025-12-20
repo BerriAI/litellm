@@ -1,3 +1,4 @@
+import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 import { ArrowLeftIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
@@ -5,7 +6,7 @@ import { Badge, Button, Card, Grid, Tab, TabGroup, TabList, TabPanel, TabPanels,
 import { Button as AntdButton, Form, Tooltip } from "antd";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { useEffect, useState } from "react";
-import { rolesWithWriteAccess } from "../../utils/roles";
+import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } from "../../utils/roles";
 import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "../callback_info_helpers";
 import AutoRotationView from "../common_components/AutoRotationView";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
@@ -54,6 +55,7 @@ export default function KeyInfoView({
   setAccessToken,
   backButtonText = "Back to Keys",
 }: KeyInfoViewProps) {
+  const { teams: teamsData } = useTeams();
   const [isEditing, setIsEditing] = useState(false);
   const [form] = Form.useForm();
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -301,6 +303,15 @@ export default function KeyInfoView({
     return `${dateStr} at ${timeStr}`;
   };
 
+  const canModifyKey =
+    isProxyAdminRole(userRole || "") ||
+    (teamsData &&
+      isUserTeamAdminForSingleTeam(
+        teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0],
+        userID || "",
+      )) ||
+    userID === currentKeyData.user_id;
+
   return (
     <div className="w-full h-screen p-4">
       <div className="flex justify-between items-center mb-6">
@@ -349,7 +360,7 @@ export default function KeyInfoView({
             )}
           </div>
         </div>
-        {userRole && rolesWithWriteAccess.includes(userRole) && (
+        {canModifyKey && (
           <div className="flex gap-2">
             <Tooltip
               title={!premiumUser ? "This is a LiteLLM Enterprise feature, and requires a valid key to use." : ""}
