@@ -38,23 +38,33 @@ async def test_openai_realtime_direct_call_no_intent():
             # Not needed for client-side websocket
             pass
             
-        async def send_text(self, message):
-            # This is called by the realtime handler when forwarding messages FROM OpenAI TO the client
-            # Messages from OpenAI come through backend_ws and are forwarded here via send_text()
-            self.messages_sent.append(message)
-            try:
-                msg_data = json.loads(message)
-                msg_type = msg_data.get('type', 'unknown')
-                print(f"Received from OpenAI (via send_text): {msg_type}")
-                
-                # Check if this is the session.created message we're waiting for
-                if msg_type == "session.created" and not self.received_session_created:
-                    self.messages_received.append(msg_data)
-                    self.received_session_created = True
-                    self.connection_successful = True
-                    print(f"✅ Successfully received session.created from OpenAI")
-            except json.JSONDecodeError:
-                pass
+            async def send_text(self, message):
+                # This is called by the realtime handler when forwarding messages FROM OpenAI TO the client
+                # Messages from OpenAI come through backend_ws and are forwarded here via send_text()
+                print(f"[DEBUG] send_text() called with message type: {type(message)}, length: {len(message) if hasattr(message, '__len__') else 'N/A'}")
+                self.messages_sent.append(message)
+                try:
+                    # Handle both bytes and string messages (OpenAI sends bytes from recv(decode=False))
+                    if isinstance(message, bytes):
+                        message_str = message.decode('utf-8')
+                    else:
+                        message_str = message
+                        
+                    msg_data = json.loads(message_str)
+                    msg_type = msg_data.get('type', 'unknown')
+                    print(f"Received from OpenAI (via send_text): {msg_type}")
+                    
+                    # Check if this is the session.created message we're waiting for
+                    if msg_type == "session.created" and not self.received_session_created:
+                        self.messages_received.append(msg_data)
+                        self.received_session_created = True
+                        self.connection_successful = True
+                        print(f"✅ Successfully received session.created from OpenAI")
+                except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                    # Fail the test if we can't parse the message - this indicates a real problem
+                    error_msg = f"Failed to parse message in send_text: {e}, message type: {type(message)}, message preview: {str(message)[:100]}"
+                    print(f"[ERROR] {error_msg}")
+                    pytest.fail(error_msg)
             
         async def receive_text(self):
             # This is called by client_ack_messages() to read messages FROM the client
@@ -76,6 +86,9 @@ async def test_openai_realtime_direct_call_no_intent():
                 
                 if not self.connection_successful:
                     print(f"Timeout: session.created not received after {max_wait} seconds")
+                    print(f"[DEBUG] Total messages received in send_text: {len(self.messages_sent)}")
+                    if self.messages_sent:
+                        print(f"[DEBUG] First message preview: {str(self.messages_sent[0])[:200]}")
             
             # After waiting, close the connection to end the test
             print("Test validation complete - closing connection")
@@ -159,23 +172,33 @@ async def test_openai_realtime_direct_call_with_intent():
             # Not needed for client-side websocket
             pass
             
-        async def send_text(self, message):
-            # This is called by the realtime handler when forwarding messages FROM OpenAI TO the client
-            # Messages from OpenAI come through backend_ws and are forwarded here via send_text()
-            self.messages_sent.append(message)
-            try:
-                msg_data = json.loads(message)
-                msg_type = msg_data.get('type', 'unknown')
-                print(f"Received from OpenAI (via send_text, with intent): {msg_type}")
-                
-                # Check if this is the session.created message we're waiting for
-                if msg_type == "session.created" and not self.received_session_created:
-                    self.messages_received.append(msg_data)
-                    self.received_session_created = True
-                    self.connection_successful = True
-                    print(f"✅ Successfully received session.created from OpenAI (with intent)")
-            except json.JSONDecodeError:
-                pass
+            async def send_text(self, message):
+                # This is called by the realtime handler when forwarding messages FROM OpenAI TO the client
+                # Messages from OpenAI come through backend_ws and are forwarded here via send_text()
+                print(f"[DEBUG] send_text() called with message type: {type(message)}, length: {len(message) if hasattr(message, '__len__') else 'N/A'}")
+                self.messages_sent.append(message)
+                try:
+                    # Handle both bytes and string messages (OpenAI sends bytes from recv(decode=False))
+                    if isinstance(message, bytes):
+                        message_str = message.decode('utf-8')
+                    else:
+                        message_str = message
+                        
+                    msg_data = json.loads(message_str)
+                    msg_type = msg_data.get('type', 'unknown')
+                    print(f"Received from OpenAI (via send_text, with intent): {msg_type}")
+                    
+                    # Check if this is the session.created message we're waiting for
+                    if msg_type == "session.created" and not self.received_session_created:
+                        self.messages_received.append(msg_data)
+                        self.received_session_created = True
+                        self.connection_successful = True
+                        print(f"✅ Successfully received session.created from OpenAI (with intent)")
+                except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                    # Fail the test if we can't parse the message - this indicates a real problem
+                    error_msg = f"Failed to parse message in send_text: {e}, message type: {type(message)}, message preview: {str(message)[:100]}"
+                    print(f"[ERROR] {error_msg}")
+                    pytest.fail(error_msg)
             
         async def receive_text(self):
             # This is called by client_ack_messages() to read messages FROM the client
@@ -197,6 +220,9 @@ async def test_openai_realtime_direct_call_with_intent():
                 
                 if not self.connection_successful:
                     print(f"Timeout: session.created not received after {max_wait} seconds (with intent)")
+                    print(f"[DEBUG] Total messages received in send_text: {len(self.messages_sent)}")
+                    if self.messages_sent:
+                        print(f"[DEBUG] First message preview: {str(self.messages_sent[0])[:200]}")
             
             # After waiting, close the connection to end the test
             print("Test validation complete (with intent) - closing connection")
