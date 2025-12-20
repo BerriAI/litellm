@@ -1,5 +1,6 @@
-from typing import Any, Optional, cast
 import sys
+from typing import Any, Optional, cast
+
 
 def _get_litellm_globals() -> dict:
     """Helper to get the globals dictionary of the litellm module."""
@@ -262,7 +263,9 @@ def _lazy_import_utils(name: str) -> Any:  # noqa: PLR0915
         return _supports_response_schema
     
     if name == "supports_parallel_function_calling":
-        from .utils import supports_parallel_function_calling as _supports_parallel_function_calling
+        from .utils import (
+            supports_parallel_function_calling as _supports_parallel_function_calling,
+        )
         _globals["supports_parallel_function_calling"] = _supports_parallel_function_calling
         return _supports_parallel_function_calling
     
@@ -428,7 +431,9 @@ def _lazy_import_cost_calculator(name: str) -> Any:
         return _cost_per_token
     
     if name == "response_cost_calculator":
-        from .cost_calculator import response_cost_calculator as _response_cost_calculator
+        from .cost_calculator import (
+            response_cost_calculator as _response_cost_calculator,
+        )
         _globals["response_cost_calculator"] = _response_cost_calculator
         return _response_cost_calculator
     
@@ -500,9 +505,7 @@ def _lazy_import_types_utils(name: str) -> Any:
         return _CredentialItem
 
     if name == "PriorityReservationDict":
-        from .types.utils import (
-            PriorityReservationDict as _PriorityReservationDict,
-        )
+        from .types.utils import PriorityReservationDict as _PriorityReservationDict
 
         _globals["PriorityReservationDict"] = _PriorityReservationDict
         return _PriorityReservationDict
@@ -522,9 +525,7 @@ def _lazy_import_types_utils(name: str) -> Any:
         return _SearchProviders
 
     if name == "GenericStreamingChunk":
-        from .types.utils import (
-            GenericStreamingChunk as _GenericStreamingChunk,
-        )
+        from .types.utils import GenericStreamingChunk as _GenericStreamingChunk
 
         _globals["GenericStreamingChunk"] = _GenericStreamingChunk
         return _GenericStreamingChunk
@@ -568,13 +569,17 @@ def _lazy_import_llm_client_cache(name: str) -> Any:
     _globals = _get_litellm_globals()
 
     if name == "LLMClientCache":
-        from litellm.caching.llm_caching_handler import LLMClientCache as _LLMClientCache
+        from litellm.caching.llm_caching_handler import (
+            LLMClientCache as _LLMClientCache,
+        )
 
         _globals["LLMClientCache"] = _LLMClientCache
         return _LLMClientCache
 
     if name == "in_memory_llm_clients_cache":
-        from litellm.caching.llm_caching_handler import LLMClientCache as _LLMClientCache
+        from litellm.caching.llm_caching_handler import (
+            LLMClientCache as _LLMClientCache,
+        )
 
         instance = _LLMClientCache()
         # Only populate the requested singleton name to keep lazy-import
@@ -594,7 +599,9 @@ def _lazy_import_litellm_logging(name: str) -> Any:
         return _Logging
     
     if name == "modify_integration":
-        from litellm.litellm_core_utils.litellm_logging import modify_integration as _modify_integration
+        from litellm.litellm_core_utils.litellm_logging import (
+            modify_integration as _modify_integration,
+        )
         _globals["modify_integration"] = _modify_integration
         return _modify_integration
     
@@ -669,9 +676,7 @@ def _lazy_import_types(name: str) -> Any:
     _globals = _get_litellm_globals()
 
     if name == "GuardrailItem":
-        from litellm.types.guardrails import (
-            GuardrailItem as _GuardrailItem,
-        )
+        from litellm.types.guardrails import GuardrailItem as _GuardrailItem
 
         _globals["GuardrailItem"] = _GuardrailItem
         return _GuardrailItem
@@ -679,7 +684,7 @@ def _lazy_import_types(name: str) -> Any:
     raise AttributeError(f"Types lazy import: unknown attribute {name!r}")
 
 
-def _lazy_import_llm_configs(name: str) -> Any:
+def _lazy_import_llm_configs(name: str) -> Any:  # noqa: PLR0915
     """Lazy import for LLM config classes."""
     _globals = _get_litellm_globals()
 
@@ -724,9 +729,7 @@ def _lazy_import_llm_configs(name: str) -> Any:
         return _AzureAnthropicConfig
 
     if name == "BytezChatConfig":
-        from .llms.bytez.chat.transformation import (
-            BytezChatConfig as _BytezChatConfig,
-        )
+        from .llms.bytez.chat.transformation import BytezChatConfig as _BytezChatConfig
 
         _globals["BytezChatConfig"] = _BytezChatConfig
         return _BytezChatConfig
@@ -780,9 +783,7 @@ def _lazy_import_llm_configs(name: str) -> Any:
         return _OobaboogaConfig
 
     if name == "MaritalkConfig":
-        from .llms.maritalk import (
-            MaritalkConfig as _MaritalkConfig,
-        )
+        from .llms.maritalk import MaritalkConfig as _MaritalkConfig
 
         _globals["MaritalkConfig"] = _MaritalkConfig
         return _MaritalkConfig
@@ -820,17 +821,13 @@ def _lazy_import_llm_configs(name: str) -> Any:
         return _AnthropicTextConfig
 
     if name == "GroqSTTConfig":
-        from .llms.groq.stt.transformation import (
-            GroqSTTConfig as _GroqSTTConfig,
-        )
+        from .llms.groq.stt.transformation import GroqSTTConfig as _GroqSTTConfig
 
         _globals["GroqSTTConfig"] = _GroqSTTConfig
         return _GroqSTTConfig
 
     if name == "TritonConfig":
-        from .llms.triton.completion.transformation import (
-            TritonConfig as _TritonConfig,
-        )
+        from .llms.triton.completion.transformation import TritonConfig as _TritonConfig
 
         _globals["TritonConfig"] = _TritonConfig
         return _TritonConfig
@@ -1004,9 +1001,7 @@ def _lazy_import_llm_configs(name: str) -> Any:
         return _VoyageRerankConfig
 
     if name == "ClarifaiConfig":
-        from .llms.clarifai.chat.transformation import (
-            ClarifaiConfig as _ClarifaiConfig,
-        )
+        from .llms.clarifai.chat.transformation import ClarifaiConfig as _ClarifaiConfig
 
         _globals["ClarifaiConfig"] = _ClarifaiConfig
         return _ClarifaiConfig
