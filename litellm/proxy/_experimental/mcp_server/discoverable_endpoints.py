@@ -398,8 +398,14 @@ async def callback(code: str, state: str):
 async def oauth_protected_resource_mcp(
     request: Request, mcp_server_name: Optional[str] = None
 ):
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
     # Get the correct base URL considering X-Forwarded-* headers
     request_base_url = get_request_base_url(request)
+    mcp_server: Optional[MCPServer] = None
+    if mcp_server_name:
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
     return {
         "authorization_servers": [
             (
@@ -413,6 +419,7 @@ async def oauth_protected_resource_mcp(
             if mcp_server_name
             else f"{request_base_url}/mcp"
         ),  # this is what Claude will call
+        "scopes_supported": mcp_server.scopes if mcp_server else [],
     }
 
 """
@@ -428,6 +435,9 @@ async def oauth_protected_resource_mcp(
 async def oauth_authorization_server_mcp(
     request: Request, mcp_server_name: Optional[str] = None
 ):
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
     # Get the correct base URL considering X-Forwarded-* headers
     request_base_url = get_request_base_url(request)
 
@@ -442,16 +452,21 @@ async def oauth_authorization_server_mcp(
         else f"{request_base_url}/token"
     )
 
+    mcp_server: Optional[MCPServer] = None
+    if mcp_server_name:
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
+
     return {
         "issuer": request_base_url,  # point to your proxy
         "authorization_endpoint": authorization_endpoint,
         "token_endpoint": token_endpoint,
         "response_types_supported": ["code"],
+        "scopes_supported": mcp_server.scopes if mcp_server else [],
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["client_secret_post"],
         # Claude expects a registration endpoint, even if we just fake it
-        "registration_endpoint": f"{request_base_url}/{mcp_server_name}/register",
+        "registration_endpoint": f"{request_base_url}/{mcp_server_name}/register" if mcp_server_name else f"{request_base_url}/register",
     }
 
 
