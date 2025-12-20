@@ -1691,6 +1691,21 @@ class LiteLLM_TeamTableCachedObj(LiteLLM_TeamTable):
     last_refreshed_at: Optional[float] = None
 
 
+class LiteLLM_DeletedTeamTable(LiteLLM_TeamTable):
+    """
+    Recording of deleted teams for audit purposes. Mirrors LiteLLM_TeamTable
+    plus metadata captured at deletion time.
+    """
+
+    id: Optional[str] = None
+    deleted_at: Optional[datetime] = None
+    deleted_by: Optional[str] = None
+    deleted_by_api_key: Optional[str] = None
+    litellm_changed_by: Optional[str] = None
+
+    model_config = ConfigDict(protected_namespaces=())
+
+
 class TeamRequest(LiteLLMPydanticObjectBase):
     teams: List[str]
 
@@ -2072,6 +2087,21 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     rotation_interval: Optional[str] = None  # How often to rotate (e.g., "30d", "90d")
     last_rotation_at: Optional[datetime] = None  # When this key was last rotated
     key_rotation_at: Optional[datetime] = None  # When this key should next be rotated
+
+    model_config = ConfigDict(protected_namespaces=())
+
+
+class LiteLLM_DeletedVerificationToken(LiteLLM_VerificationToken):
+    """
+    Recording of deleted keys for audit purposes. Mirrors LiteLLM_VerificationToken
+    plus metadata captured at deletion time.
+    """
+
+    id: Optional[str] = None
+    deleted_at: Optional[datetime] = None
+    deleted_by: Optional[str] = None
+    deleted_by_api_key: Optional[str] = None
+    litellm_changed_by: Optional[str] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
