@@ -48,9 +48,9 @@ pip install litellm==1.80.11
 - **Gemini 3 Flash Preview** - [Day 0 support for Google's Gemini 3 Flash Preview with reasoning capabilities](../../docs/providers/gemini)
 - **Stability AI Image Generation** - [New provider for Stability AI image generation and editing](../../docs/providers/stability)
 - **LiteLLM Content Filter** - [Built-in guardrails for harmful content, bias, and PII detection with image support](../../docs/proxy/guardrails/litellm_content_filter)
-- **New Provider: Venice.ai** - [Support for Venice.ai API via providers.json](../../docs/providers/venice)
+- **New Provider: Venice.ai** - Support for Venice.ai API via providers.json
 - **Unified Skills API** - [Skills API works across Anthropic, Vertex, Azure, and Bedrock](../../docs/skills)
-- **Azure Sentinel Logging** - [New logging integration for Azure Sentinel](../../docs/proxy/logging#azure-sentinel)
+- **Azure Sentinel Logging** - [New logging integration for Azure Sentinel](../../docs/observability/azure_sentinel)
 - **Guardrails Load Balancing** - [Load balance between multiple guardrail providers](../../docs/proxy/guardrails)
 - **Email Budget Alerts** - [Send email notifications when budgets are reached](../../docs/proxy/email)
 
@@ -63,7 +63,7 @@ pip install litellm==1.80.11
 | Provider | Supported LiteLLM Endpoints | Description |
 | -------- | ------------------- | ----------- |
 | [Stability AI](../../docs/providers/stability) | `/images/generations`, `/images/edits` | Stable Diffusion 3, SD3.5, image editing and generation |
-| [Venice.ai](../../docs/providers/venice) | `/chat/completions`, `/messages`, `/responses` | Venice.ai API integration via providers.json |
+| Venice.ai | `/chat/completions`, `/messages`, `/responses` | Venice.ai API integration via providers.json |
 | [VertexAI Agent Engine](../../docs/providers/vertex_ai_agent_engine) | `/a2a` | Google Vertex AI Agent Engine for agentic workflows |
 | [LinkUp Search](../../docs/search/linkup) | `/search` | LinkUp web search API integration |
 
@@ -72,7 +72,7 @@ pip install litellm==1.80.11
 | Endpoint | Method | Description | Documentation |
 | -------- | ------ | ----------- | ------------- |
 | `/interactions` | POST | Google Interactions API for conversational AI | [Docs](../../docs/interactions) |
-| `/search` | POST | RAG Search API with rerankers | [Docs](../../docs/search) |
+| `/search` | POST | RAG Search API with rerankers | [Docs](../../docs/search/index) |
 
 ---
 
@@ -136,9 +136,7 @@ pip install litellm==1.80.11
 - **[Bedrock](../../docs/providers/bedrock)**
     - Add Qwen 2 and Qwen 3 to get_bedrock_model_id - [PR #18100](https://github.com/BerriAI/litellm/pull/18100)
     - Remove ttl field when routing to bedrock - [PR #18049](https://github.com/BerriAI/litellm/pull/18049)
-    - Add support for Bedrock image guardrails - [PR #18115](https://github.com/BerriAI/litellm/pull/18115)
     - Add Bedrock Stability image edit models - [PR #18254](https://github.com/BerriAI/litellm/pull/18254)
-    - Guardrails block precedence over masking - [PR #17968](https://github.com/BerriAI/litellm/pull/17968)
 - **[Perplexity](../../docs/providers/perplexity)**
     - Use API-provided cost instead of manual calculation - [PR #17887](https://github.com/BerriAI/litellm/pull/17887)
 - **[OpenAI](../../docs/providers/openai)**
@@ -147,7 +145,7 @@ pip install litellm==1.80.11
     - Fix cost calculation of gpt-image-1 model - [PR #17966](https://github.com/BerriAI/litellm/pull/17966)
 - **[GitHub Copilot](../../docs/providers/github_copilot)**
     - Add github_copilot model info - [PR #17858](https://github.com/BerriAI/litellm/pull/17858)
-- **[Custom LLM](../../docs/providers/custom_llm)**
+- **[Custom LLM](../../docs/providers/custom_llm_server)**
     - Add image_edit and aimage_edit support - [PR #17999](https://github.com/BerriAI/litellm/pull/17999)
 
 ### Bug Fixes
@@ -180,7 +178,7 @@ pip install litellm==1.80.11
     - Add support for agent skills - [PR #18031](https://github.com/BerriAI/litellm/pull/18031)
 - **[Skills API](../../docs/skills)**
     - Unified Skills API works across Anthropic, Vertex, Azure, Bedrock - [PR #18232](https://github.com/BerriAI/litellm/pull/18232)
-- **[Search API](../../docs/search)**
+- **[Search API](../../docs/search/index)**
     - Add new RAG Search API with rerankers - [PR #18217](https://github.com/BerriAI/litellm/pull/18217)
 - **[Interactions API](../../docs/interactions)**
     - Add Google Interactions API on SDK and AI Gateway - [PR #18079](https://github.com/BerriAI/litellm/pull/18079), [PR #18081](https://github.com/BerriAI/litellm/pull/18081)
@@ -241,13 +239,13 @@ pip install litellm==1.80.11
 
 ### Logging
 
-- **[Azure Sentinel](../../docs/proxy/logging#azure-sentinel)**
+- **[Azure Sentinel](../../docs/observability/azure_sentinel)**
     - Add new Azure Sentinel Logger integration - [PR #18146](https://github.com/BerriAI/litellm/pull/18146)
 - **[Prometheus](../../docs/proxy/logging#prometheus)**
     - Add extraction of top level metadata for custom labels - [PR #18087](https://github.com/BerriAI/litellm/pull/18087)
 - **[Langfuse](../../docs/proxy/logging#langfuse)**
     - Fix not working log_failure_event - [PR #18234](https://github.com/BerriAI/litellm/pull/18234)
-- **[Arize Phoenix](../../docs/observability/arize_phoenix)**
+- **[Arize Phoenix](../../docs/observability/phoenix_integration)**
     - Fix nested spans - [PR #18102](https://github.com/BerriAI/litellm/pull/18102)
 - **General**
     - Change extra_headers to additional_headers - [PR #17950](https://github.com/BerriAI/litellm/pull/17950)
@@ -258,7 +256,7 @@ pip install litellm==1.80.11
     - Add built-in guardrails for harmful content, bias, etc. - [PR #18029](https://github.com/BerriAI/litellm/pull/18029)
     - Add support for running content filters on images - [PR #18044](https://github.com/BerriAI/litellm/pull/18044)
     - Add support for Brazil PII field - [PR #18076](https://github.com/BerriAI/litellm/pull/18076)
-    - Add new guardrail option - [PR #18007](https://github.com/BerriAI/litellm/pull/18007)
+    - Add configurable guardrail options for content filtering - [PR #18007](https://github.com/BerriAI/litellm/pull/18007)
 - **[Guardrails API](../../docs/adding_provider/generic_guardrail_api)**
     - Support LLM tool call response checks on `/chat/completions`, `/v1/responses`, `/v1/messages` - [PR #17619](https://github.com/BerriAI/litellm/pull/17619)
     - Add guardrails load balancing - [PR #18181](https://github.com/BerriAI/litellm/pull/18181)
@@ -269,10 +267,13 @@ pip install litellm==1.80.11
     - Add monitor mode for Lakera - [PR #18084](https://github.com/BerriAI/litellm/pull/18084)
 - **[Pillar Security](../../docs/proxy/guardrails/pillar_security)**
     - Add masking support and MCP call support - [PR #17959](https://github.com/BerriAI/litellm/pull/17959)
+- **[Bedrock Guardrails](../../docs/proxy/guardrails/bedrock)**
+    - Add support for Bedrock image guardrails - [PR #18115](https://github.com/BerriAI/litellm/pull/18115)
+    - Guardrails block action takes precedence over masking - [PR #17968](https://github.com/BerriAI/litellm/pull/17968)
 
 ### Secret Managers
 
-- **[HashiCorp Vault](../../docs/secret_managers)**
+- **[HashiCorp Vault](../../docs/secret_managers/hashicorp_vault)**
     - Add documentation for configurable Vault mount - [PR #18082](https://github.com/BerriAI/litellm/pull/18082)
     - Add per-team Vault configuration - [PR #18150](https://github.com/BerriAI/litellm/pull/18150)
 - **UI**
@@ -289,8 +290,8 @@ pip install litellm==1.80.11
 ## MCP Gateway
 
 - **Auth Header Propagation** - Add MCP auth header propagation - [PR #17963](https://github.com/BerriAI/litellm/pull/17963)
-- **Fix deepcopy error** - Fix MCP deepcopy error - [PR #18010](https://github.com/BerriAI/litellm/pull/18010)
-- **Fix list tool** - Fix MCP list tool not working without db - [PR #18161](https://github.com/BerriAI/litellm/pull/18161)
+- **Fix deepcopy error** - Fix MCP tool call deepcopy error when processing requests - [PR #18010](https://github.com/BerriAI/litellm/pull/18010)
+- **Fix list tool** - Fix MCP list_tools not working without database connection - [PR #18161](https://github.com/BerriAI/litellm/pull/18161)
 
 ---
 
@@ -313,7 +314,6 @@ pip install litellm==1.80.11
 - **Prisma Build Time** - Download Prisma binaries at build time instead of runtime for security restricted environments - [PR #17695](https://github.com/BerriAI/litellm/pull/17695)
 - **Docker Alpine** - Add libsndfile to Alpine image for ARM64 audio processing - [PR #18092](https://github.com/BerriAI/litellm/pull/18092)
 - **Security** - Prevent LiteLLM API key leakage on /health endpoint failures - [PR #18133](https://github.com/BerriAI/litellm/pull/18133)
-- **Security Scan** - Add new security scan to detect secret keys exposed in codebase - [PR #18148](https://github.com/BerriAI/litellm/pull/18148)
 
 ---
 
@@ -338,8 +338,6 @@ pip install litellm==1.80.11
 - **PR Templates** - Add LiteLLM team PR template and CI/CD rules - [PR #17983](https://github.com/BerriAI/litellm/pull/17983), [PR #17985](https://github.com/BerriAI/litellm/pull/17985)
 - **Issue Labeling** - Improve issue labeling with component dropdown and more provider keywords - [PR #17957](https://github.com/BerriAI/litellm/pull/17957)
 - **PR Template Cleanup** - Remove redundant fields from PR template - [PR #17956](https://github.com/BerriAI/litellm/pull/17956)
-- **CI/CD Fixes** - Multiple CI/CD fixes for mypy, tests, and logging - [PR #18195](https://github.com/BerriAI/litellm/pull/18195), [PR #18197](https://github.com/BerriAI/litellm/pull/18197), [PR #18204](https://github.com/BerriAI/litellm/pull/18204), [PR #18211](https://github.com/BerriAI/litellm/pull/18211)
-- **Security** - Remove example API keys with high entropy - [PR #18255](https://github.com/BerriAI/litellm/pull/18255)
 - **Dependencies** - Bump altcha-lib from 1.3.0 to 1.4.1 - [PR #18017](https://github.com/BerriAI/litellm/pull/18017)
 
 ---
