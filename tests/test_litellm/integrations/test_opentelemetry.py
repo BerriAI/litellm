@@ -172,6 +172,98 @@ class TestOpenTelemetryCostBreakdown(unittest.TestCase):
         assert ("gen_ai.cost.original_cost", 0.004) not in call_args_list
 
 
+class TestOpenTelemetryProviderInitialization(unittest.TestCase):
+    """Test suite for verifying provider initialization respects existing providers"""
+
+    def test_init_tracing_respects_existing_tracer_provider(self):
+        """
+        Unit test: _init_tracing() should respect existing TracerProvider.
+
+        When a TracerProvider already exists (e.g., set by Langfuse SDK),
+        LiteLLM should use it instead of creating a new one.
+        """
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider
+
+        # Setup: Create and set an existing TracerProvider
+        tracer_provider = TracerProvider()
+        trace.set_tracer_provider(tracer_provider)
+        existing_provider = trace.get_tracer_provider()
+
+        # Act: Initialize OpenTelemetry integration (should detect existing provider)
+        otel_integration = OpenTelemetry()
+
+        # Assert: The existing provider should still be active
+        current_provider = trace.get_tracer_provider()
+        assert current_provider is existing_provider, (
+            "Existing TracerProvider should be respected and not overridden"
+        )
+
+    def test_init_metrics_respects_existing_meter_provider(self):
+        """
+        Unit test: _init_metrics() should respect existing MeterProvider.
+
+        When a MeterProvider already exists (e.g., set by Langfuse SDK),
+        LiteLLM should use it instead of creating a new one.
+        """
+        from opentelemetry import metrics
+        from opentelemetry.sdk.metrics import MeterProvider
+
+        # Setup: Enable metrics for this test
+        os.environ["LITELLM_OTEL_INTEGRATION_ENABLE_METRICS"] = "true"
+
+        try:
+            # Create and set an existing MeterProvider
+            meter_provider = MeterProvider()
+            metrics.set_meter_provider(meter_provider)
+            existing_provider = metrics.get_meter_provider()
+
+            # Act: Initialize OpenTelemetry integration (should detect existing provider)
+            config = OpenTelemetryConfig.from_env()
+            otel_integration = OpenTelemetry(config=config)
+
+            # Assert: The existing provider should still be active
+            current_provider = metrics.get_meter_provider()
+            assert current_provider is existing_provider, (
+                "Existing MeterProvider should be respected and not overridden"
+            )
+        finally:
+            # Cleanup
+            os.environ.pop("LITELLM_OTEL_INTEGRATION_ENABLE_METRICS", None)
+
+    def test_init_logs_respects_existing_logger_provider(self):
+        """
+        Unit test: _init_logs() should respect existing LoggerProvider.
+
+        When a LoggerProvider already exists (e.g., set by Langfuse SDK),
+        LiteLLM should use it instead of creating a new one.
+        """
+        from opentelemetry._logs import get_logger_provider, set_logger_provider
+        from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
+
+        # Setup: Enable events for this test
+        os.environ["LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS"] = "true"
+
+        try:
+            # Create and set an existing LoggerProvider
+            logger_provider = OTLoggerProvider()
+            set_logger_provider(logger_provider)
+            existing_provider = get_logger_provider()
+
+            # Act: Initialize OpenTelemetry integration (should detect existing provider)
+            config = OpenTelemetryConfig.from_env()
+            otel_integration = OpenTelemetry(config=config)
+
+            # Assert: The existing provider should still be active
+            current_provider = get_logger_provider()
+            assert current_provider is existing_provider, (
+                "Existing LoggerProvider should be respected and not overridden"
+            )
+        finally:
+            # Cleanup
+            os.environ.pop("LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS", None)
+
+
 class TestOpenTelemetry(unittest.TestCase):
     POLL_INTERVAL = 0.05
     POLL_TIMEOUT = 2.0
