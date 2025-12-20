@@ -507,7 +507,11 @@ async def _common_key_generation_helper(  # noqa: PLR0915
                         upperbound_duration = duration_in_seconds(
                             duration=upperbound_value
                         )
-                        user_duration = duration_in_seconds(duration=value)
+                        # Handle special case where duration is "-1" (never expires)
+                        if value == "-1":
+                            user_duration = float('inf')  # Infinite duration
+                        else:
+                            user_duration = duration_in_seconds(duration=value)
                         if user_duration > upperbound_duration:
                             raise HTTPException(
                                 status_code=400,
@@ -1339,7 +1343,10 @@ async def prepare_key_update_data(
 
     if "duration" in non_default_values:
         duration = non_default_values.pop("duration")
-        if duration and (isinstance(duration, str)) and len(duration) > 0:
+        if duration == "-1":
+            # Set expires to None to indicate the key never expires
+            non_default_values["expires"] = None
+        elif duration and (isinstance(duration, str)) and len(duration) > 0:
             duration_s = duration_in_seconds(duration=duration)
             expires = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
             non_default_values["expires"] = expires
@@ -1452,7 +1459,7 @@ async def update_key_fn(
     - tpm_limit_type: Optional[str] - TPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
     - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
     - allowed_cache_controls: Optional[list] - List of allowed cache control values
-    - duration: Optional[str] - Key validity duration ("30d", "1h", etc.)
+    - duration: Optional[str] - Key validity duration ("30d", "1h", etc.) or "-1" to never expire
     - permissions: Optional[dict] - Key-specific permissions
     - send_invite_email: Optional[bool] - Send invite email to user_id
     - guardrails: Optional[List[str]] - List of active guardrails for the key
