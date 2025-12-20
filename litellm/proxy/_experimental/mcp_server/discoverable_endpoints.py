@@ -15,6 +15,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.proxy.utils import get_server_root_path
 
 router = APIRouter(
     tags=["mcp"],
@@ -381,7 +382,18 @@ async def callback(code: str, state: str):
 # ------------------------------
 # Optional .well-known endpoints for MCP + OAuth discovery
 # ------------------------------
-@router.get("/.well-known/oauth-protected-resource/{mcp_server_name}/mcp")
+"""
+    Per SEP-985, the client MUST:
+    1. Try resource_metadata from WWW-Authenticate header (if present)
+    2. Fall back to path-based well-known URI: /.well-known/oauth-protected-resource/{path}
+    (
+    If the resource identifier value contains a path or query component, any terminating slash (/) 
+    following the host component MUST be removed before inserting /.well-known/ and the well-known 
+    URI path suffix between the host component and the path(include root path) and/or query components. 
+    https://datatracker.ietf.org/doc/html/rfc9728#section-3.1)
+    3. Fall back to root-based well-known URI: /.well-known/oauth-protected-resource
+"""
+@router.get(f"/.well-known/oauth-protected-resource{'' if get_server_root_path() == '/' else get_server_root_path()}/{{mcp_server_name}}/mcp")
 @router.get("/.well-known/oauth-protected-resource")
 async def oauth_protected_resource_mcp(
     request: Request, mcp_server_name: Optional[str] = None
@@ -403,8 +415,15 @@ async def oauth_protected_resource_mcp(
         ),  # this is what Claude will call
     }
 
-
-@router.get("/.well-known/oauth-authorization-server/{mcp_server_name}")
+"""
+    https://datatracker.ietf.org/doc/html/rfc8414#section-3.1
+    RFC 8414: Path-aware OAuth discovery
+    If the issuer identifier value contains a path component, any
+    terminating "/" MUST be removed before inserting "/.well-known/" and
+    the well-known URI suffix between the host component and the path(include root path)
+    component.
+"""
+@router.get(f"/.well-known/oauth-authorization-server{'' if get_server_root_path() == '/' else get_server_root_path()}/{{mcp_server_name}}")
 @router.get("/.well-known/oauth-authorization-server")
 async def oauth_authorization_server_mcp(
     request: Request, mcp_server_name: Optional[str] = None
