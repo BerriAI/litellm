@@ -59,7 +59,7 @@ websockets = {version = "^15.0.1", optional = true}
 boto3 = {version = "1.36.0", optional = true}
 redisvl = {version = "^0.4.1", optional = true, markers = "python_version >= '3.9' and python_version < '3.14'"}
 mcp = {version = "^1.21.2", optional = true, python = ">=3.10"}
-litellm-proxy-extras = {version = "0.4.14", optional = true}
+litellm-proxy-extras = {version = "0.4.16", optional = true}
 rich = {version = "13.7.1", optional = true}
 litellm-enterprise = {version = "0.1.27", optional = true}
 diskcache = {version = "^5.6.1", optional = true}
