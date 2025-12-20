@@ -123,6 +123,9 @@ import os
 def test_azure_extra_headers(input, call_type, header_value):
     from litellm import embedding, image_generation
 
+    # Clear the LLM clients cache to ensure the new http_client is used
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
     http_client = Client()
 
     messages = [{"role": "user", "content": "Hello world"}]
@@ -470,7 +473,11 @@ def test_map_openai_params():
 def test_azure_max_retries_0(
     mock_make_sync_azure_openai_chat_completion_request, max_retries, stream
 ):
+    import litellm
     from litellm import completion
+
+    # Clear the LLM clients cache to ensure max_retries is set correctly
+    litellm.in_memory_llm_clients_cache.flush_cache()
 
     try:
         completion(
@@ -498,7 +505,11 @@ def test_azure_max_retries_0(
 async def test_async_azure_max_retries_0(
     make_azure_openai_chat_completion_request, max_retries, stream
 ):
+    import litellm
     from litellm import acompletion
+
+    # Clear the LLM clients cache to ensure max_retries is set correctly
+    litellm.in_memory_llm_clients_cache.flush_cache()
 
     try:
         await acompletion(
@@ -527,7 +538,11 @@ async def test_async_azure_max_retries_0(
 async def test_azure_instruct(
     mock_select_azure_base_url_or_endpoint, max_retries, stream, sync_mode
 ):
+    import litellm
     from litellm import completion, acompletion
+
+    # Clear the LLM clients cache to ensure select_azure_base_url_or_endpoint is called
+    litellm.in_memory_llm_clients_cache.flush_cache()
 
     args = {
         "model": "azure_text/instruct-model",
@@ -562,7 +577,11 @@ async def test_azure_instruct(
 async def test_azure_embedding_max_retries_0(
     mock_select_azure_base_url_or_endpoint, max_retries, sync_mode
 ):
+    import litellm
     from litellm import aembedding, embedding
+
+    # Clear the LLM clients cache to ensure select_azure_base_url_or_endpoint is called
+    litellm.in_memory_llm_clients_cache.flush_cache()
 
     args = {
         "model": "azure/text-embedding-ada-002",
