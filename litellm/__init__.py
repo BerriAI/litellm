@@ -1516,7 +1516,6 @@ if TYPE_CHECKING:
     from .llms.voyage.rerank.transformation import VoyageRerankConfig as VoyageRerankConfig
     from .llms.clarifai.chat.transformation import ClarifaiConfig as ClarifaiConfig
     from .llms.ai21.chat.transformation import AI21ChatConfig as AI21ChatConfig
-    from .llms.ai21.chat.transformation import AI21Config as AI21Config
     from litellm.caching.llm_caching_handler import LLMClientCache
     from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
     from litellm.types.utils import (
@@ -1570,9 +1569,7 @@ if TYPE_CHECKING:
     module_level_aclient: AsyncHTTPHandler
     module_level_client: HTTPHandler
 
-    # LLM config classes - lazy loaded only
-    AmazonConverseConfig: Type[Any]
-    OpenAILikeChatConfig: Type[Any]
+    # Note: AmazonConverseConfig and OpenAILikeChatConfig are imported above in TYPE_CHECKING block
 
 
 def __getattr__(name: str) -> Any:
