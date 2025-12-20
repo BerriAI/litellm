@@ -1,8 +1,8 @@
-import { render, waitFor, screen } from "@testing-library/react";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import useTeams from "@/app/(dashboard)/hooks/useTeams";
+import { render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import KeyInfoView from "./key_info_view";
-import useTeams from "@/app/(dashboard)/hooks/useTeams";
 
 vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
   default: vi.fn(),
@@ -245,6 +245,34 @@ describe("KeyInfoView", () => {
         accessToken={"test-token"}
         userID={"other-user-id"}
         userRole={"user"}
+        premiumUser={true}
+        teams={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByText("Regenerate Key")).not.toBeInTheDocument();
+      expect(screen.queryByText("Delete Key")).not.toBeInTheDocument();
+    });
+  });
+
+  it("should not allow Internal Viewer to modify key even if they own it", async () => {
+    vi.mocked(useTeams).mockReturnValue({
+      teams: [],
+      setTeams: vi.fn(),
+    });
+
+    const ownerUserId = "internal-viewer-user-id";
+    const keyData = { ...MOCK_KEY_DATA, user_id: ownerUserId };
+    render(
+      <KeyInfoView
+        keyData={keyData}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        accessToken={"test-token"}
+        userID={ownerUserId}
+        userRole={"Internal Viewer"}
         premiumUser={true}
         teams={[]}
       />,

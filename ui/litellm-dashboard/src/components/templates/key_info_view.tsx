@@ -302,6 +302,7 @@ export default function KeyInfoView({
     });
     return `${dateStr} at ${timeStr}`;
   };
+  console.log("userRole", userRole);
 
   const canModifyKey =
     isProxyAdminRole(userRole || "") ||
@@ -310,7 +311,7 @@ export default function KeyInfoView({
         teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0],
         userID || "",
       )) ||
-    userID === currentKeyData.user_id;
+    (userID === currentKeyData.user_id && userRole !== "Internal Viewer");
 
   return (
     <div className="w-full h-screen p-4">
