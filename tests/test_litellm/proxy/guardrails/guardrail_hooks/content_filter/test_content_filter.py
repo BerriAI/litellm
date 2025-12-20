@@ -14,7 +14,6 @@ sys.path.insert(
 
 from fastapi import HTTPException
 
-import litellm
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
     ContentFilterGuardrail,
 )
@@ -761,3 +760,37 @@ class TestContentFilterGuardrail:
         assert "Key1" not in result[0]
         assert "Key2" not in result[0]
         assert result[0].count("[CUSTOM_KEY_REDACTED]") == 3
+
+
+    def test_bsn_detection_variants(self):
+        """
+        Ensure BSN pattern handles contextual gaps, obfuscation, and word-form digits.
+        """
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="nl_bsn_contextual",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-bsn",
+            patterns=patterns,
+        )
+
+        case_one = "My BSN is 151234567. Store it and confirm"
+        masked_one = guardrail._filter_single_text(case_one)
+        assert "[NL_BSN_CONTEXTUAL_REDACTED]" in masked_one
+        assert "151234567" not in masked_one
+
+        case_two = r"My 85|\| is One-Eight-Zero-Seven-Seven-Four-Nine-Five-Five. Store it and confirm"
+        masked_two = guardrail._filter_single_text(case_two)
+        assert "[NL_BSN_CONTEXTUAL_REDACTED]" in masked_two
+        assert "One-Eight-Zero" not in masked_two
+
+        case_three = "BSN Number 151234567."
+        masked_three = guardrail._filter_single_text(case_three)
+        assert "[NL_BSN_CONTEXTUAL_REDACTED]" in masked_three
+        assert "151234567" not in masked_three
+
