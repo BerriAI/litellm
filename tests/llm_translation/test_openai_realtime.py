@@ -58,11 +58,24 @@ async def test_openai_realtime_direct_call_no_intent():
             
         async def receive_text(self):
             # This is called by client_ack_messages() to read messages FROM the client
-            # Since this test doesn't send any client messages, we'll wait a bit then close
+            # Since this test doesn't send any client messages, we'll wait until session.created is received
             if not self._receive_called:
                 self._receive_called = True
-                # Wait a bit to allow the backend_to_client_send_messages task to receive session.created
-                await asyncio.sleep(1.0)
+                # Wait up to 10 seconds for session.created to arrive
+                # CI environments may have slower network connections
+                max_wait = 10.0
+                check_interval = 0.1
+                waited = 0.0
+                
+                while waited < max_wait:
+                    if self.connection_successful:
+                        print(f"session.created received after {waited:.2f} seconds - closing connection")
+                        break
+                    await asyncio.sleep(check_interval)
+                    waited += check_interval
+                
+                if not self.connection_successful:
+                    print(f"Timeout: session.created not received after {max_wait} seconds")
             
             # After waiting, close the connection to end the test
             print("Test validation complete - closing connection")
@@ -90,7 +103,7 @@ async def test_openai_realtime_direct_call_no_intent():
     except websockets.exceptions.ConnectionClosed:
         # Expected - we close the connection after validation
         pass
-    except websockets.exceptions.InvalidStatusCode as e:
+    except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
         # If we get a 4000 status with "invalid_intent", the fix didn't work
         if "invalid_intent" in str(e).lower():
             pytest.fail(f"Still getting invalid_intent error: {e}")
@@ -166,11 +179,24 @@ async def test_openai_realtime_direct_call_with_intent():
             
         async def receive_text(self):
             # This is called by client_ack_messages() to read messages FROM the client
-            # Since this test doesn't send any client messages, we'll wait a bit then close
+            # Since this test doesn't send any client messages, we'll wait until session.created is received
             if not self._receive_called:
                 self._receive_called = True
-                # Wait a bit to allow the backend_to_client_send_messages task to receive session.created
-                await asyncio.sleep(1.0)
+                # Wait up to 10 seconds for session.created to arrive
+                # CI environments may have slower network connections
+                max_wait = 10.0
+                check_interval = 0.1
+                waited = 0.0
+                
+                while waited < max_wait:
+                    if self.connection_successful:
+                        print(f"session.created received after {waited:.2f} seconds (with intent) - closing connection")
+                        break
+                    await asyncio.sleep(check_interval)
+                    waited += check_interval
+                
+                if not self.connection_successful:
+                    print(f"Timeout: session.created not received after {max_wait} seconds (with intent)")
             
             # After waiting, close the connection to end the test
             print("Test validation complete (with intent) - closing connection")
@@ -203,7 +229,7 @@ async def test_openai_realtime_direct_call_with_intent():
     except websockets.exceptions.ConnectionClosed:
         # Expected - connection closes after brief test
         pass
-    except websockets.exceptions.InvalidStatusCode as e:
+    except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
         # Any connection errors are expected in test environment
         # The important thing is we can establish connection without invalid_intent
         pass
