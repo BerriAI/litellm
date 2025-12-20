@@ -2,7 +2,8 @@ import { Bot, Loader2, UserRound } from "lucide-react";
 import React from "react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { coy, oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { useTheme } from "@/contexts/ThemeContext";
 import ChatImageRenderer from "../../chat_ui/ChatImageRenderer";
 import ReasoningContent from "../../chat_ui/ReasoningContent";
 import ResponseMetrics from "../../chat_ui/ResponseMetrics";
@@ -15,6 +16,7 @@ interface MessageDisplayProps {
 }
 
 export function MessageDisplay({ messages, isLoading }: MessageDisplayProps) {
+  const { isDarkMode } = useTheme();
   if (messages.length === 0) {
     return <div className="h-full" />;
   }
@@ -73,7 +75,7 @@ export function MessageDisplay({ messages, isLoading }: MessageDisplayProps) {
             const match = /language-(\w+)/.exec(className || "");
             return !inline && match ? (
               <SyntaxHighlighter
-                style={coy as any}
+                style={isDarkMode ? oneDark as any : coy as any}
                 language={match[1]}
                 PreTag="div"
                 className="rounded-md my-2"
@@ -84,7 +86,7 @@ export function MessageDisplay({ messages, isLoading }: MessageDisplayProps) {
                 {String(children).replace(/\n$/, "")}
               </SyntaxHighlighter>
             ) : (
-              <code className={`${className} px-1.5 py-0.5 rounded bg-gray-100 text-sm font-mono`} {...props}>
+              <code className={`${className} px-1.5 py-0.5 rounded bg-gray-100 dark:bg-zinc-800 text-sm font-mono`} {...props}>
                 {children}
               </code>
             );

@@ -14,11 +14,11 @@ export const ProviderLogo: React.FC<ProviderLogoProps> = ({ provider, className 
 
   if (showFallback) {
     return (
-      <div className={`${className} rounded-full bg-gray-200 flex items-center justify-center text-xs`}>
+      <div className={`${className} rounded-full bg-gray-200 dark:bg-zinc-700 flex items-center justify-center text-xs text-gray-600 dark:text-gray-300`}>
         {provider?.charAt(0) || "-"}
       </div>
     );
   }
 
-  return <img src={logo} alt={`${provider} logo`} className={className} onError={() => setHasError(true)} />;
+  return <img src={logo} alt={`${provider} logo`} className={`${className} provider-logo`} onError={() => setHasError(true)} />;
 };

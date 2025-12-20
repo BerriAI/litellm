@@ -23,6 +23,8 @@ import {
 } from "@tremor/react";
 import React, { useEffect, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { oneLight, oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { useTheme } from "@/contexts/ThemeContext";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import NotificationsManager from "../molecules/notifications_manager";
 import { budgetDeleteCall, getBudgetList } from "../networking";
@@ -42,6 +44,7 @@ export interface budgetItem {
 }
 
 const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
+  const { isDarkMode } = useTheme();
   const [isCreateModelVisible, setIsCreateModelVisible] = useState(false);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [selectedBudget, setSelectedBudget] = useState<budgetItem | null>(null);
@@ -192,7 +195,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
           </TabList>
           <TabPanels>
             <TabPanel>
-              <SyntaxHighlighter language="bash">
+              <SyntaxHighlighter language="bash" style={isDarkMode ? oneDark : oneLight}>
                 {`
 curl -X POST --location '<your_proxy_base_url>/end_user/new' \
 
@@ -206,7 +209,7 @@ curl -X POST --location '<your_proxy_base_url>/end_user/new' \
               </SyntaxHighlighter>
             </TabPanel>
             <TabPanel>
-              <SyntaxHighlighter language="bash">
+              <SyntaxHighlighter language="bash" style={isDarkMode ? oneDark : oneLight}>
                 {`
 curl -X POST --location '<your_proxy_base_url>/chat/completions' \
 
@@ -215,7 +218,7 @@ curl -X POST --location '<your_proxy_base_url>/chat/completions' \
 -H 'Content-Type: application/json' \
 
 -d '{
-  "model": "gpt-3.5-turbo', 
+  "model": "gpt-3.5-turbo',
   "messages":[{"role": "user", "content": "Hey, how's it going?"}],
   "user": "my-customer-id"
 }' # 👈 KEY CHANGE
@@ -224,7 +227,7 @@ curl -X POST --location '<your_proxy_base_url>/chat/completions' \
               </SyntaxHighlighter>
             </TabPanel>
             <TabPanel>
-              <SyntaxHighlighter language="python">
+              <SyntaxHighlighter language="python" style={isDarkMode ? oneDark : oneLight}>
                 {`from openai import OpenAI
 client = OpenAI(
   base_url="<your_proxy_base_url>",

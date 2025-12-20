@@ -3,7 +3,8 @@ import { Modal, Select, Button as AntdButton, Tabs } from "antd";
 import { CodeOutlined } from "@ant-design/icons";
 import { Button as TremorButton, Text } from "@tremor/react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { coy, oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { useTheme } from "@/contexts/ThemeContext";
 import NotificationsManager from "../../molecules/notifications_manager";
 
 interface PromptCodeSnippetsProps {
@@ -26,6 +27,7 @@ const PromptCodeSnippets: React.FC<PromptCodeSnippetsProps> = ({
   version = "1",
   proxySettings,
 }) => {
+  const { isDarkMode } = useTheme();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [selectedLanguage, setSelectedLanguage] = useState<"curl" | "python" | "javascript">("curl");
   const [selectedTab, setSelectedTab] = useState("basic");
@@ -261,7 +263,7 @@ main();`;
 
         <SyntaxHighlighter
           language={selectedLanguage === "curl" ? "bash" : selectedLanguage === "python" ? "python" : "javascript"}
-          style={coy as any}
+          style={isDarkMode ? oneDark as any : coy as any}
           wrapLines={true}
           wrapLongLines={true}
           className="rounded-md mt-0"

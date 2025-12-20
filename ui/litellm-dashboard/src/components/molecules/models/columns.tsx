@@ -26,7 +26,7 @@ export const columns = (
       return (
         <Tooltip title={model.model_info.id}>
           <div
-            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left w-full truncate whitespace-nowrap cursor-pointer max-w-[15ch]"
+            className="font-mono text-blue-500 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 dark:hover:bg-blue-900/50 text-xs font-normal px-2 py-0.5 text-left w-full truncate whitespace-nowrap cursor-pointer max-w-[15ch]"
             onClick={() => setSelectedModelId(model.model_info.id)}
           >
             {model.model_info.id}
@@ -64,16 +64,16 @@ export const columns = (
               {model.provider ? (
                 <ProviderLogo provider={model.provider} />
               ) : (
-                <div className="w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs">-</div>
+                <div className="w-4 h-4 rounded-full bg-gray-200 dark:bg-zinc-700 flex items-center justify-center text-xs text-gray-600 dark:text-gray-300">-</div>
               )}
             </div>
 
             {/* Model Names Container */}
             <div className="flex flex-col min-w-0 flex-1">
               {/* Public Model Name */}
-              <div className="text-xs font-medium text-gray-900 truncate max-w-[210px]">{displayName}</div>
+              <div className="text-xs font-medium text-gray-900 dark:text-gray-100 truncate max-w-[210px]">{displayName}</div>
               {/* LiteLLM Model Name */}
-              <div className="text-xs text-gray-500 truncate mt-0.5 max-w-[210px]">
+              <div className="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5 max-w-[210px]">
                 {model.litellm_model_name || "-"}
               </div>
             </div>
@@ -93,16 +93,16 @@ export const columns = (
       return credentialName ? (
         <Tooltip title={`Credential: ${credentialName}`}>
           <div className="flex items-center space-x-2 max-w-[180px]">
-            <KeyIcon className="w-4 h-4 text-blue-500 flex-shrink-0" />
-            <span className="text-xs truncate" title={credentialName}>
+            <KeyIcon className="w-4 h-4 text-blue-500 dark:text-blue-400 flex-shrink-0" />
+            <span className="text-xs truncate text-gray-900 dark:text-gray-100" title={credentialName}>
               {credentialName}
             </span>
           </div>
         </Tooltip>
       ) : (
         <div className="flex items-center space-x-2 max-w-[180px]">
-          <KeyIcon className="w-4 h-4 text-gray-300 flex-shrink-0" />
-          <span className="text-xs text-gray-400">No credentials</span>
+          <KeyIcon className="w-4 h-4 text-gray-300 dark:text-gray-600 flex-shrink-0" />
+          <span className="text-xs text-gray-400 dark:text-gray-500">No credentials</span>
         </div>
       );
     },
@@ -122,14 +122,14 @@ export const columns = (
         <div className="flex flex-col min-w-0 max-w-[160px]">
           {/* Created By - Primary */}
           <div
-            className="text-xs font-medium text-gray-900 truncate"
+            className="text-xs font-medium text-gray-900 dark:text-gray-100 truncate"
             title={isConfigModel ? "Defined in config" : createdBy || "Unknown"}
           >
             {isConfigModel ? "Defined in config" : createdBy || "Unknown"}
           </div>
           {/* Created At - Secondary */}
           <div
-            className="text-xs text-gray-500 truncate mt-0.5"
+            className="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5"
             title={isConfigModel ? "Config file" : createdAt || "Unknown date"}
           >
             {isConfigModel ? "-" : createdAt || "Unknown date"}
@@ -164,7 +164,7 @@ export const columns = (
       if (!inputCost && !outputCost) {
         return (
           <div className="max-w-[120px]">
-            <span className="text-xs text-gray-400">-</span>
+            <span className="text-xs text-gray-400 dark:text-gray-500">-</span>
           </div>
         );
       }
@@ -173,9 +173,9 @@ export const columns = (
         <Tooltip title="Cost per 1M tokens">
           <div className="flex flex-col min-w-0 max-w-[120px]">
             {/* Input Cost - Primary */}
-            {inputCost && <div className="text-xs font-medium text-gray-900 truncate">In: ${inputCost}</div>}
+            {inputCost && <div className="text-xs font-medium text-gray-900 dark:text-gray-100 truncate">In: ${inputCost}</div>}
             {/* Output Cost - Secondary */}
-            {outputCost && <div className="text-xs text-gray-500 truncate mt-0.5">Out: ${outputCost}</div>}
+            {outputCost && <div className="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5">Out: ${outputCost}</div>}
           </div>
         </Tooltip>
       );
@@ -192,7 +192,7 @@ export const columns = (
             <Button
               size="xs"
               variant="light"
-              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+              className="font-mono text-blue-500 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 dark:hover:bg-blue-900/50 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
               onClick={() => setSelectedTeamId(model.model_info.team_id)}
             >
               {model.model_info.team_id.slice(0, 7)}...
@@ -200,7 +200,7 @@ export const columns = (
           </Tooltip>
         </div>
       ) : (
-        "-"
+        <span className="text-gray-400 dark:text-gray-500">-</span>
       );
     },
   },
@@ -254,7 +254,7 @@ export const columns = (
                 e.stopPropagation();
                 toggleExpanded();
               }}
-              className="text-xs text-blue-600 hover:text-blue-800 px-1 py-0.5 rounded hover:bg-blue-50 h-5 leading-tight flex-shrink-0 whitespace-nowrap"
+              className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 px-1 py-0.5 rounded hover:bg-blue-50 dark:hover:bg-blue-900/30 h-5 leading-tight flex-shrink-0 whitespace-nowrap"
             >
               {isExpanded ? "−" : `+${accessGroups.length - 1}`}
             </button>
@@ -272,7 +272,7 @@ export const columns = (
         <div
           className={`
           inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium
-          ${model.model_info.db_model ? "bg-blue-50 text-blue-600" : "bg-gray-100 text-gray-600"}
+          ${model.model_info.db_model ? "bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400" : "bg-gray-100 dark:bg-zinc-700 text-gray-600 dark:text-gray-300"}
         `}
         >
           {model.model_info.db_model ? "DB Model" : "Config Model"}

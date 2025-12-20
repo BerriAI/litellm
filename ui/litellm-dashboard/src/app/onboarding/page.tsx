@@ -10,10 +10,12 @@ import {
   getProxyBaseUrl,
 } from "@/components/networking";
 import { jwtDecode } from "jwt-decode";
-import { Form, Button as Button2 } from "antd";
+import { Form, Button as Button2, ConfigProvider } from "antd";
 import { getCookie } from "@/utils/cookieUtils";
+import { ThemeProvider, useTheme } from "@/contexts/ThemeContext";
+import { getAntdTheme } from "@/config/antdTheme";
 
-export default function Onboarding() {
+function OnboardingContent() {
   const [form] = Form.useForm();
   const searchParams = useSearchParams()!;
   const token = getCookie("token");
@@ -26,6 +28,7 @@ export default function Onboarding() {
   const [loginUrl, setLoginUrl] = useState<string>("");
   const [jwtToken, setJwtToken] = useState<string>("");
   const [getUiConfigLoading, setGetUiConfigLoading] = useState<boolean>(true);
+  const { isDarkMode } = useTheme();
 
   useEffect(() => {
     getUiConfig().then((data) => {
@@ -90,53 +93,65 @@ export default function Onboarding() {
     // redirect to login page
   };
   return (
-    <div className="mx-auto w-full max-w-md mt-10">
-      <Card>
-        <Title className="text-sm mb-5 text-center">🚅 LiteLLM</Title>
-        <Title className="text-xl">{action === "reset_password" ? "Reset Password" : "Sign up"}</Title>
-        <Text>
-          {action === "reset_password"
-            ? "Reset your password to access Admin UI."
-            : "Claim your user account to login to Admin UI."}
-        </Text>
+    <ConfigProvider theme={getAntdTheme(isDarkMode)}>
+      <div className="min-h-screen bg-gray-50 dark:bg-[#141414] py-10">
+        <div className="mx-auto w-full max-w-md">
+          <Card className="dark:bg-[#1a1a1a] dark:border-[#2a2a2a]">
+            <Title className="text-sm mb-5 text-center">🚅 LiteLLM</Title>
+            <Title className="text-xl">{action === "reset_password" ? "Reset Password" : "Sign up"}</Title>
+            <Text>
+              {action === "reset_password"
+                ? "Reset your password to access Admin UI."
+                : "Claim your user account to login to Admin UI."}
+            </Text>
 
-        {action !== "reset_password" && (
-          <Callout className="mt-4" title="SSO" icon={RiCheckboxCircleLine} color="sky">
-            <Grid numItems={2} className="flex justify-between items-center">
-              <Col>SSO is under the Enterprise Tier.</Col>
+            {action !== "reset_password" && (
+              <Callout className="mt-4" title="SSO" icon={RiCheckboxCircleLine} color="sky">
+                <Grid numItems={2} className="flex justify-between items-center">
+                  <Col>SSO is under the Enterprise Tier.</Col>
 
-              <Col>
-                <Button variant="primary" className="mb-2">
-                  <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
-                    Get Free Trial
-                  </a>
-                </Button>
-              </Col>
-            </Grid>
-          </Callout>
-        )}
+                  <Col>
+                    <Button variant="primary" className="mb-2">
+                      <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
+                        Get Free Trial
+                      </a>
+                    </Button>
+                  </Col>
+                </Grid>
+              </Callout>
+            )}
 
-        <Form className="mt-10 mb-5 mx-auto" layout="vertical" onFinish={handleSubmit}>
-          <>
-            <Form.Item label="Email Address" name="user_email">
-              <TextInput type="email" disabled={true} value={userEmail} defaultValue={userEmail} className="max-w-md" />
-            </Form.Item>
+            <Form className="mt-10 mb-5 mx-auto" layout="vertical" onFinish={handleSubmit}>
+              <>
+                <Form.Item label="Email Address" name="user_email">
+                  <TextInput type="email" disabled={true} value={userEmail} defaultValue={userEmail} className="max-w-md" />
+                </Form.Item>
 
-            <Form.Item
-              label="Password"
-              name="password"
-              rules={[{ required: true, message: "password required to sign up" }]}
-              help={action === "reset_password" ? "Enter your new password" : "Create a password for your account"}
-            >
-              <TextInput placeholder="" type="password" className="max-w-md" />
-            </Form.Item>
-          </>
+                <Form.Item
+                  label="Password"
+                  name="password"
+                  rules={[{ required: true, message: "password required to sign up" }]}
+                  help={action === "reset_password" ? "Enter your new password" : "Create a password for your account"}
+                >
+                  <TextInput placeholder="" type="password" className="max-w-md" />
+                </Form.Item>
+              </>
 
-          <div className="mt-10">
-            <Button2 htmlType="submit">{action === "reset_password" ? "Reset Password" : "Sign Up"}</Button2>
-          </div>
-        </Form>
-      </Card>
-    </div>
+              <div className="mt-10">
+                <Button2 htmlType="submit">{action === "reset_password" ? "Reset Password" : "Sign Up"}</Button2>
+              </div>
+            </Form>
+          </Card>
+        </div>
+      </div>
+    </ConfigProvider>
+  );
+}
+
+export default function Onboarding() {
+  return (
+    <ThemeProvider>
+      <OnboardingContent />
+    </ThemeProvider>
   );
 }

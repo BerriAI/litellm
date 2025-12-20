@@ -91,13 +91,14 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({
 
   if (isLoading) {
     return (
-      <div style={{ padding: "24px", borderRadius: "8px", backgroundColor: "#fff" }}>
+      <div className="bg-white dark:bg-[#141414]" style={{ padding: "24px", borderRadius: "8px" }}>
         <div style={{ textAlign: "center", padding: "32px 20px" }}>
           <div className="loading-spinner" style={{ marginBottom: "16px" }}>
             <div
+              className="border-gray-200 dark:border-[#3a3a3a] border-t-blue-500"
               style={{
-                border: "3px solid #f3f3f3",
-                borderTop: "3px solid #1890ff",
+                borderWidth: "3px",
+                borderStyle: "solid",
                 borderRadius: "50%",
                 width: "30px",
                 height: "30px",
@@ -129,7 +130,7 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({
   }
 
   return (
-    <div style={{ padding: "24px", borderRadius: "8px", backgroundColor: "#fff" }}>
+    <div className="bg-white dark:bg-[#141414]" style={{ padding: "24px", borderRadius: "8px" }}>
       {testResult.status === "success" ? (
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "32px 20px" }}>
           <div style={{ color: "#52c41a", fontSize: "24px", display: "flex", alignItems: "center" }}>
@@ -150,12 +151,12 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({
               Connection to {litellmParams.search_provider} successful!
             </Text>
             {testResult.test_query && (
-              <Text style={{ fontSize: "14px", color: "#666", marginTop: "8px", display: "block" }}>
-                Test query: <code style={{ backgroundColor: "#f0f0f0", padding: "2px 6px", borderRadius: "4px" }}>{testResult.test_query}</code>
+              <Text className="text-gray-600 dark:text-gray-400" style={{ fontSize: "14px", marginTop: "8px", display: "block" }}>
+                Test query: <code className="bg-gray-100 dark:bg-[#252525]" style={{ padding: "2px 6px", borderRadius: "4px" }}>{testResult.test_query}</code>
               </Text>
             )}
             {testResult.results_count !== undefined && (
-              <Text style={{ fontSize: "14px", color: "#666", display: "block" }}>
+              <Text className="text-gray-600 dark:text-gray-400" style={{ fontSize: "14px", display: "block" }}>
                 Results retrieved: {testResult.results_count}
               </Text>
             )}
@@ -172,9 +173,10 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({
             </div>
 
             <div
+              className="bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800"
               style={{
-                backgroundColor: "#fff2f0",
-                border: "1px solid #ffccc7",
+                borderWidth: "1px",
+                borderStyle: "solid",
                 borderRadius: "8px",
                 padding: "16px",
                 marginBottom: "20px",
@@ -190,9 +192,9 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({
 
               {testResult.error_type && (
                 <div style={{ marginTop: "8px" }}>
-                  <Text style={{ fontSize: "13px", color: "#666" }}>
+                  <Text className="text-gray-600 dark:text-gray-400" style={{ fontSize: "13px" }}>
                     Error type:{" "}
-                    <code style={{ backgroundColor: "#ffebee", padding: "2px 6px", borderRadius: "4px", color: "#d32f2f" }}>
+                    <code className="bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400" style={{ padding: "2px 6px", borderRadius: "4px" }}>
                       {testResult.error_type}
                     </code>
                   </Text>
@@ -237,18 +239,20 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({
             )}
 
             <div
+              className="bg-yellow-50 dark:bg-yellow-900/20 border-yellow-300 dark:border-yellow-700"
               style={{
-                backgroundColor: "#fffbf0",
-                border: "1px solid #ffe58f",
-                borderLeft: "4px solid #faad14",
+                borderWidth: "1px",
+                borderStyle: "solid",
+                borderLeftWidth: "4px",
+                borderLeftColor: "#faad14",
                 borderRadius: "8px",
                 padding: "16px",
               }}
             >
-              <Text strong style={{ display: "block", marginBottom: "8px", color: "#d48806" }}>
+              <Text strong className="text-yellow-700 dark:text-yellow-400" style={{ display: "block", marginBottom: "8px" }}>
                 Troubleshooting tips:
               </Text>
-              <ul style={{ margin: "8px 0", paddingLeft: "20px", color: "#ad6800" }}>
+              <ul className="text-yellow-700 dark:text-yellow-400" style={{ margin: "8px 0", paddingLeft: "20px" }}>
                 <li style={{ marginBottom: "6px" }}>Verify your API key is correct and active</li>
                 <li style={{ marginBottom: "6px" }}>Check if the search provider service is operational</li>
                 <li style={{ marginBottom: "6px" }}>Ensure you have sufficient credits/quota with the provider</li>

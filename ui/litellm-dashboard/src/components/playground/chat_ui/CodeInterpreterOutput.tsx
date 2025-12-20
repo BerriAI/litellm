@@ -8,7 +8,8 @@ import {
   LoadingOutlined,
 } from "@ant-design/icons";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { coy, oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { useTheme } from "@/contexts/ThemeContext";
 import { getProxyBaseUrl } from "@/components/networking";
 
 interface ContainerFileCitation {
@@ -33,6 +34,7 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({
   annotations = [],
   accessToken,
 }) => {
+  const { isDarkMode } = useTheme();
   const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
   const [loadingImages, setLoadingImages] = useState<Record<string, boolean>>({});
   const proxyBaseUrl = getProxyBaseUrl();
@@ -147,7 +149,7 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({
               children: (
                 <SyntaxHighlighter
                   language="python"
-                  style={coy}
+                  style={isDarkMode ? oneDark : coy}
                   customStyle={{
                     margin: 0,
                     borderRadius: "6px",

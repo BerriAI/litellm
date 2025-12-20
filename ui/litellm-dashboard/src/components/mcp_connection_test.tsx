@@ -109,15 +109,16 @@ const MCPConnectionTest: React.FC<MCPConnectionTestProps> = ({
   const isOverallSuccess = connectionSuccess && !connectionError;
 
   return (
-    <div style={{ padding: "24px", borderRadius: "8px", backgroundColor: "#fff" }}>
+    <div className="bg-white dark:bg-[#141414]" style={{ padding: "24px", borderRadius: "8px" }}>
       {isLoading ? (
         <div style={{ textAlign: "center", padding: "32px 20px" }}>
           <div className="loading-spinner" style={{ marginBottom: "16px" }}>
             {/* Simple CSS spinner */}
             <div
+              className="border-gray-200 dark:border-[#3a3a3a] border-t-blue-500"
               style={{
-                border: "3px solid #f3f3f3",
-                borderTop: "3px solid #1890ff",
+                borderWidth: "3px",
+                borderStyle: "solid",
                 borderRadius: "50%",
                 width: "30px",
                 height: "30px",
@@ -170,9 +171,10 @@ const MCPConnectionTest: React.FC<MCPConnectionTestProps> = ({
             </div>
 
             <div
+              className="bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800"
               style={{
-                backgroundColor: "#fff2f0",
-                border: "1px solid #ffccc7",
+                borderWidth: "1px",
+                borderStyle: "solid",
                 borderRadius: "8px",
                 padding: "16px",
                 marginBottom: "20px",

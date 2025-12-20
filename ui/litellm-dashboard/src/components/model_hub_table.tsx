@@ -6,6 +6,8 @@ import { Copy } from "lucide-react";
 import { useRouter } from "next/navigation";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { oneLight, oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { useTheme } from "@/contexts/ThemeContext";
 import { isAdminRole } from "../utils/roles";
 import { agentHubColumns, AgentHubData } from "./agent_hub_table_columns";
 import MakeAgentPublicForm from "./make_agent_public_form";
@@ -55,6 +57,7 @@ interface ModelGroupInfo {
 }
 
 const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, premiumUser, userRole }) => {
+  const { isDarkMode } = useTheme();
   const [publicPageAllowed, setPublicPageAllowed] = useState<boolean>(false);
   const [modelHubData, setModelHubData] = useState<ModelGroupInfo[] | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -627,7 +630,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
             {/* Usage Example */}
             <div>
               <Text className="text-lg font-semibold mb-4">Usage Example</Text>
-              <SyntaxHighlighter language="python" className="text-sm">
+              <SyntaxHighlighter language="python" className="text-sm" style={isDarkMode ? oneDark : oneLight}>
                 {`import openai
 
 client = openai.OpenAI(
@@ -962,7 +965,7 @@ print(response.choices[0].message.content)`}
             {/* Usage Example */}
             <div>
               <Text className="text-lg font-semibold mb-4">Usage Example</Text>
-              <SyntaxHighlighter language="python" className="text-sm">
+              <SyntaxHighlighter language="python" className="text-sm" style={isDarkMode ? oneDark : oneLight}>
                 {`from fastmcp import Client
 import asyncio
 
@@ -989,7 +992,7 @@ async def main():
 
         # Call a tool
         response = await client.call_tool(
-            name="tool_name", 
+            name="tool_name",
             arguments={"arg": "value"}
         )
         print(f"Response: {response}")

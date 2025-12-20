@@ -75,7 +75,7 @@ const TeamFilter = ({
   return (
     <div className="mb-4">
       <div className="flex items-center gap-2">
-        <span className="text-sm text-gray-600">Where Team is</span>
+        <span className="text-sm text-gray-600 dark:text-gray-400">Where Team is</span>
         <Select
           value={selectedTeam?.team_id || ""}
           onValueChange={handleTeamChange}
@@ -86,7 +86,7 @@ const TeamFilter = ({
           {teams?.map((team) => (
             <SelectItem key={team.team_id} value={team.team_id}>
               <span className="font-medium">{team.team_alias}</span>{" "}
-              <span className="text-gray-500">({team.team_id})</span>
+              <span className="text-gray-500 dark:text-gray-400">({team.team_id})</span>
             </SelectItem>
           ))}
         </Select>
@@ -201,7 +201,7 @@ export function AllKeysTable({
             <Button
               size="xs"
               variant="light"
-              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+              className="font-mono text-blue-500 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 dark:hover:bg-blue-900/50 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
               onClick={() => setSelectedKeyId(info.getValue() as string)}
             >
               {info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "-"}
@@ -606,7 +606,7 @@ export function AllKeysTable({
           </div>
 
           <div className="flex items-center justify-between w-full mb-4">
-            <span className="inline-flex text-sm text-gray-700">
+            <span className="inline-flex text-sm text-gray-700 dark:text-gray-300">
               Showing{" "}
               {isLoading
                 ? "..."
@@ -615,14 +615,14 @@ export function AllKeysTable({
             </span>
 
             <div className="inline-flex items-center gap-2">
-              <span className="text-sm text-gray-700">
+              <span className="text-sm text-gray-700 dark:text-gray-300">
                 Page {isLoading ? "..." : pagination.currentPage} of {isLoading ? "..." : pagination.totalPages}
               </span>
 
               <button
                 onClick={() => onPageChange(pagination.currentPage - 1)}
                 disabled={isLoading || pagination.currentPage === 1}
-                className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-3 py-1 text-sm border border-gray-200 dark:border-zinc-700 rounded-md hover:bg-gray-50 dark:hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed text-gray-700 dark:text-gray-300"
               >
                 Previous
               </button>
@@ -630,7 +630,7 @@ export function AllKeysTable({
               <button
                 onClick={() => onPageChange(pagination.currentPage + 1)}
                 disabled={isLoading || pagination.currentPage === pagination.totalPages}
-                className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-3 py-1 text-sm border border-gray-200 dark:border-zinc-700 rounded-md hover:bg-gray-50 dark:hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed text-gray-700 dark:text-gray-300"
               >
                 Next
               </button>
@@ -648,7 +648,7 @@ export function AllKeysTable({
                             key={header.id}
                             className={`py-1 h-8 ${
                               header.id === "actions"
-                                ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
+                                ? "sticky right-0 bg-white dark:bg-[#1a1a1a] shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)] dark:shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.5)]"
                                 : ""
                             }`}
                             onClick={header.column.getToggleSortingHandler()}
@@ -663,11 +663,11 @@ export function AllKeysTable({
                                 <div className="w-4">
                                   {header.column.getIsSorted() ? (
                                     {
-                                      asc: <ChevronUpIcon className="h-4 w-4 text-blue-500" />,
-                                      desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />,
+                                      asc: <ChevronUpIcon className="h-4 w-4 text-blue-500 dark:text-blue-400" />,
+                                      desc: <ChevronDownIcon className="h-4 w-4 text-blue-500 dark:text-blue-400" />,
                                     }[header.column.getIsSorted() as string]
                                   ) : (
-                                    <SwitchVerticalIcon className="h-4 w-4 text-gray-400" />
+                                    <SwitchVerticalIcon className="h-4 w-4 text-gray-400 dark:text-gray-500" />
                                   )}
                                 </div>
                               )}
@@ -681,7 +681,7 @@ export function AllKeysTable({
                     {isLoading ? (
                       <TableRow>
                         <TableCell colSpan={columns.length} className="h-8 text-center">
-                          <div className="text-center text-gray-500">
+                          <div className="text-center text-gray-500 dark:text-gray-400">
                             <p>🚅 Loading keys...</p>
                           </div>
                         </TableCell>
@@ -707,7 +707,7 @@ export function AllKeysTable({
                     ) : (
                       <TableRow>
                         <TableCell colSpan={columns.length} className="h-8 text-center">
-                          <div className="text-center text-gray-500">
+                          <div className="text-center text-gray-500 dark:text-gray-400">
                             <p>No keys found</p>
                           </div>
                         </TableCell>

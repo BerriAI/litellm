@@ -2,7 +2,8 @@ import React from "react";
 import { RobotOutlined, UserOutlined } from "@ant-design/icons";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { coy, oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { useTheme } from "@/contexts/ThemeContext";
 import ResponseMetrics from "../../../playground/chat_ui/ResponseMetrics";
 import { Message } from "./types";
 
@@ -11,6 +12,7 @@ interface MessageBubbleProps {
 }
 
 const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
+  const { isDarkMode } = useTheme();
   return (
     <div className={`mb-4 flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
       <div
@@ -66,7 +68,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
                   const match = /language-(\w+)/.exec(className || "");
                   return !inline && match ? (
                     <SyntaxHighlighter
-                      style={coy as any}
+                      style={isDarkMode ? oneDark as any : coy as any}
                       language={match[1]}
                       PreTag="div"
                       className="rounded-md my-2"
@@ -78,7 +80,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
                     </SyntaxHighlighter>
                   ) : (
                     <code
-                      className={`${className} px-1.5 py-0.5 rounded bg-gray-100 text-sm font-mono`}
+                      className={`${className} px-1.5 py-0.5 rounded bg-gray-100 dark:bg-zinc-800 text-sm font-mono`}
                       style={{ wordBreak: "break-word" }}
                       {...props}
                     >

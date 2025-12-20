@@ -10,13 +10,31 @@ export const metadata: Metadata = {
   icons: { icon: "./favicon.ico" },
 };
 
+// Script to prevent flash of unstyled content (FOUC) for dark mode
+const themeScript = `
+  (function() {
+    try {
+      var theme = localStorage.getItem('litellm-theme-mode');
+      var isDark = theme === 'dark' ||
+        (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) ||
+        (!theme && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      if (isDark) {
+        document.documentElement.classList.add('dark');
+      }
+    } catch (e) {}
+  })();
+`;
+
 export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
       <body className={inter.className}>{children}</body>
     </html>
   );

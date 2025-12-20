@@ -25,7 +25,8 @@ import { Button, Input, Modal, Popover, Select, Spin, Tooltip, Typography, Uploa
 import React, { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { coy, oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { useTheme } from "@/contexts/ThemeContext";
 import { v4 as uuidv4 } from "uuid";
 import { truncateString } from "../../../utils/textUtils";
 import GuardrailSelector from "../../guardrails/GuardrailSelector";
@@ -92,6 +93,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   disabledPersonalKeyCreation,
   proxySettings,
 }) => {
+  const { isDarkMode } = useTheme();
   const [isMCPToolsModalVisible, setIsMCPToolsModalVisible] = useState(false);
   const [mcpTools, setMCPTools] = useState<MCPTool[]>([]);
   const [selectedMCPTools, setSelectedMCPTools] = useState<string[]>(() => {
@@ -1076,15 +1078,15 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const antIcon = <LoadingOutlined style={{ fontSize: 24 }} spin />;
 
   return (
-    <div className="w-full p-4 pb-0 bg-white">
+    <div className="w-full p-4 pb-0 bg-white dark:bg-[#141414]">
       <Card className="w-full rounded-xl shadow-md overflow-hidden">
         <div className="flex h-[80vh] w-full gap-4">
           {/* Left Sidebar with Controls */}
-          <div className="w-1/4 p-4 bg-gray-50 overflow-y-auto">
+          <div className="w-1/4 p-4 bg-gray-50 dark:bg-[#141414] overflow-y-auto">
             <Title className="text-xl font-semibold mb-6 mt-2">Configurations</Title>
             <div className="space-y-4">
               <div>
-                <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+                <Text className="font-medium block mb-2 text-gray-700 dark:text-gray-300 flex items-center">
                   <KeyOutlined className="mr-2" /> Virtual Key Source
                 </Text>
                 <Select
@@ -1113,7 +1115,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
               </div>
 
               <div>
-                <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+                <Text className="font-medium block mb-2 text-gray-700 dark:text-gray-300 flex items-center">
                   <ApiOutlined className="mr-2" /> Endpoint Type
                 </Text>
                 <EndpointSelector
@@ -1135,7 +1137,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 {/* Voice Selector for Speech Endpoint */}
                 {endpointType === EndpointType.SPEECH && (
                   <div className="mb-4">
-                    <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+                    <Text className="font-medium block mb-2 text-gray-700 dark:text-gray-300 flex items-center">
                       <SoundOutlined className="mr-2" />
                       Voice
                     </Text>
@@ -1164,7 +1166,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
               {/* Model Selector - shown when NOT using A2A Agents */}
               {endpointType !== EndpointType.A2A_AGENTS && (
                 <div>
-                  <Text className="font-medium block mb-2 text-gray-700 flex items-center justify-between">
+                  <Text className="font-medium block mb-2 text-gray-700 dark:text-gray-300 flex items-center justify-between">
                     <span className="flex items-center">
                       <RobotOutlined className="mr-2" /> Select Model
                     </span>
@@ -1265,7 +1267,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
               {/* Agent Selector - shown ONLY for A2A Agents endpoint */}
               {endpointType === EndpointType.A2A_AGENTS && (
                 <div>
-                  <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+                  <Text className="font-medium block mb-2 text-gray-700 dark:text-gray-300 flex items-center">
                     <RobotOutlined className="mr-2" /> Select Agent
                   </Text>
                   <Select
@@ -1302,7 +1304,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
               )}
 
               <div>
-                <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+                <Text className="font-medium block mb-2 text-gray-700 dark:text-gray-300 flex items-center">
                   <TagsOutlined className="mr-2" /> Tags
                 </Text>
                 <TagSelector
@@ -1315,7 +1317,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
               {/* MCP Tool Selection */}
               <div>
-                <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+                <Text className="font-medium block mb-2 text-gray-700 dark:text-gray-300 flex items-center">
                   <ToolOutlined className="mr-2" /> MCP Tool
                   <Tooltip
                     className="ml-1"
@@ -1354,7 +1356,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
               </div>
 
               <div>
-                <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+                <Text className="font-medium block mb-2 text-gray-700 dark:text-gray-300 flex items-center">
                   <DatabaseOutlined className="mr-2" /> Vector Store
                   <Tooltip
                     className="ml-1"
@@ -1380,7 +1382,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
               </div>
 
               <div>
-                <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+                <Text className="font-medium block mb-2 text-gray-700 dark:text-gray-300 flex items-center">
                   <SafetyOutlined className="mr-2" /> Guardrails
                   <Tooltip
                     className="ml-1"
@@ -1422,20 +1424,20 @@ const ChatUI: React.FC<ChatUIProps> = ({
           </div>
 
           {/* Main Chat Area */}
-          <div className="w-3/4 flex flex-col bg-white">
-            <div className="p-4 border-b border-gray-200 flex justify-between items-center">
+          <div className="w-3/4 flex flex-col bg-white dark:bg-[#141414]">
+            <div className="p-4 border-b border-gray-200 dark:border-transparent flex justify-between items-center">
               <Title className="text-xl font-semibold mb-0">Test Key</Title>
               <div className="flex gap-2">
                 <TremorButton
                   onClick={clearChatHistory}
-                  className="bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
+                  className="bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300 dark:bg-[#252525] dark:hover:bg-[#2a2a2a] dark:text-gray-300 dark:border-[#3a3a3a]"
                   icon={ClearOutlined}
                 >
                   Clear Chat
                 </TremorButton>
                 <TremorButton
                   onClick={() => setIsGetCodeModalVisible(true)}
-                  className="bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
+                  className="bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300 dark:bg-[#252525] dark:hover:bg-[#2a2a2a] dark:text-gray-300 dark:border-[#3a3a3a]"
                   icon={CodeOutlined}
                 >
                   Get Code
@@ -1454,29 +1456,29 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 <div key={index}>
                   <div className={`mb-4 ${message.role === "user" ? "text-right" : "text-left"}`}>
                     <div
-                      className="inline-block max-w-[80%] rounded-lg shadow-sm p-3.5 px-4"
-                      style={{
-                        backgroundColor: message.role === "user" ? "#f0f8ff" : "#ffffff",
-                        border: message.role === "user" ? "1px solid #e6f0fa" : "1px solid #f0f0f0",
-                        textAlign: "left",
-                      }}
+                      className={`inline-block max-w-[80%] rounded-lg shadow-sm p-3.5 px-4 text-left ${
+                        message.role === "user"
+                          ? "bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800/30"
+                          : "bg-white dark:bg-[#1a1a1a] border border-gray-100 dark:border-[#2a2a2a]"
+                      }`}
                     >
                       <div className="flex items-center gap-2 mb-1.5">
                         <div
-                          className="flex items-center justify-center w-6 h-6 rounded-full mr-1"
-                          style={{
-                            backgroundColor: message.role === "user" ? "#e6f0fa" : "#f5f5f5",
-                          }}
+                          className={`flex items-center justify-center w-6 h-6 rounded-full mr-1 ${
+                            message.role === "user"
+                              ? "bg-blue-100 dark:bg-blue-900/40"
+                              : "bg-gray-100 dark:bg-[#252525]"
+                          }`}
                         >
                           {message.role === "user" ? (
-                            <UserOutlined style={{ fontSize: "12px", color: "#2563eb" }} />
+                            <UserOutlined className="text-blue-600 dark:text-blue-400" style={{ fontSize: "12px" }} />
                           ) : (
-                            <RobotOutlined style={{ fontSize: "12px", color: "#4b5563" }} />
+                            <RobotOutlined className="text-gray-600 dark:text-gray-400" style={{ fontSize: "12px" }} />
                           )}
                         </div>
                         <strong className="text-sm capitalize">{message.role}</strong>
                         {message.role === "assistant" && message.model && (
-                          <span className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600 font-normal">
+                          <span className="text-xs px-2 py-0.5 rounded bg-gray-100 dark:bg-[#252525] text-gray-600 dark:text-gray-400 font-normal">
                             {message.model}
                           </span>
                         )}
@@ -1550,7 +1552,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                                   const match = /language-(\w+)/.exec(className || "");
                                   return !inline && match ? (
                                     <SyntaxHighlighter
-                                      style={coy as any}
+                                      style={isDarkMode ? oneDark as any : coy as any}
                                       language={match[1]}
                                       PreTag="div"
                                       className="rounded-md my-2"
@@ -1562,7 +1564,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                                     </SyntaxHighlighter>
                                   ) : (
                                     <code
-                                      className={`${className} px-1.5 py-0.5 rounded bg-gray-100 text-sm font-mono`}
+                                      className={`${className} px-1.5 py-0.5 rounded bg-gray-100 dark:bg-[#252525] text-sm font-mono`}
                                       style={{ wordBreak: "break-word" }}
                                       {...props}
                                     >
@@ -1625,21 +1627,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 chatHistory[chatHistory.length - 1].role === "user" && (
                   <div className="text-left mb-4">
                     <div
-                      className="inline-block max-w-[80%] rounded-lg shadow-sm p-3.5 px-4"
-                      style={{
-                        backgroundColor: "#ffffff",
-                        border: "1px solid #f0f0f0",
-                        textAlign: "left",
-                      }}
+                      className="inline-block max-w-[80%] rounded-lg shadow-sm p-3.5 px-4 text-left bg-white dark:bg-[#1a1a1a] border border-gray-100 dark:border-[#2a2a2a]"
                     >
                       <div className="flex items-center gap-2 mb-1.5">
                         <div
-                          className="flex items-center justify-center w-6 h-6 rounded-full mr-1"
-                          style={{
-                            backgroundColor: "#f5f5f5",
-                          }}
+                          className="flex items-center justify-center w-6 h-6 rounded-full mr-1 bg-gray-100 dark:bg-[#252525]"
                         >
-                          <RobotOutlined style={{ fontSize: "12px", color: "#4b5563" }} />
+                          <RobotOutlined className="text-gray-600 dark:text-gray-400" style={{ fontSize: "12px" }} />
                         </div>
                         <strong className="text-sm capitalize">Assistant</strong>
                       </div>
@@ -1656,17 +1650,17 @@ const ChatUI: React.FC<ChatUIProps> = ({
               <div ref={chatEndRef} style={{ height: "1px" }} />
             </div>
 
-            <div className="p-4 border-t border-gray-200 bg-white">
+            <div className="p-4 border-t border-gray-200 dark:border-transparent bg-white dark:bg-[#141414]">
               {/* Image Upload Section for Image Edits */}
               {endpointType === EndpointType.IMAGE_EDITS && (
                 <div className="mb-4">
                   {uploadedImages.length === 0 ? (
                     <Dragger beforeUpload={handleImageUpload} accept="image/*" showUploadList={false}>
                       <p className="ant-upload-drag-icon">
-                        <PictureOutlined style={{ fontSize: "24px", color: "#666" }} />
+                        <PictureOutlined className="text-gray-500 dark:text-gray-400" style={{ fontSize: "24px" }} />
                       </p>
-                      <p className="ant-upload-text text-sm">Click or drag images to upload</p>
-                      <p className="ant-upload-hint text-xs text-gray-500">
+                      <p className="ant-upload-text text-sm dark:text-gray-300">Click or drag images to upload</p>
+                      <p className="ant-upload-hint text-xs text-gray-500 dark:text-gray-400">
                         Support for PNG, JPG, JPEG formats. Multiple images supported.
                       </p>
                     </Dragger>
@@ -1689,12 +1683,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       ))}
                       {/* Add more images button */}
                       <div
-                        className="flex items-center justify-center w-32 h-32 border-2 border-dashed border-gray-300 rounded-md hover:border-gray-400 cursor-pointer"
+                        className="flex items-center justify-center w-32 h-32 border-2 border-dashed border-gray-300 dark:border-[#3a3a3a] rounded-md hover:border-gray-400 dark:hover:border-[#4a4a4a] cursor-pointer bg-white dark:bg-[#1a1a1a]"
                         onClick={() => document.getElementById("additional-image-upload")?.click()}
                       >
                         <div className="text-center">
-                          <PictureOutlined style={{ fontSize: "24px", color: "#666" }} />
-                          <p className="text-xs text-gray-500 mt-1">Add more</p>
+                          <PictureOutlined className="text-gray-500 dark:text-gray-400" style={{ fontSize: "24px" }} />
+                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Add more</p>
                         </div>
                         <input
                           id="additional-image-upload"
@@ -1723,24 +1717,24 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       showUploadList={false}
                     >
                       <p className="ant-upload-drag-icon">
-                        <SoundOutlined style={{ fontSize: "24px", color: "#666" }} />
+                        <SoundOutlined className="text-gray-500 dark:text-gray-400" style={{ fontSize: "24px" }} />
                       </p>
-                      <p className="ant-upload-text text-sm">Click or drag audio file to upload</p>
-                      <p className="ant-upload-hint text-xs text-gray-500">
+                      <p className="ant-upload-text text-sm dark:text-gray-300">Click or drag audio file to upload</p>
+                      <p className="ant-upload-hint text-xs text-gray-500 dark:text-gray-400">
                         Support for MP3, MP4, MPEG, MPGA, M4A, WAV, WEBM formats. Max file size: 25 MB.
                       </p>
                     </Dragger>
                   ) : (
-                    <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                    <div className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-[#1a1a1a] rounded-lg border border-gray-200 dark:border-[#2a2a2a]">
                       <div className="flex items-center gap-2 flex-1">
-                        <SoundOutlined style={{ fontSize: "20px", color: "#666" }} />
-                        <span className="text-sm font-medium">{uploadedAudio.name}</span>
-                        <span className="text-xs text-gray-500">
+                        <SoundOutlined className="text-gray-500 dark:text-gray-400" style={{ fontSize: "20px" }} />
+                        <span className="text-sm font-medium dark:text-gray-200">{uploadedAudio.name}</span>
+                        <span className="text-xs text-gray-500 dark:text-gray-400">
                           ({(uploadedAudio.size / 1024 / 1024).toFixed(2)} MB)
                         </span>
                       </div>
                       <button
-                        className="bg-white shadow-sm border border-gray-200 rounded px-2 py-1 text-red-500 hover:bg-red-50 text-xs"
+                        className="bg-white dark:bg-[#252525] shadow-sm border border-gray-200 dark:border-[#3a3a3a] rounded px-2 py-1 text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 text-xs"
                         onClick={handleRemoveAudio}
                       >
                         <DeleteOutlined /> Remove
@@ -1753,7 +1747,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
               {/* Show file previews above input when files are uploaded */}
               {endpointType === EndpointType.RESPONSES && responsesUploadedImage && (
                 <div className="mb-2">
-                  <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                  <div className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-[#1a1a1a] rounded-lg border border-gray-200 dark:border-[#2a2a2a]">
                     <div className="relative inline-block">
                       {responsesUploadedImage.name.toLowerCase().endsWith(".pdf") ? (
                         <div className="w-10 h-10 rounded-md bg-red-500 flex items-center justify-center">
@@ -1768,13 +1762,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       )}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-gray-900 truncate">{responsesUploadedImage.name}</div>
-                      <div className="text-xs text-gray-500">
+                      <div className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">{responsesUploadedImage.name}</div>
+                      <div className="text-xs text-gray-500 dark:text-gray-400">
                         {responsesUploadedImage.name.toLowerCase().endsWith(".pdf") ? "PDF" : "Image"}
                       </div>
                     </div>
                     <button
-                      className="flex items-center justify-center w-6 h-6 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded-full transition-colors"
+                      className="flex items-center justify-center w-6 h-6 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-200 dark:hover:bg-[#3a3a3a] rounded-full transition-colors"
                       onClick={handleRemoveResponsesImage}
                     >
                       <DeleteOutlined style={{ fontSize: "12px" }} />
@@ -1785,7 +1779,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
               {endpointType === EndpointType.CHAT && chatUploadedImage && (
                 <div className="mb-2">
-                  <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                  <div className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-[#1a1a1a] rounded-lg border border-gray-200 dark:border-[#2a2a2a]">
                     <div className="relative inline-block">
                       {chatUploadedImage.name.toLowerCase().endsWith(".pdf") ? (
                         <div className="w-10 h-10 rounded-md bg-red-500 flex items-center justify-center">
@@ -1800,13 +1794,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       )}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-gray-900 truncate">{chatUploadedImage.name}</div>
-                      <div className="text-xs text-gray-500">
+                      <div className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">{chatUploadedImage.name}</div>
+                      <div className="text-xs text-gray-500 dark:text-gray-400">
                         {chatUploadedImage.name.toLowerCase().endsWith(".pdf") ? "PDF" : "Image"}
                       </div>
                     </div>
                     <button
-                      className="flex items-center justify-center w-6 h-6 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded-full transition-colors"
+                      className="flex items-center justify-center w-6 h-6 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-200 dark:hover:bg-[#3a3a3a] rounded-full transition-colors"
                       onClick={handleRemoveChatImage}
                     >
                       <DeleteOutlined style={{ fontSize: "12px" }} />
@@ -1818,22 +1812,22 @@ const ChatUI: React.FC<ChatUIProps> = ({
               {/* Code Interpreter indicator and sample prompts when enabled */}
               {endpointType === EndpointType.RESPONSES && codeInterpreter.enabled && (
                 <div className="mb-2 space-y-2">
-                  <div className="px-3 py-2 bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg border border-blue-200 flex items-center justify-between">
+                  <div className="px-3 py-2 bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-900/20 dark:to-purple-900/20 rounded-lg border border-blue-200 dark:border-blue-800/30 flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       {isLoading ? (
                         <>
-                          <LoadingOutlined className="text-blue-500" spin />
-                          <span className="text-sm text-blue-700 font-medium">Running Python code...</span>
+                          <LoadingOutlined className="text-blue-500 dark:text-blue-400" spin />
+                          <span className="text-sm text-blue-700 dark:text-blue-300 font-medium">Running Python code...</span>
                         </>
                       ) : (
                         <>
-                          <CodeOutlined className="text-blue-500" />
-                          <span className="text-sm text-blue-700 font-medium">Code Interpreter Active</span>
+                          <CodeOutlined className="text-blue-500 dark:text-blue-400" />
+                          <span className="text-sm text-blue-700 dark:text-blue-300 font-medium">Code Interpreter Active</span>
                         </>
                       )}
                     </div>
                     <button
-                      className="text-xs text-blue-500 hover:text-blue-700"
+                      className="text-xs text-blue-500 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300"
                       onClick={() => codeInterpreter.setEnabled(false)}
                     >
                       Disable
@@ -1849,7 +1843,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       ].map((prompt, idx) => (
                         <button
                           key={idx}
-                          className="text-xs px-3 py-1.5 bg-white border border-gray-200 rounded-full hover:bg-blue-50 hover:border-blue-300 hover:text-blue-600 transition-colors"
+                          className="text-xs px-3 py-1.5 bg-white dark:bg-[#1a1a1a] border border-gray-200 dark:border-[#2a2a2a] text-gray-700 dark:text-gray-300 rounded-full hover:bg-blue-50 dark:hover:bg-blue-900/20 hover:border-blue-300 dark:hover:border-blue-800/30 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
                           onClick={() => setInputMessage(prompt)}
                         >
                           {prompt}
@@ -1870,7 +1864,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     <button
                       key={prompt}
                       type="button"
-                      className="shrink-0 rounded-full border border-gray-200 px-3 py-1 text-xs font-medium text-gray-600 transition-colors hover:bg-blue-50 hover:border-blue-300 hover:text-blue-600 cursor-pointer"
+                      className="shrink-0 rounded-full border border-gray-200 dark:border-[#2a2a2a] bg-white dark:bg-[#1a1a1a] px-3 py-1 text-xs font-medium text-gray-600 dark:text-gray-400 transition-colors hover:bg-blue-50 dark:hover:bg-blue-900/20 hover:border-blue-300 dark:hover:border-blue-800/30 hover:text-blue-600 dark:hover:text-blue-400 cursor-pointer"
                       onClick={() => setInputMessage(prompt)}
                     >
                       {prompt}
@@ -1880,7 +1874,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
               )}
 
               <div className="flex items-center gap-2">
-                <div className="flex items-center flex-1 bg-white border border-gray-300 rounded-xl px-3 py-1 min-h-[44px]">
+                <div className="flex items-center flex-1 bg-white dark:bg-[#1a1a1a] border border-gray-300 dark:border-[#2a2a2a] rounded-xl px-3 py-1 min-h-[44px]">
                   {/* Left: attachment and code interpreter icons */}
                   <div className="flex-shrink-0 mr-2 flex items-center gap-1">
                     {endpointType === EndpointType.RESPONSES && !responsesUploadedImage && (
@@ -1905,8 +1899,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         <button
                           className={`p-1.5 rounded-md transition-colors ${
                             codeInterpreter.enabled
-                              ? "bg-blue-100 text-blue-600"
-                              : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                              ? "bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400"
+                              : "text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-[#3a3a3a]"
                           }`}
                           onClick={() => {
                             codeInterpreter.toggle();
@@ -1991,7 +1985,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       >
         <div className="flex justify-between items-end my-4">
           <div>
-            <Text className="font-medium block mb-1 text-gray-700">SDK Type</Text>
+            <Text className="font-medium block mb-1 text-gray-700 dark:text-gray-300">SDK Type</Text>
             <Select
               value={selectedSdk}
               onChange={(value) => setSelectedSdk(value as "openai" | "azure")}
@@ -2013,7 +2007,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
         </div>
         <SyntaxHighlighter
           language="python"
-          style={coy as any}
+          style={isDarkMode ? oneDark as any : coy as any}
           wrapLines={true}
           wrapLongLines={true}
           className="rounded-md"

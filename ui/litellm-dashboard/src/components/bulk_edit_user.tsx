@@ -301,7 +301,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
       </div>
 
       {/* Team Management Section */}
-      <Card title="Team Management" size="small" className="mb-4" style={{ backgroundColor: "#fafafa" }}>
+      <Card title="Team Management" size="small" className="mb-4 bg-gray-50 dark:bg-[#1a1a1a]">
         <Space direction="vertical" style={{ width: "100%" }}>
           <Checkbox checked={addToTeams} onChange={(e) => setAddToTeams(e.target.checked)}>
             Add selected users to teams
