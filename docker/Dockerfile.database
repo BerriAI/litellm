@@ -48,7 +48,22 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 USER root
 
 # Install runtime dependencies
-RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip
+# Install Node.js 20.x from official binaries to fix security vulnerabilities
+RUN apk add --no-cache bash openssl tzdata python3 py3-pip curl && \
+    ARCH=$(uname -m) && \
+    case "$ARCH" in \
+        x86_64) NODE_ARCH="x64" ;; \
+        aarch64) NODE_ARCH="arm64" ;; \
+        *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
+    esac && \
+    NODE_VERSION="20.18.2" && \
+    curl -fsSL "https://unofficial-builds.nodejs.org/download/release/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}-musl.tar.gz" -o /tmp/node.tar.gz && \
+    tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1 && \
+    rm -f /tmp/node.tar.gz && \
+    ln -sf /usr/local/bin/node /usr/bin/node && \
+    ln -sf /usr/local/bin/npm /usr/bin/npm && \
+    node --version && \
+    npm --version
 
 WORKDIR /app
 # Copy the current directory contents into the container at /app
