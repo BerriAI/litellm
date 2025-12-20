@@ -31,11 +31,10 @@ secret:
     
     # Test data files
     - "**/tests/**/data_map.txt"
-    - "tests/**/*.txt"
     
-    # Documentation and other non-code files
-    - "docs/**"
-    - "**/*.md"
+    # Documentation build artifacts only (not all docs)
+    - "docs/my-website/.docusaurus/**"
+    - "docs/my-website/build/**"
     - "**/*.lock"
     - "poetry.lock"
     - "package-lock.json"
