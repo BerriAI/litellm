@@ -14,6 +14,7 @@ SEARCH_PROVIDERS = [
     "exa_ai",
     "firecrawl",
     "searxng",
+    "linkup",
 ]
 
 ALLOWED_FILES_IN_LLMS_FOLDER = [

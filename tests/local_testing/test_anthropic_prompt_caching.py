@@ -153,7 +153,7 @@ async def test_litellm_anthropic_prompt_caching_tools():
                     },
                 }
             ],
-            "max_tokens": 4096,
+            "max_tokens": 64000,
             "model": "claude-3-7-sonnet-20250219",
         }
 
@@ -684,7 +684,7 @@ async def test_litellm_anthropic_prompt_caching_system():
                     ],
                 }
             ],
-            "max_tokens": 4096,
+            "max_tokens": 64000,
             "model": "claude-3-7-sonnet-20250219",
         }
 

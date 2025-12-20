@@ -21,7 +21,9 @@ from litellm.llms.anthropic.experimental_pass_through.adapters.transformation im
     LiteLLMAnthropicMessagesAdapter,
 )
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
-from litellm.types.guardrails import GenericGuardrailAPIInputs
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+    AnthropicPassthroughLoggingHandler,
+)
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthropicMessagesRequest,
@@ -30,12 +32,17 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolParam,
 )
+from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
+    GenericGuardrailAPIInputs,
+    ModelResponse,
+)
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.llms.anthropic_messages.anthropic_response import (
         AnthropicMessagesResponse,
-        AnthropicResponseTextBlock,
     )
 
 
@@ -245,20 +252,39 @@ class AnthropicMessagesHandler(BaseTranslation):
         task_mappings: List[Tuple[int, Optional[int]]] = []
         # Track (content_index, None) for each text
 
-        response_content = response.get("content", [])
+        # Handle both dict and object responses
+        response_content: List[Any] = []
+        if isinstance(response, dict):
+            response_content = response.get("content", []) or []
+        elif hasattr(response, "content"):
+            content = getattr(response, "content", None)
+            response_content = content or []
+        else:
+            response_content = []
+
         if not response_content:
             return response
 
         # Step 1: Extract all text content and tool calls from response
         for content_idx, content_block in enumerate(response_content):
-            # Check if this is a text or tool_use block by checking the 'type' field
-            if isinstance(content_block, dict) and content_block.get("type") in [
-                "text",
-                "tool_use",
-            ]:
-                # Cast to dict to handle the union type properly
+            # Handle both dict and Pydantic object content blocks
+            block_dict: Dict[str, Any] = {}
+            if isinstance(content_block, dict):
+                block_type = content_block.get("type")
+                block_dict = cast(Dict[str, Any], content_block)
+            elif hasattr(content_block, "type"):
+                block_type = getattr(content_block, "type", None)
+                # Convert Pydantic object to dict for processing
+                if hasattr(content_block, "model_dump"):
+                    block_dict = content_block.model_dump()
+                else:
+                    block_dict = {"type": block_type, "text": getattr(content_block, "text", None)}
+            else:
+                continue
+
+            if block_type in ["text", "tool_use"]:
                 self._extract_output_text_and_images(
-                    content_block=cast(Dict[str, Any], content_block),
+                    content_block=block_dict,
                     content_idx=content_idx,
                     texts_to_check=texts_to_check,
                     images_to_check=images_to_check,
@@ -318,6 +344,34 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         Get the string so far, check the apply guardrail to the string so far, and return the list of responses so far.
         """
+        has_ended = self._check_streaming_has_ended(responses_so_far)
+        if has_ended:
+
+            # build the model response from the responses_so_far
+            model_response = cast(
+                ModelResponse,
+                AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+                    all_chunks=responses_so_far,
+                    litellm_logging_obj=cast("LiteLLMLoggingObj", litellm_logging_obj),
+                    model="",
+                ),
+            )
+            tool_calls_list = cast(Optional[List[ChatCompletionMessageToolCall]], model_response.choices[0].message.tool_calls)  # type: ignore
+            string_so_far = model_response.choices[0].message.content  # type: ignore
+            guardrail_inputs = GenericGuardrailAPIInputs()
+            if string_so_far:
+                guardrail_inputs["texts"] = [string_so_far]
+            if tool_calls_list:
+                guardrail_inputs["tool_calls"] = tool_calls_list
+
+            _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(  # allow rejecting the response, if invalid
+                inputs=guardrail_inputs,
+                request_data={},
+                input_type="response",
+                logging_obj=litellm_logging_obj,
+            )
+            return responses_so_far
+
         string_so_far = self.get_streaming_string_so_far(responses_so_far)
         _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(  # allow rejecting the response, if invalid
             inputs={"texts": [string_so_far]},
@@ -412,13 +466,93 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         return text
 
+    def _check_streaming_has_ended(self, responses_so_far: List[Any]) -> bool:
+        """
+        Check if streaming response has ended by looking for non-null stop_reason.
+
+        Handles two formats:
+        1. Raw bytes in SSE (Server-Sent Events) format from Anthropic API
+        2. Parsed dict objects (for backwards compatibility)
+
+        SSE format example:
+            b'event: message_delta\\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},...}\\n\\n'
+
+        Dict format example:
+            {
+                "type": "message_delta",
+                "delta": {
+                    "stop_reason": "tool_use",
+                    "stop_sequence": null
+                }
+            }
+
+        Returns:
+            True if stop_reason is set to a non-null value, indicating stream has ended
+        """
+        for response in responses_so_far:
+            # Handle raw bytes in SSE format
+            if isinstance(response, bytes):
+                try:
+                    # Decode bytes to string
+                    sse_string = response.decode("utf-8")
+
+                    # Split by double newline to get individual events
+                    events = sse_string.split("\n\n")
+
+                    for event in events:
+                        if not event.strip():
+                            continue
+
+                        # Parse event lines
+                        lines = event.strip().split("\n")
+                        event_type = None
+                        data_line = None
+
+                        for line in lines:
+                            if line.startswith("event:"):
+                                event_type = line[6:].strip()
+                            elif line.startswith("data:"):
+                                data_line = line[5:].strip()
+
+                        # Check for message_delta event with stop_reason
+                        if event_type == "message_delta" and data_line:
+                            try:
+                                data = json.loads(data_line)
+                                delta = data.get("delta", {})
+                                stop_reason = delta.get("stop_reason")
+                                if stop_reason is not None:
+                                    return True
+                            except json.JSONDecodeError:
+                                verbose_proxy_logger.warning(
+                                    f"Failed to parse JSON from SSE data: {data_line}"
+                                )
+
+                except Exception as e:
+                    verbose_proxy_logger.error(
+                        f"Error checking streaming end in SSE: {e}"
+                    )
+
+            # Handle already-parsed dict format
+            elif isinstance(response, dict):
+                if response.get("type") == "message_delta":
+                    delta = response.get("delta", {})
+                    stop_reason = delta.get("stop_reason")
+                    if stop_reason is not None:
+                        return True
+
+        return False
+
     def _has_text_content(self, response: "AnthropicMessagesResponse") -> bool:
         """
         Check if response has any text content to process.
 
         Override this method to customize text content detection.
         """
-        response_content = response.get("content", [])
+        if isinstance(response, dict):
+            response_content = response.get("content", [])
+        else:
+            response_content = getattr(response, "content", None) or []
+        
         if not response_content:
             return False
         for content_block in response_content:
@@ -478,7 +612,16 @@ class AnthropicMessagesHandler(BaseTranslation):
             mapping = task_mappings[task_idx]
             content_idx = cast(int, mapping[0])
 
-            response_content = response.get("content", [])
+            # Handle both dict and object responses
+            response_content: List[Any] = []
+            if isinstance(response, dict):
+                response_content = response.get("content", []) or []
+            elif hasattr(response, "content"):
+                content = getattr(response, "content", None)
+                response_content = content or []
+            else:
+                continue
+
             if not response_content:
                 continue
 
@@ -489,7 +632,11 @@ class AnthropicMessagesHandler(BaseTranslation):
             content_block = response_content[content_idx]
 
             # Verify it's a text block and update the text field
-            if isinstance(content_block, dict) and content_block.get("type") == "text":
-                # Cast to dict to handle the union type properly for assignment
-                content_block = cast("AnthropicResponseTextBlock", content_block)
-                content_block["text"] = guardrail_response
+            # Handle both dict and Pydantic object content blocks
+            if isinstance(content_block, dict):
+                if content_block.get("type") == "text":
+                    cast(Dict[str, Any], content_block)["text"] = guardrail_response
+            elif hasattr(content_block, "type") and getattr(content_block, "type", None) == "text":
+                # Update Pydantic object's text attribute
+                if hasattr(content_block, "text"):
+                    content_block.text = guardrail_response

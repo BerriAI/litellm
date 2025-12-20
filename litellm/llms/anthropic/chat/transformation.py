@@ -61,6 +61,7 @@ from litellm.utils import (
     add_dummy_tool,
     get_max_tokens,
     has_tool_call_blocks,
+    last_assistant_with_tool_calls_has_no_thinking_blocks,
     supports_reasoning,
     token_counter,
 )
@@ -941,6 +942,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         self, headers: dict, optional_params: dict
     ) -> dict:
         """Update headers with optional anthropic beta."""
+        
+        # Skip adding beta headers for Vertex requests
+        # Vertex AI handles these headers differently
+        is_vertex_request = optional_params.get("is_vertex_request", False)
+        if is_vertex_request:
+            return headers
 
         _tools = optional_params.get("tools", [])
         for tool in _tools:
@@ -999,6 +1006,20 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     llm_provider="anthropic",
                 )
 
+        # Drop thinking param if thinking is enabled but thinking_blocks are missing
+        # This prevents the error: "Expected thinking or redacted_thinking, but found tool_use"
+        if (
+            optional_params.get("thinking") is not None
+            and messages is not None
+            and last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
+        ):
+            if litellm.modify_params:
+                optional_params.pop("thinking", None)
+                litellm.verbose_logger.warning(
+                    "Dropping 'thinking' param because the last assistant message with tool_calls "
+                    "has no thinking_blocks. The model won't use extended thinking for this turn."
+                )
+
         headers = self.update_headers_with_optional_anthropic_beta(
             headers=headers, optional_params=optional_params
         )
@@ -1051,6 +1072,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             and _valid_user_id(_litellm_metadata["user_id"])
         ):
             optional_params["metadata"] = {"user_id": _litellm_metadata["user_id"]}
+
+        # Remove internal LiteLLM parameters that should not be sent to Anthropic API
+        optional_params.pop("is_vertex_request", None)
 
         data = {
             "model": model,
@@ -1117,19 +1141,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if content["type"] == "text":
                 text_content += content["text"]
             ## TOOL CALLING
-            elif content["type"] == "tool_use":
+            elif content["type"] == "tool_use" or content["type"] == "server_tool_use":
                 tool_call = AnthropicConfig.convert_tool_use_to_openai_format(
                     anthropic_tool_content=content,
-                    index=idx,
-                )
-                tool_calls.append(tool_call)
-            ## SERVER TOOL USE (for tool search)
-            elif content["type"] == "server_tool_use":
-                # Server tool use blocks are for tool search - treat as tool calls
-                # Note: using .get("input", {}) for server_tool_use as input may not be present
-                content_with_input = {**content, "input": content.get("input", {})}
-                tool_call = AnthropicConfig.convert_tool_use_to_openai_format(
-                    anthropic_tool_content=content_with_input,
                     index=idx,
                 )
                 tool_calls.append(tool_call)
@@ -1328,6 +1342,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 "context_management"
             )
 
+            container: Optional[Dict] = completion_response.get("container")
+
             provider_specific_fields: Dict[str, Any] = {
                 "citations": citations,
                 "thinking_blocks": thinking_blocks,
@@ -1336,7 +1352,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 provider_specific_fields["context_management"] = context_management
             if web_search_results is not None:
                 provider_specific_fields["web_search_results"] = web_search_results
-
+            if container is not None:
+                provider_specific_fields["container"] = container
+                
             _message = litellm.Message(
                 tool_calls=tool_calls,
                 content=text_content or None,

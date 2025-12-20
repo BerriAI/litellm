@@ -201,3 +201,79 @@ async def test_a2a_completion_bridge_bedrock_agentcore():
 
     print(f"Received {len(chunks)} chunks from Bedrock AgentCore")
 
+
+# ============================================================
+# Vertex AI Agent Engine Tests
+# ============================================================
+
+# Configuration - update these for your Vertex AI Reasoning Engine
+VERTEX_AGENT_RESOURCE_NAME = "projects/1060139831167/locations/us-central1/reasoningEngines/8263861224643493888"
+
+
+@pytest.mark.asyncio
+async def test_vertex_agent_engine_non_streaming():
+    """
+    Test non-streaming request to Vertex AI Agent Engine via litellm.acompletion.
+    
+    Uses the Reasoning Engine resource ID to call a hosted agent.
+    """
+
+    litellm._turn_on_debug()
+
+    # Call via litellm.acompletion with vertex_ai/agent_engine/ prefix
+    response = await litellm.acompletion(
+        model=f"vertex_ai/agent_engine/{VERTEX_AGENT_RESOURCE_NAME}",
+        messages=[{"role": "user", "content": "Hello! What can you do?"}],
+        stream=False,
+    )
+
+    print(f"\n=== Vertex Agent Engine Non-Streaming Response ===")
+    print(f"Response: {response}")
+
+    # Basic assertions
+    assert response is not None
+    assert hasattr(response, "choices")
+    assert len(response.choices) > 0
+    assert response.choices[0].message is not None
+    assert response.choices[0].message.content is not None
+    assert len(response.choices[0].message.content) > 0
+
+    print(f"Agent response: {response.choices[0].message.content[:200]}...")
+
+
+@pytest.mark.asyncio
+async def test_vertex_agent_engine_streaming():
+    """
+    Test streaming request to Vertex AI Agent Engine via litellm.acompletion.
+    
+    Uses the Reasoning Engine resource ID to call a hosted agent with streaming.
+    """
+    #litellm._turn_on_debug()
+
+    # Call via litellm.acompletion with streaming
+    response = await litellm.acompletion(
+        model=f"vertex_ai/agent_engine/{VERTEX_AGENT_RESOURCE_NAME}",
+        messages=[{"role": "user", "content": "Hello! What can you do?"}],
+        stream=True,
+    )
+
+    print(f"\n=== Vertex Agent Engine Streaming Response ===")
+
+    chunks = []
+    full_content = ""
+    async for chunk in response:
+        print(f"Chunk: {chunk}")
+    #     chunks.append(chunk)
+    #     if hasattr(chunk, "choices") and len(chunk.choices) > 0:
+    #         delta = chunk.choices[0].delta
+    #         if hasattr(delta, "content") and delta.content:
+    #             full_content += delta.content
+    #             print(f"Chunk: {delta.content}", end="", flush=True)
+
+    # # print(f"\n\nReceived {len(chunks)} chunks")
+    # print(f"Full content: {full_content[:200]}...")
+
+    # # Basic assertions
+    # assert len(chunks) > 0
+    # assert len(full_content) > 0
+

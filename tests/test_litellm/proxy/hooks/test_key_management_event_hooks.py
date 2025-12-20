@@ -39,6 +39,7 @@ class TestKeyManagementEventHooksIndependentOperations:
         # Create mock objects for the hook parameters
         mock_data = MagicMock()
         mock_data.key_alias = "test-key-alias"
+        mock_data.team_id = None
 
         mock_response = MagicMock()
         mock_response.model_dump.return_value = {"key": "sk-test", "token": "test-token"}
@@ -94,6 +95,7 @@ class TestKeyManagementEventHooksIndependentOperations:
         # Create mock objects for the hook parameters
         mock_data = MagicMock()
         mock_data.key_alias = "test-key-alias"
+        mock_data.team_id = None
 
         mock_response = MagicMock()
         mock_response.model_dump.return_value = {"key": "sk-test", "token": "test-token"}
@@ -127,4 +129,3 @@ class TestKeyManagementEventHooksIndependentOperations:
 
         # Email should have been called despite secret manager failure
         assert email_called["called"] is True
-

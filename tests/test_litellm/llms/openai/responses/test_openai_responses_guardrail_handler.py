@@ -17,20 +17,16 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from fastapi import HTTPException
+from openai.types.responses import ResponseFunctionToolCall
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms import get_guardrail_translation_mapping
 from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
 )
-from litellm.types.guardrails import GenericGuardrailAPIInputs
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.responses.main import (
-    GenericResponseOutputItem,
-    OutputFunctionToolCall,
-    OutputText,
-)
-from litellm.types.utils import CallTypes
+from litellm.types.responses.main import GenericResponseOutputItem, OutputText
+from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
 
 
 class MockGuardrail(CustomGuardrail):
@@ -544,11 +540,11 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
     """Test tool call extraction functionality"""
 
     def test_extract_tool_call_from_function_call_output(self):
-        """Test extracting tool calls from OutputFunctionToolCall in response output"""
+        """Test extracting tool calls from ResponseFunctionToolCall in response output"""
         handler = OpenAIResponsesHandler()
 
         # Create output item matching the user's provided response structure
-        output_item = OutputFunctionToolCall(
+        output_item = ResponseFunctionToolCall(
             arguments='{"location":"Boston, MA","unit":"celsius"}',
             call_id="call_4SjsMeA6DUHwGKaE87ZojgOF",
             name="get_current_weather",
@@ -644,7 +640,7 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
             object="response",
             status="completed",
             output=[
-                OutputFunctionToolCall(
+                ResponseFunctionToolCall(
                     arguments='{"location":"Boston, MA","unit":"celsius"}',
                     call_id="call_4SjsMeA6DUHwGKaE87ZojgOF",
                     name="get_current_weather",
@@ -693,7 +689,7 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
         )
 
         # Then extract from a tool call output
-        tool_call_output = OutputFunctionToolCall(
+        tool_call_output = ResponseFunctionToolCall(
             arguments='{"location":"Boston, MA","unit":"celsius"}',
             call_id="call_4SjsMeA6DUHwGKaE87ZojgOF",
             name="get_current_weather",
@@ -716,3 +712,108 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
         assert texts_to_check[0] == "I'll check the weather for you"
         assert len(tool_calls_to_check) == 1
         assert tool_calls_to_check[0]["function"]["name"] == "get_current_weather"
+
+    def test_extract_text_from_basemodel_instance(self):
+        """Test extracting text from GenericResponseOutputItem as BaseModel instance
+
+        This test verifies that _extract_output_text_and_images correctly handles
+        GenericResponseOutputItem when passed as a Pydantic BaseModel instance
+        (not as a dict). This addresses the issue where isinstance(output_item, BaseModel)
+        was failing because the handler was importing BaseModel from openai instead of pydantic.
+        """
+        handler = OpenAIResponsesHandler()
+
+        # Create a proper GenericResponseOutputItem instance (Pydantic BaseModel)
+        output_item = GenericResponseOutputItem(
+            type="message",
+            id="msg_123",
+            status="completed",
+            role="assistant",
+            content=[
+                OutputText(
+                    type="output_text",
+                    text="Hi! My name is Ishaan.",
+                    annotations=[],
+                )
+            ],
+        )
+
+        texts_to_check: List[str] = []
+        images_to_check: List[str] = []
+        tool_calls_to_check: List[Any] = []
+        task_mappings: List[Tuple[int, int]] = []
+
+        # Extract text from the BaseModel instance
+        handler._extract_output_text_and_images(
+            output_item=output_item,
+            output_idx=0,
+            texts_to_check=texts_to_check,
+            images_to_check=images_to_check,
+            task_mappings=task_mappings,
+            tool_calls_to_check=tool_calls_to_check,
+        )
+
+        # Verify text was extracted correctly
+        assert len(texts_to_check) == 1
+        assert texts_to_check[0] == "Hi! My name is Ishaan."
+        assert len(task_mappings) == 1
+        assert task_mappings[0] == (0, 0)  # (output_idx, content_idx)
+        assert len(tool_calls_to_check) == 0  # No tool calls in this output
+
+    def test_extract_text_from_basemodel_with_multiple_content_items(self):
+        """Test extracting multiple text items from GenericResponseOutputItem BaseModel
+
+        This test verifies that the handler correctly processes a BaseModel instance
+        with multiple content items in the content array.
+        """
+        handler = OpenAIResponsesHandler()
+
+        # Create GenericResponseOutputItem with multiple content items
+        output_item = GenericResponseOutputItem(
+            type="message",
+            id="msg_456",
+            status="completed",
+            role="assistant",
+            content=[
+                OutputText(
+                    type="output_text",
+                    text="First paragraph.",
+                    annotations=[],
+                ),
+                OutputText(
+                    type="output_text",
+                    text="Second paragraph.",
+                    annotations=[],
+                ),
+                OutputText(
+                    type="output_text",
+                    text="Third paragraph.",
+                    annotations=[],
+                ),
+            ],
+        )
+
+        texts_to_check: List[str] = []
+        images_to_check: List[str] = []
+        tool_calls_to_check: List[Any] = []
+        task_mappings: List[Tuple[int, int]] = []
+
+        # Extract all text items
+        handler._extract_output_text_and_images(
+            output_item=output_item,
+            output_idx=0,
+            texts_to_check=texts_to_check,
+            images_to_check=images_to_check,
+            task_mappings=task_mappings,
+            tool_calls_to_check=tool_calls_to_check,
+        )
+
+        # Verify all text items were extracted
+        assert len(texts_to_check) == 3
+        assert texts_to_check[0] == "First paragraph."
+        assert texts_to_check[1] == "Second paragraph."
+        assert texts_to_check[2] == "Third paragraph."
+        assert len(task_mappings) == 3
+        assert task_mappings[0] == (0, 0)
+        assert task_mappings[1] == (0, 1)
+        assert task_mappings[2] == (0, 2)

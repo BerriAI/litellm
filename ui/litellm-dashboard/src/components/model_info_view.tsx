@@ -37,6 +37,7 @@ import { getProviderLogoAndName } from "./provider_info_helpers";
 import NumericalInput from "./shared/numerical_input";
 import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
+import { useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -83,6 +84,8 @@ export default function ModelInfoView({
   const isAdmin = userRole === "Admin";
   const isAutoRouter = modelData?.litellm_params?.auto_router_config != null;
 
+  const { data: modelsInfoData } = useModelsInfo(accessToken, userID, userRole);
+  console.log("modelsInfoData, ", modelsInfoData);
   const usingExistingCredential =
     modelData?.litellm_params?.litellm_credential_name != null &&
     modelData?.litellm_params?.litellm_credential_name != undefined;
@@ -226,6 +229,13 @@ export default function ModelInfoView({
             access_groups: values.model_access_group,
           };
         }
+        // Override health_check_model from the form
+        if (values.health_check_model !== undefined) {
+          updatedModelInfo = {
+            ...updatedModelInfo,
+            health_check_model: values.health_check_model,
+          };
+        }
       } catch (e) {
         NotificationsManager.fromBackend("Invalid JSON in Model Info");
         return;
@@ -342,6 +352,7 @@ export default function ModelInfoView({
       onModelUpdate(updatedModel);
     }
   };
+  const isWildcardModel = modelData.litellm_model_name.includes("*");
 
   return (
     <div className="p-4">
@@ -545,6 +556,7 @@ export default function ModelInfoView({
                       ? localModelData.litellm_params.guardrails
                       : [],
                     tags: Array.isArray(localModelData.litellm_params?.tags) ? localModelData.litellm_params.tags : [],
+                    health_check_model: isWildcardModel ? localModelData.model_info?.health_check_model : null,
                     litellm_extra_params: JSON.stringify(localModelData.litellm_params || {}, null, 2),
                   }}
                   layout="vertical"
@@ -867,6 +879,49 @@ export default function ModelInfoView({
                           </div>
                         )}
                       </div>
+
+                      {isWildcardModel && (
+                        <div>
+                          <Text className="font-medium">Health Check Model</Text>
+                          {isEditing ? (
+                            <Form.Item name="health_check_model" className="mb-0">
+                              <Select
+                                showSearch
+                                placeholder="Select existing health check model"
+                                optionFilterProp="children"
+                                allowClear
+                                options={(() => {
+                                  const seen = new Set();
+                                  return modelsInfoData?.data
+                                    ?.filter((model: any) => {
+                                      const modelProvider = model.provider;
+                                      const wildcardProvider = modelData.litellm_model_name.split("/")[0];
+                                      return (
+                                        modelProvider === wildcardProvider &&
+                                        model.model_name !== modelData.litellm_model_name
+                                      );
+                                    })
+                                    .filter((model: any) => {
+                                      if (seen.has(model.model_name)) {
+                                        return false;
+                                      }
+                                      seen.add(model.model_name);
+                                      return true;
+                                    })
+                                    .map((model: any) => ({
+                                      value: model.model_name,
+                                      label: model.model_name,
+                                    }));
+                                })()}
+                              />
+                            </Form.Item>
+                          ) : (
+                            <div className="mt-1 p-2 bg-gray-50 rounded">
+                              {localModelData.model_info?.health_check_model || "Not Set"}
+                            </div>
+                          )}
+                        </div>
+                      )}
 
                       {/* Cache Control Section */}
                       {isEditing ? (

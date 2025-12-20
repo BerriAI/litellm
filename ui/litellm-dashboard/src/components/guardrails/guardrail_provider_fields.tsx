@@ -5,6 +5,7 @@ import {
   guardrail_provider_map,
   populateGuardrailProviders,
   populateGuardrailProviderMap,
+  shouldRenderContentFilterConfigSettings,
 } from "./guardrail_info_helpers";
 import { getGuardrailProviderSpecificParams } from "../networking";
 import NumericalInput from "../shared/numerical_input";
@@ -107,6 +108,20 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
   }
 
   console.log("Value:", value);
+  
+  // Fields to skip for content filter provider (handled in dedicated steps)
+  const contentFilterFieldsToSkip = new Set([
+    "patterns",
+    "blocked_words",
+    "blocked_words_file",
+    "categories",
+    "severity_threshold",
+    "pattern_redaction_format",
+    "keyword_redaction_tag",
+  ]);
+  
+  const isContentFilterProvider = shouldRenderContentFilterConfigSettings(selectedProvider);
+  
   // Convert object to array of entries and render fields
   const renderFields = (fields: { [key: string]: ProviderParam }, parentKey = "", parentValue?: any) => {
     return Object.entries(fields).map(([fieldKey, field]) => {
@@ -120,6 +135,11 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
 
       // Skip optional_params - they are handled in a separate step
       if (fieldKey === "optional_params" && field.type === "nested" && field.fields) {
+        return null;
+      }
+
+      // Skip content filter specific fields when it's a content filter provider (handled in dedicated steps)
+      if (isContentFilterProvider && contentFilterFieldsToSkip.has(fieldKey)) {
         return null;
       }
 
