@@ -1266,7 +1266,7 @@ def test_user_api_key_auth_jwt_hashing():
     from litellm.proxy.auth.handle_jwt import JWTHandler
     
     # Test with a JWT token (3 parts separated by dots)
-    jwt_token = "test-jwt-token-header.payload.signature"
+    jwt_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
     
     # Create UserAPIKeyAuth instance with JWT
     user_auth = UserAPIKeyAuth(api_key=jwt_token)
@@ -1303,7 +1303,7 @@ def test_jwt_handler_is_jwt_static_method():
     from litellm.proxy.auth.handle_jwt import JWTHandler
     
     # Test with valid JWT format
-    valid_jwt = "test-jwt-token-header.payload.signature"
+    valid_jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
     assert JWTHandler.is_jwt(valid_jwt) == True
     
     # Test with invalid JWT format (only 2 parts)

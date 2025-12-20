@@ -218,7 +218,7 @@ def test_bedrock_agentcore_with_api_key_bearer_token():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
-    test_jwt_token = "test-jwt-token-header.payload.signature"
+    test_jwt_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
 
     with patch.object(client, "post", return_value=MagicMock()) as mock_post:
         try:
