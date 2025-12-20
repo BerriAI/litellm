@@ -640,13 +640,27 @@ def add_object_type(schema):
     if properties is not None:
         if "required" in schema and schema["required"] is None:
             schema.pop("required", None)
-        schema["type"] = "object"
-        for name, value in properties.items():
-            add_object_type(value)
+        # Gemini doesn't accept empty properties for object types
+        # If properties is empty, remove it and the type field
+        if not properties:
+            schema.pop("properties", None)
+            schema.pop("type", None)
+            schema.pop("required", None)
+        else:
+            schema["type"] = "object"
+            for name, value in properties.items():
+                add_object_type(value)
 
     items = schema.get("items", None)
     if items is not None:
         add_object_type(items)
+
+    for key in ["anyOf", "oneOf", "allOf"]:
+        values = schema.get(key, None)
+        if values is not None and isinstance(values, list):
+            for value in values:
+                if isinstance(value, dict):
+                    add_object_type(value)
 
 
 def strip_field(schema, field_name: str):

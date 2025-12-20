@@ -119,6 +119,7 @@ def anthropic_messages_handler(
     tools: Optional[List[Dict]] = None,
     top_k: Optional[int] = None,
     top_p: Optional[float] = None,
+    container: Optional[Dict] = None,
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     client: Optional[AsyncHTTPHandler] = None,
@@ -131,6 +132,9 @@ def anthropic_messages_handler(
 ]:
     """
     Makes Anthropic `/v1/messages` API calls In the Anthropic API Spec
+    
+    Args:
+        container: Container config with skills for code execution
     """
     from litellm.types.utils import LlmProviders
 

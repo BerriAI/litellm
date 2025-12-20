@@ -29,6 +29,13 @@ class StabilityImageGenerationRequest(TypedDict, total=False):
     strength: Optional[float]  # How much to transform the image (0-1)
     style_preset: Optional[str]  # Style preset name
 
+class StabilityImageEditRequest(StabilityImageGenerationRequest):
+    """
+    Request parameters for Stability AI image edit endpoint.
+
+    Endpoint: /v2beta/stable-image/edit/inpaint
+    """
+    mask: Optional[str]  # Base64-encoded mask (white = edit, black = keep)
 
 class StabilityImageGenerationResponse(TypedDict, total=False):
     """
@@ -197,16 +204,12 @@ STABILITY_EDIT_ENDPOINTS = {
     "search-and-replace": "/v2beta/stable-image/edit/search-and-replace",
     "search-and-recolor": "/v2beta/stable-image/edit/search-and-recolor",
     "remove-background": "/v2beta/stable-image/edit/remove-background",
-}
-
-STABILITY_UPSCALE_ENDPOINTS = {
+    "replace-background-and-relight": "/v2beta/stable-image/edit/replace-background-and-relight",
     "fast": "/v2beta/stable-image/upscale/fast",
     "conservative": "/v2beta/stable-image/upscale/conservative",
     "creative": "/v2beta/stable-image/upscale/creative",
-}
-
-STABILITY_CONTROL_ENDPOINTS = {
     "sketch": "/v2beta/stable-image/control/sketch",
     "structure": "/v2beta/stable-image/control/structure",
     "style": "/v2beta/stable-image/control/style",
+    "style-transfer": "/v2beta/stable-image/control/style-transfer",
 }

@@ -1,6 +1,6 @@
 import asyncio
 import time
-from typing import Any, AsyncIterator, cast
+from typing import Any, AsyncIterator, Optional, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -155,7 +155,7 @@ async def responses_api(
     # Normal response flow
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -173,6 +173,48 @@ async def responses_api(
             user_api_base=user_api_base,
             version=version,
         )
+        
+        # Store in managed objects table if background mode is enabled
+        if data.get("background") and isinstance(response, ResponsesAPIResponse):
+            if response.status in ["queued", "in_progress"]:
+                from litellm_enterprise.proxy.hooks.managed_files import (  # type: ignore
+                    _PROXY_LiteLLMManagedFiles,
+                )                
+                managed_files_obj = cast(
+                    Optional[_PROXY_LiteLLMManagedFiles],
+                    proxy_logging_obj.get_proxy_hook("managed_files"),
+                )
+                
+                if managed_files_obj and llm_router:
+                    try:
+                        # Get the actual deployment model_id from hidden params
+                        hidden_params = getattr(response, "_hidden_params", {}) or {}
+                        model_id = hidden_params.get("model_id", None)
+                        
+                        if not model_id:
+                            verbose_proxy_logger.warning(
+                                f"No model_id found in response hidden params for response {response.id}, skipping managed object storage"
+                            )
+                            raise Exception("No model_id found in response hidden params")
+                        # Store in managed objects table
+                        await managed_files_obj.store_unified_object_id(
+                            unified_object_id=response.id,
+                            file_object=response,
+                            litellm_parent_otel_span=None,
+                            model_object_id=response.id,
+                            file_purpose="response",
+                            user_api_key_dict=user_api_key_dict,
+                        )
+                        
+                        verbose_proxy_logger.info(
+                            f"Stored background response {response.id} in managed objects table with unified_id={response.id}"
+                        )
+                    except Exception as e:
+                        verbose_proxy_logger.error(
+                            f"Failed to store background response in managed objects table: {str(e)}"
+                        )
+        
+        return response
     except ModifyResponseException as e:
         # Guardrail passthrough: return violation message in Responses API format (200)
         _data = e.request_data

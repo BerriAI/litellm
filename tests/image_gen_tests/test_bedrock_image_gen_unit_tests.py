@@ -10,7 +10,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
-from litellm.llms.bedrock.image.amazon_nova_canvas_transformation import (
+from litellm.llms.bedrock.image_generation.amazon_nova_canvas_transformation import (
     AmazonNovaCanvasConfig,
 )
 
@@ -22,15 +22,15 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
-from litellm.llms.bedrock.image.cost_calculator import cost_calculator
+from litellm.llms.bedrock.image_generation.cost_calculator import cost_calculator
 from litellm.types.utils import ImageResponse, ImageObject
 import os
 
 import litellm
-from litellm.llms.bedrock.image.amazon_stability3_transformation import (
+from litellm.llms.bedrock.image_generation.amazon_stability3_transformation import (
     AmazonStability3Config,
 )
-from litellm.llms.bedrock.image.amazon_stability1_transformation import (
+from litellm.llms.bedrock.image_generation.amazon_stability1_transformation import (
     AmazonStabilityConfig,
 )
 from litellm.types.llms.bedrock import (
@@ -38,7 +38,7 @@ from litellm.types.llms.bedrock import (
     AmazonStability3TextToImageResponse,
 )
 from unittest.mock import MagicMock, patch
-from litellm.llms.bedrock.image.image_handler import (
+from litellm.llms.bedrock.image_generation.image_handler import (
     BedrockImageGeneration,
     BedrockImagePreparedRequest,
 )
@@ -528,9 +528,11 @@ def test_backward_compatibility_regular_nova_model():
 
 
 def test_amazon_titan_image_gen():
+    """Test Amazon Titan image generation with cost tracking."""
     from litellm import image_generation
 
-    model_id = "bedrock/amazon.titan-image-generator-v1"
+    # Use v2 as v1 has reached end of life
+    model_id = "bedrock/amazon.titan-image-generator-v2:0"
 
     response = litellm.image_generation(
         model=model_id,

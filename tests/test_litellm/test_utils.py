@@ -573,6 +573,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "chat",
                         "completion",
                         "container",
+                        "image_edit",
                         "embedding",
                         "image_generation",
                         "video_generation",
@@ -2732,7 +2733,7 @@ class TestProxyLoggingBudgetAlerts:
 
 def test_azure_ai_claude_provider_config():
     """Test that Azure AI Claude models return AzureAnthropicConfig for proper tool transformation."""
-    from litellm import AzureAnthropicConfig, AzureAIStudioConfig
+    from litellm import AzureAIStudioConfig, AzureAnthropicConfig
     from litellm.utils import ProviderConfigManager
 
     # Claude models should return AzureAnthropicConfig

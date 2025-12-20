@@ -795,3 +795,215 @@ def test_text_plus_tool_calls_sequence():
     assert (
         completed_result.choices[0].finish_reason == "stop"
     ), "response.completed should have finish_reason='stop'"
+
+
+# =============================================================================
+# Tests for issue #18201: Tool calls transformation fixes
+# =============================================================================
+
+
+def test_tool_message_output_uses_input_text_not_output_text():
+    """
+    Test that tool message content uses input_text type, not output_text.
+
+    This is a regression test for a bug where tool results were transformed to:
+        {"type": "function_call_output", "output": [{"type": "output_text", "text": "..."}]}
+
+    But the Responses API expects input_text for tool results:
+        {"type": "function_call_output", "output": [{"type": "input_text", "text": "..."}]}
+
+    The incorrect format caused OpenAI to reject with:
+        "Invalid value: 'output_text'. Supported values are: 'input_text', 'input_image', and 'input_file'."
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_abc123",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "Paris"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_abc123",
+            "content": '{"temperature": 15, "condition": "sunny"}',
+        },
+    ]
+
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    # Find the function_call_output item
+    function_call_output = None
+    for item in response:
+        if item.get("type") == "function_call_output":
+            function_call_output = item
+            break
+
+    assert function_call_output is not None, "function_call_output not found"
+    assert function_call_output["call_id"] == "call_abc123"
+
+    # The output should be a list with input_text type
+    output = function_call_output["output"]
+    assert isinstance(output, list), f"output should be a list, got {type(output)}"
+    assert len(output) == 1
+    assert output[0]["type"] == "input_text", f"Expected input_text, got {output[0].get('type')}"
+    assert output[0]["text"] == '{"temperature": 15, "condition": "sunny"}'
+
+    print("✓ Tool message output correctly uses input_text type")
+
+
+def test_multiple_tool_calls_in_single_choice():
+    """
+    Test that multiple tool calls are grouped into a single choice.
+
+    This is a regression test for a bug where each tool call was put in its own
+    Choice with separate indices:
+        choices = [
+            {"index": 0, "message": {"tool_calls": [tc1]}},
+            {"index": 1, "message": {"tool_calls": [tc2]}},
+            {"index": 2, "message": {"tool_calls": [tc3]}},
+        ]
+
+    But Chat Completions API expects all tool calls in a single choice:
+        choices = [
+            {"index": 0, "message": {"tool_calls": [tc1, tc2, tc3]}},
+        ]
+    """
+    from unittest.mock import Mock
+
+    from openai.types.responses import ResponseFunctionToolCall
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import (
+        InputTokensDetails,
+        OutputTokensDetails,
+        ResponseAPIUsage,
+        ResponsesAPIResponse,
+    )
+    from litellm.types.utils import ModelResponse, Usage
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Create multiple function tool calls (simulating parallel tool calls)
+    tool_call_1 = ResponseFunctionToolCall(
+        id="fc_1",
+        type="function_call",
+        status="completed",
+        arguments='{"location": "Paris"}',
+        call_id="call_paris",
+        name="get_weather",
+    )
+    tool_call_2 = ResponseFunctionToolCall(
+        id="fc_2",
+        type="function_call",
+        status="completed",
+        arguments='{"location": "Tokyo"}',
+        call_id="call_tokyo",
+        name="get_weather",
+    )
+    tool_call_3 = ResponseFunctionToolCall(
+        id="fc_3",
+        type="function_call",
+        status="completed",
+        arguments='{"sign": "Leo"}',
+        call_id="call_horoscope",
+        name="get_horoscope",
+    )
+
+    usage = ResponseAPIUsage(
+        input_tokens=50,
+        input_tokens_details=InputTokensDetails(cached_tokens=0),
+        output_tokens=100,
+        output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
+        total_tokens=150,
+    )
+
+    raw_response = ResponsesAPIResponse(
+        id="resp_test",
+        created_at=1234567890,
+        error=None,
+        incomplete_details=None,
+        instructions=None,
+        metadata={},
+        model="gpt-4o",
+        object="response",
+        output=[tool_call_1, tool_call_2, tool_call_3],
+        parallel_tool_calls=True,
+        temperature=1.0,
+        tool_choice="auto",
+        tools=[],
+        top_p=1.0,
+        max_output_tokens=None,
+        previous_response_id=None,
+        reasoning=None,
+        status="completed",
+        text=None,
+        truncation="disabled",
+        usage=usage,
+        user=None,
+        store=True,
+        background=False,
+    )
+
+    model_response = ModelResponse(
+        id="chatcmpl-test",
+        created=1234567890,
+        model=None,
+        object="chat.completion",
+        choices=[],
+        usage=Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
+    )
+
+    logging_obj = Mock()
+
+    result = handler.transform_response(
+        model="gpt-4o",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=logging_obj,
+        request_data={"model": "gpt-4o"},
+        messages=[{"role": "user", "content": "test"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    # Should have exactly ONE choice
+    assert len(result.choices) == 1, f"Expected 1 choice, got {len(result.choices)}"
+
+    choice = result.choices[0]
+    assert choice.index == 0
+    assert choice.finish_reason == "tool_calls"
+
+    # That one choice should have ALL THREE tool calls
+    tool_calls = choice.message.tool_calls
+    assert tool_calls is not None, "tool_calls should not be None"
+    assert len(tool_calls) == 3, f"Expected 3 tool_calls, got {len(tool_calls)}"
+
+    # Verify each tool call
+    assert tool_calls[0]["id"] == "call_paris"
+    assert tool_calls[0]["function"]["name"] == "get_weather"
+
+    assert tool_calls[1]["id"] == "call_tokyo"
+    assert tool_calls[1]["function"]["name"] == "get_weather"
+
+    assert tool_calls[2]["id"] == "call_horoscope"
+    assert tool_calls[2]["function"]["name"] == "get_horoscope"
+
+    print("✓ Multiple tool calls are correctly grouped in a single choice")

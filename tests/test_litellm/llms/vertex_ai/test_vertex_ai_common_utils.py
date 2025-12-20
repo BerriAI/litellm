@@ -984,6 +984,7 @@ async def test_vertex_ai_token_counter_routes_partner_models():
     to the partner models token counter instead of the Gemini token counter.
     """
     from unittest.mock import AsyncMock, patch
+
     from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
     from litellm.types.utils import TokenCountResponse
 
@@ -1027,6 +1028,7 @@ async def test_vertex_ai_token_counter_routes_gemini_models():
     to the Gemini token counter (not partner models).
     """
     from unittest.mock import AsyncMock, patch
+
     from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
     from litellm.types.utils import TokenCountResponse
 
@@ -1124,3 +1126,73 @@ def test_vertex_ai_moonshot_uses_openai_handler():
     assert VertexAIPartnerModels.should_use_openai_handler(
         "moonshotai/kimi-k2-thinking-maas"
     )
+
+
+def test_build_vertex_schema_empty_properties():
+    """
+    Test _build_vertex_schema handles empty properties objects correctly.
+    
+    This test verifies the fix for the issue where Gemini rejects schemas 
+    with empty properties objects like {"properties": {}, "type": "object"}.
+    
+    Error from Gemini: "GenerateContentRequest.generation_config.response_schema
+    .properties[\"action\"].items.any_of[0].properties[\"go_back\"].properties: 
+    should be non-empty for OBJECT type"
+    
+    The fix removes empty properties objects and their associated type/required fields.
+    """
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    # Input: Schema with empty properties (the problematic case from real request)
+    input_schema = {
+        "properties": {
+            "action": {
+                "description": "List of actions to execute",
+                "items": {
+                    "anyOf": [
+                        {
+                            "properties": {
+                                "go_back": {
+                                    "properties": {},
+                                    "type": "object",
+                                    "additionalProperties": False,
+                                    "description": "Go back",
+                                    "required": []
+                                }
+                            },
+                            "required": ["go_back"],
+                            "type": "object",
+                            "additionalProperties": False
+                        }
+                    ]
+                },
+                "type": "array"
+            }
+        },
+        "type": "object",
+        "additionalProperties": False
+    }
+
+    # Apply the transformation
+    result = _build_vertex_schema(input_schema)
+
+    # Verify the transformation removed empty properties
+    # Navigate to the go_back schema
+    go_back_schema = result["properties"]["action"]["items"]["anyOf"][0]["properties"]["go_back"]
+    
+    # Verify empty properties was removed
+    assert "properties" not in go_back_schema, "Empty properties should be removed"
+    
+    # Verify type was also removed (since object without properties is invalid in Gemini)
+    assert "type" not in go_back_schema, "Type should be removed when properties is empty"
+    
+    # Verify required was also removed
+    assert "required" not in go_back_schema, "Required should be removed when properties is empty"
+    
+    # Verify description is preserved
+    assert go_back_schema.get("description") == "Go back", "Description should be preserved"
+    
+    # Verify parent schema still has proper structure
+    parent_schema = result["properties"]["action"]["items"]["anyOf"][0]
+    assert parent_schema["type"] == "object", "Parent schema should still have object type"
+    assert "go_back" in parent_schema["properties"], "go_back should still be in parent properties"
