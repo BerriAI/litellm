@@ -618,6 +618,9 @@ def test_azure_safety_result():
 
     response = completion(
         model="azure/gpt-4.1-mini",
+        api_key=os.getenv("AZURE_API_KEY"),
+        api_base=os.getenv("AZURE_API_BASE"),
+        api_version="2024-12-01-preview",
         messages=[{"role": "user", "content": "Hello world"}],
     )
     print(f"response: {response}")
