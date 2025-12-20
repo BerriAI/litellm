@@ -257,7 +257,7 @@ Contact me at [EMAIL_REDACTED]
 | `amex` | American Express cards | `3782-822463-10005` |
 | `aws_access_key` | AWS access keys | `AKIAIOSFODNN7EXAMPLE` |
 | `aws_secret_key` | AWS secret keys | `wJalrXUtnFEMI/K7MDENG/bPxRfi...` |
-| `github_token` | GitHub tokens | `example-github-token-123` |
+| `github_token` | GitHub tokens | `ghp_16C7e42F292c6912E7710c838347Ae178B4a` |
 
 ### Using Prebuilt Patterns
 
