@@ -107,6 +107,41 @@ vi.mock("./networking", () => ({
     ],
   }),
   credentialGetCall: vi.fn().mockResolvedValue({}),
+  getGuardrailsList: vi.fn().mockResolvedValue({
+    guardrails: [{ guardrail_name: "content_filter" }, { guardrail_name: "toxicity_filter" }],
+  }),
+  tagListCall: vi.fn().mockResolvedValue({
+    test_tag: {
+      name: "test_tag",
+      description: "A test tag",
+    },
+    production_tag: {
+      name: "production_tag",
+      description: "Production ready models",
+    },
+  }),
+}));
+
+// Mock the useModelsInfo hook since it uses React Query
+vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
+  useModelsInfo: vi.fn().mockReturnValue({
+    data: {
+      data: [
+        {
+          model_name: "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+          provider: "bedrock",
+          litellm_model_name: "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        },
+        {
+          model_name: "openai/gpt-4",
+          provider: "openai",
+          litellm_model_name: "gpt-4",
+        },
+      ],
+    },
+    isLoading: false,
+    error: null,
+  }),
 }));
 
 describe("ModelInfoView", () => {
@@ -239,6 +274,36 @@ describe("ModelInfoView", () => {
     const { getByTestId } = render(<ModelInfoView {...NON_CREATED_BY_USER_ADMIN_PROPS} />);
     await waitFor(() => {
       expect(getByTestId("delete-model-button")).toBeDisabled();
+    });
+  });
+
+  it("should render health check model field for wildcard routes", async () => {
+    const wildcardModelData = {
+      ...modelData,
+      litellm_model_name: "openai/gpt-4*",
+    };
+
+    const WILDCARD_ADMIN_PROPS = {
+      ...DEFAULT_ADMIN_PROPS,
+      modelData: wildcardModelData,
+    };
+
+    const { getByText } = render(<ModelInfoView {...WILDCARD_ADMIN_PROPS} />);
+    await waitFor(() => {
+      expect(getByText("Model Settings")).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(getByText("Health Check Model")).toBeInTheDocument();
+    });
+  });
+
+  it("should not render health check model field for non-wildcard routes", async () => {
+    const { queryByText } = render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />);
+    await waitFor(() => {
+      expect(queryByText("Model Settings")).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(queryByText("Health Check Model")).not.toBeInTheDocument();
     });
   });
 

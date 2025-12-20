@@ -43,8 +43,8 @@ def mock_user_api_key_dict():
         team_id="test-team",
         team_alias=None,
         user_role=None,
-        api_key="a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
-        token="a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
+        api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+        token="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
         permissions={},
         models=[],
         spend=0.0,
@@ -71,7 +71,7 @@ def mock_request_data_input():
         ],
         "litellm_call_id": "test-call-id",
         "metadata": {
-            "user_api_key_hash": "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
+            "user_api_key_hash": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
             "user_api_key_user_id": "default_user_id",
             "user_api_key_user_email": "test@example.com",
             "user_api_key_team_id": "test-team",
@@ -197,7 +197,7 @@ class TestMetadataExtraction:
             # Verify metadata was extracted from request_data["metadata"]
             assert (
                 request_metadata["user_api_key_hash"]
-                == "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456"
+                == "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"
             )
             assert request_metadata["user_api_key_user_id"] == "default_user_id"
             assert request_metadata["user_api_key_user_email"] == "test@example.com"
