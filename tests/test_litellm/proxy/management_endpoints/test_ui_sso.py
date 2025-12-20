@@ -2050,7 +2050,7 @@ class TestProcessSSOJWTAccessToken:
     @pytest.fixture
     def sample_jwt_token(self):
         """Create a sample JWT token string"""
-        return "test-jwt-token-header.payload.signature"
+        return "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
 
     @pytest.fixture
     def sample_jwt_payload(self):
@@ -3052,6 +3052,7 @@ class TestSSOReadinessEndpoint:
     async def test_sso_readiness_no_sso_configured(self):
         """Test that readiness returns healthy when no SSO is configured"""
         from fastapi.testclient import TestClient
+
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
         from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
         from litellm.proxy.proxy_server import app
@@ -3080,6 +3081,7 @@ class TestSSOReadinessEndpoint:
     async def test_sso_readiness_google_fully_configured(self):
         """Test that readiness returns healthy when Google SSO is fully configured"""
         from fastapi.testclient import TestClient
+
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
         from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
         from litellm.proxy.proxy_server import app
@@ -3116,6 +3118,7 @@ class TestSSOReadinessEndpoint:
     async def test_sso_readiness_google_missing_secret(self):
         """Test that readiness returns unhealthy when Google SSO is missing GOOGLE_CLIENT_SECRET"""
         from fastapi.testclient import TestClient
+
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
         from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
         from litellm.proxy.proxy_server import app
@@ -3173,6 +3176,7 @@ class TestSSOReadinessEndpoint:
     ):
         """Test Microsoft SSO readiness with both fully configured and missing variables"""
         from fastapi.testclient import TestClient
+
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
         from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
         from litellm.proxy.proxy_server import app
@@ -3242,6 +3246,7 @@ class TestSSOReadinessEndpoint:
     ):
         """Test Generic SSO readiness with both fully configured and missing variables"""
         from fastapi.testclient import TestClient
+
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
         from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
         from litellm.proxy.proxy_server import app
