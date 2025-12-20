@@ -65,6 +65,7 @@ style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 
 Users can now configure their Cloudzero Integration directly on the UI.
+
 ---
 ### Performance: 50% Reduction in Memory Usage and Import Latency for the LiteLLM SDK
 
