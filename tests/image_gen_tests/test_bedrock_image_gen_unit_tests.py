@@ -531,7 +531,8 @@ def test_amazon_titan_image_gen():
     """Test Amazon Titan image generation with cost tracking."""
     from litellm import image_generation
 
-    model_id = "bedrock/amazon.titan-image-generator-v1"
+    # Use v2 as v1 has reached end of life
+    model_id = "bedrock/amazon.titan-image-generator-v2:0"
 
     response = litellm.image_generation(
         model=model_id,
