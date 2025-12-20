@@ -3138,28 +3138,28 @@ openai = ["openai (>=0.27.8)"]
 
 [[package]]
 name = "litellm-enterprise"
-version = "0.1.25"
+version = "0.1.27"
 description = "Package for LiteLLM Enterprise features"
 optional = true
 python-versions = "!=2.7.*,!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,!=3.6.*,!=3.7.*,>=3.8"
 groups = ["main"]
 markers = "extra == \"proxy\""
 files = [
-    {file = "litellm_enterprise-0.1.25-py3-none-any.whl", hash = "sha256:80c8f1996846453ad309e74cd6d2659d9508320370df5d462d34326b06401c4d"},
-    {file = "litellm_enterprise-0.1.25.tar.gz", hash = "sha256:1c82178b8e2c85f47b31910fd103a322b46d6caea44cd7a8c80b00fdcfeacd22"},
+    {file = "litellm_enterprise-0.1.27-py3-none-any.whl", hash = "sha256:41b9d41d04123f492060a742091006dc1d182b54ce3a1c0e18ee75d623c63e91"},
+    {file = "litellm_enterprise-0.1.27.tar.gz", hash = "sha256:aa40c87f7c8df64beb79e75f71e1b5c0a458350efa68527e3491e6f27f2cbd57"},
 ]
 
 [[package]]
 name = "litellm-proxy-extras"
-version = "0.4.14"
+version = "0.4.16"
 description = "Additional files for the LiteLLM Proxy. Reduces the size of the main litellm package."
 optional = true
 python-versions = "!=2.7.*,!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,!=3.6.*,!=3.7.*,>=3.8"
 groups = ["main"]
 markers = "extra == \"proxy\""
 files = [
-    {file = "litellm_proxy_extras-0.4.14-py3-none-any.whl", hash = "sha256:6943e19abb696e080b5a2a01472b99b1d78603ecb9df24604eba428f54440e7d"},
-    {file = "litellm_proxy_extras-0.4.14.tar.gz", hash = "sha256:518680192aac39c8c4f96ee0f3a87e2905250d3edaea8e0c4ff54ee598e775b0"},
+    {file = "litellm_proxy_extras-0.4.16-py3-none-any.whl", hash = "sha256:5651e777c7f4c0e87c6722971bca19b8f40f417b08f74001cab2d0a5b1c63a91"},
+    {file = "litellm_proxy_extras-0.4.16.tar.gz", hash = "sha256:ff1ee4ea119318b471bb71a99d8bc941159d4d2c09bee797dd29768e9504befb"},
 ]
 
 [[package]]
@@ -8051,4 +8051,4 @@ utils = ["numpydoc"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.9,<4.0"
-content-hash = "a102d24777f1c438dcf15055abeef385722a9603cb3c3d3643c86190b7534c47"
+content-hash = "b010d9da7f5a765670932b78d720aae4fcb819daba050683ee125b4367972419"
