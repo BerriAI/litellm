@@ -708,7 +708,7 @@ class ModelResponseIterator:
                     tool_input = content_block_start["content_block"].get("input", {})
                     # Fix: Only send non-empty tool arguments in content_block_start
                     # This prevents double '{}' accumulation: '{}' + '{}' = '{}{}' (invalid JSON)
-                    # Track if we sent initial args so content_block_stop knows whether to send '{}'
+                    # Track if we sent initial args so content_block_stop knows whether to send '{}'.
                     self.sent_initial_tool_args = bool(tool_input)  # Track if we sent args
                     tool_args = json.dumps(tool_input) if tool_input else ""
                     tool_use = ChatCompletionToolCallChunk(
