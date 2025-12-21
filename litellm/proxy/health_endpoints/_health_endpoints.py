@@ -3,7 +3,7 @@ import copy
 import os
 import time
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Literal, Optional, Union
 
 import fastapi
@@ -958,6 +958,92 @@ async def shared_health_check_status_endpoint(
                 "error": f"Failed to retrieve shared health check status: {str(e)}"
             },
         )
+
+
+@router.get(
+    "/health/license",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def health_license_endpoint(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """Return metadata about the configured LiteLLM license without exposing the key."""
+    from litellm.proxy.proxy_server import (
+        _license_check,
+        premium_user,
+        premium_user_data,
+    )
+
+    license_data = premium_user_data or _license_check.airgapped_license_data
+
+    if (
+        license_data is None
+        and getattr(_license_check, "license_str", None)
+        and getattr(_license_check, "public_key", None)
+    ):
+        try:
+            verification_result = _license_check.verify_license_without_api_request(
+                public_key=_license_check.public_key,
+                license_key=_license_check.license_str,
+            )
+            if verification_result is True:
+                license_data = _license_check.airgapped_license_data
+        except Exception:
+            pass
+
+    has_license = bool(getattr(_license_check, "license_str", None))
+    license_type = "enterprise" if premium_user else "community"
+    expiration_date: Optional[str] = None
+    allowed_features: list = []
+    max_users: Optional[int] = None
+    max_teams: Optional[int] = None
+
+    if license_data:
+        expiration_date = license_data.get("expiration_date")
+        raw_allowed_features = license_data.get("allowed_features")
+        if isinstance(raw_allowed_features, list):
+            allowed_features = list(raw_allowed_features)
+        elif raw_allowed_features is None:
+            allowed_features = []
+        else:
+            allowed_features = [raw_allowed_features]
+        extracted_license_type = license_data.get("license_type")
+        if isinstance(extracted_license_type, str) and extracted_license_type:
+            license_type = extracted_license_type
+        max_users = license_data.get("max_users")
+        max_teams = license_data.get("max_teams")
+
+    is_expired: Optional[bool] = None
+    if isinstance(expiration_date, str):
+        try:
+            expiration_dt = datetime.strptime(expiration_date, "%Y-%m-%d").replace(
+                tzinfo=timezone.utc
+            )
+            is_expired = expiration_dt < datetime.now(timezone.utc)
+        except ValueError:
+            is_expired = None
+
+    status = "inactive"
+    if premium_user:
+        status = "active"
+    elif has_license and is_expired is True:
+        status = "expired"
+    elif has_license:
+        status = "invalid"
+
+    return {
+        "has_license": has_license,
+        "status": status,
+        "license_type": license_type,
+        "expiration_date": expiration_date,
+        "is_expired": is_expired,
+        "allowed_features": allowed_features,
+        "limits": {
+            "max_users": max_users,
+            "max_teams": max_teams,
+        },
+    }
 
 
 db_health_cache = {"status": "unknown", "last_updated": datetime.now()}

@@ -3776,6 +3776,7 @@ class EnterpriseLicenseData(TypedDict, total=False):
     expiration_date: str
     user_id: str
     allowed_features: List[str]
+    license_type: Optional[str]
     max_users: int
     max_teams: int
 
