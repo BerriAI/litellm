@@ -80,11 +80,13 @@ async def test_openai_realtime_direct_call_no_intent():
         async def receive_text(self):
             # This is called by client_ack_messages() to read messages FROM the client
             # Since this test doesn't send any client messages, we'll wait until session.created is received
+            # We need to wait long enough for backend_to_client_send_messages() to receive messages from OpenAI
             if not self._receive_called:
                 self._receive_called = True
-                # Wait up to 45 seconds for session.created to arrive
-                # CI environments can have very slow network connections and high latency
-                max_wait = 45.0
+                # Wait up to 60 seconds for session.created to arrive
+                # CI environments can have very slow network connections, and we need to give
+                # backend_to_client_send_messages() enough time to establish connection and receive messages
+                max_wait = 60.0
                 check_interval = 0.1
                 waited = 0.0
                 
@@ -99,11 +101,11 @@ async def test_openai_realtime_direct_call_no_intent():
                 # Give a generous grace period for CI environments
                 if not self.connection_successful:
                     # Check one more time after a longer delay
-                    await asyncio.sleep(2.0)
+                    await asyncio.sleep(3.0)
                     if self.connection_successful:
-                        print(f"session.created received after {waited + 2.0:.2f} seconds (with grace period) - closing connection")
+                        print(f"session.created received after {waited + 3.0:.2f} seconds (with grace period) - closing connection")
                     else:
-                        print(f"Timeout: session.created not received after {max_wait + 2.0} seconds")
+                        print(f"Timeout: session.created not received after {max_wait + 3.0} seconds")
                         print(f"[DEBUG] Total messages received in send_text: {len(self.messages_sent)}")
                         if self.messages_sent:
                             print(f"[DEBUG] First message preview: {str(self.messages_sent[0])[:200]}")
@@ -151,9 +153,17 @@ async def test_openai_realtime_direct_call_no_intent():
         # Make sure we're not getting the "Invalid intent" error
         if "invalid_intent" in str(e).lower() or "Invalid intent" in str(e):
             pytest.fail(f"Fix failed - still getting invalid intent error: {e}")
-        # If connection failed completely (no messages), fail the test
+        # If connection failed completely (no messages), fail the test with detailed error
         if not websocket_client.connection_successful and len(websocket_client.messages_sent) == 0:
-            pytest.fail(f"Connection failed with exception and no messages received: {type(e).__name__}: {e}")
+            # Import here to avoid circular imports
+            import traceback
+            error_trace = traceback.format_exc()
+            pytest.fail(
+                f"Connection failed with exception and no messages received.\n"
+                f"Exception type: {type(e).__name__}\n"
+                f"Exception message: {e}\n"
+                f"Traceback:\n{error_trace}"
+            )
         # If we got messages but connection failed later, that's acceptable
         print(f"[INFO] Exception occurred but messages were received: {type(e).__name__}: {e}")
     
@@ -278,11 +288,13 @@ async def test_openai_realtime_direct_call_with_intent():
         async def receive_text(self):
             # This is called by client_ack_messages() to read messages FROM the client
             # Since this test doesn't send any client messages, we'll wait until session.created is received
+            # We need to wait long enough for backend_to_client_send_messages() to receive messages from OpenAI
             if not self._receive_called:
                 self._receive_called = True
-                # Wait up to 45 seconds for session.created to arrive
-                # CI environments can have very slow network connections and high latency
-                max_wait = 45.0
+                # Wait up to 60 seconds for session.created to arrive
+                # CI environments can have very slow network connections, and we need to give
+                # backend_to_client_send_messages() enough time to establish connection and receive messages
+                max_wait = 60.0
                 check_interval = 0.1
                 waited = 0.0
 
@@ -297,11 +309,11 @@ async def test_openai_realtime_direct_call_with_intent():
                 # Give a generous grace period for CI environments
                 if not self.connection_successful:
                     # Check one more time after a longer delay
-                    await asyncio.sleep(2.0)
+                    await asyncio.sleep(3.0)
                     if self.connection_successful:
-                        print(f"session.created received after {waited + 2.0:.2f} seconds (with grace period, with intent) - closing connection")
+                        print(f"session.created received after {waited + 3.0:.2f} seconds (with grace period, with intent) - closing connection")
                     else:
-                        print(f"Timeout: session.created not received after {max_wait + 2.0} seconds (with intent)")
+                        print(f"Timeout: session.created not received after {max_wait + 3.0} seconds (with intent)")
                         print(f"[DEBUG] Total messages received in send_text: {len(self.messages_sent)}")
                         if self.messages_sent:
                             print(f"[DEBUG] First message preview: {str(self.messages_sent[0])[:200]}")
