@@ -1,7 +1,4 @@
-import React from "react";
-import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Icon } from "@tremor/react";
-import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
-import { Tooltip } from "antd";
+import { ChevronDownIcon, ChevronUpIcon, SwitchVerticalIcon } from "@heroicons/react/outline";
 import {
   ColumnDef,
   flexRender,
@@ -10,9 +7,12 @@ import {
   SortingState,
   useReactTable,
 } from "@tanstack/react-table";
-import { VectorStore } from "./types";
-import { getProviderLogoAndName } from "../provider_info_helpers";
+import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@tremor/react";
+import { Tooltip } from "antd";
+import React from "react";
 import TableIconActionButton from "../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
+import { getProviderLogoAndName } from "../provider_info_helpers";
+import { VectorStore } from "./types";
 
 interface VectorStoreTableProps {
   data: VectorStore[];
