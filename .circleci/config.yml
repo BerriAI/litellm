@@ -16,12 +16,6 @@ commands:
             echo "nameserver 127.0.0.11" | sudo tee /etc/resolv.conf
             echo "nameserver 8.8.8.8" | sudo tee -a /etc/resolv.conf
             echo "nameserver 8.8.4.4" | sudo tee -a /etc/resolv.conf
-  fix_conda_typing_extensions:
-    description: "Fix conda's outdated typing-extensions to support Sentinel (required by pydantic)"
-    steps:
-      - run:
-          name: "Upgrade typing-extensions in conda environment"
-          command: pip install --upgrade typing-extensions>=4.12.0
   setup_litellm_enterprise_pip:
     steps:
       - run:
@@ -617,10 +611,13 @@ jobs:
             conda create -n myenv python=3.13 -y
             conda activate myenv
             python --version
-      - fix_conda_typing_extensions
       - run:
           name: Install Dependencies
           command: |
+            export PATH="$HOME/miniconda/bin:$PATH"
+            source ~/.bashrc
+            conda activate myenv
+            pip install --upgrade typing-extensions>=4.12.0
             pip install "pytest==7.3.1"
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
@@ -684,6 +681,9 @@ jobs:
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
+            export PATH="$HOME/miniconda/bin:$PATH"
+            source ~/.bashrc
+            conda activate myenv
             set +e
             chmod +x docker/entrypoint.sh
             ./docker/entrypoint.sh
@@ -692,6 +692,9 @@ jobs:
       - run:
           name: Run tests
           command: |
+            export PATH="$HOME/miniconda/bin:$PATH"
+            source ~/.bashrc
+            conda activate myenv
             pwd
             ls
             python -m pytest tests/proxy_security_tests --cov=litellm --cov-report=xml -vv -x -v --junitxml=test-results/junit.xml --durations=5
@@ -1989,10 +1992,13 @@ jobs:
             conda create -n myenv python=3.9 -y
             conda activate myenv
             python --version
-      - fix_conda_typing_extensions
       - run:
           name: Install Dependencies
           command: |
+            export PATH="$HOME/miniconda/bin:$PATH"
+            source ~/.bashrc
+            conda activate myenv
+            pip install --upgrade typing-extensions>=4.12.0
             pip install "pytest==7.3.1"
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
@@ -2072,10 +2078,13 @@ jobs:
             conda create -n myenv python=3.9 -y
             conda activate myenv
             python --version
-      - fix_conda_typing_extensions
       - run:
           name: Install Dependencies
           command: |
+            export PATH="$HOME/miniconda/bin:$PATH"
+            source ~/.bashrc
+            conda activate myenv
+            pip install --upgrade typing-extensions>=4.12.0
             pip install "pytest==7.3.1"
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
@@ -2212,10 +2221,13 @@ jobs:
             conda create -n myenv python=3.10 -y
             conda activate myenv
             python --version
-      - fix_conda_typing_extensions
       - run:
           name: Install Dependencies
           command: |
+            export PATH="$HOME/miniconda/bin:$PATH"
+            source ~/.bashrc
+            conda activate myenv
+            pip install --upgrade typing-extensions>=4.12.0
             pip install "pytest==7.3.1"
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
@@ -2356,10 +2368,13 @@ jobs:
             conda create -n myenv python=3.9 -y
             conda activate myenv
             python --version
-      - fix_conda_typing_extensions
       - run:
           name: Install Dependencies
           command: |
+            export PATH="$HOME/miniconda/bin:$PATH"
+            source ~/.bashrc
+            conda activate myenv
+            pip install --upgrade typing-extensions>=4.12.0
             pip install "pytest==7.3.1"
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
@@ -2542,10 +2557,13 @@ jobs:
             conda create -n myenv python=3.9 -y
             conda activate myenv
             python --version
-      - fix_conda_typing_extensions
       - run:
           name: Install Dependencies
           command: |
+            export PATH="$HOME/miniconda/bin:$PATH"
+            source ~/.bashrc
+            conda activate myenv
+            pip install --upgrade typing-extensions>=4.12.0
             pip install "pytest==7.3.1"
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
@@ -2652,10 +2670,13 @@ jobs:
             conda create -n myenv python=3.9 -y
             conda activate myenv
             python --version
-      - fix_conda_typing_extensions
       - run:
           name: Install Dependencies
           command: |
+            export PATH="$HOME/miniconda/bin:$PATH"
+            source ~/.bashrc
+            conda activate myenv
+            pip install --upgrade typing-extensions>=4.12.0
             pip install "pytest==7.3.1"
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
@@ -2788,10 +2809,13 @@ jobs:
             conda create -n myenv python=3.9 -y
             conda activate myenv
             python --version
-      - fix_conda_typing_extensions
       - run:
           name: Install Dependencies
           command: |
+            export PATH="$HOME/miniconda/bin:$PATH"
+            source ~/.bashrc
+            conda activate myenv
+            pip install --upgrade typing-extensions>=4.12.0
             pip install "pytest==7.3.1"
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
@@ -2896,10 +2920,13 @@ jobs:
             conda create -n myenv python=3.13 -y
             conda activate myenv
             python --version
-      - fix_conda_typing_extensions
       - run:
           name: Install Dependencies
           command: |
+            export PATH="$HOME/miniconda/bin:$PATH"
+            source ~/.bashrc
+            conda activate myenv
+            pip install --upgrade typing-extensions>=4.12.0
             pip install "pytest==7.3.1"
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
@@ -2999,13 +3026,13 @@ jobs:
             conda create -n myenv python=3.10 -y
             conda activate myenv
             python --version
-      - fix_conda_typing_extensions
       - run:
           name: Install Dependencies
           command: |
             export PATH="$HOME/miniconda/bin:$PATH"
             source $HOME/miniconda/etc/profile.d/conda.sh
             conda activate myenv
+            pip install --upgrade typing-extensions>=4.12.0
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
@@ -3445,10 +3472,13 @@ jobs:
             conda create -n myenv python=3.9 -y
             conda activate myenv
             python --version
-      - fix_conda_typing_extensions
       - run:
           name: Install Dependencies
           command: |
+            export PATH="$HOME/miniconda/bin:$PATH"
+            source ~/.bashrc
+            conda activate myenv
+            pip install --upgrade typing-extensions>=4.12.0
             npm install -D @playwright/test
             npm install @google-cloud/vertexai
             pip install "pytest==7.3.1"
