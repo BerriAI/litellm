@@ -26,6 +26,7 @@ import litellm
 from litellm import completion
 from litellm._logging import verbose_logger
 from litellm.integrations.datadog.datadog import *
+import litellm.integrations.datadog.datadog as datadog_module
 from datetime import datetime, timedelta
 from litellm.types.utils import (
     StandardLoggingPayload,
@@ -88,6 +89,24 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
             additional_headers=None,
         ),
     )
+
+
+class _DummySpan:
+    def __init__(self, trace_id=None, span_id=None):
+        self.trace_id = trace_id
+        self.span_id = span_id
+
+
+class _DummyTracer:
+    def __init__(self, current_span=None, current_root_span=None):
+        self._current_span = current_span
+        self._current_root_span = current_root_span
+
+    def current_span(self):
+        return self._current_span
+
+    def current_root_span(self):
+        return self._current_root_span
 
 
 @pytest.mark.asyncio
@@ -219,20 +238,35 @@ async def test_datadog_logging_http_request():
 
         # Get the expected fields and their types from DatadogPayload
         expected_fields = DatadogPayload.__annotations__
-        # Assert that all elements in body have the fields of DatadogPayload with correct types
+        required_fields = {
+            "ddsource": str,
+            "ddtags": str,
+            "hostname": str,
+            "message": str,
+            "service": str,
+            "status": str,
+        }
+        optional_fields = set(expected_fields.keys()) - set(required_fields.keys())
+
+        # Assert that all elements in body have the required fields with correct types
         for log in body:
             assert isinstance(log, dict), "Each log should be a dictionary"
-            for field, expected_type in expected_fields.items():
+            for field, expected_type in required_fields.items():
                 assert field in log, f"Field '{field}' is missing from the log"
                 assert isinstance(
                     log[field], expected_type
                 ), f"Field '{field}' has incorrect type. Expected {expected_type}, got {type(log[field])}"
 
-        # Additional assertion to ensure no extra fields are present
-        for log in body:
-            assert set(log.keys()) == set(
-                expected_fields.keys()
-            ), f"Log contains unexpected fields: {set(log.keys()) - set(expected_fields.keys())}"
+            for optional_field in optional_fields:
+                if optional_field in log:
+                    assert isinstance(
+                        log[optional_field], str
+                    ), f"Optional field '{optional_field}' must be a string"
+
+            unexpected_fields = set(log.keys()) - set(expected_fields.keys())
+            assert (
+                not unexpected_fields
+            ), f"Log contains unexpected fields: {unexpected_fields}"
 
         # Parse the 'message' field as JSON and check its structure
         message = json.loads(body[0]["message"])
@@ -254,6 +288,96 @@ async def test_datadog_logging_http_request():
 
     except Exception as e:
         pytest.fail(f"Test failed with exception: {str(e)}")
+
+
+@pytest.mark.asyncio
+async def test_add_trace_context_uses_current_span(monkeypatch):
+    monkeypatch.setenv("DD_SITE", "https://fake.datadoghq.com")
+    monkeypatch.setenv("DD_API_KEY", "anything")
+    tracer = _DummyTracer(current_span=_DummySpan(trace_id=123, span_id=456))
+    monkeypatch.setattr(datadog_module, "tracer", tracer)
+
+    dd_logger = DataDogLogger()
+    payload = DatadogPayload(
+        ddsource="litellm",
+        ddtags="env:test",
+        hostname="host",
+        message="{}",
+        service="svc",
+        status="info",
+    )
+
+    dd_logger._add_trace_context_to_payload(payload)
+    assert payload["dd.trace_id"] == "123"
+    assert payload["dd.span_id"] == "456"
+
+
+@pytest.mark.asyncio
+async def test_add_trace_context_falls_back_to_root_span(monkeypatch):
+    monkeypatch.setenv("DD_SITE", "https://fake.datadoghq.com")
+    monkeypatch.setenv("DD_API_KEY", "anything")
+    tracer = _DummyTracer(
+        current_span=None,
+        current_root_span=_DummySpan(trace_id=789, span_id=None),
+    )
+    monkeypatch.setattr(datadog_module, "tracer", tracer)
+
+    dd_logger = DataDogLogger()
+    payload = DatadogPayload(
+        ddsource="litellm",
+        ddtags="env:test",
+        hostname="host",
+        message="{}",
+        service="svc",
+        status="info",
+    )
+
+    dd_logger._add_trace_context_to_payload(payload)
+    assert payload["dd.trace_id"] == "789"
+    assert "dd.span_id" not in payload
+
+
+@pytest.mark.asyncio
+async def test_add_trace_context_handles_missing_tracer(monkeypatch):
+    monkeypatch.setenv("DD_SITE", "https://fake.datadoghq.com")
+    monkeypatch.setenv("DD_API_KEY", "anything")
+    monkeypatch.setattr(datadog_module, "tracer", object())
+
+    dd_logger = DataDogLogger()
+    payload = DatadogPayload(
+        ddsource="litellm",
+        ddtags="env:test",
+        hostname="host",
+        message="{}",
+        service="svc",
+        status="info",
+    )
+
+    dd_logger._add_trace_context_to_payload(payload)
+    assert "dd.trace_id" not in payload
+    assert "dd.span_id" not in payload
+
+
+@pytest.mark.asyncio
+async def test_add_trace_context_ignores_span_without_trace_id(monkeypatch):
+    monkeypatch.setenv("DD_SITE", "https://fake.datadoghq.com")
+    monkeypatch.setenv("DD_API_KEY", "anything")
+    tracer = _DummyTracer(current_span=_DummySpan(trace_id=None, span_id=555))
+    monkeypatch.setattr(datadog_module, "tracer", tracer)
+
+    dd_logger = DataDogLogger()
+    payload = DatadogPayload(
+        ddsource="litellm",
+        ddtags="env:test",
+        hostname="host",
+        message="{}",
+        service="svc",
+        status="info",
+    )
+
+    dd_logger._add_trace_context_to_payload(payload)
+    assert "dd.trace_id" not in payload
+    assert "dd.span_id" not in payload
 
 
 @pytest.mark.asyncio
