@@ -33,6 +33,7 @@ async def test_openai_realtime_direct_call_no_intent():
             self.received_session_created = False
             self.connection_successful = False
             self._receive_called = False
+            self.intent_error_received = None  # Initialize for second test
             
         async def accept(self):
             # Not needed for client-side websocket
@@ -81,9 +82,9 @@ async def test_openai_realtime_direct_call_no_intent():
             # Since this test doesn't send any client messages, we'll wait until session.created is received
             if not self._receive_called:
                 self._receive_called = True
-                # Wait up to 10 seconds for session.created to arrive
-                # CI environments may have slower network connections
-                max_wait = 10.0
+                # Wait up to 45 seconds for session.created to arrive
+                # CI environments can have very slow network connections and high latency
+                max_wait = 45.0
                 check_interval = 0.1
                 waited = 0.0
                 
@@ -94,11 +95,18 @@ async def test_openai_realtime_direct_call_no_intent():
                     await asyncio.sleep(check_interval)
                     waited += check_interval
                 
+                # Final check: messages might have arrived just after the loop
+                # Give a generous grace period for CI environments
                 if not self.connection_successful:
-                    print(f"Timeout: session.created not received after {max_wait} seconds")
-                    print(f"[DEBUG] Total messages received in send_text: {len(self.messages_sent)}")
-                    if self.messages_sent:
-                        print(f"[DEBUG] First message preview: {str(self.messages_sent[0])[:200]}")
+                    # Check one more time after a longer delay
+                    await asyncio.sleep(2.0)
+                    if self.connection_successful:
+                        print(f"session.created received after {waited + 2.0:.2f} seconds (with grace period) - closing connection")
+                    else:
+                        print(f"Timeout: session.created not received after {max_wait + 2.0} seconds")
+                        print(f"[DEBUG] Total messages received in send_text: {len(self.messages_sent)}")
+                        if self.messages_sent:
+                            print(f"[DEBUG] First message preview: {str(self.messages_sent[0])[:200]}")
             
             # After waiting, close the connection to end the test
             print("Test validation complete - closing connection")
@@ -121,7 +129,7 @@ async def test_openai_realtime_direct_call_no_intent():
             model="gpt-4o-realtime-preview-2024-10-01",
             websocket=websocket_client,
             api_key=os.environ.get("OPENAI_API_KEY"),
-            timeout=15
+            timeout=60  # Generous timeout for CI environments with slow network connections
         )
     except websockets.exceptions.ConnectionClosed:
         # Expected - we close the connection after validation
@@ -177,6 +185,7 @@ async def test_openai_realtime_direct_call_with_intent():
             self.received_session_created = False
             self.connection_successful = False
             self._receive_called = False
+            self.intent_error_received = None  # Initialize for error handling
 
         async def accept(self):
             # Not needed for client-side websocket
@@ -238,9 +247,9 @@ async def test_openai_realtime_direct_call_with_intent():
             # Since this test doesn't send any client messages, we'll wait until session.created is received
             if not self._receive_called:
                 self._receive_called = True
-                # Wait up to 10 seconds for session.created to arrive
-                # CI environments may have slower network connections
-                max_wait = 10.0
+                # Wait up to 45 seconds for session.created to arrive
+                # CI environments can have very slow network connections and high latency
+                max_wait = 45.0
                 check_interval = 0.1
                 waited = 0.0
 
@@ -251,11 +260,18 @@ async def test_openai_realtime_direct_call_with_intent():
                     await asyncio.sleep(check_interval)
                     waited += check_interval
 
+                # Final check: messages might have arrived just after the loop
+                # Give a generous grace period for CI environments
                 if not self.connection_successful:
-                    print(f"Timeout: session.created not received after {max_wait} seconds (with intent)")
-                    print(f"[DEBUG] Total messages received in send_text: {len(self.messages_sent)}")
-                    if self.messages_sent:
-                        print(f"[DEBUG] First message preview: {str(self.messages_sent[0])[:200]}")
+                    # Check one more time after a longer delay
+                    await asyncio.sleep(2.0)
+                    if self.connection_successful:
+                        print(f"session.created received after {waited + 2.0:.2f} seconds (with grace period, with intent) - closing connection")
+                    else:
+                        print(f"Timeout: session.created not received after {max_wait + 2.0} seconds (with intent)")
+                        print(f"[DEBUG] Total messages received in send_text: {len(self.messages_sent)}")
+                        if self.messages_sent:
+                            print(f"[DEBUG] First message preview: {str(self.messages_sent[0])[:200]}")
 
             # After waiting, close the connection to end the test
             print("Test validation complete (with intent) - closing connection")
@@ -283,7 +299,7 @@ async def test_openai_realtime_direct_call_with_intent():
             websocket=websocket_client,
             api_key=os.environ.get("OPENAI_API_KEY"),
             query_params=query_params,
-            timeout=10
+            timeout=60  # Generous timeout for CI environments with slow network connections
         )
     except websockets.exceptions.ConnectionClosed:
         # Expected - connection closes after brief test
