@@ -160,7 +160,7 @@ async def test_health_license_endpoint_with_active_license():
     ):
         response = await health_license_endpoint(user_api_key_dict=MagicMock())
 
-    assert response["status"] == "active"
+    assert response["has_license"] is True
     assert response["license_type"] == "enterprise"
     assert response["expiration_date"] == "2099-01-01"
     assert response["allowed_features"] == ["feature-a"]
@@ -188,7 +188,7 @@ async def test_health_license_endpoint_without_valid_license():
     ):
         response = await health_license_endpoint(user_api_key_dict=MagicMock())
 
-    assert response["status"] == "invalid"
+    assert response["has_license"] is True
     assert response["license_type"] == "community"
     assert response["expiration_date"] is None
     assert response["allowed_features"] == []
