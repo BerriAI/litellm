@@ -94,9 +94,9 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessTok
             <Button icon={<ReloadOutlined />} onClick={handleReset}>
               Reset
             </Button>
-            <TremorButton onClick={handleSave} loading={saving} className="flex items-center gap-2">
+            <Button onClick={handleSave} loading={saving} type="primary">
               <SaveOutlined /> Save Changes
-            </TremorButton>
+            </Button>
           </div>
         )}
       </div>
