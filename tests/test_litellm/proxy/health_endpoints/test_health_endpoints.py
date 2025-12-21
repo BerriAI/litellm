@@ -137,7 +137,6 @@ async def test_health_services_endpoint_sqs(status, error_message):
 async def test_health_license_endpoint_with_active_license():
     license_data = {
         "expiration_date": "2099-01-01",
-        "license_type": "enterprise",
         "allowed_features": ["feature-a"],
         "max_users": 100,
         "max_teams": 5,

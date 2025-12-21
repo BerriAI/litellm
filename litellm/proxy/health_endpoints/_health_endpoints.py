@@ -1008,9 +1008,6 @@ async def health_license_endpoint(
             allowed_features = []
         else:
             allowed_features = [raw_allowed_features]
-        extracted_license_type = license_data.get("license_type")
-        if isinstance(extracted_license_type, str) and extracted_license_type:
-            license_type = extracted_license_type
         max_users = license_data.get("max_users")
         max_teams = license_data.get("max_teams")
 
