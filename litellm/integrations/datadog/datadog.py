@@ -33,6 +33,7 @@ from litellm.integrations.datadog.datadog_handler import (
     get_datadog_source,
     get_datadog_tags,
 )
+from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
@@ -337,6 +338,7 @@ class DataDogLogger(
             service=get_datadog_service(),
             status=status,
         )
+        self._add_trace_context_to_payload(dd_payload=dd_payload)
         return dd_payload
 
     def create_datadog_logging_payload(
@@ -573,6 +575,56 @@ class DataDogLogger(
             status=DataDogStatus.INFO,
         )
         return dd_payload
+
+    def _add_trace_context_to_payload(
+        self,
+        dd_payload: DatadogPayload,
+    ) -> None:
+        """Attach Datadog APM trace context if one is active."""
+
+        try:
+            trace_context = self._get_active_trace_context()
+            if trace_context is None:
+                return
+
+            dd_payload["dd.trace_id"] = trace_context["trace_id"]
+            span_id = trace_context.get("span_id")
+            if span_id is not None:
+                dd_payload["dd.span_id"] = span_id
+        except Exception:
+            verbose_logger.exception(
+                "Datadog: Failed to attach trace context to payload"
+            )
+
+    def _get_active_trace_context(self) -> Optional[Dict[str, str]]:
+        try:
+            current_span = None
+            current_span_fn = getattr(tracer, "current_span", None)
+            if callable(current_span_fn):
+                current_span = current_span_fn()
+
+            if current_span is None:
+                current_root_span_fn = getattr(tracer, "current_root_span", None)
+                if callable(current_root_span_fn):
+                    current_span = current_root_span_fn()
+
+            if current_span is None:
+                return None
+
+            trace_id = getattr(current_span, "trace_id", None)
+            if trace_id is None:
+                return None
+
+            span_id = getattr(current_span, "span_id", None)
+            trace_context: Dict[str, str] = {"trace_id": str(trace_id)}
+            if span_id is not None:
+                trace_context["span_id"] = str(span_id)
+            return trace_context
+        except Exception:
+            verbose_logger.exception(
+                "Datadog: Failed to retrieve active trace context from tracer"
+            )
+            return None
 
     async def async_health_check(self) -> IntegrationHealthCheckStatus:
         """
