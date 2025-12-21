@@ -1913,6 +1913,9 @@ class MCPServerManager:
         Note: This now handles prefixed tool names
         """
         for server in self.get_registry().values():
+            if server.auth_type == MCPAuth.oauth2:
+                # Skip OAuth2 servers for now as they may require user-specific tokens
+                continue
             tools = await self._get_tools_from_server(server)
             for tool in tools:
                 # The tool.name here is already prefixed from _get_tools_from_server
