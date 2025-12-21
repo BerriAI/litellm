@@ -615,8 +615,10 @@ jobs:
           name: Install Dependencies
           command: |
             export PATH="$HOME/miniconda/bin:$PATH"
-            source ~/.bashrc
+            source $HOME/miniconda/etc/profile.d/conda.sh
             conda activate myenv
+            python --version
+            which python
             pip install --upgrade typing-extensions>=4.12.0
             pip install "pytest==7.3.1"
             pip install "pytest-asyncio==0.21.1"
@@ -682,7 +684,7 @@ jobs:
           name: Run prisma ./docker/entrypoint.sh
           command: |
             export PATH="$HOME/miniconda/bin:$PATH"
-            source ~/.bashrc
+            source $HOME/miniconda/etc/profile.d/conda.sh
             conda activate myenv
             set +e
             chmod +x docker/entrypoint.sh
@@ -693,7 +695,7 @@ jobs:
           name: Run tests
           command: |
             export PATH="$HOME/miniconda/bin:$PATH"
-            source ~/.bashrc
+            source $HOME/miniconda/etc/profile.d/conda.sh
             conda activate myenv
             pwd
             ls
