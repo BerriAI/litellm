@@ -2,6 +2,14 @@ import io
 import os
 import sys
 
+from litellm.integrations.datadog.datadog_handler import (
+  get_datadog_source,
+  get_datadog_service,
+  get_datadog_env, 
+  get_datadog_pod_name,
+  get_datadog_hostname,
+  get_datadog_tags,
+)
 
 sys.path.insert(0, os.path.abspath("../.."))
 
@@ -452,16 +460,16 @@ def test_datadog_static_methods():
     """Test the static helper methods in DataDogLogger class"""
 
     # Test with default environment variables
-    assert DataDogLogger._get_datadog_source() == "litellm"
-    assert DataDogLogger._get_datadog_service() == "litellm-server"
-    assert DataDogLogger._get_datadog_hostname() is not None
-    assert DataDogLogger._get_datadog_env() == "unknown"
-    assert DataDogLogger._get_datadog_pod_name() == "unknown"
+    assert get_datadog_source() == "litellm"
+    assert get_datadog_service() == "litellm-server"
+    assert get_datadog_hostname() is not None
+    assert get_datadog_env() == "unknown"
+    assert get_datadog_pod_name() == "unknown"
 
     # Test tags format with default values
     assert (
-        "env:unknown,service:litellm,version:unknown,HOSTNAME:"
-        in DataDogLogger._get_datadog_tags()
+        "env:unknown,service:litellm-server,version:unknown,HOSTNAME:"
+        in get_datadog_tags()
     )
 
     # Test with custom environment variables
@@ -475,31 +483,31 @@ def test_datadog_static_methods():
     }
 
     with patch.dict(os.environ, test_env):
-        assert DataDogLogger._get_datadog_source() == "custom-source"
+        assert get_datadog_source() == "custom-source"
         print(
-            "DataDogLogger._get_datadog_source()", DataDogLogger._get_datadog_source()
+            "DataDogLogger._get_datadog_source()", get_datadog_source()
         )
-        assert DataDogLogger._get_datadog_service() == "custom-service"
+        assert get_datadog_service() == "custom-service"
         print(
-            "DataDogLogger._get_datadog_service()", DataDogLogger._get_datadog_service()
+            "DataDogLogger._get_datadog_service()", get_datadog_service()
         )
-        assert DataDogLogger._get_datadog_hostname() == "test-host"
+        assert get_datadog_hostname() == "test-host"
         print(
             "DataDogLogger._get_datadog_hostname()",
-            DataDogLogger._get_datadog_hostname(),
+            get_datadog_hostname(),
         )
-        assert DataDogLogger._get_datadog_env() == "production"
-        print("DataDogLogger._get_datadog_env()", DataDogLogger._get_datadog_env())
-        assert DataDogLogger._get_datadog_pod_name() == "pod-123"
+        assert get_datadog_env() == "production"
+        print("DataDogLogger._get_datadog_env()", get_datadog_env())
+        assert get_datadog_pod_name() == "pod-123"
         print(
             "DataDogLogger._get_datadog_pod_name()",
-            DataDogLogger._get_datadog_pod_name(),
+            get_datadog_pod_name(),
         )
 
         # Test tags format with custom values
         expected_custom_tags = "env:production,service:custom-service,version:1.0.0,HOSTNAME:test-host,POD_NAME:pod-123"
-        print("DataDogLogger._get_datadog_tags()", DataDogLogger._get_datadog_tags())
-        assert DataDogLogger._get_datadog_tags() == expected_custom_tags
+        print("DataDogLogger._get_datadog_tags()", get_datadog_tags())
+        assert get_datadog_tags() == expected_custom_tags
 
 
 @pytest.mark.asyncio
@@ -539,7 +547,7 @@ async def test_datadog_non_serializable_messages():
 def test_get_datadog_tags():
     """Test the _get_datadog_tags static method with various inputs"""
     # Test with no standard_logging_object and default env vars
-    base_tags = DataDogLogger._get_datadog_tags()
+    base_tags = get_datadog_tags()
     assert "env:" in base_tags
     assert "service:" in base_tags
     assert "version:" in base_tags
@@ -555,7 +563,7 @@ def test_get_datadog_tags():
         "POD_NAME": "pod-123",
     }
     with patch.dict(os.environ, test_env):
-        custom_tags = DataDogLogger._get_datadog_tags()
+        custom_tags = get_datadog_tags()
         assert "env:production" in custom_tags
         assert "service:custom-service" in custom_tags
         assert "version:1.0.0" in custom_tags
@@ -566,18 +574,18 @@ def test_get_datadog_tags():
     standard_logging_obj = create_standard_logging_payload()
     standard_logging_obj["request_tags"] = ["tag1", "tag2"]
 
-    tags_with_request = DataDogLogger._get_datadog_tags(standard_logging_obj)
+    tags_with_request = get_datadog_tags(standard_logging_obj)
     assert "request_tag:tag1" in tags_with_request
     assert "request_tag:tag2" in tags_with_request
 
     # Test with empty request_tags
     standard_logging_obj["request_tags"] = []
-    tags_empty_request = DataDogLogger._get_datadog_tags(standard_logging_obj)
+    tags_empty_request = get_datadog_tags(standard_logging_obj)
     assert "request_tag:" not in tags_empty_request
 
     # Test with None request_tags
     standard_logging_obj["request_tags"] = None
-    tags_none_request = DataDogLogger._get_datadog_tags(standard_logging_obj)
+    tags_none_request = get_datadog_tags(standard_logging_obj)
     assert "request_tag:" not in tags_none_request
 
 
