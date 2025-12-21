@@ -1,6 +1,6 @@
 import React from "react";
 import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Icon } from "@tremor/react";
-import { TrashIcon, PencilAltIcon, SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
+import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
 import { Tooltip } from "antd";
 import {
   ColumnDef,
@@ -12,6 +12,7 @@ import {
 } from "@tanstack/react-table";
 import { VectorStore } from "./types";
 import { getProviderLogoAndName } from "../provider_info_helpers";
+import TableIconActionButton from "../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 
 interface VectorStoreTableProps {
   data: VectorStore[];
@@ -104,17 +105,15 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({ data, onView, onEdi
         const vectorStore = row.original;
         return (
           <div className="flex space-x-2">
-            <Icon
-              icon={PencilAltIcon}
-              size="sm"
+            <TableIconActionButton
+              variant="Edit"
+              tooltipText="Edit vector store"
               onClick={() => onEdit(vectorStore.vector_store_id)}
-              className="cursor-pointer"
             />
-            <Icon
-              icon={TrashIcon}
-              size="sm"
+            <TableIconActionButton
+              variant="Delete"
+              tooltipText="Delete vector store"
               onClick={() => onDelete(vectorStore.vector_store_id)}
-              className="cursor-pointer"
             />
           </div>
         );
