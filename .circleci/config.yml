@@ -610,6 +610,8 @@ jobs:
             source ~/.bashrc
             conda create -n myenv python=3.13 -y
             conda activate myenv
+            # Fix conda's outdated typing-extensions (needs Sentinel for pydantic)
+            pip install --upgrade typing-extensions>=4.12.0
             python --version
       - run:
           name: Install Dependencies
@@ -1981,6 +1983,8 @@ jobs:
             source ~/.bashrc
             conda create -n myenv python=3.9 -y
             conda activate myenv
+            # Fix conda's outdated typing-extensions (needs Sentinel for pydantic)
+            pip install --upgrade typing-extensions>=4.12.0
             python --version
       - run:
           name: Install Dependencies
@@ -2063,6 +2067,8 @@ jobs:
             source ~/.bashrc
             conda create -n myenv python=3.9 -y
             conda activate myenv
+            # Fix conda's outdated typing-extensions (needs Sentinel for pydantic)
+            pip install --upgrade typing-extensions>=4.12.0
             python --version
       - run:
           name: Install Dependencies
@@ -2202,6 +2208,8 @@ jobs:
             source ~/.bashrc
             conda create -n myenv python=3.10 -y
             conda activate myenv
+            # Fix conda's outdated typing-extensions (needs Sentinel for pydantic)
+            pip install --upgrade typing-extensions>=4.12.0
             python --version
       - run:
           name: Install Dependencies
@@ -2345,6 +2353,8 @@ jobs:
             source ~/.bashrc
             conda create -n myenv python=3.9 -y
             conda activate myenv
+            # Fix conda's outdated typing-extensions (needs Sentinel for pydantic)
+            pip install --upgrade typing-extensions>=4.12.0
             python --version
       - run:
           name: Install Dependencies
@@ -2530,6 +2540,8 @@ jobs:
             source ~/.bashrc
             conda create -n myenv python=3.9 -y
             conda activate myenv
+            # Fix conda's outdated typing-extensions (needs Sentinel for pydantic)
+            pip install --upgrade typing-extensions>=4.12.0
             python --version
       - run:
           name: Install Dependencies
@@ -2639,6 +2651,8 @@ jobs:
             source ~/.bashrc
             conda create -n myenv python=3.9 -y
             conda activate myenv
+            # Fix conda's outdated typing-extensions (needs Sentinel for pydantic)
+            pip install --upgrade typing-extensions>=4.12.0
             python --version
       - run:
           name: Install Dependencies
@@ -2774,6 +2788,8 @@ jobs:
             source ~/.bashrc
             conda create -n myenv python=3.9 -y
             conda activate myenv
+            # Fix conda's outdated typing-extensions (needs Sentinel for pydantic)
+            pip install --upgrade typing-extensions>=4.12.0
             python --version
       - run:
           name: Install Dependencies
@@ -2881,6 +2897,8 @@ jobs:
             source ~/.bashrc
             conda create -n myenv python=3.13 -y
             conda activate myenv
+            # Fix conda's outdated typing-extensions (needs Sentinel for pydantic)
+            pip install --upgrade typing-extensions>=4.12.0
             python --version
       - run:
           name: Install Dependencies
@@ -2983,6 +3001,8 @@ jobs:
             source ~/.bashrc
             conda create -n myenv python=3.10 -y
             conda activate myenv
+            # Fix conda's outdated typing-extensions (needs Sentinel for pydantic)
+            pip install --upgrade typing-extensions>=4.12.0
             python --version
       - run:
           name: Install Dependencies
@@ -3428,6 +3448,8 @@ jobs:
             source ~/.bashrc
             conda create -n myenv python=3.9 -y
             conda activate myenv
+            # Fix conda's outdated typing-extensions (needs Sentinel for pydantic)
+            pip install --upgrade typing-extensions>=4.12.0
             python --version
       - run:
           name: Install Dependencies
