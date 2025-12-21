@@ -1,7 +1,11 @@
 import asyncio
 import contextvars
+import importlib
 from functools import partial
-from typing import Any, Coroutine, Dict, List, Literal, Optional, Union, cast, overload
+from typing import TYPE_CHECKING, Any, Coroutine, Dict, List, Literal, Optional, Union, cast, overload
+
+if TYPE_CHECKING:
+    from litellm.images.utils import ImageEditRequestUtils
 
 import httpx
 
@@ -29,6 +33,7 @@ from litellm.main import (
     base_llm_aiohttp_handler,
     base_llm_http_handler,
     bedrock_image_generation,
+    bedrock_image_edit,
     openai_chat_completions,
     openai_image_variations,
 )
@@ -50,7 +55,20 @@ from litellm.utils import (
     get_optional_params_image_gen,
 )
 
-from .utils import ImageEditRequestUtils
+# Cache for ImageEditRequestUtils to avoid repeated __getattr__ calls
+_ImageEditRequestUtils_cache: Optional["ImageEditRequestUtils"] = None
+
+
+def _get_ImageEditRequestUtils() -> "ImageEditRequestUtils":
+    """Get ImageEditRequestUtils, loading it lazily if needed."""
+    global _ImageEditRequestUtils_cache
+    if _ImageEditRequestUtils_cache is None:
+        # Access via module to trigger __getattr__ if not cached
+        module = importlib.import_module(__name__)
+        _ImageEditRequestUtils_cache = module.ImageEditRequestUtils
+    assert _ImageEditRequestUtils_cache is not None  # Type narrowing for type checker
+    return _ImageEditRequestUtils_cache
+
 
 
 ##### Image Generation #######################
@@ -653,7 +671,7 @@ def image_variation(
 
 
 @client
-def image_edit(
+def image_edit(  # noqa: PLR0915
     image: Union[FileTypes, List[FileTypes]],
     prompt: str,
     model: Optional[str] = None,
@@ -678,6 +696,29 @@ def image_edit(
     """
     local_vars = locals()
     try:
+        openai_params = [
+                "user",
+                "request_timeout",
+                "api_base",
+                "api_version",
+                "api_key",
+                "deployment_id",
+                "organization",
+                "base_url",
+                "default_headers",
+                "timeout",
+                "max_retries",
+                "n",
+                "quality",
+                "size",
+                "style",
+                "async_call",
+            ]
+        litellm_params_list = all_litellm_params
+        default_params = openai_params + litellm_params_list
+        non_default_params = {
+            k: v for k, v in kwargs.items() if k not in default_params
+        }  # model-specific params - pass them straight to the model/provider
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("async_call", False) is True
@@ -769,15 +810,16 @@ def image_edit(
         local_vars.update(kwargs)
         # Get ImageEditOptionalRequestParams with only valid parameters
         image_edit_optional_params: ImageEditOptionalRequestParams = (
-            ImageEditRequestUtils.get_requested_image_edit_optional_param(local_vars)
+            _get_ImageEditRequestUtils().get_requested_image_edit_optional_param(local_vars)
         )
-
         # Get optional parameters for the responses API
         image_edit_request_params: Dict = (
-            ImageEditRequestUtils.get_optional_params_image_edit(
+            _get_ImageEditRequestUtils().get_optional_params_image_edit(
                 model=model,
                 image_edit_provider_config=image_edit_provider_config,
                 image_edit_optional_params=image_edit_optional_params,
+                drop_params=kwargs.get("drop_params"),
+                additional_drop_params=kwargs.get("additional_drop_params"),
             )
         )
 
@@ -793,6 +835,42 @@ def image_edit(
             custom_llm_provider=custom_llm_provider,
         )
 
+        # Route bedrock to its specific handler (AWS signing required)
+        if custom_llm_provider == "bedrock":
+            if model is None:
+                raise Exception("Model needs to be set for bedrock")
+            image_edit_request_params.update(non_default_params)
+            return bedrock_image_edit.image_edit(  # type: ignore
+                model=model,
+                image=images,
+                prompt=prompt,
+                timeout=timeout,
+                logging_obj=litellm_logging_obj,
+                optional_params=image_edit_request_params,
+                model_response=ImageResponse(),
+                aimage_edit=_is_async,
+                client=kwargs.get("client"),
+                api_base=kwargs.get("api_base"),
+                extra_headers=extra_headers,
+                api_key=kwargs.get("api_key"),
+            )
+        elif custom_llm_provider == "stability":
+            image_edit_request_params.update(non_default_params)
+            return base_llm_http_handler.image_edit_handler(
+            model=model,
+            image=images,
+            prompt=prompt,
+            image_edit_provider_config=image_edit_provider_config,
+            image_edit_optional_request_params=image_edit_request_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
+            logging_obj=litellm_logging_obj,
+            extra_headers=extra_headers,
+            extra_body=extra_body,
+            timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
+            _is_async=_is_async,
+            client=kwargs.get("client"),
+        )
         # Call the handler with _is_async flag instead of directly calling the async handler
         return base_llm_http_handler.image_edit_handler(
             model=model,
@@ -898,3 +976,15 @@ async def aimage_edit(
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
+
+
+def __getattr__(name: str) -> Any:
+    """Lazy import handler for images.main module"""
+    if name == "ImageEditRequestUtils":
+        # Lazy load ImageEditRequestUtils to avoid heavy import from images.utils at module load time
+        from .utils import ImageEditRequestUtils as _ImageEditRequestUtils
+        # Cache it in the module's __dict__ for subsequent accesses
+        module = importlib.import_module(__name__)
+        module.__dict__["ImageEditRequestUtils"] = _ImageEditRequestUtils
+        return _ImageEditRequestUtils
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

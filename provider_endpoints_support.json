@@ -18,6 +18,7 @@
         "ocr": "Supports /ocr endpoint",
         "search": "Supports /search endpoint",
         "skills": "Supports /skills endpoint",
+        "interactions": "Supports /interactions endpoint (Google AI Interactions API)",
         "a2a_(Agent Gateway)": "Supports /a2a/{agent}/message/send endpoint (A2A Protocol)",
         "create_container": "Supports POST /containers endpoint",
         "list_containers": "Supports GET /containers endpoint",
@@ -69,6 +70,23 @@
     "ai21_chat": {
       "display_name": "AI21 Chat (`ai21_chat`)",
       "url": "https://docs.litellm.ai/docs/providers/ai21",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true
+      }
+    },
+    "amazon_nova": {
+      "display_name": "Amazon Nova (`amazon_nova`)",
+      "url": "https://docs.litellm.ai/docs/providers/amazon_nova",
       "endpoints": {
         "chat_completions": true,
         "messages": true,
@@ -715,6 +733,23 @@
         "search": true
       }
     },
+    "linkup": {
+      "display_name": "Linkup (`linkup`)",
+      "url": "https://docs.litellm.ai/docs/search/linkup",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "search": true
+      }
+    },
     "friendliai": {
       "display_name": "FriendliAI (`friendliai`)",
       "url": "https://docs.litellm.ai/docs/providers/friendliai",
@@ -831,6 +866,7 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
+        "interactions": true,
         "a2a": true
       }
     },
@@ -1933,6 +1969,74 @@
     "langgraph": {
       "display_name": "LangGraph (`langgraph`)",
       "url": "https://docs.litellm.ai/docs/providers/langgraph",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true
+      }
+    },
+    "vertex_ai/agent_engine": {
+      "display_name": "Vertex AI Agent Engine (`vertex_ai/agent_engine`)",
+      "url": "https://docs.litellm.ai/docs/providers/vertex_ai_agent_engine",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true
+      }
+    },
+    "pydantic_ai_agents": {
+      "display_name": "Pydantic AI Agents (`pydantic_ai_agents`)",
+      "url": "https://docs.litellm.ai/docs/providers/pydantic_ai_agent",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true
+      }
+    },
+    "stability": {
+      "display_name": "Stability AI (`stability`)",
+      "url": "https://docs.litellm.ai/docs/providers/stability",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": true,
+        "image_edits": true,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
+      }
+    },
+    "venice": {
+      "display_name": "Venice.ai (`venice`)",
+      "url": "https://docs.litellm.ai/docs/providers/venice",
       "endpoints": {
         "chat_completions": true,
         "messages": true,

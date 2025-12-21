@@ -3043,3 +3043,241 @@ class TestAddMissingTeamMember:
         assert set(added_teams) == set(
             expected_teams_added
         ), f"Expected teams {expected_teams_added}, but got {added_teams}"
+
+
+class TestSSOReadinessEndpoint:
+    """Test the /sso/readiness endpoint"""
+
+    @pytest.mark.asyncio
+    async def test_sso_readiness_no_sso_configured(self):
+        """Test that readiness returns healthy when no SSO is configured"""
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.proxy_server import app
+
+        mock_user_auth = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+        try:
+            client = TestClient(app)
+
+            with patch.dict(os.environ, {}, clear=True):
+                response = client.get("/sso/readiness")
+
+                assert response.status_code == 200
+                data = response.json()
+                assert data["status"] == "healthy"
+                assert data["sso_configured"] is False
+                assert data["message"] == "No SSO provider configured"
+        finally:
+            app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    async def test_sso_readiness_google_fully_configured(self):
+        """Test that readiness returns healthy when Google SSO is fully configured"""
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.proxy_server import app
+
+        mock_user_auth = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+        try:
+            client = TestClient(app)
+
+            with patch.dict(
+                os.environ,
+                {
+                    "GOOGLE_CLIENT_ID": "test-google-client-id",
+                    "GOOGLE_CLIENT_SECRET": "test-google-secret",
+                },
+                clear=True,
+            ):
+                response = client.get("/sso/readiness")
+
+                assert response.status_code == 200
+                data = response.json()
+                assert data["status"] == "healthy"
+                assert data["sso_configured"] is True
+                assert data["provider"] == "google"
+                assert "Google SSO is properly configured" in data["message"]
+        finally:
+            app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    async def test_sso_readiness_google_missing_secret(self):
+        """Test that readiness returns unhealthy when Google SSO is missing GOOGLE_CLIENT_SECRET"""
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.proxy_server import app
+
+        mock_user_auth = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+        try:
+            client = TestClient(app)
+
+            with patch.dict(
+                os.environ,
+                {"GOOGLE_CLIENT_ID": "test-google-client-id"},
+                clear=True,
+            ):
+                response = client.get("/sso/readiness")
+
+                assert response.status_code == 503
+                data = response.json()["detail"]
+                assert data["status"] == "unhealthy"
+                assert data["sso_configured"] is True
+                assert data["provider"] == "google"
+                assert "GOOGLE_CLIENT_SECRET" in data["missing_environment_variables"]
+                assert "Google SSO is configured but missing required environment variables" in data["message"]
+        finally:
+            app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "env_vars,expected_status,expected_provider,expected_missing_vars",
+        [
+            (
+                {
+                    "MICROSOFT_CLIENT_ID": "test-microsoft-client-id",
+                    "MICROSOFT_CLIENT_SECRET": "test-microsoft-secret",
+                    "MICROSOFT_TENANT": "test-tenant",
+                },
+                200,
+                "microsoft",
+                [],
+            ),
+            (
+                {"MICROSOFT_CLIENT_ID": "test-microsoft-client-id"},
+                503,
+                "microsoft",
+                ["MICROSOFT_CLIENT_SECRET", "MICROSOFT_TENANT"],
+            ),
+        ],
+    )
+    async def test_sso_readiness_microsoft_configurations(
+        self, env_vars, expected_status, expected_provider, expected_missing_vars
+    ):
+        """Test Microsoft SSO readiness with both fully configured and missing variables"""
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.proxy_server import app
+
+        mock_user_auth = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+        try:
+            client = TestClient(app)
+
+            with patch.dict(os.environ, env_vars, clear=True):
+                response = client.get("/sso/readiness")
+
+                assert response.status_code == expected_status
+                
+                if expected_status == 200:
+                    data = response.json()
+                    assert data["sso_configured"] is True
+                    assert data["provider"] == expected_provider
+                    assert data["status"] == "healthy"
+                    assert "Microsoft SSO is properly configured" in data["message"]
+                else:
+                    data = response.json()["detail"]
+                    assert data["sso_configured"] is True
+                    assert data["provider"] == expected_provider
+                    assert data["status"] == "unhealthy"
+                    assert set(data["missing_environment_variables"]) == set(
+                        expected_missing_vars
+                    )
+        finally:
+            app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "env_vars,expected_status,expected_provider,expected_missing_vars",
+        [
+            (
+                {
+                    "GENERIC_CLIENT_ID": "test-generic-client-id",
+                    "GENERIC_CLIENT_SECRET": "test-generic-secret",
+                    "GENERIC_AUTHORIZATION_ENDPOINT": "https://auth.example.com/authorize",
+                    "GENERIC_TOKEN_ENDPOINT": "https://auth.example.com/token",
+                    "GENERIC_USERINFO_ENDPOINT": "https://auth.example.com/userinfo",
+                },
+                200,
+                "generic",
+                [],
+            ),
+            (
+                {"GENERIC_CLIENT_ID": "test-generic-client-id"},
+                503,
+                "generic",
+                [
+                    "GENERIC_CLIENT_SECRET",
+                    "GENERIC_AUTHORIZATION_ENDPOINT",
+                    "GENERIC_TOKEN_ENDPOINT",
+                    "GENERIC_USERINFO_ENDPOINT",
+                ],
+            ),
+        ],
+    )
+    async def test_sso_readiness_generic_configurations(
+        self, env_vars, expected_status, expected_provider, expected_missing_vars
+    ):
+        """Test Generic SSO readiness with both fully configured and missing variables"""
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.proxy_server import app
+
+        mock_user_auth = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+        try:
+            client = TestClient(app)
+
+            with patch.dict(os.environ, env_vars, clear=True):
+                response = client.get("/sso/readiness")
+
+                assert response.status_code == expected_status
+                
+                if expected_status == 200:
+                    data = response.json()
+                    assert data["sso_configured"] is True
+                    assert data["provider"] == expected_provider
+                    assert data["status"] == "healthy"
+                    assert "Generic SSO is properly configured" in data["message"]
+                else:
+                    data = response.json()["detail"]
+                    assert data["sso_configured"] is True
+                    assert data["provider"] == expected_provider
+                    assert data["status"] == "unhealthy"
+                    assert set(data["missing_environment_variables"]) == set(
+                        expected_missing_vars
+                    )
+        finally:
+            app.dependency_overrides.clear()

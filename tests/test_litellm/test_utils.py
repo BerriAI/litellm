@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from jsonschema import validate
@@ -573,6 +573,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "chat",
                         "completion",
                         "container",
+                        "image_edit",
                         "embedding",
                         "image_generation",
                         "video_generation",
@@ -2602,3 +2603,156 @@ class TestIsCachedMessage:
         """Empty list content should return False."""
         message = {"role": "user", "content": []}
         assert is_cached_message(message) is False
+
+
+@pytest.mark.asyncio
+class TestProxyLoggingBudgetAlerts:
+    """Test budget_alerts method in ProxyLogging class."""
+
+    async def test_budget_alerts_when_alerting_is_none(self):
+        """Test that budget_alerts returns early when alerting is None."""
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = None
+        proxy_logging.slack_alerting_instance = AsyncMock()
+        proxy_logging.email_logging_instance = AsyncMock()
+
+        user_info = MagicMock()
+
+        # Should return without calling any alerting instances
+        await proxy_logging.budget_alerts(type="user_budget", user_info=user_info)
+
+        # Verify no calls were made
+        proxy_logging.slack_alerting_instance.budget_alerts.assert_not_called()
+        proxy_logging.email_logging_instance.budget_alerts.assert_not_called()
+
+    async def test_budget_alerts_with_slack_only(self):
+        """Test that budget_alerts calls slack_alerting_instance when slack is in alerting."""
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = ["slack"]
+        proxy_logging.slack_alerting_instance = AsyncMock()
+
+        user_info = MagicMock()
+
+        await proxy_logging.budget_alerts(type="token_budget", user_info=user_info)
+
+        proxy_logging.slack_alerting_instance.budget_alerts.assert_called_once_with(
+            type="token_budget", user_info=user_info
+        )
+
+    async def test_budget_alerts_with_email_only(self):
+        """Test that budget_alerts calls email_logging_instance when email is in alerting."""
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = ["email"]
+        proxy_logging.email_logging_instance = AsyncMock()
+
+        user_info = MagicMock()
+
+        await proxy_logging.budget_alerts(type="team_budget", user_info=user_info)
+
+        proxy_logging.email_logging_instance.budget_alerts.assert_called_once_with(
+            type="team_budget", user_info=user_info
+        )
+
+    async def test_budget_alerts_with_email_when_instance_is_none(self):
+        """Test that budget_alerts does not call email_logging_instance when it is None."""
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = ["email"]
+        proxy_logging.email_logging_instance = None
+
+        user_info = MagicMock()
+
+        # Should not raise an error
+        await proxy_logging.budget_alerts(type="organization_budget", user_info=user_info)
+
+    async def test_budget_alerts_with_both_slack_and_email(self):
+        """Test that budget_alerts calls both slack and email instances when both are in alerting."""
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = ["slack", "email"]
+        proxy_logging.slack_alerting_instance = AsyncMock()
+        proxy_logging.email_logging_instance = AsyncMock()
+
+        user_info = MagicMock()
+
+        await proxy_logging.budget_alerts(type="proxy_budget", user_info=user_info)
+
+        proxy_logging.slack_alerting_instance.budget_alerts.assert_called_once_with(
+            type="proxy_budget", user_info=user_info
+        )
+        proxy_logging.email_logging_instance.budget_alerts.assert_called_once_with(
+            type="proxy_budget", user_info=user_info
+        )
+
+    @pytest.mark.parametrize(
+        "alert_type",
+        [
+            "token_budget",
+            "user_budget",
+            "soft_budget",
+            "team_budget",
+            "organization_budget",
+            "proxy_budget",
+            "projected_limit_exceeded",
+        ],
+    )
+    async def test_budget_alerts_with_all_alert_types(self, alert_type):
+        """Test that budget_alerts works with all supported alert types."""
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = ["slack", "email"]
+        proxy_logging.slack_alerting_instance = AsyncMock()
+        proxy_logging.email_logging_instance = AsyncMock()
+
+        user_info = MagicMock()
+
+        await proxy_logging.budget_alerts(type=alert_type, user_info=user_info)
+
+        proxy_logging.slack_alerting_instance.budget_alerts.assert_called_once_with(
+            type=alert_type, user_info=user_info
+        )
+        proxy_logging.email_logging_instance.budget_alerts.assert_called_once_with(
+            type=alert_type, user_info=user_info
+        )
+
+
+def test_azure_ai_claude_provider_config():
+    """Test that Azure AI Claude models return AzureAnthropicConfig for proper tool transformation."""
+    from litellm import AzureAIStudioConfig, AzureAnthropicConfig
+    from litellm.utils import ProviderConfigManager
+
+    # Claude models should return AzureAnthropicConfig
+    config = ProviderConfigManager.get_provider_chat_config(
+        model="claude-sonnet-4-5",
+        provider=LlmProviders.AZURE_AI,
+    )
+    assert isinstance(config, AzureAnthropicConfig)
+
+    # Test case-insensitive matching
+    config = ProviderConfigManager.get_provider_chat_config(
+        model="Claude-Opus-4",
+        provider=LlmProviders.AZURE_AI,
+    )
+    assert isinstance(config, AzureAnthropicConfig)
+
+    # Non-Claude models should return AzureAIStudioConfig
+    config = ProviderConfigManager.get_provider_chat_config(
+        model="mistral-large",
+        provider=LlmProviders.AZURE_AI,
+    )
+    assert isinstance(config, AzureAIStudioConfig)

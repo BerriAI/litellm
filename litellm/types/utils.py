@@ -2852,6 +2852,7 @@ all_litellm_params = (
         "prompt_label",
         "shared_session",
         "search_tool_name",
+        "order",
     ]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())
@@ -3038,6 +3039,7 @@ class SearchProviders(str, Enum):
     DATAFORSEO = "dataforseo"
     FIRECRAWL = "firecrawl"
     SEARXNG = "searxng"
+    LINKUP = "linkup"
 
 
 # Create a set of all search provider values for quick lookup
