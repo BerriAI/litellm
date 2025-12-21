@@ -199,6 +199,7 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         }
         """
         # Convert input to list if it's a single item
+        input_list: List[Any]
         if isinstance(input, str):
             input_list = [input]
         elif isinstance(input, list):
