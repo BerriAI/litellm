@@ -1,10 +1,10 @@
-import { Button, Icon } from "@tremor/react";
+import { Button } from "@tremor/react";
 import type { TableProps } from "antd";
-import { Table, Tooltip } from "antd";
+import { Table } from "antd";
 import Title from "antd/es/typography/Title";
 import React from "react";
-import { AlertingObject } from "./types";
 import TableIconActionButton from "../../../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
+import { AlertingObject } from "./types";
 
 type LoggingCallbacksProps = {
   callbacks: AlertingObject[];

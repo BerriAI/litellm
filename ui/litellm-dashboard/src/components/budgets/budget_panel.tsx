@@ -6,7 +6,6 @@
 import {
   Button,
   Card,
-  Icon,
   Tab,
   TabGroup,
   Table,
@@ -23,11 +22,11 @@ import {
 import React, { useEffect, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
+import TableIconActionButton from "../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import NotificationsManager from "../molecules/notifications_manager";
 import { budgetDeleteCall, getBudgetList } from "../networking";
 import BudgetModal from "./budget_modal";
 import EditBudgetModal from "./edit_budget_modal";
-import TableIconActionButton from "../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 
 interface BudgetSettingsPageProps {
   accessToken: string | null;
