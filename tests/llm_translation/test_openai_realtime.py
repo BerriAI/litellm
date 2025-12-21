@@ -107,9 +107,13 @@ async def test_openai_realtime_direct_call_no_intent():
                         print(f"[DEBUG] Total messages received in send_text: {len(self.messages_sent)}")
                         if self.messages_sent:
                             print(f"[DEBUG] First message preview: {str(self.messages_sent[0])[:200]}")
+                        else:
+                            print(f"[DEBUG] No messages received in send_text() - connection may have failed before messages arrived")
             
             # After waiting, close the connection to end the test
-            print("Test validation complete - closing connection")
+            # Only close if we haven't received session.created (connection_successful will handle it)
+            if not self.connection_successful:
+                print("Test validation complete - closing connection (no session.created received)")
             raise websockets.exceptions.ConnectionClosed(None, None)
             
         async def close(self, code=1000, reason=""):
@@ -139,15 +143,44 @@ async def test_openai_realtime_direct_call_no_intent():
         if "invalid_intent" in str(e).lower():
             pytest.fail(f"Still getting invalid_intent error: {e}")
         else:
-            # Other connection errors are expected in test environment
-            pass
+            # Other connection errors - log but allow test to continue if messages were received
+            print(f"[WARNING] InvalidStatusCode exception: {e}")
+            if not websocket_client.connection_successful and len(websocket_client.messages_sent) == 0:
+                pytest.fail(f"Connection failed with InvalidStatusCode and no messages received: {e}")
     except Exception as e:
         # Make sure we're not getting the "Invalid intent" error
         if "invalid_intent" in str(e).lower() or "Invalid intent" in str(e):
             pytest.fail(f"Fix failed - still getting invalid intent error: {e}")
-        # Other exceptions are acceptable for this connection test
+        # If connection failed completely (no messages), fail the test
+        if not websocket_client.connection_successful and len(websocket_client.messages_sent) == 0:
+            pytest.fail(f"Connection failed with exception and no messages received: {type(e).__name__}: {e}")
+        # If we got messages but connection failed later, that's acceptable
+        print(f"[INFO] Exception occurred but messages were received: {type(e).__name__}: {e}")
+    
+    # Final safety check: Give one last chance for messages that arrived after receive_text() completed
+    # This handles race conditions where send_text() is called just after the wait loop
+    if not websocket_client.connection_successful and len(websocket_client.messages_sent) > 0:
+        # Messages were received but connection_successful wasn't set - check them now
+        import asyncio
+        await asyncio.sleep(0.1)  # Brief pause to ensure any async operations complete
+        # Re-check connection_successful (it might have been set by a late-arriving send_text call)
     
     # Validate that we successfully connected and received expected response
+    # Provide detailed error messages if assertions fail
+    if not websocket_client.connection_successful:
+        error_details = f"Failed to establish successful connection to OpenAI. "
+        error_details += f"Total messages in send_text: {len(websocket_client.messages_sent)}, "
+        error_details += f"Messages received: {len(websocket_client.messages_received)}"
+        if websocket_client.messages_sent:
+            try:
+                msg_str = str(websocket_client.messages_sent[0])
+                if isinstance(websocket_client.messages_sent[0], bytes):
+                    msg_str = websocket_client.messages_sent[0].decode('utf-8', errors='replace')[:200]
+                error_details += f". First message preview: {msg_str}"
+            except Exception:
+                error_details += f". First message type: {type(websocket_client.messages_sent[0])}"
+        pytest.fail(error_details)
+    
     assert websocket_client.connection_successful, "Failed to establish successful connection to OpenAI"
     assert websocket_client.received_session_created, "Did not receive session.created response from OpenAI"
     assert len(websocket_client.messages_received) > 0, "No messages received from OpenAI"
