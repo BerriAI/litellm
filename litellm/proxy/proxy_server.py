@@ -12,6 +12,7 @@ import time
 import traceback
 import warnings
 from datetime import datetime, timedelta
+import tempfile
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -946,7 +947,7 @@ try:
     # This prevents mutating the packaged UI directory (e.g. site-packages or the repo checkout)
     # and ensures extensionless routes like /ui/login work via <route>/index.html.
     is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
-    runtime_ui_path = "/tmp/litellm_ui"
+    runtime_ui_path = os.path.join(tempfile.gettempdir(), "litellm_ui")
 
     if _dir_has_content(runtime_ui_path):
         if is_non_root:
@@ -8884,7 +8885,11 @@ def get_image():
     default_site_logo = os.path.join(current_dir, "logo.jpg")
 
     is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
-    assets_dir = "/tmp/litellm_assets" if is_non_root else current_dir
+    assets_dir = (
+        os.path.join(tempfile.gettempdir(), "litellm_assets")
+        if is_non_root
+        else current_dir
+    )
 
     if is_non_root:
         os.makedirs(assets_dir, exist_ok=True)
