@@ -34,7 +34,7 @@ from litellm.types.utils import ModelResponseStream
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.utils import GenericGuardrailAPIInputs
+    from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
 from litellm.types.guardrails import (
     BlockedWord,
@@ -48,7 +48,6 @@ from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter impor
     CategoryKeywordDetection,
     ContentFilterCategoryConfig,
     ContentFilterDetection,
-    DetectionType,
     PatternDetection,
 )
 
@@ -677,6 +676,143 @@ class ContentFilterGuardrail(CustomGuardrail):
         )
         return redaction_tag
 
+    async def _process_images(
+        self, images: List[str], detections: List[ContentFilterDetection]
+    ) -> None:
+        """
+        Process images by describing them and applying content filtering.
+
+        Args:
+            images: List of image URLs
+            detections: List to append detection information
+        """
+        if not (images and self.image_model and self.llm_router):
+            return
+
+        tasks = []
+        for image in images:
+            task = self.llm_router.acompletion(
+                model=self.image_model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Describe the image in detail.",
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": image}},
+                        ],
+                    },
+                ],
+                stream=False,
+            )
+            tasks.append(task)
+
+        responses = await asyncio.gather(*tasks)
+        descriptions = []
+        for response in responses:
+            choice = response.choices[0]
+            message = getattr(choice, "message", None)
+            if message and getattr(message, "content", None):
+                image_description = message.content
+                verbose_proxy_logger.debug(f"Image description: {image_description}")
+                descriptions.append(image_description)
+            else:
+                verbose_proxy_logger.warning("No image description found")
+
+        # Apply content filtering to image descriptions
+        verbose_proxy_logger.debug(
+            f"ContentFilterGuardrail: Applying guardrail to {len(descriptions)} image description(s)"
+        )
+        for description in descriptions:
+            # This will raise HTTPException if BLOCK action is triggered
+            try:
+                self._filter_single_text(description, detections=detections)
+            except HTTPException as e:
+                # e.detail can be a string or dict
+                if isinstance(e.detail, dict) and "error" in e.detail:
+                    detail_dict = cast(Dict[str, Any], e.detail)
+                    detail_dict["error"] = (
+                        detail_dict["error"] + " (Image description): " + description
+                    )
+                elif isinstance(e.detail, str):
+                    e.detail = e.detail + " (Image description): " + description
+                else:
+                    e.detail = "Content blocked: Image description detected" + description
+                raise e
+
+    def _count_masked_entities(
+        self, detections: List[ContentFilterDetection], masked_entity_count: Dict[str, int]
+    ) -> None:
+        """
+        Count masked entities by type from detections.
+
+        Args:
+            detections: List of detection dictionaries
+            masked_entity_count: Dictionary to update with counts
+        """
+        for detection in detections:
+            if detection["action"] == ContentFilterAction.MASK.value:
+                detection_type = detection["type"]
+                if detection_type == "pattern":
+                    pattern_detection = cast(PatternDetection, detection)
+                    pattern_name = pattern_detection["pattern_name"]
+                    masked_entity_count[pattern_name] = (
+                        masked_entity_count.get(pattern_name, 0) + 1
+                    )
+                elif detection_type == "blocked_word":
+                    entity_type = "blocked_word"
+                    masked_entity_count[entity_type] = (
+                        masked_entity_count.get(entity_type, 0) + 1
+                    )
+                elif detection_type == "category_keyword":
+                    category_detection = cast(CategoryKeywordDetection, detection)
+                    category = category_detection["category"]
+                    masked_entity_count[category] = (
+                        masked_entity_count.get(category, 0) + 1
+                    )
+
+    def _log_guardrail_information(
+        self,
+        request_data: dict,
+        detections: List[ContentFilterDetection],
+        status: "GuardrailStatus",
+        start_time: datetime,
+        masked_entity_count: Dict[str, int],
+        exception_str: str,
+    ) -> None:
+        """
+        Log guardrail information to request_data metadata.
+
+        Args:
+            request_data: Request data dictionary
+            detections: List of detection dictionaries
+            status: Guardrail status
+            start_time: Start time of guardrail execution
+            masked_entity_count: Count of masked entities by type
+            exception_str: Exception string if guardrail failed
+        """
+        # Convert TypedDict detections to regular dicts for JSON serialization
+        guardrail_json_response: Union[Exception, str, dict, List[dict]] = [
+            dict(detection) for detection in detections
+        ]
+        if status != "success":
+            guardrail_json_response = exception_str if exception_str else [
+                dict(detection) for detection in detections
+            ]
+
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_provider=self.guardrail_provider,
+            guardrail_json_response=guardrail_json_response,
+            request_data=request_data,
+            guardrail_status=status,
+            start_time=start_time.timestamp(),
+            end_time=datetime.now().timestamp(),
+            duration=(datetime.now() - start_time).total_seconds(),
+            masked_entity_count=masked_entity_count,
+        )
+
     async def apply_guardrail(
         self,
         inputs: "GenericGuardrailAPIInputs",
@@ -713,65 +849,11 @@ class ContentFilterGuardrail(CustomGuardrail):
         try:
             texts = inputs.get("texts", [])
             images = inputs.get("images", [])
-            if images and self.image_model and self.llm_router:
-                tasks = []
-                for image in images:
-                    task = self.llm_router.acompletion(
-                        model=self.image_model,
-                        messages=[
-                            {
-                                "role": "system",
-                                "content": "Describe the image in detail.",
-                            },
-                            {
-                                "role": "user",
-                                "content": [
-                                    {"type": "image_url", "image_url": {"url": image}},
-                                ],
-                            },
-                        ],
-                        stream=False,
-                    )
-                    tasks.append(task)
 
-                responses = await asyncio.gather(*tasks)
-                descriptions = []
-                for response in responses:
-                    choice = response.choices[0]
-                    message = getattr(choice, "message", None)
-                    if message and getattr(message, "content", None):
-                        image_description = message.content
-                        verbose_proxy_logger.debug(
-                            f"Image description: {image_description}"
-                        )
-                        descriptions.append(image_description)
-                    else:
-                        verbose_proxy_logger.warning("No image description found")
+            # Process images if present
+            await self._process_images(images, detections)
 
-                # Apply content filtering to image descriptions
-                verbose_proxy_logger.debug(
-                    f"ContentFilterGuardrail: Applying guardrail to {len(descriptions)} image description(s)"
-                )
-                for description in descriptions:
-                    # This will raise HTTPException if BLOCK action is triggered
-                    try:
-                        self._filter_single_text(description, detections=detections)
-                    except HTTPException as e:
-                        # e.detail can be a string or dict
-                        if isinstance(e.detail, dict) and "error" in e.detail:
-                            detail_dict = cast(Dict[str, Any], e.detail)
-                            detail_dict["error"] = (
-                                detail_dict["error"]
-                                + " (Image description): "
-                                + description
-                            )
-                        elif isinstance(e.detail, str):
-                            e.detail = e.detail + " (Image description): " + description
-                        else:
-                            e.detail = (
-                                "Content blocked: Image description detected" + description
-                            )
-                        raise e
+            # Process texts
             verbose_proxy_logger.debug(
                 f"ContentFilterGuardrail: Applying guardrail to {len(texts)} text(s)"
             )
@@ -787,26 +869,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             inputs["texts"] = processed_texts
 
             # Count masked entities by type
-            for detection in detections:
-                if detection["action"] == ContentFilterAction.MASK.value:
-                    detection_type = detection["type"]
-                    if detection_type == "pattern":
-                        pattern_detection = cast(PatternDetection, detection)
-                        pattern_name = pattern_detection["pattern_name"]
-                        masked_entity_count[pattern_name] = (
-                            masked_entity_count.get(pattern_name, 0) + 1
-                        )
-                    elif detection_type == "blocked_word":
-                        entity_type = "blocked_word"
-                        masked_entity_count[entity_type] = (
-                            masked_entity_count.get(entity_type, 0) + 1
-                        )
-                    elif detection_type == "category_keyword":
-                        category_detection = cast(CategoryKeywordDetection, detection)
-                        category = category_detection["category"]
-                        masked_entity_count[category] = (
-                            masked_entity_count.get(category, 0) + 1
-                        )
+            self._count_masked_entities(detections, masked_entity_count)
 
             return inputs
         except HTTPException:
@@ -817,25 +880,14 @@ class ContentFilterGuardrail(CustomGuardrail):
             exception_str = str(e)
             raise e
         finally:
-            # Create Guardrail Trace for logging on Langfuse, Datadog, etc.
-            # Convert TypedDict detections to regular dicts for JSON serialization
-            guardrail_json_response: Union[Exception, str, dict, List[dict]] = [
-                dict(detection) for detection in detections
-            ]
-            if status != "success":
-                guardrail_json_response = exception_str if exception_str else [
-                    dict(detection) for detection in detections
-                ]
-
-            self.add_standard_logging_guardrail_information_to_request_data(
-                guardrail_provider=self.guardrail_provider,
-                guardrail_json_response=guardrail_json_response,
+            # Log guardrail information
+            self._log_guardrail_information(
                 request_data=request_data,
-                guardrail_status=status,
-                start_time=start_time.timestamp(),
-                end_time=datetime.now().timestamp(),
-                duration=(datetime.now() - start_time).total_seconds(),
+                detections=detections,
+                status=status,
+                start_time=start_time,
                 masked_entity_count=masked_entity_count,
+                exception_str=exception_str,
             )
 
     async def async_post_call_streaming_iterator_hook(
