@@ -143,6 +143,30 @@ class _ProxyDBLogger(CustomLogger):
                         f"Cache Hit: response_cost {response_cost}, for user_id {user_id}"
                     )
 
+                ## CHECK FOR FREE MODELS - Set cost to 0.0 for cache updates ##
+                import os
+
+                # Get model from multiple sources (alias and actual model)
+                _request_model = kwargs.get("model")  # e.g., "xyne-spaces-minimax-m2" (alias)
+                _litellm_model = None
+                if litellm_params and isinstance(litellm_params, dict):
+                    _litellm_model = litellm_params.get("model")  # e.g., "MiniMaxAI/MiniMax-M2" (actual)
+
+                FREE_MODELS_ENV = os.getenv('FREE_MODELS', '')
+                FREE_MODELS = [m.strip() for m in FREE_MODELS_ENV.split(',') if m.strip()]
+
+                # Check if ANY of the model identifiers match (case-insensitive)
+                is_free_model = False
+                matched_model = None
+                if FREE_MODELS:
+                    FREE_MODELS_LOWER = [m.lower() for m in FREE_MODELS]
+                    for model_name in [_request_model, _litellm_model]:
+                        if model_name and model_name.lower() in FREE_MODELS_LOWER:
+                            is_free_model = True
+                            matched_model = model_name
+                            break
+
+                
                 verbose_proxy_logger.debug(
                     f"user_api_key {user_api_key}, user_id {user_id}, team_id {team_id}, end_user_id {end_user_id}"
                 )
@@ -166,26 +190,42 @@ class _ProxyDBLogger(CustomLogger):
                         org_id=org_id,
                     )
 
-                    # update cache
-                    asyncio.create_task(
-                        update_cache(
+                    # Update cache - use 0.0 cost for FREE_MODELS to prevent budget blocking
+                    if is_free_model:
+                        # Free model: set cost to 0.0 for cache (budget checks won't block)
+                        asyncio.create_task(
+                            update_cache(
+                                token=user_api_key,
+                                user_id=user_id,
+                                end_user_id=end_user_id,
+                                response_cost=0.0,
+                                team_id=team_id,
+                                parent_otel_span=parent_otel_span,
+                                tags=tags,
+                            )
+                        )
+                        # No Slack alerts for free models
+                    else:
+                        # Paid model: use actual cost for cache
+                        asyncio.create_task(
+                            update_cache(
+                                token=user_api_key,
+                                user_id=user_id,
+                                end_user_id=end_user_id,
+                                response_cost=response_cost,
+                                team_id=team_id,
+                                parent_otel_span=parent_otel_span,
+                                tags=tags,
+                            )
+                        )
+
+                        await proxy_logging_obj.slack_alerting_instance.customer_spend_alert(
                             token=user_api_key,
-                            user_id=user_id,
+                            key_alias=key_alias,
                             end_user_id=end_user_id,
                             response_cost=response_cost,
-                            team_id=team_id,
-                            parent_otel_span=parent_otel_span,
-                            tags=tags,
+                            max_budget=end_user_max_budget,
                         )
-                    )
-
-                    await proxy_logging_obj.slack_alerting_instance.customer_spend_alert(
-                        token=user_api_key,
-                        key_alias=key_alias,
-                        end_user_id=end_user_id,
-                        response_cost=response_cost,
-                        max_budget=end_user_max_budget,
-                    )
             else:
                 if kwargs["stream"] is not True or (
                     kwargs["stream"] is True and "complete_streaming_response" in kwargs

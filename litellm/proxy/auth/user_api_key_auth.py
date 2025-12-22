@@ -1054,10 +1054,13 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
             # Check 4. Token Spend is under budget
             if RouteChecks.is_llm_api_route(route=route):
+                # Get model from request for free model bypass
+                current_model = request_data.get("model", None)
                 await _virtual_key_max_budget_check(
                     valid_token=valid_token,
                     proxy_logging_obj=proxy_logging_obj,
                     user_obj=user_obj,
+                    model=current_model,
                 )
 
             # Check 5. Soft Budget Check
