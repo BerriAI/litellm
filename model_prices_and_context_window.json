@@ -26693,5 +26693,29 @@
         "metadata": {
             "comment": "Estimated cost based on standard TTS pricing. RunwayML uses ElevenLabs models."
         }
+    },
+    "hosted_vllm/zai-org/GLM-4.6-FP8": {
+        "litellm_provider": "hosted_vllm",
+        "mode": "chat",
+        "max_input_tokens": 202752,
+        "output_cost_per_token": 0.0000022
+    },
+        "hosted_vllm/zai-org/GLM-4.6": {
+        "litellm_provider": "hosted_vllm",
+        "mode": "chat",
+        "max_input_tokens": 202752,
+        "output_cost_per_token": 0.0000022
+    },
+    "hosted_vllm/MiniMaxAI/MiniMax-M2": {
+        "litellm_provider": "hosted_vllm",
+        "mode": "chat",
+        "max_input_tokens": 196608,
+        "output_cost_per_token": 0.0000012
+    },
+    "hosted_vllm/Qwen/Qwen3-VL-235B-A22B-Thinking": {
+        "litellm_provider": "hosted_vllm",
+        "mode": "one of: chat, completion, image_generation",
+        "max_input_tokens": 196608,
+        "output_cost_per_token": 0.0000012
     }
 }
