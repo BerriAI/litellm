@@ -2818,9 +2818,6 @@ class BaseLLMHTTPHandler:
             transformed_request, bytes
         ):
             # Handle traditional file uploads
-            # httpx accepts both str and bytes for the data parameter
-
-            # Use the HTTP method specified by the provider config
             http_method = provider_config.file_upload_http_method.upper()
             if http_method == "PUT":
                 upload_response = sync_httpx_client.put(
@@ -2927,9 +2924,6 @@ class BaseLLMHTTPHandler:
             transformed_request, bytes
         ):
             # Handle traditional file uploads
-            # httpx accepts both str and bytes for the content parameter
-
-            # Use the HTTP method specified by the provider config
             http_method = provider_config.file_upload_http_method.upper()
             if http_method == "PUT":
                 upload_response = await async_httpx_client.put(
