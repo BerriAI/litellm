@@ -1,6 +1,5 @@
-import React from "react";
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // ---- Hoisted shared mocks (safe to use inside vi.mock factories) ----
 const { keyUpdateCallMock, keyDeleteCallMock } = vi.hoisted(() => {
@@ -123,7 +122,9 @@ vi.mock("@tremor/react", async () => {
 });
 
 // antd bits -> async factory & local React
-vi.mock("antd", async () => {
+vi.mock("antd", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("antd")>();
+
   const React = await import("react");
 
   const Form = { useForm: () => [{}] };
@@ -154,7 +155,7 @@ vi.mock("antd", async () => {
   }
   (Button as any).displayName = "AntdButton";
 
-  return { Form, Input, InputNumber, Select, Tooltip, Button };
+  return { ...actual, Form, Input, InputNumber, Select, Tooltip, Button };
 });
 
 // Icons -> async factory & local React
