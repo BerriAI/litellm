@@ -1,10 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import MCPToolPermissions from "./MCPToolPermissions";
 import * as networking from "../networking";
 
 vi.mock("../networking");
+
+const createQueryClient = () =>
+  new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+        gcTime: 0,
+      },
+    },
+  });
 
 describe("MCPToolPermissions", () => {
   const mockAccessToken = "test-token";
@@ -28,15 +39,13 @@ describe("MCPToolPermissions", () => {
     ];
 
     // Mock fetchMCPServers to return server details
-    vi.mocked(networking.fetchMCPServers).mockResolvedValue({
-      data: [
-        {
-          server_id: mockServerId,
-          server_name: mockServerName,
-          alias: mockServerName,
-        },
-      ],
-    });
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      {
+        server_id: mockServerId,
+        server_name: mockServerName,
+        alias: mockServerName,
+      },
+    ]);
 
     // Mock listMCPTools to return tools for the server
     vi.mocked(networking.listMCPTools).mockResolvedValue({
@@ -44,13 +53,16 @@ describe("MCPToolPermissions", () => {
       error: false,
     });
 
+    const queryClient = createQueryClient();
     render(
-      <MCPToolPermissions
-        accessToken={mockAccessToken}
-        selectedServers={[mockServerId]}
-        toolPermissions={{}}
-        onChange={mockOnChange}
-      />
+      <QueryClientProvider client={queryClient}>
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={[mockServerId]}
+          toolPermissions={{}}
+          onChange={mockOnChange}
+        />
+      </QueryClientProvider>,
     );
 
     // Wait for server and tools to load
@@ -76,4 +88,3 @@ describe("MCPToolPermissions", () => {
     expect(networking.listMCPTools).toHaveBeenCalledWith(mockAccessToken, mockServerId);
   });
 });
-
