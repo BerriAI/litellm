@@ -313,6 +313,8 @@ DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE = os.getenv(
     "DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE", "streaming.chunk.yield"
 )
 
+EMAIL_BUDGET_ALERT_TTL = int(os.getenv("EMAIL_BUDGET_ALERT_TTL", 24 * 60 * 60))  # 24 hours in seconds
+EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE = float(os.getenv("EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE", 0.8))  # 80% of max budget
 ############### LLM Provider Constants ###############
 ### ANTHROPIC CONSTANTS ###
 ANTHROPIC_SKILLS_API_BETA_VERSION = "skills-2025-10-02"
@@ -890,6 +892,7 @@ BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "qwen2",
     "twelvelabs",
     "openai",
+    "stability",
 ]
 
 BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[

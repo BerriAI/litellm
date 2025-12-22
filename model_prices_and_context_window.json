@@ -6570,6 +6570,18 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "gpt-4o-transcribe-diarize": {
+        "input_cost_per_audio_token": 6e-06,
+        "input_cost_per_token": 2.5e-06,
+        "litellm_provider": "openai",
+        "max_input_tokens": 16000,
+        "max_output_tokens": 2000,
+        "mode": "audio_transcription",
+        "output_cost_per_token": 1e-05,
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
     "claude-3-5-haiku-20241022": {
         "cache_creation_input_token_cost": 1e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
@@ -12342,6 +12354,7 @@
         "max_videos_per_prompt": 10,
         "mode": "image_generation",
         "output_cost_per_image": 0.039,
+        "output_cost_per_image_token": 3e-05,
         "output_cost_per_reasoning_token": 2.5e-06,
         "output_cost_per_token": 2.5e-06,
         "rpm": 100000,
@@ -12390,6 +12403,7 @@
         "max_videos_per_prompt": 10,
         "mode": "image_generation",
         "output_cost_per_image": 0.039,
+        "output_cost_per_image_token": 3e-05,
         "output_cost_per_reasoning_token": 3e-05,
         "output_cost_per_token": 3e-05,
         "rpm": 100000,
@@ -12930,6 +12944,49 @@
         "output_cost_per_token": 1.2e-05,
         "output_cost_per_token_above_200k_tokens": 1.8e-05,
         "output_cost_per_token_batches": 6e-06,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/batch"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_video_input": true,
+        "supports_vision": true,
+        "supports_web_search": true
+    },
+    "vertex_ai/gemini-3-flash-preview": {
+        "cache_read_input_token_cost": 5e-08,
+        "input_cost_per_token": 5e-07,
+        "input_cost_per_audio_token": 1e-06,
+        "litellm_provider": "vertex_ai",
+        "max_audio_length_hours": 8.4,
+        "max_audio_per_prompt": 1,
+        "max_images_per_prompt": 3000,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65535,
+        "max_pdf_size_mb": 30,
+        "max_tokens": 65535,
+        "max_video_length": 1,
+        "max_videos_per_prompt": 10,
+        "mode": "chat",
+        "output_cost_per_token": 3e-06,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -14080,6 +14137,7 @@
         "max_videos_per_prompt": 10,
         "mode": "image_generation",
         "output_cost_per_image": 0.039,
+        "output_cost_per_image_token": 3e-05,
         "output_cost_per_reasoning_token": 2.5e-06,
         "output_cost_per_token": 2.5e-06,
         "rpm": 100000,
@@ -14128,6 +14186,7 @@
         "max_videos_per_prompt": 10,
         "mode": "image_generation",
         "output_cost_per_image": 0.039,
+        "output_cost_per_image_token": 3e-05,
         "output_cost_per_reasoning_token": 3e-05,
         "output_cost_per_token": 3e-05,
         "rpm": 100000,
@@ -15305,6 +15364,34 @@
             "video"
         ]
     },
+    "gemini/veo-3.1-fast-generate-001": {
+        "litellm_provider": "gemini",
+        "max_input_tokens": 1024,
+        "max_tokens": 1024,
+        "mode": "video_generation",
+        "output_cost_per_second": 0.15,
+        "source": "https://ai.google.dev/gemini-api/docs/video",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "gemini/veo-3.1-generate-001": {
+        "litellm_provider": "gemini",
+        "max_input_tokens": 1024,
+        "max_tokens": 1024,
+        "mode": "video_generation",
+        "output_cost_per_second": 0.40,
+        "source": "https://ai.google.dev/gemini-api/docs/video",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
     "github_copilot/claude-haiku-4.5": {
         "litellm_provider": "github_copilot",
         "max_input_tokens": 128000,
@@ -15312,7 +15399,7 @@
         "max_tokens": 16000,
         "mode": "chat",
         "supported_endpoints": [
-            "/chat/completions"
+            "/v1/chat/completions"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -15325,7 +15412,7 @@
         "max_tokens": 16000,
         "mode": "chat",
         "supported_endpoints": [
-            "/chat/completions"
+            "/v1/chat/completions"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -15338,7 +15425,7 @@
         "max_tokens": 16000,
         "mode": "chat",
         "supported_endpoints": [
-            "/chat/completions"
+            "/v1/chat/completions"
         ],
         "supports_vision": true
     },
@@ -15349,7 +15436,7 @@
         "max_tokens": 16000,
         "mode": "chat",
         "supported_endpoints": [
-            "/chat/completions"
+            "/v1/chat/completions"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -15362,7 +15449,7 @@
         "max_tokens": 16000,
         "mode": "chat",
         "supported_endpoints": [
-            "/chat/completions"
+            "/v1/chat/completions"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -15519,8 +15606,8 @@
         "max_tokens": 128000,
         "mode": "chat",
         "supported_endpoints": [
-            "/chat/completions",
-            "/responses"
+            "/v1/chat/completions",
+            "/v1/responses"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -15545,8 +15632,8 @@
         "max_tokens": 64000,
         "mode": "chat",
         "supported_endpoints": [
-            "/chat/completions",
-            "/responses"
+            "/v1/chat/completions",
+            "/v1/responses"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -15560,7 +15647,7 @@
         "max_tokens": 128000,
         "mode": "responses",
         "supported_endpoints": [
-            "/responses"
+            "/v1/responses"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -15574,8 +15661,8 @@
         "max_tokens": 64000,
         "mode": "chat",
         "supported_endpoints": [
-            "/chat/completions",
-            "/responses"
+            "/v1/chat/completions",
+            "/v1/responses"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -16777,7 +16864,8 @@
         "supported_endpoints": [
             "/v1/images/generations"
         ],
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_pdf_input": true
     },
     "gpt-image-1.5-2025-12-16": {
         "cache_read_input_image_token_cost": 2e-06,
@@ -16791,7 +16879,8 @@
         "supported_endpoints": [
             "/v1/images/generations"
         ],
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_pdf_input": true
     },
     "gpt-5": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -22332,7 +22421,7 @@
         "input_cost_per_token": 0,
         "litellm_provider": "openrouter",
         "max_input_tokens": 262144,
-        "max_output_tokens": null,
+        "max_output_tokens": 262144,
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 0,
@@ -22360,7 +22449,7 @@
         "input_cost_per_token": 1e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 131072,
-        "max_output_tokens": null,
+        "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 1e-07,
@@ -22374,7 +22463,7 @@
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 262144,
-        "max_output_tokens": null,
+        "max_output_tokens": 262144,
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 1.5e-07,
@@ -22388,7 +22477,7 @@
         "input_cost_per_token": 2e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 262144,
-        "max_output_tokens": null,
+        "max_output_tokens": 262144,
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 2e-07,
@@ -22402,7 +22491,7 @@
         "input_cost_per_token": 5e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 262144,
-        "max_output_tokens": null,
+        "max_output_tokens": 262144,
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 1.5e-06,
@@ -24422,6 +24511,90 @@
         "output_cost_per_image": 0.08,
         "supported_endpoints": ["/v1/images/generations"]
     },
+    "stability/inpaint": {
+        "litellm_provider": "stability",
+        "mode": "image_edit",
+        "output_cost_per_image": 0.005,
+        "supported_endpoints": ["/v1/images/edits"]
+    },
+    "stability/outpaint": {
+        "litellm_provider": "stability",
+        "mode": "image_edit",
+        "output_cost_per_image": 0.004,
+        "supported_endpoints": ["/v1/images/edits"]
+    },
+    "stability/erase": {
+        "litellm_provider": "stability",
+        "mode": "image_edit",
+        "output_cost_per_image": 0.005,
+        "supported_endpoints": ["/v1/images/edits"]
+    },
+    "stability/search-and-replace": {
+        "litellm_provider": "stability",
+        "mode": "image_edit",
+        "output_cost_per_image": 0.005,
+        "supported_endpoints": ["/v1/images/edits"]
+    },
+    "stability/search-and-recolor": {
+        "litellm_provider": "stability",
+        "mode": "image_edit",
+        "output_cost_per_image": 0.005,
+        "supported_endpoints": ["/v1/images/edits"]
+    },
+    "stability/remove-background": {
+        "litellm_provider": "stability",
+        "mode": "image_edit",
+        "output_cost_per_image": 0.005,
+        "supported_endpoints": ["/v1/images/edits"]
+    },
+    "stability/replace-background-and-relight": {
+        "litellm_provider": "stability",
+        "mode": "image_edit",
+        "output_cost_per_image": 0.008,
+        "supported_endpoints": ["/v1/images/edits"]
+    },
+    "stability/sketch": {
+        "litellm_provider": "stability",
+        "mode": "image_edit",
+        "output_cost_per_image": 0.005,
+        "supported_endpoints": ["/v1/images/edits"]
+    },
+    "stability/structure": {
+        "litellm_provider": "stability",
+        "mode": "image_edit",
+        "output_cost_per_image": 0.005,
+        "supported_endpoints": ["/v1/images/edits"]
+    },
+    "stability/style": {
+        "litellm_provider": "stability",
+        "mode": "image_edit",
+        "output_cost_per_image": 0.005,
+        "supported_endpoints": ["/v1/images/edits"]
+    },
+    "stability/style-transfer": {
+        "litellm_provider": "stability",
+        "mode": "image_edit",
+        "output_cost_per_image": 0.008,
+        "supported_endpoints": ["/v1/images/edits"]
+    },
+    "stability/fast": {
+        "litellm_provider": "stability",
+        "mode": "image_edit",
+        "output_cost_per_image": 0.002,
+        "supported_endpoints": ["/v1/images/edits"]
+    },
+    "stability/conservative": {
+        "litellm_provider": "stability",
+        "mode": "image_edit",
+        "output_cost_per_image": 0.04,
+        "supported_endpoints": ["/v1/images/edits"]
+    },
+    "stability/creative": {
+        "litellm_provider": "stability",
+        "mode": "image_edit",
+        "output_cost_per_image": 0.06,
+        "supported_endpoints": ["/v1/images/edits"]
+    },
     "stability/stable-image-core": {
         "litellm_provider": "stability",
         "mode": "image_generation",
@@ -24448,6 +24621,84 @@
         "max_tokens": 77,
         "mode": "image_generation",
         "output_cost_per_image": 0.04
+    },
+    "stability.stable-conservative-upscale-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "mode": "image_edit",
+        "output_cost_per_image": 0.40
+    },
+    "stability.stable-creative-upscale-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "mode": "image_edit",
+        "output_cost_per_image": 0.60
+    },
+    "stability.stable-fast-upscale-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "mode": "image_edit",
+        "output_cost_per_image": 0.03
+    },
+    "stability.stable-outpaint-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "mode": "image_edit",
+        "output_cost_per_image": 0.06
+    },
+    "stability.stable-image-control-sketch-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "mode": "image_edit",
+        "output_cost_per_image": 0.07
+    },
+    "stability.stable-image-control-structure-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "mode": "image_edit",
+        "output_cost_per_image": 0.07
+    },
+    "stability.stable-image-erase-object-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "mode": "image_edit",
+        "output_cost_per_image": 0.07
+    },
+    "stability.stable-image-inpaint-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "mode": "image_edit",
+        "output_cost_per_image": 0.07
+    },
+    "stability.stable-image-remove-background-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "mode": "image_edit",
+        "output_cost_per_image": 0.07
+    },
+    "stability.stable-image-search-recolor-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "mode": "image_edit",
+        "output_cost_per_image": 0.07
+    },
+    "stability.stable-image-search-replace-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "mode": "image_edit",
+        "output_cost_per_image": 0.07
+    },
+    "stability.stable-image-style-guide-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "mode": "image_edit",
+        "output_cost_per_image": 0.07
+    },
+    "stability.stable-style-transfer-v1:0": {
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "mode": "image_edit",
+        "output_cost_per_image": 0.08
     },
     "stability.stable-image-core-v1:1": {
         "litellm_provider": "bedrock",
@@ -24487,6 +24738,16 @@
         "litellm_provider": "openai",
         "mode": "image_generation",
         "output_cost_per_pixel": 0.0
+    },
+    "linkup/search": {
+        "input_cost_per_query": 5.87e-03,
+        "litellm_provider": "linkup",
+        "mode": "search"
+    },
+    "linkup/search-deep": {
+        "input_cost_per_query": 58.67e-03,
+        "litellm_provider": "linkup",
+        "mode": "search"
     },
     "tavily/search": {
         "input_cost_per_query": 0.008,
@@ -25161,6 +25422,42 @@
         "supported_endpoints": [
             "/v1/audio/speech"
         ]
+    },
+    "aws_polly/standard": {
+        "input_cost_per_character": 4e-06,
+        "litellm_provider": "aws_polly",
+        "mode": "audio_speech",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "source": "https://aws.amazon.com/polly/pricing/"
+    },
+    "aws_polly/neural": {
+        "input_cost_per_character": 1.6e-05,
+        "litellm_provider": "aws_polly",
+        "mode": "audio_speech",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "source": "https://aws.amazon.com/polly/pricing/"
+    },
+    "aws_polly/long-form": {
+        "input_cost_per_character": 1e-04,
+        "litellm_provider": "aws_polly",
+        "mode": "audio_speech",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "source": "https://aws.amazon.com/polly/pricing/"
+    },
+    "aws_polly/generative": {
+        "input_cost_per_character": 3e-05,
+        "litellm_provider": "aws_polly",
+        "mode": "audio_speech",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "source": "https://aws.amazon.com/polly/pricing/"
     },
     "us.amazon.nova-lite-v1:0": {
         "input_cost_per_token": 6e-08,
@@ -27222,6 +27519,7 @@
         "max_videos_per_prompt": 10,
         "mode": "image_generation",
         "output_cost_per_image": 0.039,
+        "output_cost_per_image_token": 3e-05,
         "output_cost_per_reasoning_token": 2.5e-06,
         "output_cost_per_token": 2.5e-06,
         "rpm": 100000,
@@ -27705,6 +28003,14 @@
         ],
         "source": "https://cloud.google.com/generative-ai-app-builder/pricing"
     },
+    "vertex_ai/deepseek-ai/deepseek-ocr-maas": {
+        "litellm_provider": "vertex_ai",
+        "mode": "ocr",
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 1.2e-06,
+        "ocr_cost_per_page": 3e-04,
+        "source": "https://cloud.google.com/vertex-ai/pricing"
+    },
     "vertex_ai/openai/gpt-oss-120b-maas": {
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "vertex_ai-openai_models",
@@ -27860,6 +28166,34 @@
         ]
     },
     "vertex_ai/veo-3.1-fast-generate-preview": {
+        "litellm_provider": "vertex_ai-video-models",
+        "max_input_tokens": 1024,
+        "max_tokens": 1024,
+        "mode": "video_generation",
+        "output_cost_per_second": 0.15,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/veo",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "vertex_ai/veo-3.1-generate-001": {
+        "litellm_provider": "vertex_ai-video-models",
+        "max_input_tokens": 1024,
+        "max_tokens": 1024,
+        "mode": "video_generation",
+        "output_cost_per_second": 0.4,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/veo",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "vertex_ai/veo-3.1-fast-generate-001": {
         "litellm_provider": "vertex_ai-video-models",
         "max_input_tokens": 1024,
         "max_tokens": 1024,
@@ -29304,7 +29638,8 @@
         "input_cost_per_token": 4.5e-07,
         "output_cost_per_token": 1.8e-06,
         "litellm_provider": "fireworks_ai",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_reasoning": true
     },
     "fireworks_ai/accounts/fireworks/models/flux-kontext-pro": {
         "max_tokens": 4096,
@@ -31006,7 +31341,8 @@
         "input_cost_per_token": 9e-07,
         "output_cost_per_token": 9e-07,
         "litellm_provider": "fireworks_ai",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_reasoning": true
     },
     "fireworks_ai/accounts/fireworks/models/qwen3-4b": {
         "max_tokens": 40960,
@@ -31033,7 +31369,8 @@
         "input_cost_per_token": 2e-07,
         "output_cost_per_token": 2e-07,
         "litellm_provider": "fireworks_ai",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_reasoning": true
     },
     "fireworks_ai/accounts/fireworks/models/qwen3-coder-30b-a3b-instruct": {
         "max_tokens": 262144,

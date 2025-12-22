@@ -134,6 +134,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "weave_otel",
     "pagerduty",
     "humanloop",
+    "azure_sentinel",
     "gcs_pubsub",
     "agentops",
     "anthropic_cache_control_hook",
@@ -557,6 +558,8 @@ ovhcloud_embedding_models: Set = set()
 lemonade_models: Set = set()
 docker_model_runner_models: Set = set()
 amazon_nova_models: Set = set()
+stability_models: Set = set()
+github_copilot_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -801,6 +804,10 @@ def add_known_models():
             docker_model_runner_models.add(key)
         elif value.get("litellm_provider") == "amazon_nova":
             amazon_nova_models.add(key)
+        elif value.get("litellm_provider") == "stability":
+            stability_models.add(key)
+        elif value.get("litellm_provider") == "github_copilot":
+            github_copilot_models.add(key)
 
 
 add_known_models()
@@ -1003,6 +1010,8 @@ models_by_provider: dict = {
     "lemonade": lemonade_models,
     "clarifai": clarifai_models,
     "amazon_nova": amazon_nova_models,
+    "stability": stability_models,
+    "github_copilot": github_copilot_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1054,47 +1063,8 @@ from .utils import client
 # Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py
 # (which imports tiktoken) at import time
 
-from .llms.bytez.chat.transformation import BytezChatConfig
 from .llms.custom_llm import CustomLLM
-from .llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig
-from .llms.galadriel.chat.transformation import GaladrielChatConfig
-from .llms.github.chat.transformation import GithubChatConfig
-from .llms.compactifai.chat.transformation import CompactifAIChatConfig
-from .llms.empower.chat.transformation import EmpowerChatConfig
-from .llms.huggingface.chat.transformation import HuggingFaceChatConfig
-from .llms.huggingface.embedding.transformation import HuggingFaceEmbeddingConfig
-from .llms.oobabooga.chat.transformation import OobaboogaConfig
-from .llms.maritalk import MaritalkConfig
-from .llms.openrouter.chat.transformation import OpenrouterConfig
-from .llms.datarobot.chat.transformation import DataRobotConfig
-from .llms.anthropic.chat.transformation import AnthropicConfig
 from .llms.anthropic.common_utils import AnthropicModelInfo
-from .llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
-from .llms.groq.stt.transformation import GroqSTTConfig
-from .llms.anthropic.completion.transformation import AnthropicTextConfig
-from .llms.triton.completion.transformation import TritonConfig
-from .llms.triton.completion.transformation import TritonGenerateConfig
-from .llms.triton.completion.transformation import TritonInferConfig
-from .llms.triton.embedding.transformation import TritonEmbeddingConfig
-from .llms.huggingface.rerank.transformation import HuggingFaceRerankConfig
-from .llms.databricks.chat.transformation import DatabricksConfig
-from .llms.databricks.embed.transformation import DatabricksEmbeddingConfig
-from .llms.predibase.chat.transformation import PredibaseConfig
-from .llms.replicate.chat.transformation import ReplicateConfig
-from .llms.snowflake.chat.transformation import SnowflakeConfig
-from .llms.cohere.rerank.transformation import CohereRerankConfig
-from .llms.cohere.rerank_v2.transformation import CohereRerankV2Config
-from .llms.azure_ai.rerank.transformation import AzureAIRerankConfig
-from .llms.infinity.rerank.transformation import InfinityRerankConfig
-from .llms.jina_ai.rerank.transformation import JinaAIRerankConfig
-from .llms.deepinfra.rerank.transformation import DeepinfraRerankConfig
-from .llms.hosted_vllm.rerank.transformation import HostedVLLMRerankConfig
-from .llms.nvidia_nim.rerank.transformation import NvidiaNimRerankConfig
-from .llms.nvidia_nim.rerank.ranking_transformation import NvidiaNimRankingConfig
-from .llms.vertex_ai.rerank.transformation import VertexAIRerankConfig
-from .llms.fireworks_ai.rerank.transformation import FireworksAIRerankConfig
-from .llms.voyage.rerank.transformation import VoyageRerankConfig
-from .llms.clarifai.chat.transformation import ClarifaiConfig
 from .llms.ai21.chat.transformation import AI21ChatConfig, AI21ChatConfig as AI21Config
 from .llms.meta_llama.chat.transformation import LlamaAPIConfig
 from .llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -1194,9 +1164,9 @@ from .llms.bedrock.chat.invoke_transformations.amazon_openai_transformation impo
     AmazonBedrockOpenAIConfig,
 )
 
-from .llms.bedrock.image.amazon_stability1_transformation import AmazonStabilityConfig
-from .llms.bedrock.image.amazon_stability3_transformation import AmazonStability3Config
-from .llms.bedrock.image.amazon_nova_canvas_transformation import AmazonNovaCanvasConfig
+from .llms.bedrock.image_generation.amazon_stability1_transformation import AmazonStabilityConfig
+from .llms.bedrock.image_generation.amazon_stability3_transformation import AmazonStability3Config
+from .llms.bedrock.image_generation.amazon_nova_canvas_transformation import AmazonNovaCanvasConfig
 from .llms.bedrock.embed.amazon_titan_g1_transformation import AmazonTitanG1Config
 from .llms.bedrock.embed.amazon_titan_multimodal_transformation import (
     AmazonTitanMultimodalEmbeddingG1Config,
@@ -1502,6 +1472,50 @@ if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo as _ModelInfoType
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.caching.caching import Cache
+    
+    # Type stubs for lazy-loaded configs to help mypy
+    from .llms.bedrock.chat.converse_transformation import AmazonConverseConfig as AmazonConverseConfig
+    from .llms.openai_like.chat.handler import OpenAILikeChatConfig as OpenAILikeChatConfig
+    from .llms.galadriel.chat.transformation import GaladrielChatConfig as GaladrielChatConfig
+    from .llms.github.chat.transformation import GithubChatConfig as GithubChatConfig
+    from .llms.azure_ai.anthropic.transformation import AzureAnthropicConfig as AzureAnthropicConfig
+    from .llms.bytez.chat.transformation import BytezChatConfig as BytezChatConfig
+    from .llms.compactifai.chat.transformation import CompactifAIChatConfig as CompactifAIChatConfig
+    from .llms.empower.chat.transformation import EmpowerChatConfig as EmpowerChatConfig
+    from .llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig as AiohttpOpenAIChatConfig
+    from .llms.huggingface.chat.transformation import HuggingFaceChatConfig as HuggingFaceChatConfig
+    from .llms.huggingface.embedding.transformation import HuggingFaceEmbeddingConfig as HuggingFaceEmbeddingConfig
+    from .llms.oobabooga.chat.transformation import OobaboogaConfig as OobaboogaConfig
+    from .llms.maritalk import MaritalkConfig as MaritalkConfig
+    from .llms.openrouter.chat.transformation import OpenrouterConfig as OpenrouterConfig
+    from .llms.datarobot.chat.transformation import DataRobotConfig as DataRobotConfig
+    from .llms.anthropic.chat.transformation import AnthropicConfig as AnthropicConfig
+    from .llms.anthropic.completion.transformation import AnthropicTextConfig as AnthropicTextConfig
+    from .llms.groq.stt.transformation import GroqSTTConfig as GroqSTTConfig
+    from .llms.triton.completion.transformation import TritonConfig as TritonConfig
+    from .llms.triton.completion.transformation import TritonGenerateConfig as TritonGenerateConfig
+    from .llms.triton.completion.transformation import TritonInferConfig as TritonInferConfig
+    from .llms.triton.embedding.transformation import TritonEmbeddingConfig as TritonEmbeddingConfig
+    from .llms.huggingface.rerank.transformation import HuggingFaceRerankConfig as HuggingFaceRerankConfig
+    from .llms.databricks.chat.transformation import DatabricksConfig as DatabricksConfig
+    from .llms.databricks.embed.transformation import DatabricksEmbeddingConfig as DatabricksEmbeddingConfig
+    from .llms.predibase.chat.transformation import PredibaseConfig as PredibaseConfig
+    from .llms.replicate.chat.transformation import ReplicateConfig as ReplicateConfig
+    from .llms.snowflake.chat.transformation import SnowflakeConfig as SnowflakeConfig
+    from .llms.cohere.rerank.transformation import CohereRerankConfig as CohereRerankConfig
+    from .llms.cohere.rerank_v2.transformation import CohereRerankV2Config as CohereRerankV2Config
+    from .llms.azure_ai.rerank.transformation import AzureAIRerankConfig as AzureAIRerankConfig
+    from .llms.infinity.rerank.transformation import InfinityRerankConfig as InfinityRerankConfig
+    from .llms.jina_ai.rerank.transformation import JinaAIRerankConfig as JinaAIRerankConfig
+    from .llms.deepinfra.rerank.transformation import DeepinfraRerankConfig as DeepinfraRerankConfig
+    from .llms.hosted_vllm.rerank.transformation import HostedVLLMRerankConfig as HostedVLLMRerankConfig
+    from .llms.nvidia_nim.rerank.transformation import NvidiaNimRerankConfig as NvidiaNimRerankConfig
+    from .llms.nvidia_nim.rerank.ranking_transformation import NvidiaNimRankingConfig as NvidiaNimRankingConfig
+    from .llms.vertex_ai.rerank.transformation import VertexAIRerankConfig as VertexAIRerankConfig
+    from .llms.fireworks_ai.rerank.transformation import FireworksAIRerankConfig as FireworksAIRerankConfig
+    from .llms.voyage.rerank.transformation import VoyageRerankConfig as VoyageRerankConfig
+    from .llms.clarifai.chat.transformation import ClarifaiConfig as ClarifaiConfig
+    from .llms.ai21.chat.transformation import AI21ChatConfig as AI21ChatConfig
     from litellm.caching.llm_caching_handler import LLMClientCache
     from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
     from litellm.types.utils import (
@@ -1555,9 +1569,7 @@ if TYPE_CHECKING:
     module_level_aclient: AsyncHTTPHandler
     module_level_client: HTTPHandler
 
-    # LLM config classes - lazy loaded only
-    AmazonConverseConfig: Type[Any]
-    OpenAILikeChatConfig: Type[Any]
+    # Note: AmazonConverseConfig and OpenAILikeChatConfig are imported above in TYPE_CHECKING block
 
 
 def __getattr__(name: str) -> Any:

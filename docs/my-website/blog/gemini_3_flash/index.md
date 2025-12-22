@@ -27,6 +27,33 @@ import TabItem from '@theme/TabItem';
 
 LiteLLM now supports `gemini-3-flash-preview` and all the new API changes along with it.
 
+:::note
+If you only want cost tracking, you need no change in your current Litellm version. But if you want the support for new features introduced along with it like thinking levels, you will need to use v1.80.8-stable.1 or above.
+:::
+
+## Deploy this version
+
+<Tabs>
+<TabItem value="docker" label="Docker">
+
+``` showLineNumbers title="docker run litellm"
+docker run \
+-e STORE_MODEL_IN_DB=True \
+-p 4000:4000 \
+ghcr.io/berriai/litellm:main-v1.80.8-stable.1
+```
+
+</TabItem>
+
+<TabItem value="pip" label="Pip">
+
+``` showLineNumbers title="pip install litellm"
+pip install litellm==1.80.8.post1
+```
+
+</TabItem>
+</Tabs>
+
 ## What's New
 
 ### 1. New Thinking Levels: `thinkingLevel` with MINIMAL & MEDIUM
@@ -208,6 +235,11 @@ response = completion(
 )
 print(response)
 ```
+
+:::note
+If using this model via vertex_ai, keep the location as global as this is the only supported location as of now.
+:::
+
 
 ## `reasoning_effort` Mapping for Gemini 3+
 

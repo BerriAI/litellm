@@ -18,5 +18,12 @@
   "veniceai": {
     "base_url": "https://api.venice.ai/api/v1",
     "api_key_env": "VENICE_AI_API_KEY"
+  },
+  "xiaomi_mimo": {
+    "base_url": "https://api.xiaomimimo.com/v1",
+    "api_key_env": "XIAOMI_MIMO_API_KEY",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
   }
 }
