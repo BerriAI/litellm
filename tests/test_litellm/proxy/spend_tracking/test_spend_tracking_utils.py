@@ -57,7 +57,9 @@ def test_sanitize_request_body_for_spend_logs_payload_long_string():
         end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
     
     skipped_chars = len(long_string) - (start_chars + end_chars)
-    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+    expected_truncation_message = (
+        f"\n...\n({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars)\n...\n"
+    )
     expected_length = start_chars + len(expected_truncation_message) + end_chars
     
     assert len(sanitized["text"]) == expected_length
@@ -83,7 +85,9 @@ def test_sanitize_request_body_for_spend_logs_payload_nested_dict():
         end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
     
     skipped_chars = len(long_string) - total_keep
-    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+    expected_truncation_message = (
+        f"\n...\n({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars)\n...\n"
+    )
     expected_length = start_chars + len(expected_truncation_message) + end_chars
     
     assert len(sanitized["outer"]["inner"]["text"]) == expected_length
@@ -108,7 +112,9 @@ def test_sanitize_request_body_for_spend_logs_payload_nested_list():
         end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
     
     skipped_chars = len(long_string) - total_keep
-    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+    expected_truncation_message = (
+        f"\n...\n({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars)\n...\n"
+    )
     expected_length = start_chars + len(expected_truncation_message) + end_chars
     
     assert len(sanitized["items"][0]["text"]) == expected_length
@@ -148,7 +154,9 @@ def test_sanitize_request_body_for_spend_logs_payload_mixed_types():
         end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
     
     skipped_chars = len(long_string) - total_keep
-    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+    expected_truncation_message = (
+        f"\n...\n({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars)\n...\n"
+    )
     expected_length = start_chars + len(expected_truncation_message) + end_chars
     
     assert len(sanitized["text"]) == expected_length
@@ -956,4 +964,3 @@ def test_should_store_prompts_and_responses_in_spend_logs_case_insensitive_strin
         mock_get_secret_bool.return_value = False
         result = _should_store_prompts_and_responses_in_spend_logs()
         assert result is False, "Expected False (from env var) when key missing, got True"
-
