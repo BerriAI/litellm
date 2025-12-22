@@ -57,6 +57,7 @@ describe("RequestResponsePanel", () => {
   it("should render the component with request and response panels", () => {
     const mockGetClientRequest = vi.fn().mockReturnValue({ test: "request" });
     const mockGetModelRequest = vi.fn().mockReturnValue({ test: "model request" });
+    const mockGetModelResponse = vi.fn().mockReturnValue({ test: "model response" });
     const mockFormattedResponse = vi.fn().mockReturnValue({ test: "response" });
 
     render(
@@ -64,17 +65,20 @@ describe("RequestResponsePanel", () => {
         row={{ original: baseLogEntry }}
         hasClientRequest={true}
         hasModelRequest={true}
+        hasModelResponse={true}
         hasClientResponse={true}
         hasError={false}
         errorInfo={null}
         getClientRequest={mockGetClientRequest}
         getModelRequest={mockGetModelRequest}
+        getModelResponse={mockGetModelResponse}
         formattedResponse={mockFormattedResponse}
       />,
     );
 
     expect(screen.getByText("Request from client")).toBeInTheDocument();
     expect(screen.getByText("Request to model/endpoint")).toBeInTheDocument();
+    expect(screen.getByText("Response from model/endpoint")).toBeInTheDocument();
     expect(screen.getByText("Response to client")).toBeInTheDocument();
   });
 
@@ -82,6 +86,7 @@ describe("RequestResponsePanel", () => {
     const user = userEvent.setup();
     const mockGetClientRequest = vi.fn().mockReturnValue({ test: "request data" });
     const mockGetModelRequest = vi.fn().mockReturnValue({ test: "model request data" });
+    const mockGetModelResponse = vi.fn().mockReturnValue({ test: "model response data" });
     const mockFormattedResponse = vi.fn().mockReturnValue({ test: "response" });
     const mockWriteText = vi.fn().mockResolvedValue(undefined);
 
@@ -102,11 +107,13 @@ describe("RequestResponsePanel", () => {
         row={{ original: baseLogEntry }}
         hasClientRequest={true}
         hasModelRequest={true}
+        hasModelResponse={true}
         hasClientResponse={true}
         hasError={false}
         errorInfo={null}
         getClientRequest={mockGetClientRequest}
         getModelRequest={mockGetModelRequest}
+        getModelResponse={mockGetModelResponse}
         formattedResponse={mockFormattedResponse}
       />,
     );
@@ -128,6 +135,7 @@ describe("RequestResponsePanel", () => {
     const user = userEvent.setup();
     const mockGetClientRequest = vi.fn().mockReturnValue({ test: "request" });
     const mockGetModelRequest = vi.fn().mockReturnValue({ test: "model request" });
+    const mockGetModelResponse = vi.fn().mockReturnValue({ test: "model response" });
     const mockFormattedResponse = vi.fn().mockReturnValue({ test: "response data" });
     const mockWriteText = vi.fn().mockResolvedValue(undefined);
 
@@ -148,11 +156,13 @@ describe("RequestResponsePanel", () => {
         row={{ original: baseLogEntry }}
         hasClientRequest={true}
         hasModelRequest={true}
+        hasModelResponse={true}
         hasClientResponse={true}
         hasError={false}
         errorInfo={null}
         getClientRequest={mockGetClientRequest}
         getModelRequest={mockGetModelRequest}
+        getModelResponse={mockGetModelResponse}
         formattedResponse={mockFormattedResponse}
       />,
     );
@@ -174,6 +184,7 @@ describe("RequestResponsePanel", () => {
   it("should call formattedResponse for the response panel and not request getters", () => {
     const mockGetClientRequest = vi.fn().mockReturnValue({ requestData: "this should not appear in response" });
     const mockGetModelRequest = vi.fn().mockReturnValue({ modelRequestData: "not in response" });
+    const mockGetModelResponse = vi.fn().mockReturnValue({ modelResponseData: "not in response" });
     const mockFormattedResponse = vi.fn().mockReturnValue({ responseData: "this should appear in response" });
 
     render(
@@ -181,11 +192,13 @@ describe("RequestResponsePanel", () => {
         row={{ original: baseLogEntry }}
         hasClientRequest={true}
         hasModelRequest={true}
+        hasModelResponse={true}
         hasClientResponse={true}
         hasError={false}
         errorInfo={null}
         getClientRequest={mockGetClientRequest}
         getModelRequest={mockGetModelRequest}
+        getModelResponse={mockGetModelResponse}
         formattedResponse={mockFormattedResponse}
       />,
     );

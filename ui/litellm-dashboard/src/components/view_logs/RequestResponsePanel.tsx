@@ -9,11 +9,13 @@ interface RequestResponsePanelProps {
   };
   hasClientRequest: string | boolean;
   hasModelRequest: string | boolean;
+  hasModelResponse: string | boolean;
   hasClientResponse: string | boolean;
   hasError: boolean;
   errorInfo: any;
   getClientRequest: () => any;
   getModelRequest: () => any;
+  getModelResponse: () => any;
   formattedResponse: () => any;
 }
 
@@ -21,11 +23,13 @@ export function RequestResponsePanel({
   row: _row,
   hasClientRequest,
   hasModelRequest,
+  hasModelResponse,
   hasClientResponse,
   hasError,
   errorInfo,
   getClientRequest,
   getModelRequest,
+  getModelResponse,
   formattedResponse,
 }: RequestResponsePanelProps) {
   const copyToClipboard = async (text: string) => {
@@ -87,28 +91,17 @@ export function RequestResponsePanel({
       copyTitle: "Copy request to model/endpoint",
       successMessage: "Request to model/endpoint copied to clipboard",
       errorMessage: "Failed to copy request to model/endpoint",
-      emptyText: (
-        <span className="block whitespace-normal break-words text-left max-w-prose mx-auto">
-          Request not available. Enable{" "}
-          <a
-            className="text-blue-600 underline"
-            href="https://docs.litellm.ai/docs/proxy/config_settings#store_prompts_in_spend_logs"
-            target="_blank"
-            rel="noreferrer"
-          >
-            <code>store_prompts_in_spend_logs</code>
-          </a>{" "}
-          to capture and display model requests. If content is truncated, raise{" "}
-          <a
-            className="text-blue-600 underline"
-            href="https://docs.litellm.ai/docs/proxy/config_settings#store_prompts_in_spend_logs#MAX_STRING_LENGTH_PROMPT_IN_DB"
-            target="_blank"
-            rel="noreferrer"
-          >
-            <code>MAX_STRING_LENGTH_PROMPT_IN_DB</code>
-          </a>.
-        </span>
-      ),
+      emptyText: "Request to model/endpoint not available",
+    },
+    {
+      key: "model-response",
+      title: "Response from model/endpoint",
+      hasData: hasModelResponse,
+      getData: getModelResponse,
+      copyTitle: "Copy response from model/endpoint",
+      successMessage: "Response from model/endpoint copied to clipboard",
+      errorMessage: "Failed to copy response from model/endpoint",
+      emptyText: "Response from model/endpoint not available",
     },
     {
       key: "client-response",
@@ -123,7 +116,7 @@ export function RequestResponsePanel({
   ];
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 w-full max-w-full overflow-hidden box-border">
+    <div className="flex flex-col gap-4 w-full max-w-full overflow-hidden box-border">
       {panels.map((panel) => {
         const hasData = Boolean(panel.hasData);
         const data = hasData ? panel.getData() : null;
