@@ -2365,13 +2365,11 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
         loaded_model_cost = litellm.get_model_cost_map(url=model_cost)
 
     for key, value in loaded_model_cost.items():
-        ## get model info ##
-        try:
-            existing_model: dict = cast(dict, get_model_info(model=key))
-            model_cost_key = existing_model["key"]
-        except Exception:
-            existing_model = {}
-            model_cost_key = key
+        ## get existing model info from model_cost directly ##
+        ## avoid calling get_model_info() as it triggers provider resolution
+        ## which can cause side effects like GitHub Copilot OAuth flow
+        existing_model: dict = litellm.model_cost.get(key, {})
+        model_cost_key = key
         ## override / add new keys to the existing model cost dictionary
         updated_dictionary = _update_dictionary(existing_model, value)
         litellm.model_cost.setdefault(model_cost_key, {}).update(updated_dictionary)
