@@ -110,13 +110,26 @@ from litellm.types.utils import (
     RawRequestTypedDict,
     StreamingChoices,
 )
+from litellm.types.utils import (
+    ModelResponseStream,
+    RawRequestTypedDict,
+    StreamingChoices,
+)
 from litellm.utils import (
+    Choices,
     Choices,
     CustomStreamWrapper,
     EmbeddingResponse,
     Message,
     ModelResponse,
+    EmbeddingResponse,
+    Message,
+    ModelResponse,
     ProviderConfigManager,
+    TextChoices,
+    TextCompletionResponse,
+    TextCompletionStreamWrapper,
+    TranscriptionResponse,
     TextChoices,
     TextCompletionResponse,
     TextCompletionStreamWrapper,
@@ -6506,6 +6519,38 @@ def speech(  # noqa: PLR0915
             api_base=api_base,
             api_key=api_key,
             **kwargs,
+        )
+    elif custom_llm_provider == "minimax":
+        from litellm.llms.minimax.text_to_speech.transformation import (
+            MinimaxTextToSpeechConfig,
+        )
+
+        # MiniMax Text-to-Speech
+        if text_to_speech_provider_config is None:
+            text_to_speech_provider_config = MinimaxTextToSpeechConfig()
+
+        minimax_config = cast(
+            MinimaxTextToSpeechConfig, text_to_speech_provider_config
+        )
+
+        if api_base is not None:
+            litellm_params_dict["api_base"] = api_base
+        if api_key is not None:
+            litellm_params_dict["api_key"] = api_key
+
+        response = base_llm_http_handler.text_to_speech_handler(
+            model=model,
+            input=input,
+            voice=voice,
+            text_to_speech_provider_config=minimax_config,
+            text_to_speech_optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            client=client,
+            _is_async=aspeech or False,
         )
     elif custom_llm_provider == "aws_polly":
         from litellm.llms.aws_polly.text_to_speech.transformation import (
