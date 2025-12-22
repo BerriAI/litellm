@@ -224,8 +224,10 @@ async def test_async_create_file_handles_binary_data():
     """
     handler = BaseLLMHTTPHandler()
 
+    # Binary content with invalid UTF-8 bytes (would fail decode)
     binary_content = bytes([0xFF, 0xFE, 0x00, 0x01, 0x02, 0x03, 0x50, 0x44, 0x46])
 
+    # Mock the provider config
     mock_provider_config = Mock()
     mock_provider_config.custom_llm_provider = "vertex_ai"
     mock_provider_config.file_upload_http_method = "POST"
@@ -233,15 +235,18 @@ async def test_async_create_file_handles_binary_data():
         return_value={"id": "file-123", "object": "file"}
     )
 
+    # Mock the logging object
     mock_logging_obj = Mock()
     mock_logging_obj.pre_call = Mock()
 
+    # Mock the response
     mock_response = Mock()
     mock_response.status_code = 200
     mock_response.json.return_value = {"id": "file-123", "object": "file"}
     mock_response.headers = {}
     mock_response.text = '{"id": "file-123", "object": "file"}'
 
+    # Mock the async client
     mock_async_client = AsyncMock()
     mock_async_client.post = AsyncMock(return_value=mock_response)
 
@@ -260,6 +265,7 @@ async def test_async_create_file_handles_binary_data():
             timeout=30.0,
         )
 
+    # Verify binary content was passed directly without modification
     mock_async_client.post.assert_called_once()
     call_kwargs = mock_async_client.post.call_args.kwargs
 
