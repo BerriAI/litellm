@@ -1443,16 +1443,16 @@
       "url": "https://docs.litellm.ai/docs/providers/ovhcloud",
       "endpoints": {
         "chat_completions": true,
-        "messages": true,
-        "responses": true,
-        "embeddings": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": true,
         "image_generations": false,
         "audio_transcriptions": true,
         "audio_speech": false,
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": false
       }
     },
     "parallel_ai": {
