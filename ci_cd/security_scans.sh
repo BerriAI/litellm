@@ -57,7 +57,7 @@ run_secret_detection() {
     
     # Use --recursive for directory scanning and auto-confirm if prompted
     # .gitguardian.yaml will automatically exclude binary files, wheel files, etc.
-    GITGUARDIAN_API_KEY environment variable will be used for authentication
+    # GITGUARDIAN_API_KEY environment variable will be used for authentication
     echo y | ggshield secret scan path . --recursive || {
         echo ""
         echo "=========================================="
