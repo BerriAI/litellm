@@ -1,11 +1,11 @@
 import { isAdminRole } from "@/utils/roles";
 import { QuestionCircleOutlined } from "@ant-design/icons";
-import { useQuery } from "@tanstack/react-query";
 import { Button, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
 import { Descriptions, Modal, Select, Tooltip, Typography } from "antd";
 import React, { useEffect, useState } from "react";
+import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
 import NotificationsManager from "../molecules/notifications_manager";
-import { deleteMCPServer, fetchMCPServers } from "../networking";
+import { deleteMCPServer } from "../networking";
 import { DataTable } from "../view_logs/table";
 import CreateMCPServer from "./create_mcp_server";
 import MCPConnect from "./mcp_connect";
@@ -19,19 +19,7 @@ const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
 const { Option } = Select;
 
 const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID }) => {
-  const {
-    data: mcpServers,
-    isLoading: isLoadingServers,
-    refetch,
-    dataUpdatedAt,
-  } = useQuery({
-    queryKey: ["mcpServers"],
-    queryFn: () => {
-      if (!accessToken) throw new Error("Access Token required");
-      return fetchMCPServers(accessToken);
-    },
-    enabled: !!accessToken,
-  }) as { data: MCPServer[]; isLoading: boolean; refetch: () => void; dataUpdatedAt: number };
+  const { data: mcpServers, isLoading: isLoadingServers, refetch, dataUpdatedAt } = useMCPServers(accessToken);
 
   // Log allowed_tools from fetched servers
   React.useEffect(() => {
