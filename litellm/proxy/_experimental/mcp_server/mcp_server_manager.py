@@ -84,6 +84,8 @@ def _deserialize_json_dict(data: Any) -> Optional[Dict[str, str]]:
 
 
 class MCPServerManager:
+    _STDIO_ENV_TEMPLATE_PATTERN = re.compile(r"^\$\{(X-[^}]+)\}$")
+
     def __init__(self):
         self.registry: Dict[str, MCPServer] = {}
         self.config_mcp_servers: Dict[str, MCPServer] = {}
@@ -671,11 +673,39 @@ class MCPServerManager:
     #########################################################
     # Methods that call the upstream MCP servers
     #########################################################
+    def _build_stdio_env(
+        self,
+        server: MCPServer,
+        raw_headers: Optional[Dict[str, str]] = None,
+    ) -> Optional[Dict[str, str]]:
+        """Resolve stdio env values, supporting header-driven placeholders."""
+
+        if server.transport != MCPTransport.stdio or not server.env:
+            return None
+
+        resolved_env: Dict[str, str] = {}
+        normalized_headers = {k.lower(): v for k, v in (raw_headers or {}).items()}
+
+        for env_key, env_value in server.env.items():
+            stripped_value = env_value.strip()
+            match = self._STDIO_ENV_TEMPLATE_PATTERN.match(stripped_value)
+            if match:
+                header_name = match.group(1)
+                header_value = normalized_headers.get(header_name.lower())
+                if header_value is None:
+                    continue
+                resolved_env[env_key] = header_value
+            else:
+                resolved_env[env_key] = env_value
+
+        return resolved_env
+
     def _create_mcp_client(
         self,
         server: MCPServer,
         mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
         extra_headers: Optional[Dict[str, str]] = None,
+        stdio_env: Optional[Dict[str, str]] = None,
     ) -> MCPClient:
         """
         Create an MCPClient instance for the given server.
@@ -692,10 +722,13 @@ class MCPServerManager:
         # Handle stdio transport
         if transport == MCPTransport.stdio:
             # For stdio, we need to get the stdio config from the server
+            resolved_env = stdio_env if stdio_env is not None else server.env or {}
             stdio_config: Optional[MCPStdioConfig] = None
             if server.command and server.args is not None:
                 stdio_config = MCPStdioConfig(
-                    command=server.command, args=server.args, env=server.env or {}
+                    command=server.command,
+                    args=server.args,
+                    env=resolved_env,
                 )
 
             return MCPClient(
@@ -725,6 +758,7 @@ class MCPServerManager:
         mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
         extra_headers: Optional[Dict[str, str]] = None,
         add_prefix: bool = True,
+        raw_headers: Optional[Dict[str, str]] = None,
     ) -> List[MCPTool]:
         """
         Helper method to get tools from a single MCP server with prefixed names.
@@ -751,10 +785,13 @@ class MCPServerManager:
                     extra_headers = {}
                 extra_headers.update(server.static_headers)
 
+            stdio_env = self._build_stdio_env(server, raw_headers)
+
             client = self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
                 extra_headers=extra_headers,
+                stdio_env=stdio_env,
             )
 
             ## HANDLE OPENAPI TOOLS
@@ -784,6 +821,7 @@ class MCPServerManager:
         mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
         extra_headers: Optional[Dict[str, str]] = None,
         add_prefix: bool = True,
+        raw_headers: Optional[Dict[str, str]] = None,
     ) -> List[Prompt]:
         """
         Helper method to get prompts from a single MCP server with prefixed names.
@@ -807,10 +845,13 @@ class MCPServerManager:
                     extra_headers = {}
                 extra_headers.update(server.static_headers)
 
+            stdio_env = self._build_stdio_env(server, raw_headers)
+
             client = self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
                 extra_headers=extra_headers,
+                stdio_env=stdio_env,
             )
 
             prompts = await client.list_prompts()
@@ -833,6 +874,7 @@ class MCPServerManager:
         mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
         extra_headers: Optional[Dict[str, str]] = None,
         add_prefix: bool = True,
+        raw_headers: Optional[Dict[str, str]] = None,
     ) -> List[Resource]:
         """Fetch available resources from a single MCP server."""
 
@@ -847,10 +889,13 @@ class MCPServerManager:
                     extra_headers = {}
                 extra_headers.update(server.static_headers)
 
+            stdio_env = self._build_stdio_env(server, raw_headers)
+
             client = self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
                 extra_headers=extra_headers,
+                stdio_env=stdio_env,
             )
 
             resources = await client.list_resources()
@@ -873,6 +918,7 @@ class MCPServerManager:
         mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
         extra_headers: Optional[Dict[str, str]] = None,
         add_prefix: bool = True,
+        raw_headers: Optional[Dict[str, str]] = None,
     ) -> List[ResourceTemplate]:
         """Fetch available resource templates from a single MCP server."""
 
@@ -887,10 +933,13 @@ class MCPServerManager:
                     extra_headers = {}
                 extra_headers.update(server.static_headers)
 
+            stdio_env = self._build_stdio_env(server, raw_headers)
+
             client = self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
                 extra_headers=extra_headers,
+                stdio_env=stdio_env,
             )
 
             resource_templates = await client.list_resource_templates()
@@ -913,6 +962,7 @@ class MCPServerManager:
         url: AnyUrl,
         mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
         extra_headers: Optional[Dict[str, str]] = None,
+        raw_headers: Optional[Dict[str, str]] = None,
     ) -> ReadResourceResult:
         """Read resource contents from a specific MCP server."""
 
@@ -924,10 +974,13 @@ class MCPServerManager:
                 extra_headers = {}
             extra_headers.update(server.static_headers)
 
+        stdio_env = self._build_stdio_env(server, raw_headers)
+
         client = self._create_mcp_client(
             server=server,
             mcp_auth_header=mcp_auth_header,
             extra_headers=extra_headers,
+            stdio_env=stdio_env,
         )
 
         return await client.read_resource(url)
@@ -939,6 +992,7 @@ class MCPServerManager:
         arguments: Optional[Dict[str, Any]] = None,
         mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
         extra_headers: Optional[Dict[str, str]] = None,
+        raw_headers: Optional[Dict[str, str]] = None,
     ) -> GetPromptResult:
         """Fetch a specific prompt definition from a single MCP server."""
 
@@ -950,10 +1004,13 @@ class MCPServerManager:
                 extra_headers = {}
             extra_headers.update(server.static_headers)
 
+        stdio_env = self._build_stdio_env(server, raw_headers)
+
         client = self._create_mcp_client(
             server=server,
             mcp_auth_header=mcp_auth_header,
             extra_headers=extra_headers,
+            stdio_env=stdio_env,
         )
 
         get_prompt_request_params = GetPromptRequestParams(
@@ -1742,10 +1799,13 @@ class MCPServerManager:
                 extra_headers = {}
             extra_headers.update(mcp_server.static_headers)
 
+        stdio_env = self._build_stdio_env(mcp_server, raw_headers)
+
         client = self._create_mcp_client(
             server=mcp_server,
             mcp_auth_header=server_auth_header,
             extra_headers=extra_headers,
+            stdio_env=stdio_env,
         )
 
         call_tool_params = MCPCallToolRequestParams(
