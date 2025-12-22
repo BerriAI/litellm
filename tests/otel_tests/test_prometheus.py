@@ -8,7 +8,6 @@ import asyncio
 from litellm._uuid import uuid
 import os
 import sys
-import hashlib
 from openai import AsyncOpenAI
 from typing import Dict, Any
 
@@ -94,7 +93,7 @@ async def test_proxy_failure_metrics():
     async with aiohttp.ClientSession() as session:
         # Make a bad chat completion call
         status, response_text = await make_bad_chat_completion_request(
-            session, "sk-test-1234"
+            session, "sk-1234"
         )
 
         # Check if the request failed as expected
@@ -106,12 +105,8 @@ async def test_proxy_failure_metrics():
 
         print("/metrics", metrics)
 
-        # Compute expected hash for test key
-        test_key = "sk-test-1234"
-        expected_hash = hashlib.sha256(test_key.encode()).hexdigest()
-
         # Check if the failure metric is present and correct - use pattern matching for robustness
-        expected_metric_pattern = f'litellm_proxy_failed_requests_metric_total{{api_key_alias="None",end_user="None",exception_class="Openai.RateLimitError",exception_status="429",hashed_api_key="{expected_hash}",requested_model="fake-azure-endpoint",route="/chat/completions",team="None",team_alias="None",user="default_user_id",user_email="None"}}'
+        expected_metric_pattern = 'litellm_proxy_failed_requests_metric_total{api_key_alias="None",end_user="None",exception_class="Openai.RateLimitError",exception_status="429",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",route="/chat/completions",team="None",team_alias="None",user="default_user_id",user_email="None"}'
 
         # Check if the pattern is in metrics (this metric doesn't include user_email field)
         assert any(
@@ -119,7 +114,7 @@ async def test_proxy_failure_metrics():
         ), f"Expected failure metric pattern not found in /metrics. Pattern: {expected_metric_pattern}"
 
         # Check total requests metric which includes user_email
-        total_requests_pattern = f'litellm_proxy_total_requests_metric_total{{api_key_alias="None",end_user="None",hashed_api_key="{expected_hash}",requested_model="fake-azure-endpoint",route="/chat/completions",status_code="429",team="None",team_alias="None",user="default_user_id",user_email="None"}}'
+        total_requests_pattern = 'litellm_proxy_total_requests_metric_total{api_key_alias="None",end_user="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",route="/chat/completions",status_code="429",team="None",team_alias="None",user="default_user_id",user_email="None"}'
 
         assert any(
             total_requests_pattern in line for line in metrics.split("\n")
@@ -138,7 +133,7 @@ async def test_proxy_success_metrics():
     async with aiohttp.ClientSession() as session:
         # Make a good chat completion call
         status, response_text = await make_good_chat_completion_request(
-            session, "sk-test-1234"
+            session, "sk-1234"
         )
 
         # Check if the request succeeded as expected
@@ -152,18 +147,14 @@ async def test_proxy_success_metrics():
 
         assert END_USER_ID not in metrics
 
-        # Compute expected hash for test key
-        test_key = "sk-test-1234"
-        expected_hash = hashlib.sha256(test_key.encode()).hexdigest()
-
         # Check if the success metric is present and correct
         assert (
-            f'litellm_request_total_latency_metric_bucket{{api_key_alias="None",end_user="None",hashed_api_key="{expected_hash}",le="0.005",model="fake",requested_model="fake-openai-endpoint",team="None",team_alias="None",user="default_user_id"}}'
+            'litellm_request_total_latency_metric_bucket{api_key_alias="None",end_user="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",le="0.005",model="fake",requested_model="fake-openai-endpoint",team="None",team_alias="None",user="default_user_id"}'
             in metrics
         )
 
         assert (
-            f'litellm_llm_api_latency_metric_bucket{{api_key_alias="None",end_user="None",hashed_api_key="{expected_hash}",le="0.005",model="fake",requested_model="fake-openai-endpoint",team="None",team_alias="None",user="default_user_id"}}'
+            'litellm_llm_api_latency_metric_bucket{api_key_alias="None",end_user="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",le="0.005",model="fake",requested_model="fake-openai-endpoint",team="None",team_alias="None",user="default_user_id"}'
             in metrics
         )
 
@@ -224,7 +215,7 @@ async def test_proxy_fallback_metrics():
 
     async with aiohttp.ClientSession() as session:
         # Make a good chat completion call
-        await make_chat_completion_request_with_fallback(session, "sk-test-1234")
+        await make_chat_completion_request_with_fallback(session, "sk-1234")
 
         # Get metrics
         async with session.get("http://0.0.0.0:4000/metrics") as response:
@@ -232,19 +223,15 @@ async def test_proxy_fallback_metrics():
 
         print("/metrics", metrics)
 
-        # Compute expected hash for test key
-        test_key = "sk-test-1234"
-        expected_hash = hashlib.sha256(test_key.encode()).hexdigest()
-
         # Check if successful fallback metric is incremented
         assert (
-            f'litellm_deployment_successful_fallbacks_total{{api_key_alias="None",exception_class="Openai.RateLimitError",exception_status="429",fallback_model="fake-openai-endpoint",hashed_api_key="{expected_hash}",requested_model="fake-azure-endpoint",team="None",team_alias="None"}} 1.0'
+            'litellm_deployment_successful_fallbacks_total{api_key_alias="None",exception_class="Openai.RateLimitError",exception_status="429",fallback_model="fake-openai-endpoint",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",team="None",team_alias="None"} 1.0'
             in metrics
         )
 
         # Check if failed fallback metric is incremented
         assert (
-            f'litellm_deployment_failed_fallbacks_total{{api_key_alias="None",exception_class="Openai.RateLimitError",exception_status="429",fallback_model="unknown-model",hashed_api_key="{expected_hash}",requested_model="fake-azure-endpoint",team="None",team_alias="None"}} 1.0'
+            'litellm_deployment_failed_fallbacks_total{api_key_alias="None",exception_class="Openai.RateLimitError",exception_status="429",fallback_model="unknown-model",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",team="None",team_alias="None"} 1.0'
             in metrics
         )
 
@@ -255,7 +242,7 @@ async def create_test_team(
     """Create a new team and return the team_id"""
     url = "http://0.0.0.0:4000/team/new"
     headers = {
-        "Authorization": "Bearer sk-test-1234",
+        "Authorization": "Bearer sk-1234",
         "Content-Type": "application/json",
     }
 
@@ -273,7 +260,7 @@ async def create_test_user(
     """Create a new user and return the user info"""
     url = "http://0.0.0.0:4000/user/new"
     headers = {
-        "Authorization": "Bearer sk-test-1234",
+        "Authorization": "Bearer sk-1234",
         "Content-Type": "application/json",
     }
 
@@ -320,7 +307,7 @@ async def create_test_key(session: aiohttp.ClientSession, team_id: str) -> str:
     """Generate a new key for the team and return it"""
     url = "http://0.0.0.0:4000/key/generate"
     headers = {
-        "Authorization": "Bearer sk-test-1234",
+        "Authorization": "Bearer sk-1234",
         "Content-Type": "application/json",
     }
     data = {
@@ -339,7 +326,7 @@ async def get_team_info(session: aiohttp.ClientSession, team_id: str) -> Dict[st
     """Fetch team info and return the response"""
     url = f"http://0.0.0.0:4000/team/info?team_id={team_id}"
     headers = {
-        "Authorization": "Bearer sk-test-1234",
+        "Authorization": "Bearer sk-1234",
     }
 
     async with session.get(url, headers=headers) as response:
@@ -428,7 +415,7 @@ async def create_test_key_with_budget(
     """Generate a new key with budget constraints and return it"""
     url = "http://0.0.0.0:4000/key/generate"
     headers = {
-        "Authorization": "Bearer sk-test-1234",
+        "Authorization": "Bearer sk-1234",
         "Content-Type": "application/json",
     }
     print("budget_data", budget_data)

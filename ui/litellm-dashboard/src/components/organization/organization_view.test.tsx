@@ -1,5 +1,5 @@
 import React from "react";
-import { render, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { vi, test, expect } from "vitest";
 import OrganizationInfoView from "./organization_view";
 
@@ -80,5 +80,26 @@ test("renders organization view after loading data", async () => {
 
   await waitFor(() => {
     expect(findAllByText("Acme Corp")).toBeTruthy();
+  });
+});
+
+test("should display empty state when organization has no members", async () => {
+  const { organizationInfoCall } = await import("../networking");
+  (organizationInfoCall as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(mockOrg);
+
+  render(
+    <OrganizationInfoView
+      organizationId="org_123"
+      onClose={() => {}}
+      accessToken="test-token"
+      is_org_admin={false}
+      is_proxy_admin={false}
+      userModels={[]}
+      editOrg={false}
+    />,
+  );
+
+  await waitFor(() => {
+    expect(screen.getByText("No members found")).toBeInTheDocument();
   });
 });
