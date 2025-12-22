@@ -954,13 +954,11 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
           row={row}
           hasClientRequest={hasClientRequest || hasMessages}
           hasModelRequest={hasMessages}
-          hasModelResponse={hasResponse}
           hasClientResponse={hasClientResponse}
           hasError={hasError}
           errorInfo={errorInfo}
           getClientRequest={getClientRequest}
           getModelRequest={getModelRequest}
-          getModelResponse={() => formatData(row.original.response)}
           formattedResponse={formattedResponse}
         />
       </div>
