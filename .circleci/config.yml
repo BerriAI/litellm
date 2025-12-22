@@ -677,7 +677,7 @@ jobs:
       - run:
           name: Set DATABASE_URL environment variable
           command: |
-            echo 'export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/circle_test"' >> $BASH_ENV
+            echo 'export DATABASE_URL="postgresql://postgres:test-postgres@localhost:5432/circle_test"' >> $BASH_ENV
             source $BASH_ENV
       - run:
           name: Run Security Scans
@@ -2142,7 +2142,7 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
+              -e DATABASE_URL=postgresql://postgres:test-postgres@host.docker.internal:5432/circle_test \
               -e USE_PRISMA_MIGRATE=True \
               -e AZURE_API_KEY=$AZURE_API_KEY \
               -e REDIS_HOST=$REDIS_HOST \
@@ -2284,7 +2284,7 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
+              -e DATABASE_URL=postgresql://postgres:test-postgres@host.docker.internal:5432/circle_test \
               -e AZURE_API_KEY=$AZURE_API_KEY \
               -e AZURE_API_BASE=$AZURE_API_BASE \
               -e AZURE_API_VERSION="2024-05-01-preview" \
@@ -2426,7 +2426,7 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
+              -e DATABASE_URL=postgresql://postgres:test-postgres@host.docker.internal:5432/circle_test \
               -e REDIS_HOST=$REDIS_HOST \
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
               -e REDIS_PORT=$REDIS_PORT \
@@ -2492,7 +2492,7 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
+              -e DATABASE_URL=postgresql://postgres:test-postgres@host.docker.internal:5432/circle_test \
               -e REDIS_HOST=$REDIS_HOST \
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
               -e REDIS_PORT=$REDIS_PORT \
@@ -2587,7 +2587,7 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
+              -e DATABASE_URL=postgresql://postgres:test-postgres@host.docker.internal:5432/circle_test \
               -e REDIS_HOST=$REDIS_HOST \
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
               -e REDIS_PORT=$REDIS_PORT \
@@ -2700,7 +2700,7 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
+              -e DATABASE_URL=postgresql://postgres:test-postgres@host.docker.internal:5432/circle_test \
               -e REDIS_HOST=$REDIS_HOST \
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
               -e REDIS_PORT=$REDIS_PORT \
@@ -2721,7 +2721,7 @@ jobs:
           command: |
             docker run -d \
               -p 4001:4001 \
-              -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
+              -e DATABASE_URL=postgresql://postgres:test-postgres@host.docker.internal:5432/circle_test \
               -e REDIS_HOST=$REDIS_HOST \
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
               -e REDIS_PORT=$REDIS_PORT \
@@ -2836,7 +2836,7 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
+              -e DATABASE_URL=postgresql://postgres:test-postgres@host.docker.internal:5432/circle_test \
               -e STORE_MODEL_IN_DB="True" \
               -e LITELLM_MASTER_KEY="sk-1234" \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
@@ -3067,7 +3067,7 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
+              -e DATABASE_URL=postgresql://postgres:test-postgres@host.docker.internal:5432/circle_test \
               -e LITELLM_MASTER_KEY="sk-1234" \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
               -e GEMINI_API_KEY=$GEMINI_API_KEY \
