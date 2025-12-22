@@ -786,11 +786,15 @@ class ProxyBaseLLMRequestProcessing:
         verbose_proxy_logger.exception(
             f"litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - {str(e)}"
         )
-        await proxy_logging_obj.post_call_failure_hook(
+        # Allow callbacks to transform the error response
+        transformed_exception = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
             request_data=self.data,
         )
+        # Use transformed exception if callback returned one, otherwise use original
+        if transformed_exception is not None:
+            e = transformed_exception
         litellm_debug_info = getattr(e, "litellm_debug_info", "")
         verbose_proxy_logger.debug(
             "\033[1;31mAn error occurred: %s %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
@@ -970,11 +974,15 @@ class ProxyBaseLLMRequestProcessing:
                     str(e)
                 )
             )
-            await proxy_logging_obj.post_call_failure_hook(
+            # Allow callbacks to transform the error response
+            transformed_exception = await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=e,
                 request_data=request_data,
             )
+            # Use transformed exception if callback returned one, otherwise use original
+            if transformed_exception is not None:
+                e = transformed_exception
             verbose_proxy_logger.debug(
                 f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`"
             )

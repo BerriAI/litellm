@@ -90,15 +90,17 @@ class UserAPIKeyAuthExceptionHandler:
                 api_key=api_key,
                 request_route=route,
             )
-            asyncio.create_task(
-                proxy_logging_obj.post_call_failure_hook(
-                    request_data=request_data,
-                    original_exception=e,
-                    user_api_key_dict=user_api_key_dict,
-                    error_type=ProxyErrorTypes.auth_error,
-                    route=route,
-                )
+            # Allow callbacks to transform the error response
+            transformed_exception = await proxy_logging_obj.post_call_failure_hook(
+                request_data=request_data,
+                original_exception=e,
+                user_api_key_dict=user_api_key_dict,
+                error_type=ProxyErrorTypes.auth_error,
+                route=route,
             )
+            # Use transformed exception if callback returned one, otherwise use original
+            if transformed_exception is not None:
+                e = transformed_exception
 
             if isinstance(e, litellm.BudgetExceededError):
                 raise ProxyException(
