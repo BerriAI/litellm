@@ -26714,7 +26714,7 @@
     },
     "hosted_vllm/Qwen/Qwen3-VL-235B-A22B-Thinking": {
         "litellm_provider": "hosted_vllm",
-        "mode": "one of: chat, completion, image_generation",
+        "mode": "chat",
         "max_input_tokens": 196608,
         "output_cost_per_token": 0.0000012
     }
