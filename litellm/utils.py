@@ -8096,6 +8096,12 @@ class ProviderConfigManager:
             )
 
             return VertexAITextToSpeechConfig()
+        elif litellm.LlmProviders.AWS_POLLY == provider:
+            from litellm.llms.aws_polly.text_to_speech.transformation import (
+                AWSPollyTextToSpeechConfig,
+            )
+
+            return AWSPollyTextToSpeechConfig()
         return None
 
     @staticmethod

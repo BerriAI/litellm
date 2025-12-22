@@ -25423,6 +25423,42 @@
             "/v1/audio/speech"
         ]
     },
+    "aws_polly/standard": {
+        "input_cost_per_character": 4e-06,
+        "litellm_provider": "aws_polly",
+        "mode": "audio_speech",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "source": "https://aws.amazon.com/polly/pricing/"
+    },
+    "aws_polly/neural": {
+        "input_cost_per_character": 1.6e-05,
+        "litellm_provider": "aws_polly",
+        "mode": "audio_speech",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "source": "https://aws.amazon.com/polly/pricing/"
+    },
+    "aws_polly/long-form": {
+        "input_cost_per_character": 1e-04,
+        "litellm_provider": "aws_polly",
+        "mode": "audio_speech",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "source": "https://aws.amazon.com/polly/pricing/"
+    },
+    "aws_polly/generative": {
+        "input_cost_per_character": 3e-05,
+        "litellm_provider": "aws_polly",
+        "mode": "audio_speech",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "source": "https://aws.amazon.com/polly/pricing/"
+    },
     "us.amazon.nova-lite-v1:0": {
         "input_cost_per_token": 6e-08,
         "litellm_provider": "bedrock_converse",

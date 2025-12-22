@@ -664,6 +664,7 @@ const sidebars = {
             "providers/bedrock_agents",
             "providers/bedrock_writer",
             "providers/bedrock_batches",
+            "providers/aws_polly",
             "providers/bedrock_vector_store",
           ]
         },
