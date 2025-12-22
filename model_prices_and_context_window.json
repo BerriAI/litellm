@@ -15364,6 +15364,34 @@
             "video"
         ]
     },
+    "gemini/veo-3.1-fast-generate-001": {
+        "litellm_provider": "gemini",
+        "max_input_tokens": 1024,
+        "max_tokens": 1024,
+        "mode": "video_generation",
+        "output_cost_per_second": 0.15,
+        "source": "https://ai.google.dev/gemini-api/docs/video",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "gemini/veo-3.1-generate-001": {
+        "litellm_provider": "gemini",
+        "max_input_tokens": 1024,
+        "max_tokens": 1024,
+        "mode": "video_generation",
+        "output_cost_per_second": 0.40,
+        "source": "https://ai.google.dev/gemini-api/docs/video",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
     "github_copilot/claude-haiku-4.5": {
         "litellm_provider": "github_copilot",
         "max_input_tokens": 128000,
@@ -28102,6 +28130,34 @@
         ]
     },
     "vertex_ai/veo-3.1-fast-generate-preview": {
+        "litellm_provider": "vertex_ai-video-models",
+        "max_input_tokens": 1024,
+        "max_tokens": 1024,
+        "mode": "video_generation",
+        "output_cost_per_second": 0.15,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/veo",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "vertex_ai/veo-3.1-generate-001": {
+        "litellm_provider": "vertex_ai-video-models",
+        "max_input_tokens": 1024,
+        "max_tokens": 1024,
+        "mode": "video_generation",
+        "output_cost_per_second": 0.4,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/veo",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "vertex_ai/veo-3.1-fast-generate-001": {
         "litellm_provider": "vertex_ai-video-models",
         "max_input_tokens": 1024,
         "max_tokens": 1024,
