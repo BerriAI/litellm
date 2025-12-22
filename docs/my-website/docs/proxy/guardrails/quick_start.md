@@ -69,6 +69,13 @@ guardrails:
 - `during_call` Run **during** LLM call, on **input** Same as `pre_call` but runs in parallel as LLM call.  Response not returned until guardrail check completes
 - A list of the above values to run multiple modes, e.g. `mode: [pre_call, post_call]`
 
+### Load Balancing Guardrails
+
+Need to distribute guardrail requests across multiple accounts or regions? See [Guardrail Load Balancing](./guardrail_load_balancing.md) for details on:
+- Load balancing across multiple AWS Bedrock accounts (useful for rate limit management)
+- Weighted distribution across guardrail instances
+- Multi-region guardrail deployments
+
 
 ## 2. Start LiteLLM Gateway 
 

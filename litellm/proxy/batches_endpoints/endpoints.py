@@ -573,6 +573,7 @@ async def list_batches(
             if target_model_names is None:
                 raise ValueError("target_model_names is required for this routing scenario")
             model = target_model_names.split(",")[0]
+            data.pop("model", None)
             response = await llm_router.alist_batches(
                 model=model,
                 after=after,

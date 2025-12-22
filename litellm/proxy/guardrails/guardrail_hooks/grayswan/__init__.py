@@ -40,6 +40,12 @@ def initialize_guardrail(
         ),
         categories=_get_config_value(litellm_params, optional_params, "categories"),
         policy_id=_get_config_value(litellm_params, optional_params, "policy_id"),
+        streaming_end_of_stream_only=_get_config_value(
+            litellm_params, optional_params, "streaming_end_of_stream_only"
+        ) or False,
+        streaming_sampling_rate=_get_config_value(
+            litellm_params, optional_params, "streaming_sampling_rate"
+        ) or 5,
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
     )

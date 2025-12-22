@@ -144,6 +144,51 @@
     "litellm_params_template": {
       "custom_llm_provider": "azure_ai"
     }
+  },
+  {
+    "agent_type": "pydantic_ai_agents",
+    "agent_type_display_name": "Pydantic AI",
+    "description": "Connect to Pydantic AI agents via A2A protocol (with fake streaming support)",
+    "logo_url": "/ui/assets/logos/pydantic.svg",
+    "use_a2a_form_fields": true,
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "Agent URL",
+        "placeholder": "http://localhost:9999",
+        "tooltip": "The base URL for your Pydantic AI agent server",
+        "required": true,
+        "field_type": "text",
+        "default_value": "http://localhost:9999",
+        "include_in_litellm_params": true
+      }
+    ],
+    "litellm_params_template": {
+      "custom_llm_provider": "pydantic_ai_agents"
+    }
+  },
+  {
+    "agent_type": "vertex_agent_engine",
+    "agent_type_display_name": "Vertex AI Agent Engine",
+    "description": "Connect to Google Cloud Vertex AI Reasoning Engines",
+    "logo_url": "/ui/assets/logos/google.svg",
+    "inherit_credentials_from_provider": "Vertex_AI",
+    "model_template": "vertex_ai/agent_engine/{reasoning_engine_id}",
+    "credential_fields": [
+      {
+        "key": "reasoning_engine_id",
+        "label": "Reasoning Engine Resource ID",
+        "placeholder": "projects/123456789/locations/us-central1/reasoningEngines/987654321",
+        "tooltip": "The full resource ID of your Vertex AI Reasoning Engine. Find this in Google Cloud Console under Vertex AI > Agent Builder > Your Agent.",
+        "required": true,
+        "field_type": "text",
+        "default_value": null,
+        "include_in_litellm_params": false
+      }
+    ],
+    "litellm_params_template": {
+      "custom_llm_provider": "vertex_ai"
+    }
   }
 ]
 

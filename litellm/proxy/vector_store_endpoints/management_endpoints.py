@@ -10,7 +10,7 @@ All /vector_store management endpoints
 
 import copy
 import json
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -23,6 +23,8 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+from litellm.secret_managers.main import get_secret
 from litellm.types.vector_stores import (
     LiteLLM_ManagedVectorStore,
     LiteLLM_ManagedVectorStoreListResponse,
@@ -33,6 +35,102 @@ from litellm.types.vector_stores import (
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
 router = APIRouter()
+
+
+async def _resolve_embedding_config_from_db(
+    embedding_model: str, prisma_client
+) -> Optional[Dict[str, Any]]:
+    """
+    Resolve embedding config from database model configuration.
+    
+    If litellm_embedding_model is provided but litellm_embedding_config is not,
+    this function looks up the model in the database and extracts api_key, api_base,
+    and api_version from the model's litellm_params to build the embedding config.
+    
+    Args:
+        embedding_model: The embedding model string (e.g., "text-embedding-ada-002" or "azure/text-embedding-3-large")
+        prisma_client: The Prisma client instance
+        
+    Returns:
+        Dictionary with api_key, api_base, and api_version if model found, None otherwise
+    """
+    if not embedding_model:
+        return None
+    
+    # Extract model name - could be "text-embedding-ada-002" or "azure/text-embedding-3-large"
+    # Try to find model by exact match first, then try without provider prefix
+    model_name_candidates = [embedding_model]
+    if "/" in embedding_model:
+        # If it has a provider prefix, also try without it
+        _, model_name = embedding_model.split("/", 1)
+        model_name_candidates.append(model_name)
+    
+    # Try to find model in database
+    for model_name in model_name_candidates:
+        try:
+            db_model = await prisma_client.db.litellm_proxymodeltable.find_first(
+                where={"model_name": model_name}
+            )
+            
+            if db_model and db_model.litellm_params:
+                # Extract litellm_params (could be dict or JSON string)
+                model_params = db_model.litellm_params
+                if isinstance(model_params, str):
+                    model_params = json.loads(model_params)
+                
+                # Decrypt values from database (similar to how proxy_server.py does it)
+                # Values stored in DB are encrypted, so we need to decrypt them first
+                decrypted_params = {}
+                if isinstance(model_params, dict):
+                    for k, v in model_params.items():
+                        if isinstance(v, str):
+                            # Decrypt value - returns original value if decryption fails or no key is set
+                            decrypted_value = decrypt_value_helper(
+                                value=v, key=k, return_original_value=True
+                            )
+                            decrypted_params[k] = decrypted_value
+                        else:
+                            decrypted_params[k] = v
+                else:
+                    decrypted_params = model_params
+                
+                # Build embedding config from model params
+                embedding_config = {}
+                
+                # Extract api_key
+                api_key = decrypted_params.get("api_key")
+                if api_key:
+                    # Handle os.environ/ prefix (after decryption, values may be os.environ/ prefixed)
+                    if isinstance(api_key, str) and api_key.startswith("os.environ/"):
+                        api_key = get_secret(api_key)
+                    embedding_config["api_key"] = api_key
+                
+                # Extract api_base
+                api_base = decrypted_params.get("api_base")
+                if api_base:
+                    # Handle os.environ/ prefix (after decryption, values may be os.environ/ prefixed)
+                    if isinstance(api_base, str) and api_base.startswith("os.environ/"):
+                        api_base = get_secret(api_base)
+                    embedding_config["api_base"] = api_base
+                
+                # Extract api_version
+                api_version = decrypted_params.get("api_version")
+                if api_version:
+                    embedding_config["api_version"] = api_version
+                
+                # Only return config if we have at least api_key or api_base
+                if embedding_config:
+                    verbose_proxy_logger.debug(
+                        f"Resolved embedding config from database model {model_name}: {list(embedding_config.keys())}"
+                    )
+                    return embedding_config
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"Error resolving embedding config for model {model_name}: {str(e)}"
+            )
+            continue
+    
+    return None
 
 
 ########################################################
@@ -85,6 +183,19 @@ async def new_vector_store(
         litellm_params_json: Optional[str] = None
         _input_litellm_params: dict = vector_store.get("litellm_params", {}) or {}
         if _input_litellm_params is not None:
+            # Auto-resolve embedding config if embedding model is provided but config is not
+            embedding_model = _input_litellm_params.get("litellm_embedding_model")
+            if embedding_model and not _input_litellm_params.get("litellm_embedding_config"):
+                resolved_config = await _resolve_embedding_config_from_db(
+                    embedding_model=embedding_model,
+                    prisma_client=prisma_client
+                )
+                if resolved_config:
+                    _input_litellm_params["litellm_embedding_config"] = resolved_config
+                    verbose_proxy_logger.info(
+                        f"Auto-resolved embedding config for model {embedding_model}"
+                    )
+            
             litellm_params_dict = GenericLiteLLMParams(
                 **_input_litellm_params
             ).model_dump(exclude_none=True)

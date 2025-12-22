@@ -23,13 +23,15 @@ body:
       description: Please copy and paste any relevant log output. This will be automatically formatted into code, so no need for backticks.
       render: shell
   - type: dropdown
-    id: ml-ops-team
+    id: component
     attributes:
-      label: Are you a ML Ops Team?
-      description: This helps us prioritize your requests correctly 
+      label: What part of LiteLLM is this about?
       options:
-        - "No"
-        - "Yes"
+        - "SDK (litellm Python package)"
+        - "Proxy"
+        - "UI Dashboard"
+        - "Docs"
+        - "Other"
     validations:
       required: true
   - type: input

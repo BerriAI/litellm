@@ -1936,3 +1936,87 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 </TabItem>
 </Tabs>
 
+
+## Usage - Agent Skills
+
+LiteLLM supports using Agent Skills with the API
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+response = completion(
+    model="claude-sonnet-4-5-20250929",
+    messages=messages,
+    tools= [
+        {
+            "type": "code_execution_20250825",
+            "name": "code_execution"
+        }
+    ],
+    container= {
+        "skills": [
+            {
+                "type": "anthropic",
+                "skill_id": "pptx",
+                "version": "latest"
+            }
+        ]
+    }
+)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: claude-sonnet-4-5-20250929
+        litellm_params:
+        model: anthropic/claude-sonnet-4-5-20250929
+        api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start Proxy
+
+```
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl --location 'http://localhost:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer <YOUR-LITELLM-KEY>' \
+--data '{
+    "model": "claude-sonnet-4-5-20250929",
+    "messages": [
+        {
+            "role": "user",
+            "content": "Hi"
+        }
+    ],
+    "tools": [
+        {
+            "type": "code_execution_20250825",
+            "name": "code_execution"
+        }
+    ],
+    "container": {
+        "skills": [
+            {
+                "type": "anthropic",
+                "skill_id": "pptx",
+                "version": "latest"
+            }
+        ]
+    }
+}'
+```
+
+</TabItem>
+</Tabs>
+
+The container and its "id" will be present in "provider_specific_fields" in streaming/non-streaming response

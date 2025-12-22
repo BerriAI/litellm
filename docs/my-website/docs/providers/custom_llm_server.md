@@ -17,6 +17,7 @@ Supported Routes:
 - `/v1/completions` -> `litellm.atext_completion`
 - `/v1/embeddings` -> `litellm.aembedding`
 - `/v1/images/generations` -> `litellm.aimage_generation`
+- `/v1/images/edits` -> `litellm.aimage_edit`
 
 - `/v1/messages` -> `litellm.acompletion`
 
@@ -260,6 +261,83 @@ Expected Response
 {
     "created": 1721955063,
     "data": [{"url": "https://example.com/image.png"}],
+}
+```
+
+## Image Edit
+
+1. Setup your `custom_handler.py` file
+```python
+import litellm
+from litellm import CustomLLM
+from litellm.types.utils import ImageResponse, ImageObject
+import time
+
+class MyCustomLLM(CustomLLM):
+    async def aimage_edit(
+        self,
+        model: str,
+        image: Any,
+        prompt: str,
+        model_response: ImageResponse,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        optional_params: dict,
+        logging_obj: Any,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[AsyncHTTPHandler] = None,
+    ) -> ImageResponse:
+        # Your custom image edit logic here
+        # e.g., call Stability AI, Black Forest Labs, etc.
+        return ImageResponse(
+            created=int(time.time()),
+            data=[ImageObject(url="https://example.com/edited-image.png")],
+        )
+
+my_custom_llm = MyCustomLLM()
+```
+
+
+2. Add to `config.yaml`
+
+In the config below, we pass
+
+python_filename: `custom_handler.py`
+custom_handler_instance_name: `my_custom_llm`. This is defined in Step 1
+
+custom_handler: `custom_handler.my_custom_llm`
+
+```yaml
+model_list:
+  - model_name: "my-custom-image-edit-model"
+    litellm_params:
+      model: "my-custom-llm/my-model"
+
+litellm_settings:
+  custom_provider_map:
+  - {"provider": "my-custom-llm", "custom_handler": custom_handler.my_custom_llm}
+```
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it!
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/v1/images/edits' \
+-H 'Authorization: Bearer sk-1234' \
+-F 'model=my-custom-image-edit-model' \
+-F 'image=@/path/to/image.png' \
+-F 'prompt=Make the sky blue'
+```
+
+Expected Response
+
+```
+{
+    "created": 1721955063,
+    "data": [{"url": "https://example.com/edited-image.png"}],
 }
 ```
 
@@ -511,6 +589,36 @@ class CustomLLM(BaseLLM):
         model: str,
         prompt: str,
         model_response: ImageResponse,
+        optional_params: dict,
+        logging_obj: Any,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[AsyncHTTPHandler] = None,
+    ) -> ImageResponse:
+        raise CustomLLMError(status_code=500, message="Not implemented yet!")
+
+    def image_edit(
+        self,
+        model: str,
+        image: Any,
+        prompt: str,
+        model_response: ImageResponse,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        optional_params: dict,
+        logging_obj: Any,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[HTTPHandler] = None,
+    ) -> ImageResponse:
+        raise CustomLLMError(status_code=500, message="Not implemented yet!")
+
+    async def aimage_edit(
+        self,
+        model: str,
+        image: Any,
+        prompt: str,
+        model_response: ImageResponse,
+        api_key: Optional[str],
+        api_base: Optional[str],
         optional_params: dict,
         logging_obj: Any,
         timeout: Optional[Union[float, httpx.Timeout]] = None,

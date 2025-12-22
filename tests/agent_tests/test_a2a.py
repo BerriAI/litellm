@@ -21,10 +21,7 @@ from litellm.types.utils import StandardLoggingPayload
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-
 from a2a.types import MessageSendParams, SendMessageRequest
-
-
 @pytest.mark.asyncio
 async def test_asend_message_with_client_decorator():
     """
@@ -165,3 +162,163 @@ async def test_a2a_logging_payload():
     # This confirms the A2A cost calculator is working
     assert response_cost is not None, "response_cost should not be None"
     assert response_cost == 0.0, f"response_cost should be 0.0 for A2A, got: {response_cost}"
+
+
+@pytest.mark.asyncio
+async def test_pydantic_ai_non_streaming():
+    """
+    Test non-streaming requests to Pydantic AI agents.
+    
+    Pydantic AI agents follow A2A protocol but don't support streaming.
+    This test validates non-streaming requests work correctly.
+    """
+    litellm._turn_on_debug()
+    from litellm.a2a_protocol import asend_message
+
+    # Build the request
+    send_message_payload = {
+        "message": {
+            "role": "user",
+            "parts": [
+                {
+                    "kind": "text",
+                    "text": "Hello from Pydantic AI test!",
+                }
+            ],
+            "messageId": uuid4().hex,
+        },
+    }
+
+    request = SendMessageRequest(
+        id=str(uuid4()),
+        params=MessageSendParams(**send_message_payload),
+    )
+
+    # Send message using Pydantic AI provider
+    response = await asend_message(
+        request=request,
+        api_base="http://localhost:9999",
+        litellm_params={"custom_llm_provider": "pydantic_ai_agents"},
+    )
+
+    # Print response for debugging
+    print("\n=== Pydantic AI Non-Streaming Response ===")
+    print(response.model_dump(mode="json", exclude_none=True))
+
+    # Basic assertions
+    assert response is not None
+    assert hasattr(response, "result")
+    
+    # Verify result structure
+    result = response.result
+    assert result is not None
+    
+    # Pydantic AI returns a task with history/artifacts, not a direct message
+    # Check for either format
+    result_dict = result if isinstance(result, dict) else result.model_dump(mode="python", exclude_none=True)
+    has_message = "message" in result_dict
+    has_history = "history" in result_dict
+    has_artifacts = "artifacts" in result_dict
+    
+    assert has_message or has_history or has_artifacts, (
+        f"Result should contain 'message', 'history', or 'artifacts'. Got: {list(result_dict.keys())}"
+    )
+    
+    # If it's a task response (Pydantic AI style), verify we got agent response
+    if has_history:
+        history = result_dict.get("history", [])
+        agent_messages = [m for m in history if m.get("role") == "agent"]
+        assert len(agent_messages) > 0, "Should have at least one agent message in history"
+        
+        # Verify agent message has text content
+        agent_msg = agent_messages[-1]
+        parts = agent_msg.get("parts", [])
+        text_parts = [p for p in parts if p.get("kind") == "text"]
+        assert len(text_parts) > 0, "Agent message should have text content"
+        print(f"\nAgent response: {text_parts[0].get('text')}")
+
+
+@pytest.mark.asyncio
+async def test_pydantic_ai_fake_streaming():
+    """
+    Test fake streaming for Pydantic AI agents.
+    
+    Pydantic AI agents don't support streaming natively.
+    This test validates that fake streaming works by converting
+    non-streaming responses into streaming chunks.
+    """
+    litellm._turn_on_debug()
+    from litellm.a2a_protocol import asend_message_streaming
+
+    # Build the request
+    from a2a.types import SendStreamingMessageRequest
+
+    send_message_payload = {
+        "message": {
+            "role": "user",
+            "parts": [
+                {
+                    "kind": "text",
+                    "text": "Hello from Pydantic AI streaming test!",
+                }
+            ],
+            "messageId": uuid4().hex,
+        },
+    }
+
+    request = SendStreamingMessageRequest(
+        id=str(uuid4()),
+        params=MessageSendParams(**send_message_payload),
+    )
+
+    # Send streaming message using Pydantic AI provider
+    print("\n=== Pydantic AI Fake Streaming Response ===")
+    chunks_received = 0
+    task_event_received = False
+    working_event_received = False
+    artifact_event_received = False
+    completed_event_received = False
+
+    async for chunk in asend_message_streaming(
+        request=request,
+        api_base="http://localhost:9999",
+        litellm_params={"custom_llm_provider": "pydantic_ai_agents"},
+    ):
+        chunks_received += 1
+        print(f"\nChunk {chunks_received}:")
+        
+        # Convert chunk to dict for inspection
+        chunk_dict = chunk.model_dump(mode="json", exclude_none=True) if hasattr(chunk, "model_dump") else chunk
+        print(json.dumps(chunk_dict, indent=2))
+        
+        # Check event types
+        result = chunk_dict.get("result", {})
+        kind = result.get("kind")
+        
+        if kind == "task":
+            task_event_received = True
+        elif kind == "status-update":
+            status = result.get("status", {})
+            state = status.get("state")
+            if state == "working":
+                working_event_received = True
+            elif state == "completed":
+                completed_event_received = True
+        elif kind == "artifact-update":
+            artifact_event_received = True
+
+    print(f"\n=== Streaming Summary ===")
+    print(f"Total chunks received: {chunks_received}")
+    print(f"Task event received: {task_event_received}")
+    print(f"Working event received: {working_event_received}")
+    print(f"Artifact event received: {artifact_event_received}")
+    print(f"Completed event received: {completed_event_received}")
+
+    # Verify we received chunks
+    assert chunks_received > 0, "Should receive at least one chunk"
+    
+    # Verify all required event types were received
+    assert task_event_received, "Should receive task event"
+    assert working_event_received, "Should receive working status event"
+    assert artifact_event_received, "Should receive artifact update event"
+    assert completed_event_received, "Should receive completed status event"

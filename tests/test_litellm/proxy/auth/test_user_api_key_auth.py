@@ -278,8 +278,8 @@ async def test_proxy_admin_expired_key_from_cache():
     mock_proxy_logging_obj.internal_usage_cache = MagicMock()
     mock_proxy_logging_obj.internal_usage_cache.dual_cache = AsyncMock()
     mock_proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
-    # Mock post_call_failure_hook as async function
-    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    # Mock post_call_failure_hook as async function returning None (no transformation)
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
     
     # Mock prisma_client
     mock_prisma_client = MagicMock()

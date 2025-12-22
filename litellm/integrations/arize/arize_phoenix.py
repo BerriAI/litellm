@@ -1,12 +1,10 @@
 import os
 from typing import TYPE_CHECKING, Any, Optional, Union
-from datetime import datetime
 
 from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
 from litellm.integrations.arize._utils import ArizeOTELAttributes
 from litellm.types.integrations.arize_phoenix import ArizePhoenixConfig
-from litellm.types.services import ServiceLoggerPayload
 from litellm.integrations.opentelemetry import OpenTelemetry
 
 if TYPE_CHECKING:
@@ -35,13 +33,19 @@ class ArizePhoenixLogger(OpenTelemetry):
     @staticmethod
     def set_arize_phoenix_attributes(span: Span, kwargs, response_obj):
         _utils.set_attributes(span, kwargs, response_obj, ArizeOTELAttributes)
+        
+        # Set project name on the span for all traces to go to custom Phoenix projects
+        config = ArizePhoenixLogger.get_arize_phoenix_config()
+        if config.project_name:
+            from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import safe_set_attribute
+            safe_set_attribute(span, "openinference.project.name", config.project_name)
+        
         return
 
     @staticmethod
     def get_arize_phoenix_config() -> ArizePhoenixConfig:
         """
         Retrieves the Arize Phoenix configuration based on environment variables.
-
         Returns:
             ArizePhoenixConfig: A Pydantic model containing Arize Phoenix configuration.
         """
@@ -95,7 +99,7 @@ class ArizePhoenixLogger(OpenTelemetry):
                 "PHOENIX_API_KEY must be set when using Phoenix Cloud (app.phoenix.arize.com)."
             )
 
-        project_name = os.environ.get("PHOENIX_PROJECT_NAME", "litellm-project")
+        project_name = os.environ.get("PHOENIX_PROJECT_NAME", "default")
 
         return ArizePhoenixConfig(
             otlp_auth_headers=otlp_auth_headers,
@@ -103,34 +107,8 @@ class ArizePhoenixLogger(OpenTelemetry):
             endpoint=endpoint,
             project_name=project_name,
         )
-
-    async def async_service_success_hook(
-        self,
-        payload: ServiceLoggerPayload,
-        parent_otel_span: Optional[Span] = None,
-        start_time: Optional[Union[datetime, float]] = None,
-        end_time: Optional[Union[datetime, float]] = None,
-        event_metadata: Optional[dict] = None,
-    ):
-        pass  # suppress additional spans
-
-    async def async_service_failure_hook(
-        self,
-        payload: ServiceLoggerPayload,
-        error: Optional[str] = "",
-        parent_otel_span: Optional[Span] = None,
-        start_time: Optional[Union[datetime, float]] = None,
-        end_time: Optional[Union[float, datetime]] = None,
-        event_metadata: Optional[dict] = None,
-    ):
-        pass  # suppress additional spans
-
-    def create_litellm_proxy_request_started_span(
-        self,
-        start_time: datetime,
-        headers: dict,
-    ):
-        pass  # suppress additional spans
+    
+    ## cannot suppress additional proxy server spans, removed previous methods.
 
     async def async_health_check(self):
 

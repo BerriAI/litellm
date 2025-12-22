@@ -34,8 +34,8 @@ RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
-# Update dependencies and clean up
-RUN apk upgrade --no-cache
+# Update dependencies and clean up, install libsndfile for audio processing
+RUN apk upgrade --no-cache && apk add --no-cache libsndfile
 
 WORKDIR /app
 

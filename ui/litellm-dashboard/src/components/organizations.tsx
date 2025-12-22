@@ -23,7 +23,7 @@ import NumericalInput from "./shared/numerical_input";
 import { Input } from "antd";
 import { Modal, Form, Tooltip, Select as Select2 } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { PencilAltIcon, TrashIcon, RefreshIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
+import { RefreshIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
 import { TextInput } from "@tremor/react";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import OrganizationInfoView from "./organization/organization_view";
@@ -33,6 +33,7 @@ import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 import { formatNumberWithCommas } from "../utils/dataUtils";
 import NotificationsManager from "./molecules/notifications_manager";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
+import TableIconActionButton from "./common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 
 interface OrganizationsTableProps {
   organizations: Organization[];
@@ -375,27 +376,19 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                                       <TableCell>
                                         {userRole === "Admin" && (
                                           <>
-                                            <Tooltip title="Edit organization">
-                                              {" "}
-                                              <Icon
-                                                icon={PencilAltIcon}
-                                                size="sm"
-                                                className="cursor-pointer hover:text-blue-600"
-                                                onClick={() => {
-                                                  setSelectedOrgId(org.organization_id);
-                                                  setEditOrg(true);
-                                                }}
-                                              />
-                                            </Tooltip>
-                                            <Tooltip title="Delete organization">
-                                              {" "}
-                                              <Icon
-                                                onClick={() => handleDelete(org.organization_id)}
-                                                icon={TrashIcon}
-                                                size="sm"
-                                                className="cursor-pointer hover:text-red-600"
-                                              />
-                                            </Tooltip>
+                                            <TableIconActionButton
+                                              variant="Edit"
+                                              tooltipText="Edit organization"
+                                              onClick={() => {
+                                                setSelectedOrgId(org.organization_id);
+                                                setEditOrg(true);
+                                              }}
+                                            />
+                                            <TableIconActionButton
+                                              variant="Delete"
+                                              tooltipText="Delete organization"
+                                              onClick={() => handleDelete(org.organization_id)}
+                                            />
                                           </>
                                         )}
                                       </TableCell>

@@ -46,6 +46,39 @@ class AmazonNovaEmbeddingConfig:
             elif k in self.get_supported_openai_params():
                 optional_params[k] = v
         return optional_params
+    
+    def _parse_data_url(self, data_url: str) -> tuple:
+        """
+        Parse a data URL to extract the media type and base64 data.
+        
+        Args:
+            data_url: Data URL in format: data:image/jpeg;base64,/9j/4AAQ...
+        
+        Returns:
+            tuple: (media_type, base64_data)
+                media_type: e.g., "image/jpeg", "video/mp4", "audio/mpeg"
+                base64_data: The base64-encoded data without the prefix
+        """
+        if not data_url.startswith("data:"):
+            raise ValueError(f"Invalid data URL format: {data_url[:50]}...")
+        
+        # Split by comma to separate metadata from data
+        # Format: data:image/jpeg;base64,<base64_data>
+        if "," not in data_url:
+            raise ValueError(f"Invalid data URL format (missing comma): {data_url[:50]}...")
+        
+        metadata, base64_data = data_url.split(",", 1)
+        
+        # Extract media type from metadata
+        # Remove 'data:' prefix and ';base64' suffix
+        metadata = metadata[5:]  # Remove 'data:'
+        
+        if ";" in metadata:
+            media_type = metadata.split(";")[0]
+        else:
+            media_type = metadata
+        
+        return media_type, base64_data
 
     def _transform_request(
         self,
@@ -99,15 +132,58 @@ class AmazonNovaEmbeddingConfig:
         if "embeddingDimension" not in embedding_params:
             embedding_params["embeddingDimension"] = 3072
         
-        # For text input, add basic text structure if user hasn't provided text/image/video/audio
+        # For text/media input, add basic structure if user hasn't provided text/image/video/audio
         if "text" not in embedding_params and "image" not in embedding_params and "video" not in embedding_params and "audio" not in embedding_params:
-            # Default to text if no modality specified
-            if input.startswith("s3://"):
+            # Check if input is a data URL (e.g., data:image/jpeg;base64,...)
+            if input.startswith("data:"):
+                # Parse the data URL to extract media type and base64 data
+                media_type, base64_data = self._parse_data_url(input)
+                
+                if media_type.startswith("image/"):
+                    # Extract image format from MIME type (e.g., image/jpeg -> jpeg)
+                    image_format = media_type.split("/")[1].lower()
+                    # Nova API expects specific formats
+                    if image_format == "jpg":
+                        image_format = "jpeg"
+                    
+                    embedding_params["image"] = {
+                        "format": image_format,
+                        "source": {
+                            "bytes": base64_data
+                        }
+                    }
+                elif media_type.startswith("video/"):
+                    # Handle video data URLs
+                    video_format = media_type.split("/")[1].lower()
+                    embedding_params["video"] = {
+                        "format": video_format,
+                        "source": {
+                            "bytes": base64_data
+                        }
+                    }
+                elif media_type.startswith("audio/"):
+                    # Handle audio data URLs
+                    audio_format = media_type.split("/")[1].lower()
+                    embedding_params["audio"] = {
+                        "format": audio_format,
+                        "source": {
+                            "bytes": base64_data
+                        }
+                    }
+                else:
+                    # Fallback to text for unknown types
+                    embedding_params["text"] = {
+                        "value": input,
+                        "truncationMode": "END"
+                    }
+            elif input.startswith("s3://"):
+                # S3 URL - default to text for now, user should specify modality
                 embedding_params["text"] = {
                     "source": {"s3Location": {"uri": input}},
                     "truncationMode": "END"  # Required by Nova API
                 }
             else:
+                # Plain text input
                 embedding_params["text"] = {
                     "value": input,
                     "truncationMode": "END"  # Required by Nova API

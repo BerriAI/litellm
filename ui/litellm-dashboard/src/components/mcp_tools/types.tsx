@@ -43,6 +43,7 @@ export interface InputSchemaProperty {
   required?: string[]; // For required fields in nested objects
   enum?: string[]; // For enum values
   default?: any; // For default values
+  items?: InputSchemaProperty | InputSchemaProperty[]; // For array item schemas
 }
 
 // Define the structure for the input schema of a tool

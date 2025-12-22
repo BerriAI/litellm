@@ -832,6 +832,59 @@ asyncio.run(router_acompletion())
 
 ## Basic Reliability
 
+### Deployment Ordering (Priority)
+
+Set `order` in `litellm_params` to prioritize deployments. Lower values = higher priority. When multiple deployments share the same `order`, the routing strategy picks among them.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import Router
+
+model_list = [
+    {
+        "model_name": "gpt-4",
+        "litellm_params": {
+            "model": "azure/gpt-4-primary",
+            "api_key": os.getenv("AZURE_API_KEY"),
+            "order": 1,  # 👈 Highest priority
+        },
+    },
+    {
+        "model_name": "gpt-4",
+        "litellm_params": {
+            "model": "azure/gpt-4-fallback",
+            "api_key": os.getenv("AZURE_API_KEY_2"),
+            "order": 2,  # 👈 Used when order=1 is unavailable
+        },
+    },
+]
+
+router = Router(model_list=model_list)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: azure/gpt-4-primary
+      api_key: os.environ/AZURE_API_KEY
+      order: 1  # 👈 Highest priority
+
+  - model_name: gpt-4
+    litellm_params:
+      model: azure/gpt-4-fallback
+      api_key: os.environ/AZURE_API_KEY_2
+      order: 2  # 👈 Used when order=1 is unavailable
+```
+
+</TabItem>
+</Tabs>
+
 ### Weighted Deployments 
 
 Set `weight` on a deployment to pick one deployment more often than others. 

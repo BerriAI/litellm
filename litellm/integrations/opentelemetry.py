@@ -1994,10 +1994,7 @@ class OpenTelemetry(CustomLogger):
         """
         Create a span for the received proxy server request.
         """
-        # don't create proxy parent spans for arize phoenix - [TODO]: figure out a better way to handle this
-        if self.callback_name == "arize_phoenix":
-            return None
-
+        
         return self.tracer.start_span(
             name="Received Proxy Server Request",
             start_time=self._to_ns(start_time),

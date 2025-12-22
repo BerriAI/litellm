@@ -72,13 +72,15 @@ litellm --config config.yaml --port 4000
 
 ### Overview
 
-Pillar Security supports three execution modes for comprehensive protection:
+Pillar Security supports five execution modes for comprehensive protection:
 
 | Mode | When It Runs | What It Protects | Use Case
 |------|-------------|------------------|----------
 | **`pre_call`** | Before LLM call | User input only | Block malicious prompts, prevent prompt injection
 | **`during_call`** | Parallel with LLM call | User input only | Input monitoring with lower latency
 | **`post_call`** | After LLM response | Full conversation context | Output filtering, PII detection in responses
+| **`pre_mcp_call`** | Before MCP tool call | MCP tool inputs | Validate and sanitize MCP tool call arguments
+| **`during_mcp_call`** | During MCP tool call | MCP tool inputs | Real-time monitoring of MCP tool calls
 
 ### Why Dual Mode is Recommended
 
@@ -199,6 +201,85 @@ litellm_settings:
 ```
 
 </TabItem>
+<TabItem value="masking" label="Masking Mode - Auto-Sanitize PII">
+
+**Best for:**
+- 🔒 **PII Protection**: Automatically sanitize sensitive data before sending to LLM
+- ✅ **Continue Workflows**: Allow requests to proceed with masked content
+- 🛡️ **Zero Trust**: Never expose sensitive data to LLM models
+- 📊 **Compliance**: Meet data privacy requirements without blocking legitimate requests
+
+```yaml
+model_list:
+  - model_name: gpt-4.1-mini
+    litellm_params:
+      model: openai/gpt-4.1-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: "pillar-masking"
+    litellm_params:
+      guardrail: pillar
+      mode: "pre_call"                       # Scan input before LLM call
+      api_key: os.environ/PILLAR_API_KEY     # Your Pillar API key
+      api_base: os.environ/PILLAR_API_BASE   # Pillar API endpoint
+      on_flagged_action: "mask"             # Mask sensitive content instead of blocking
+      persist_session: true                  # Keep records for investigation
+      include_scanners: true                 # Understand which scanners triggered
+      include_evidence: true                 # Capture evidence for analysis
+      default_on: true                       # Enable for all requests
+
+general_settings:
+  master_key: "YOUR_LITELLM_PROXY_MASTER_KEY"
+
+litellm_settings:
+  set_verbose: true
+```
+
+**How it works:**
+1. User sends request with sensitive data: `"My email is john@example.com"`
+2. Pillar detects PII and returns masked version: `"My email is [MASKED_EMAIL]"`
+3. LiteLLM replaces original messages with masked messages
+4. Request proceeds to LLM with sanitized content
+5. User receives response without exposing sensitive data
+
+</TabItem>
+<TabItem value="mcp" label="MCP Call Protection">
+
+**Best for:**
+- 🤖 **Agent Workflows**: Protect MCP (Model Context Protocol) tool calls
+- 🔒 **Tool Input Validation**: Scan arguments passed to MCP tools
+- 🛡️ **Comprehensive Coverage**: Extend security to all LLM endpoints
+
+```yaml
+model_list:
+  - model_name: gpt-4.1-mini
+    litellm_params:
+      model: openai/gpt-4.1-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: "pillar-mcp-guard"
+    litellm_params:
+      guardrail: pillar
+      mode: "pre_mcp_call"                   # Scan MCP tool call inputs
+      api_key: os.environ/PILLAR_API_KEY     # Your Pillar API key
+      api_base: os.environ/PILLAR_API_BASE   # Pillar API endpoint
+      on_flagged_action: "block"             # Block malicious MCP calls
+      default_on: true                       # Enable for all MCP calls
+
+general_settings:
+  master_key: "YOUR_LITELLM_PROXY_MASTER_KEY"
+
+litellm_settings:
+  set_verbose: true
+```
+
+**MCP Modes:**
+- `pre_mcp_call`: Scan MCP tool call inputs before execution
+- `during_mcp_call`: Monitor MCP tool calls in real-time
+
+</TabItem>
 </Tabs>
 
 ## Configuration Reference
@@ -250,6 +331,15 @@ Logs the violation but allows the request to proceed:
 ```yaml
 on_flagged_action: "monitor"
 ```
+
+#### Mask
+Automatically sanitizes sensitive content (PII, secrets, etc.) in your messages before sending them to the LLM:
+
+```yaml
+on_flagged_action: "mask"
+```
+
+When masking is enabled, sensitive information is automatically replaced with masked versions, allowing requests to proceed safely without exposing sensitive data to the LLM.
 
 **Response Headers:**
 
@@ -383,7 +473,8 @@ export PILLAR_TIMEOUT="5.0"
 **Quick takeaways**
 - Every request still runs *all* Pillar scanners; these options only change what comes back.
 - Choose richer responses when you need audit trails, lighter responses when latency or cost matters.
-- Blocking is controlled by LiteLLM’s `on_flagged_action` configuration—Pillar headers do not change block/monitor behaviour.
+- Actions (block/monitor/mask) are controlled by LiteLLM's `on_flagged_action` configuration—Pillar headers are automatically set based on your config.
+- When blocking (`on_flagged_action: "block"`), the `include_scanners` and `include_evidence` settings control what details are included in the exception response.
 
 Pillar Security executes the full scanner suite on each call. The settings below tune the Protect response headers LiteLLM sends, letting you balance fidelity, retention, and latency.
 
@@ -415,9 +506,10 @@ include_evidence: true    # → plr_evidence (default true in LiteLLM)
   ```
   Use when you only care about whether Pillar detected a threat.
 
-  > **📝 Note:** `flagged: true` means Pillar’s scanners recommend blocking. Pillar only reports this verdict—LiteLLM enforces your policy via the `on_flagged_action` configuration (no Pillar header controls it):
-  > - `on_flagged_action: "block"` → LiteLLM raises a 400 guardrail error
+  > **📝 Note:** `flagged: true` means Pillar's scanners recommend blocking. Pillar only reports this verdict—LiteLLM enforces your policy via the `on_flagged_action` configuration:
+  > - `on_flagged_action: "block"` → LiteLLM raises a 400 guardrail error (exception includes scanners/evidence based on `include_scanners`/`include_evidence` settings)
   > - `on_flagged_action: "monitor"` → LiteLLM logs the threat but still returns the LLM response
+  > - `on_flagged_action: "mask"` → LiteLLM replaces messages with masked versions and allows the request to proceed
 
 - **Scanner breakdown** (`include_scanners=true`)
   ```json

@@ -815,7 +815,20 @@ class PrometheusLogger(CustomLogger):
         user_api_key_auth_metadata: Optional[dict] = standard_logging_payload[
             "metadata"
         ].get("user_api_key_auth_metadata")
+        
+        # Include top-level metadata fields (excluding nested dictionaries)
+        # This allows accessing fields like requester_ip_address from top-level metadata
+        top_level_metadata = standard_logging_payload.get("metadata", {})
+        top_level_fields: Dict[str, Any] = {}
+        if isinstance(top_level_metadata, dict):
+            top_level_fields = {
+                k: v
+                for k, v in top_level_metadata.items()
+                if not isinstance(v, dict)  # Exclude nested dicts to avoid conflicts
+            }
+        
         combined_metadata: Dict[str, Any] = {
+            **top_level_fields,  # Include top-level fields first
             **(_requester_metadata if _requester_metadata else {}),
             **(user_api_key_auth_metadata if user_api_key_auth_metadata else {}),
         }

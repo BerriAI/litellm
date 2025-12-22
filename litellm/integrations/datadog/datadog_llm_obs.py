@@ -18,7 +18,10 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
-from litellm.integrations.datadog.datadog import DataDogLogger
+from litellm.integrations.datadog.datadog_handler import (
+    get_datadog_service,
+    get_datadog_tags,
+)
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_any_messages_to_chat_completion_str_messages_conversion,
@@ -36,7 +39,7 @@ from litellm.types.utils import (
 )
 
 
-class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
+class DataDogLLMObsLogger(CustomBatchLogger):
     def __init__(self, **kwargs):
         try:
             verbose_logger.debug("DataDogLLMObs: Initializing logger")
@@ -142,8 +145,8 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
                 "data": DDIntakePayload(
                     type="span",
                     attributes=DDSpanAttributes(
-                        ml_app=self._get_datadog_service(),
-                        tags=[self._get_datadog_tags()],
+                        ml_app=get_datadog_service(),
+                        tags=[get_datadog_tags()],
                         spans=self.log_queue,
                     ),
                 ),
@@ -243,9 +246,7 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             duration=int((end_time - start_time).total_seconds() * 1e9),
             metrics=metrics,
             status="error" if error_info else "ok",
-            tags=[
-                self._get_datadog_tags(standard_logging_object=standard_logging_payload)
-            ],
+            tags=[get_datadog_tags(standard_logging_object=standard_logging_payload)],
         )
 
         apm_trace_id = self._get_apm_trace_id()

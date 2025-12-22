@@ -42,7 +42,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.guardrails import GenericGuardrailAPIInputs, GuardrailEventHooks
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockContentItem,
@@ -51,6 +51,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockRequest,
     BedrockTextContent,
 )
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -604,12 +605,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """
         Only raise exception for "BLOCKED" actions, not for "ANONYMIZED" actions.
 
-        If `self.mask_request_content` or `self.mask_response_content` is set to `True`, then use the output from the guardrail to mask the request or response content.
+        If `self.mask_request_content` or `self.mask_response_content` is set to `True`, 
+        then use the output from the guardrail to mask the request or response content.
+        
+        However, even with masking enabled, content with action="BLOCKED" should still 
+        raise an exception, only content with action="ANONYMIZED" should be masked.
         """
-
-        # if user opted into masking, return False. since we'll use the masked output from the guardrail
-        if self.mask_request_content or self.mask_response_content:
-            return False
 
         # if no intervention, return False
         if response.get("action") != "GUARDRAIL_INTERVENED":

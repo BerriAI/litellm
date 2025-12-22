@@ -1,4 +1,4 @@
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { RequestViewer } from "./index";
 import type { LogEntry } from "./columns";
@@ -43,14 +43,14 @@ const createRow = (overrides: Partial<LogEntry> = {}): Row<LogEntry> =>
 
 describe("Request Viewer", () => {
   it("renders the request details heading", () => {
-    const { getByText } = render(<RequestViewer row={createRow()} />);
-    expect(getByText("Request Details")).toBeInTheDocument();
+    render(<RequestViewer row={createRow()} />);
+    expect(screen.getByText("Request Details")).toBeInTheDocument();
   });
 
   it("should truncate the request id if it is longer than 64 characters", () => {
     const LONG_REQUEST_ID = "a".repeat(128);
     const TRUNCATED_REQUEST_ID = `${"a".repeat(64)}...`;
-    const { getByText } = render(
+    render(
       <RequestViewer
         row={createRow({
           request_id: LONG_REQUEST_ID,
@@ -58,6 +58,32 @@ describe("Request Viewer", () => {
       />,
     );
 
-    expect(getByText(TRUNCATED_REQUEST_ID)).toBeInTheDocument();
+    expect(screen.getByText(TRUNCATED_REQUEST_ID)).toBeInTheDocument();
+  });
+
+  it("should display LiteLLM Overhead when litellm_overhead_time_ms is present in metadata", () => {
+    render(
+      <RequestViewer
+        row={createRow({
+          metadata: {
+            status: "success",
+            litellm_overhead_time_ms: 150,
+            additional_usage_values: {
+              cache_read_input_tokens: 0,
+              cache_creation_input_tokens: 0,
+            },
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText("LiteLLM Overhead:")).toBeInTheDocument();
+    expect(screen.getByText("150 ms")).toBeInTheDocument();
+  });
+
+  it("should not display LiteLLM Overhead when litellm_overhead_time_ms is not present in metadata", () => {
+    render(<RequestViewer row={createRow()} />);
+
+    expect(screen.queryByText("LiteLLM Overhead:")).not.toBeInTheDocument();
   });
 });

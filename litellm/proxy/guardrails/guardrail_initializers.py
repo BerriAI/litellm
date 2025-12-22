@@ -65,6 +65,7 @@ def initialize_lakera_v2(litellm_params: LitellmParams, guardrail: Guardrail):
         breakdown=litellm_params.breakdown,
         metadata=litellm_params.metadata,
         dev_info=litellm_params.dev_info,
+        on_flagged=litellm_params.on_flagged,
     )
     litellm.logging_callback_manager.add_litellm_callback(_lakera_v2_callback)
     return _lakera_v2_callback

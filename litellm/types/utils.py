@@ -34,11 +34,13 @@ from .guardrails import GuardrailEventHooks
 from .llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from .llms.base import HiddenParams
 from .llms.openai import (
+    AllMessageValues,
     Batch,
     ChatCompletionAnnotation,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
+    ChatCompletionToolParam,
     ChatCompletionUsageBlock,
     FileSearchTool,
     FineTuningJob,
@@ -2850,6 +2852,7 @@ all_litellm_params = (
         "prompt_label",
         "shared_session",
         "search_tool_name",
+        "order",
     ]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())
@@ -2912,6 +2915,7 @@ class LlmProviders(str, Enum):
     BYTEZ = "bytez"
     REPLICATE = "replicate"
     RUNWAYML = "runwayml"
+    AWS_POLLY = "aws_polly"
     HUGGINGFACE = "huggingface"
     TOGETHER_AI = "together_ai"
     OPENROUTER = "openrouter"
@@ -3036,6 +3040,7 @@ class SearchProviders(str, Enum):
     DATAFORSEO = "dataforseo"
     FIRECRAWL = "firecrawl"
     SEARXNG = "searxng"
+    LINKUP = "linkup"
 
 
 # Create a set of all search provider values for quick lookup
@@ -3320,3 +3325,15 @@ class PriorityReservationSettings(BaseModel):
     )
 
     model_config = ConfigDict(protected_namespaces=())
+
+
+class GenericGuardrailAPIInputs(TypedDict, total=False):
+    texts: List[str]  # extracted text from the LLM response - for basic text guardrails
+    images: List[str]  # extracted images from the LLM response - for image guardrails
+    tools: List[ChatCompletionToolParam]  # tools sent to the LLM
+    tool_calls: Union[
+        List[ChatCompletionToolCallChunk], List[ChatCompletionMessageToolCall]
+    ]  # tool calls sent from the LLM
+    structured_messages: List[
+        AllMessageValues
+    ]  # structured messages sent to the LLM - indicates if text is from system or user

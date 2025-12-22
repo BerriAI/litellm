@@ -678,6 +678,11 @@ async def test_prepare_key_update_data():
     updated_data = await prepare_key_update_data(data, existing_key_row)
     assert updated_data["metadata"] is None
 
+    # Test duration "-1" sets expires to None (never expires)
+    data = UpdateKeyRequest(key="test_key", duration="-1")
+    updated_data = await prepare_key_update_data(data, existing_key_row)
+    assert updated_data["expires"] is None
+
 
 @pytest.mark.parametrize(
     "env_vars, expected_url",

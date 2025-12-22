@@ -1884,3 +1884,73 @@ async def test_bedrock_router_passthrough_metadata_initialization():
 
         # Verify response was returned
         assert result == mock_response
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_adds_headers_to_metadata():
+    """
+    Test that add_litellm_data_to_request adds headers to metadata for guardrails.
+
+    This test verifies the fix for issue #17477 where guardrails couldn't access
+    request headers (like User-Agent) on Bedrock pass-through endpoints.
+
+    The fix ensures headers are available in data["metadata"]["headers"] so
+    guardrails can validate User-Agent, API keys, and other header-based checks.
+    """
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    # Create mock request with headers including User-Agent
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = MagicMock()
+    mock_request.url.path = "/bedrock/model/my-model/converse"
+    mock_request.headers = Headers(
+        {
+            "content-type": "application/json",
+            "user-agent": "claude-cli/2.0.69 (external, cli)",
+            "authorization": "Bearer sk-test-key",
+            "x-custom-header": "test-value",
+        }
+    )
+    mock_request.query_params = QueryParams({})
+
+    # Create mock user API key dict
+    mock_user_api_key_dict = UserAPIKeyAuth()
+
+    # Create mock proxy config
+    mock_proxy_config = MagicMock()
+    mock_proxy_config.pass_through_endpoints = []
+
+    # Initial data dict (simulating Bedrock pass-through)
+    data = {
+        "model": "my-bedrock-model",
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
+
+    # Call add_litellm_data_to_request
+    result = await add_litellm_data_to_request(
+        data=data,
+        request=mock_request,
+        user_api_key_dict=mock_user_api_key_dict,
+        proxy_config=mock_proxy_config,
+        general_settings={},
+        version="1.0",
+    )
+
+    # Verify headers are added to metadata for guardrails
+    assert "metadata" in result, "metadata should be present in result"
+    assert "headers" in result["metadata"], "headers should be present in metadata"
+    assert isinstance(
+        result["metadata"]["headers"], dict
+    ), "headers should be a dictionary"
+
+    # Verify specific headers are accessible (important for guardrails)
+    headers = result["metadata"]["headers"]
+    assert (
+        "user-agent" in headers or "User-Agent" in headers
+    ), "User-Agent header should be accessible in metadata"
+
+    # Also verify proxy_server_request has headers (original location)
+    assert "proxy_server_request" in result
+    assert "headers" in result["proxy_server_request"]

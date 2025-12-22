@@ -221,7 +221,7 @@ services:
       - elasticsearch
       
   litellm:
-    image: ghcr.io/berriai/litellm:main-latest
+    image: docker.litellm.ai/berriai/litellm:main-latest
     ports:
       - "4000:4000"
     environment:

@@ -228,12 +228,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         Gemini 3 models include:
         - gemini-3-pro-preview
+        - gemini-3-flash
+        - gemini-3-flash-preview (Gemini 3 Flash)
         - Any future Gemini 3.x models
         """
         # Check for Gemini 3 models
         if "gemini-3" in model:
             return True
-
         return False
 
     def _supports_penalty_parameters(self, model: str) -> bool:
@@ -685,22 +686,40 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         Returns:
             GeminiThinkingConfig with thinkingLevel and includeThoughts
         """
+        # Check if this is gemini-3-flash which supports MINIMAL thinking level
+        is_gemini3flash= model and (
+            "gemini-3-flash-preview" in model.lower() or "gemini-3-flash" in model.lower()
+        )
         if reasoning_effort == "minimal":
-            return {"thinkingLevel": "low", "includeThoughts": True}
+            if is_gemini3flash:
+                return {"thinkingLevel": "minimal", "includeThoughts": True}
+            else:
+                return {"thinkingLevel": "low", "includeThoughts": True}
         elif reasoning_effort == "low":
             return {"thinkingLevel": "low", "includeThoughts": True}
         elif reasoning_effort == "medium":
-            return {
-                "thinkingLevel": "high",
-                "includeThoughts": True,
-            }  # medium is not out yet
+            # For gemini-3-flash-preview, medium maps to "medium", otherwise "high"
+            if is_gemini3flash:
+                return {"thinkingLevel": "medium", "includeThoughts": True}
+            else:
+                return {
+                    "thinkingLevel": "high",
+                    "includeThoughts": True,
+                }  # medium is not out yet for other models
         elif reasoning_effort == "high":
             return {"thinkingLevel": "high", "includeThoughts": True}
         elif reasoning_effort == "disable":
-            # Gemini 3 cannot fully disable thinking, so we use "low" but hide thoughts
-            return {"thinkingLevel": "low", "includeThoughts": False}
+            # Gemini 3 cannot fully disable thinking, so we use "minimal" for gemini-3-flash-preview, "low" for others
+            if is_gemini3flash:
+                return {"thinkingLevel": "minimal", "includeThoughts": False}
+            else:
+                return {"thinkingLevel": "low", "includeThoughts": False}
         elif reasoning_effort == "none":
-            return {"thinkingLevel": "low", "includeThoughts": False}
+            # For gemini-3-flash-preview, use "minimal" instead of "low"
+            if is_gemini3flash:
+                return {"thinkingLevel": "minimal", "includeThoughts": False}
+            else:
+                return {"thinkingLevel": "low", "includeThoughts": False}
         else:
             raise ValueError(f"Invalid reasoning effort: {reasoning_effort}")
 
@@ -751,17 +770,38 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _map_thinking_param(
         thinking_param: AnthropicThinkingParam,
+        model: Optional[str] = None,
     ) -> GeminiThinkingConfig:
         thinking_enabled = thinking_param.get("type") == "enabled"
         thinking_budget = thinking_param.get("budget_tokens")
 
         params: GeminiThinkingConfig = {}
-        if thinking_enabled and not VertexGeminiConfig._is_thinking_budget_zero(
-            thinking_budget
-        ):
-            params["includeThoughts"] = True
-        if thinking_budget is not None and isinstance(thinking_budget, int):
-            params["thinkingBudget"] = thinking_budget
+        
+        # For Gemini 3+ models, use thinkingLevel instead of thinkingBudget
+        if model and VertexGeminiConfig._is_gemini_3_or_newer(model):
+            if thinking_enabled:
+                if thinking_budget is None or thinking_budget == 0:
+                    params["includeThoughts"] = False
+                else:
+                    params["includeThoughts"] = True
+                    if thinking_budget >= 10000:
+                        is_gemini3flash = "gemini-3-flash-preview" in model.lower() or "gemini-3-flash" in model.lower()
+                        params["thinkingLevel"] = "minimal" if is_gemini3flash else "low"
+                    else:
+                        is_gemini3flash = "gemini-3-flash-preview" in model.lower() or "gemini-3-flash" in model.lower()
+                        params["thinkingLevel"] = "minimal" if is_gemini3flash else "low"
+            else:
+                # Thinking disabled
+                params["includeThoughts"] = False
+        else:
+            # For older Gemini models, use thinkingBudget
+            if thinking_enabled and not VertexGeminiConfig._is_thinking_budget_zero(
+                thinking_budget
+            ):
+                params["includeThoughts"] = True
+            if thinking_budget is not None and isinstance(thinking_budget, int):
+                params["thinkingBudget"] = thinking_budget
+        
         return params
 
     def map_response_modalities(self, value: list) -> list:
@@ -938,7 +978,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params[
                     "thinkingConfig"
                 ] = VertexGeminiConfig._map_thinking_param(
-                    cast(AnthropicThinkingParam, value)
+                    cast(AnthropicThinkingParam, value),
+                    model=model,
                 )
             elif param == "modalities" and isinstance(value, list):
                 response_modalities = self.map_response_modalities(value)
@@ -970,7 +1011,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     "thinkingLevel" not in thinking_config
                     and "thinkingBudget" not in thinking_config
                 ):
-                    thinking_config["thinkingLevel"] = "low"
+                    # For gemini-3-flash-preview, default to "minimal" to match Gemini 2.5 Flash behavior
+                    # For other Gemini 3 models, default to "low"
+                    is_gemini3flash = "gemini-3-flash-preview" in model.lower() or "gemini-3-flash" in model.lower()
+                    thinking_config["thinkingLevel"] = "minimal" if is_gemini3flash else "low"
                     optional_params["thinkingConfig"] = thinking_config
 
         return optional_params
@@ -1432,6 +1476,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         cached_tokens: Optional[int] = None
         audio_tokens: Optional[int] = None
         text_tokens: Optional[int] = None
+        image_tokens: Optional[int] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
         reasoning_tokens: Optional[int] = None
         response_tokens: Optional[int] = None
@@ -1482,6 +1527,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     audio_tokens = detail.get("tokenCount", 0)
                 elif detail["modality"] == "TEXT":
                     text_tokens = detail.get("tokenCount", 0)
+                elif detail["modality"] == "IMAGE":
+                    image_tokens = detail.get("tokenCount", 0)
         if "thoughtsTokenCount" in usage_metadata:
             reasoning_tokens = usage_metadata["thoughtsTokenCount"]
             # Also add reasoning tokens to response_tokens_details
@@ -1502,6 +1549,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             cached_tokens=cached_tokens,
             audio_tokens=audio_tokens,
             text_tokens=text_tokens,
+            image_tokens=image_tokens,
         )
 
         completion_tokens = response_tokens or completion_response["usageMetadata"].get(

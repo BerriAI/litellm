@@ -1,5 +1,6 @@
 from typing import List, Literal, Optional, Union
 
+from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from pydantic import PrivateAttr
 from typing_extensions import Any, List, Optional, TypedDict
 
