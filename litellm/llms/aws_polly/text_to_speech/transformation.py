@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Tuple, Union
 
 import httpx
 
-import litellm
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
     TextToSpeechRequestData,
