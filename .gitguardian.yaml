@@ -1,0 +1,146 @@
+version: 2
+
+secret:
+  # Exclude files and paths by globbing
+  ignored_paths:
+    - "**/*.whl"
+    - "**/*.pyc"
+    - "**/__pycache__/**"
+    - "**/node_modules/**"
+    - "**/dist/**"
+    - "**/build/**"
+    - "**/.git/**"
+    - "**/venv/**"
+    - "**/.venv/**"
+
+    # Large data/metadata files that don't need scanning
+    - "**/model_prices_and_context_window*.json"
+    - "**/*_metadata/*.txt"
+    - "**/tokenizers/*.json"
+    - "**/tokenizers/*"
+    - "miniconda.sh"
+
+    # Build outputs and static assets
+    - "litellm/proxy/_experimental/out/**"
+    - "ui/litellm-dashboard/public/**"
+    - "**/swagger/*.js"
+    - "**/*.woff"
+    - "**/*.woff2"
+    - "**/*.avif"
+    - "**/*.webp"
+
+    # Test data files
+    - "**/tests/**/data_map.txt"
+    - "tests/**/*.txt"
+
+    # Documentation and other non-code files
+    - "docs/**"
+    - "**/*.md"
+    - "**/*.lock"
+    - "poetry.lock"
+    - "package-lock.json"
+
+    # Test files containing test secrets (for clients scanning Docker images)
+    - "tests/**"
+    - "cookbook/**"
+    - "ui/litellm-dashboard/**"
+    - ".circleci/config.yml"
+    - ".github/workflows/**"
+    - "litellm/proxy/example_config_yaml/**"
+
+  # Ignore security incidents with the SHA256 of the occurrence (false positives)
+  ignored_matches:
+    # === Current detected false positives (SHA-based) ===
+
+    # gcs_pub_sub_body - folder name, not a password
+    - name: GCS pub/sub test folder name
+      match: 75f377c456eede69e5f6e47399ccee6016a2a93cc5dd11db09cc5b1359ae569a
+
+    # os.environ/APORIA_API_KEY_1 - environment variable reference
+    - name: Environment variable reference APORIA_API_KEY_1
+      match: e2ddeb8b88eca97a402559a2be2117764e11c074d86159ef9ad2375dea188094
+
+    # os.environ/APORIA_API_KEY_2 - environment variable reference
+    - name: Environment variable reference APORIA_API_KEY_2
+      match: 09aa39a29e050b86603aa55138af1ff08fb86a4582aa965c1bd0672e1575e052
+
+    # oidc/circleci_v2/ - test authentication path, not a secret
+    - name: OIDC CircleCI test path
+      match: feb3475e1f89a65b7b7815ac4ec597e18a9ec1847742ad445c36ca617b536e15
+
+    # text-davinci-003 - OpenAI model identifier, not a secret
+    - name: OpenAI model identifier text-davinci-003
+      match: c489000cf6c7600cee0eefb80ad0965f82921cfb47ece880930eb7e7635cf1f1
+
+    # === Test secrets used in unit tests (SHA-based) ===
+
+    # Test API keys used in unit tests
+    - name: Test API key pattern 88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b
+      match: 9e7b3da3a3c5361e7371ebd594ba3b30b5d20bf4ed7cffe948500cc974b1dd70
+
+    # Test tokens used in unit tests
+    - name: Test token pattern e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      match: 0b3a63f58401e0ac52131ad935f4815bb5f8cf968ee581f326da0d19e7d56db9
+
+    # Test JWT tokens (standard test JWT)
+    - name: Test JWT token eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+      match: 1d97ccfab913e7bfd955e4b046050c32c6a8f9145c732e50552046f0914b60b7
+
+    # Example Slack webhook URLs in documentation
+    - name: Example Slack webhook URL
+      match: a4871c7f1d8e219d4ca00215abe833170030c03d522cde4a1060d1bd9d01b551
+
+    # Test database passwords (postgres)
+    - name: Test database password postgres
+      match: 6e0d657eb1f0fbc40cf0b8f3c3873ef627cc9cb7c4108d1c07d979c04bc8a4bb
+
+    # Example PromptLayer API key
+    - name: Example PromptLayer API key
+      match: 6e445d746573a5a7a4a54e2628174b089af519aea05ce2da2a76ff34d0e03c7f
+
+    # Example proxy API keys
+    - name: Example proxy API key sk-s4xN1IiLTCytwtZFJaYQrA
+      match: f70611eb4ba87e437dbc4166556b3896ff913a39675af975fe1850e160266946
+
+    # Test Langfuse credentials
+    - name: Test Langfuse credentials
+      match: c39310f68cc3d3e22f7b298bb6353c4f45759adcc37080d8b7f4e535d3cfd7f4
+
+    # Test alerting tokens
+    - name: Test alerting tokens
+      match: 22fe75366888c74b7ca433cff4186b6435da6d8310c9b869b34d49f9ac186001
+
+    # InKeep API key for documentation
+    - name: InKeep API key for documentation search
+      match: c366657791bfb5fc69045ec11d49452f09a0aebbc8648f94e2469b4025e29a75
+
+    # === Preventive patterns for test keys (pattern-based) ===
+
+    # Test API keys (124 instances across 45 files)
+    - name: Test API keys with sk-test prefix
+      match: sk-test-
+
+    # Mock API keys
+    - name: Mock API keys with sk-mock prefix
+      match: sk-mock-
+
+    # Fake API keys
+    - name: Fake API keys with sk-fake prefix
+      match: sk-fake-
+
+    # Generic test API key patterns
+    - name: Test API key patterns
+      match: test-api-key
+
+    # Test tokens
+    - name: Test token patterns
+      match: test-token
+
+    # Example API keys
+    - name: Example API key patterns
+      match: EXAMPLE_KEY
+
+    # Test user API keys
+    - name: Test user API key patterns
+      match: test-user-api-key
+
