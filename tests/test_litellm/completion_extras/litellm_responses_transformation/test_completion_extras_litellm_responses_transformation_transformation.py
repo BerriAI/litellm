@@ -802,15 +802,15 @@ def test_text_plus_tool_calls_sequence():
 # =============================================================================
 
 
-def test_tool_message_output_is_string_not_list():
+def test_tool_message_output_uses_input_text_not_output_text():
     """
-    Test that tool message content is converted to a string, not a list.
+    Test that tool message content uses input_text type, not output_text.
 
     This is a regression test for a bug where tool results were transformed to:
         {"type": "function_call_output", "output": [{"type": "output_text", "text": "..."}]}
 
-    But the Responses API expects:
-        {"type": "function_call_output", "output": "..."}
+    But the Responses API expects input_text for tool results:
+        {"type": "function_call_output", "output": [{"type": "input_text", "text": "..."}]}
 
     The incorrect format caused OpenAI to reject with:
         "Invalid value: 'output_text'. Supported values are: 'input_text', 'input_image', and 'input_file'."
@@ -856,12 +856,14 @@ def test_tool_message_output_is_string_not_list():
     assert function_call_output is not None, "function_call_output not found"
     assert function_call_output["call_id"] == "call_abc123"
 
-    # The output should be a string, NOT a list
+    # The output should be a list with input_text type
     output = function_call_output["output"]
-    assert isinstance(output, str), f"output should be a string, got {type(output)}"
-    assert output == '{"temperature": 15, "condition": "sunny"}'
+    assert isinstance(output, list), f"output should be a list, got {type(output)}"
+    assert len(output) == 1
+    assert output[0]["type"] == "input_text", f"Expected input_text, got {output[0].get('type')}"
+    assert output[0]["text"] == '{"temperature": 15, "condition": "sunny"}'
 
-    print("✓ Tool message output is correctly a string, not a list")
+    print("✓ Tool message output correctly uses input_text type")
 
 
 def test_multiple_tool_calls_in_single_choice():
