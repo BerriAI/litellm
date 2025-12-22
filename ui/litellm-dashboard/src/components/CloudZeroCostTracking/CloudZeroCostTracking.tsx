@@ -36,7 +36,9 @@ export default function CloudZeroCostTracking() {
   if (error) {
     return (
       <Card>
-        <Typography.Text className="text-red-600">Error loading CloudZero settings: {error.message}</Typography.Text>
+        <Typography.Text className="text-red-600">
+          Error loading CloudZero settings: {error instanceof Error ? error.message : String(error)}
+        </Typography.Text>
       </Card>
     );
   }

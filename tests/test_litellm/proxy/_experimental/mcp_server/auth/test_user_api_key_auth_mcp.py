@@ -332,7 +332,7 @@ class TestMCPRequestHandler:
         async def mock_user_api_key_auth(api_key, request):
             return UserAPIKeyAuth(
                 token=(
-                    "test-token-sha256-empty-hash"
+                    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
                     if api_key
                     else None
                 ),
@@ -691,7 +691,7 @@ class TestMCPCustomHeaderName:
             # Create an async mock for user_api_key_auth
             async def mock_user_api_key_auth(api_key, request):
                 return UserAPIKeyAuth(
-                    token="test-token-sha256-empty-hash",
+                    token="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
                     api_key=api_key,
                     user_id="test-user-id",
                     team_id="test-team-id",
@@ -866,7 +866,7 @@ class TestMCPAccessGroupsE2E:
         # Create an async mock for user_api_key_auth
         async def mock_user_api_key_auth(api_key, request):
             return UserAPIKeyAuth(
-                token="test-token-sha256-empty-hash",
+                token="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
                 api_key=api_key,
                 user_id="test-user-id",
                 team_id="test-team-id",
@@ -917,7 +917,7 @@ class TestMCPAccessGroupsE2E:
         # Create an async mock for user_api_key_auth
         async def mock_user_api_key_auth(api_key, request):
             return UserAPIKeyAuth(
-                token="test-token-sha256-empty-hash",
+                token="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
                 api_key=api_key,
                 user_id="test-user-id",
                 team_id="test-team-id",
