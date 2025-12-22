@@ -614,6 +614,59 @@ def test_vertex_ai_usage_metadata_with_image_tokens_auto_calculated_text():
     assert result.completion_tokens_details.reasoning_tokens == 158
 
 
+def test_vertex_ai_usage_metadata_with_image_tokens_in_prompt():
+    """Test promptTokensDetails with IMAGE modality for multimodal inputs
+    
+    This test verifies the fix for issue #18182 where image_tokens were missing
+    from prompt_tokens_details when calling Gemini models with image inputs.
+    
+    Example scenario: User sends a text prompt + image, and Gemini generates an image response.
+    The promptTokensDetails should include both TEXT and IMAGE token counts.
+    
+    In this test case, candidatesTokenCount is INCLUSIVE of thoughtsTokenCount because:
+    promptTokenCount (533) + candidatesTokenCount (1337) = totalTokenCount (1870)
+    """
+    v = VertexGeminiConfig()
+    usage_metadata = {
+        "promptTokenCount": 533,
+        "candidatesTokenCount": 1337,  # INCLUSIVE of thoughtsTokenCount
+        "totalTokenCount": 1870,
+        "promptTokensDetails": [
+            {"modality": "IMAGE", "tokenCount": 527},
+            {"modality": "TEXT", "tokenCount": 6}
+        ],
+        "candidatesTokensDetails": [
+            {"modality": "IMAGE", "tokenCount": 1120}
+        ],
+        "thoughtsTokenCount": 217
+    }
+    usage_metadata = UsageMetadata(**usage_metadata)
+    result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
+    print("result", result)
+    
+    # Verify basic token counts
+    assert result.prompt_tokens == 533
+    # candidatesTokenCount is INCLUSIVE, so completion_tokens = candidatesTokenCount
+    assert result.completion_tokens == 1337
+    assert result.total_tokens == 1870
+    
+    # Verify prompt_tokens_details includes both text and image tokens
+    assert result.prompt_tokens_details.text_tokens == 6
+    assert result.prompt_tokens_details.image_tokens == 527
+    
+    # Verify completion_tokens_details
+    assert result.completion_tokens_details.image_tokens == 1120
+    assert result.completion_tokens_details.reasoning_tokens == 217
+    
+    # Verify the math: prompt_tokens = text + image
+    # 533 = 6 (text) + 527 (image)
+    assert (
+        result.prompt_tokens_details.text_tokens
+        + result.prompt_tokens_details.image_tokens
+        == result.prompt_tokens
+    )
+
+
 def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
     """
     If budget_tokens is 0, do not set includeThoughts to True
