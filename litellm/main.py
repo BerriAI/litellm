@@ -68,6 +68,7 @@ from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
 )
 from litellm.exceptions import LiteLLMUnknownProvider
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.audio_utils.utils import (
@@ -165,7 +166,8 @@ from .llms.azure_ai.anthropic.handler import AzureAnthropicChatCompletion
 from .llms.azure_ai.embed import AzureAIEmbedding
 from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
 from .llms.bedrock.embed.embedding import BedrockEmbedding
-from .llms.bedrock.image.image_handler import BedrockImageGeneration
+from .llms.bedrock.image_generation.image_handler import BedrockImageGeneration
+from .llms.bedrock.image_edit.handler import BedrockImageEdit
 from .llms.bytez.chat.transformation import BytezChatConfig
 from .llms.clarifai.chat.transformation import ClarifaiConfig
 from .llms.codestral.completion.handler import CodestralTextCompletion
@@ -273,6 +275,7 @@ codestral_text_completions = CodestralTextCompletion()
 bedrock_converse_chat_completion = BedrockConverseLLM()
 bedrock_embedding = BedrockEmbedding()
 bedrock_image_generation = BedrockImageGeneration()
+bedrock_image_edit = BedrockImageEdit()
 vertex_chat_completion = VertexLLM()
 vertex_embedding = VertexEmbedding()
 vertex_multimodal_embedding = VertexMultimodalEmbedding()
@@ -2265,6 +2268,7 @@ def completion(  # type: ignore # noqa: PLR0915
             or custom_llm_provider == "wandb"
             or custom_llm_provider == "clarifai"
             or custom_llm_provider in litellm.openai_compatible_providers
+            or JSONProviderRegistry.exists(custom_llm_provider)  # JSON-configured providers
             or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
         ):  # allow user to make an openai call with a custom base
             # note: if a user sets a custom base - we should ensure this works

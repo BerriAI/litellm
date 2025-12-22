@@ -162,6 +162,40 @@ def test_logging_prevent_double_logging(logging_obj):
 
 
 @pytest.mark.asyncio
+async def test_datadog_logger_not_shadowed_by_llm_obs(monkeypatch):
+    """Ensure DataDog logger instantiates even when LLM Obs logger already cached."""
+
+    # Ensure required env vars exist for Datadog loggers
+    monkeypatch.setenv("DD_API_KEY", "test")
+    monkeypatch.setenv("DD_SITE", "us5.datadoghq.com")
+
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+    from litellm.integrations.datadog.datadog import DataDogLogger
+    from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
+
+    logging_module._in_memory_loggers.clear()
+
+    try:
+        # Cache an LLM Obs logger first to mirror callbacks=["datadog_llm_observability", ...]
+        obs_logger = DataDogLLMObsLogger()
+        logging_module._in_memory_loggers.append(obs_logger)
+
+        datadog_logger = logging_module._init_custom_logger_compatible_class(
+            logging_integration="datadog",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+
+        # Regression check: we expect a distinct DataDogLogger, not the LLM Obs logger
+        assert type(datadog_logger) is DataDogLogger
+        assert any(isinstance(cb, DataDogLLMObsLogger) for cb in logging_module._in_memory_loggers)
+        assert any(type(cb) is DataDogLogger for cb in logging_module._in_memory_loggers)
+    finally:
+        logging_module._in_memory_loggers.clear()
+
+
+@pytest.mark.asyncio
 async def test_logging_result_for_bridge_calls(logging_obj):
     """
     When using a bridge, log only once from the underlying bridge call.

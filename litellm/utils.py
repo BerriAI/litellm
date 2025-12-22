@@ -2364,14 +2364,27 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
     elif isinstance(model_cost, str):
         loaded_model_cost = litellm.get_model_cost_map(url=model_cost)
 
+    # Providers that trigger side effects (e.g., OAuth flows) when get_model_info is called
+    # Skip get_model_info for these providers during model registration
+    _skip_get_model_info_providers = {
+        LlmProviders.GITHUB_COPILOT.value,
+    }
+
     for key, value in loaded_model_cost.items():
         ## get model info ##
-        try:
-            existing_model: dict = cast(dict, get_model_info(model=key))
-            model_cost_key = existing_model["key"]
-        except Exception:
-            existing_model = {}
+        provider = value.get("litellm_provider", "")
+        if provider in _skip_get_model_info_providers or any(
+            key.startswith(f"{p}/") for p in _skip_get_model_info_providers
+        ):
+            existing_model = litellm.model_cost.get(key, {})
             model_cost_key = key
+        else:
+            try:
+                existing_model = cast(dict, get_model_info(model=key))
+                model_cost_key = existing_model["key"]
+            except Exception:
+                existing_model = {}
+                model_cost_key = key
         ## override / add new keys to the existing model cost dictionary
         updated_dictionary = _update_dictionary(existing_model, value)
         litellm.model_cost.setdefault(model_cost_key, {}).update(updated_dictionary)
@@ -7975,6 +7988,18 @@ class ProviderConfigManager:
             )
 
             return get_vertex_ai_image_edit_config(model)
+        elif LlmProviders.STABILITY == provider:
+            from litellm.llms.stability.image_edit import (
+                get_stability_image_edit_config,
+            )
+
+            return get_stability_image_edit_config(model)
+        elif LlmProviders.BEDROCK == provider:
+            from litellm.llms.bedrock.image_edit.stability_transformation import (
+                BedrockStabilityImageEditConfig,
+            )
+
+            return BedrockStabilityImageEditConfig()
         return None
 
     @staticmethod
@@ -7993,9 +8018,13 @@ class ProviderConfigManager:
 
             return get_azure_ai_ocr_config(model=model)
 
+        if provider == litellm.LlmProviders.VERTEX_AI:
+            from litellm.llms.vertex_ai.ocr.common_utils import get_vertex_ai_ocr_config
+
+            return get_vertex_ai_ocr_config(model=model)
+        
         PROVIDER_TO_CONFIG_MAP = {
             litellm.LlmProviders.MISTRAL: MistralOCRConfig,
-            litellm.LlmProviders.VERTEX_AI: VertexAIOCRConfig,
         }
         config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:

@@ -2852,6 +2852,7 @@ all_litellm_params = (
         "prompt_label",
         "shared_session",
         "search_tool_name",
+        "order",
     ]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())

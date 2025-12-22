@@ -321,7 +321,22 @@ class LiteLLMCompletionResponsesConfig:
                 # If we had session messages but they got filtered out,
                 # restore them
                 combined_messages = session_messages
-            # If both are empty, we'll let it fail with a proper error message
+            else:
+                # Both are empty - this likely means function_call_output had empty/invalid call_id
+                # Provide a helpful error message
+                import litellm
+                raise litellm.BadRequestError(
+                    message=(
+                        f"Unable to create messages for completion request. "
+                        f"This can happen when: "
+                        f"1) Using previous_response_id without a session database, AND "
+                        f"2) Input contains only function_call_output with empty or invalid call_id. "
+                        f"Please ensure function_call_output has a valid call_id from a previous response. "
+                        f"Original request: previous_response_id={previous_response_id}"
+                    ),
+                    model=litellm_completion_request.get("model", ""),
+                    llm_provider=litellm_completion_request.get("custom_llm_provider", ""),
+                )
         
         litellm_completion_request["messages"] = combined_messages
         litellm_completion_request["litellm_trace_id"] = chat_completion_session.get(

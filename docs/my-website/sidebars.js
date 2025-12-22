@@ -289,7 +289,7 @@ const sidebars = {
           label: "All Endpoints (Swagger)",
           href: "https://litellm-api.up.railway.app/",
         },
-  "proxy/enterprise",
+        "proxy/enterprise",
         {
           type: "category",
           label: "Authentication",
@@ -470,10 +470,10 @@ const sidebars = {
             "proxy/managed_finetuning",
           ]
         },
-          "generateContent",
-          "apply_guardrail",
-          "bedrock_invoke",
-          "interactions",
+        "generateContent",
+        "apply_guardrail",
+        "bedrock_invoke",
+        "interactions",
         {
           type: "category",
           label: "/images",
@@ -671,6 +671,7 @@ const sidebars = {
         "providers/ai21",
         "providers/aiml",
         "providers/aleph_alpha",
+        "providers/amazon_nova",
         "providers/anyscale",
         "providers/baseten",
         "providers/bytez",
@@ -783,6 +784,7 @@ const sidebars = {
           ]
         },
         "providers/xai",
+        "providers/xiaomi_mimo",
         "providers/xinference",
         "providers/zai",
       ],
