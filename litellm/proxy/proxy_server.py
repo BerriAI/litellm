@@ -3645,6 +3645,7 @@ class ProxyConfig:
             )
             if sso_settings is not None:
                 # Capitalize all keys in sso_settings dictionary
+                sso_settings.sso_settings.pop("role_mappings", None)
                 uppercase_sso_settings = {
                     key.upper(): value
                     for key, value in sso_settings.sso_settings.items()

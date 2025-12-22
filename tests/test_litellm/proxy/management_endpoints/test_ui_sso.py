@@ -3045,6 +3045,111 @@ class TestAddMissingTeamMember:
         ), f"Expected teams {expected_teams_added}, but got {added_teams}"
 
 
+@pytest.mark.asyncio
+async def test_role_mappings_override_default_internal_user_params():
+    """
+    Test that when role_mappings is configured in SSO settings,
+    the SSO-extracted role overrides default_internal_user_params role.
+    """
+    from litellm.proxy._types import NewUserResponse, SSOUserDefinedValues
+    from litellm.proxy.management_endpoints.ui_sso import insert_sso_user
+
+    # Save original default_internal_user_params
+    original_default_params = getattr(litellm, "default_internal_user_params", None)
+
+    try:
+        # Set default_internal_user_params with a role that should be overridden
+        litellm.default_internal_user_params = {
+            "user_role": "internal_user",
+            "max_budget": 100,
+            "budget_duration": "30d",
+            "models": ["gpt-3.5-turbo"],
+        }
+
+        # Mock SSO result
+        mock_result_openid = CustomOpenID(
+            id="test-user-123",
+            email="test@example.com",
+            display_name="Test User",
+            provider="microsoft",
+            team_ids=[],
+        )
+
+        # User defined values with SSO-extracted role (from role_mappings)
+        user_defined_values: SSOUserDefinedValues = {
+            "user_id": "test-user-123",
+            "user_email": "test@example.com",
+            "user_role": "proxy_admin",  # Role from SSO role_mappings
+            "max_budget": None,
+            "budget_duration": None,
+            "models": [],
+        }
+
+        # Mock Prisma client with SSO config that has role_mappings configured
+        mock_prisma = MagicMock()
+        mock_sso_config = MagicMock()
+        mock_sso_config.sso_settings = {
+            "role_mappings": {
+                "Admin": "proxy_admin",
+                "User": "internal_user",
+            }
+        }
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(
+            return_value=mock_sso_config
+        )
+
+        # Mock new_user function
+        mock_new_user_response = NewUserResponse(
+            user_id="test-user-123",
+            key="sk-xxxxx",
+            teams=None,
+        )
+
+        with patch(
+            "litellm.proxy.utils.get_prisma_client_or_throw",
+            return_value=mock_prisma,
+        ), patch(
+            "litellm.proxy.management_endpoints.ui_sso.new_user",
+            return_value=mock_new_user_response,
+        ) as mock_new_user:
+            # Act
+            result = await insert_sso_user(
+                result_openid=mock_result_openid,
+                user_defined_values=user_defined_values,
+            )
+
+            # Assert - verify new_user was called with preserved SSO role
+            mock_new_user.assert_called_once()
+            call_args = mock_new_user.call_args
+            new_user_request = call_args.kwargs["data"]
+
+            # The role from SSO should be preserved, not overridden by default_internal_user_params
+            assert (
+                new_user_request.user_role == "proxy_admin"
+            ), "SSO-extracted role should override default_internal_user_params role"
+
+            # Other default params should still be applied
+            assert (
+                new_user_request.max_budget == 100
+            ), "max_budget from default_internal_user_params should be applied"
+            assert (
+                new_user_request.budget_duration == "30d"
+            ), "budget_duration from default_internal_user_params should be applied"
+            
+            # Note: models are applied via _update_internal_new_user_params inside new_user,
+            # not in insert_sso_user, so we verify user_defined_values was updated correctly
+            # by checking that the function completed successfully and other defaults were applied
+            # The models will be applied when new_user processes the request
+
+    finally:
+        # Restore original default_internal_user_params
+        if original_default_params is not None:
+            litellm.default_internal_user_params = original_default_params
+        else:
+            if hasattr(litellm, "default_internal_user_params"):
+                delattr(litellm, "default_internal_user_params")
+
+
 class TestSSOReadinessEndpoint:
     """Test the /sso/readiness endpoint"""
 
