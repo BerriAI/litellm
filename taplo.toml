@@ -1,0 +1,26 @@
+"$schema" = "https://taplo.tamasfe.dev/schema/config.json"
+
+[format]
+# 4-space indentation to match your existing pyproject.toml
+indent_string = "    "
+
+# Long enough to avoid wrapping Poetry dependency blocks
+column_width = 120
+
+# Keep keys exactly in the order you wrote them
+reorder_keys = false
+
+# Do NOT rewrite arrays (your style mixes inline + multiline arrays)
+array_auto_expand = false
+array_auto_collapse = false
+
+# Keep existing style for inline tables (don’t collapse them)
+compact_inline_tables = false
+compact_arrays = false
+
+# Ensure newline at EOF
+trailing_newline = true
+
+[format.keys]
+# Do not align or normalize keys — keeps Homepage/homepage, Repository/repository as-is
+align = false
