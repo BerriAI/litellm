@@ -3,7 +3,7 @@ import React, { useState } from "react";
 export interface ContentFilterDetection {
   type: "pattern" | "blocked_word" | "category_keyword";
   pattern_name?: string;
-  matched_text?: string;
+  // matched_text is intentionally excluded to avoid exposing sensitive content
   keyword?: string;
   category?: string;
   severity?: string;
@@ -150,11 +150,6 @@ const ContentFilterDetails: React.FC<ContentFilterDetailsProps> = ({ response })
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
                     <KV label="Pattern:">{detection.pattern_name || "unknown"}</KV>
-                    {detection.matched_text && (
-                      <KV label="Matched:" mono>
-                        {detection.matched_text}
-                      </KV>
-                    )}
                   </div>
                   <div className="space-y-1">
                     <KV label="Action:">{chip(detection.action, detection.action === "BLOCK" ? "red" : "blue")}</KV>
