@@ -1,10 +1,55 @@
 model_list:
-  - model_name: gemini/*
+  - model_name: gemini-2.5-flash
     litellm_params:
-      model: gemini/*
+      model: vertex_ai/gemini-2.5-flash
+      vertex_project: "vertex-check-481318"
+      vertex_location: "us-central1"
+      vertex_credentials: "/Users/shivamrawat/litellm/vertex-check-481318-51ab22708a66.json"
+      rpm: 1
+
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+      rpm: 3
+
+  # - model_name: gemini-2.5-flash
+  #   litellm_params:
+  #     model: vertex_ai/gemini-2.5-flash
+  #     vertex_project: "vertex-check-481318"
+  #     vertex_location: "us-east1"
+  #     vertex_credentials: "/Users/shivamrawat/litellm/vertex-check-481318-51ab22708a66.json"
+  #     rpm: 2
+
+  # - model_name: cohere.command-r-v1:0
+  #   litellm_params:
+  #     model: bedrock/cohere.command-r-v1:0
+  #     api_key: os.environ/AWS_BEARER_TOKEN_BEDROCK
+  #     aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+  #     aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+  #     aws_region_name: os.environ/AWS_REGION_NAME
+  #     rpm: 4
 
 litellm_settings:
-  callbacks: ["dynamic_rate_limiter_v3"]
-  priority_reservation:
-    "prod": 0.9 # 90% reserved for production
-    "dev": 0.1 # 10% reserved for development
+  master_key: sk-1234
+  # redact_user_api_key_info: true
+  # fallbacks: [{"gemini-2.5-flash": ["gpt-4o"]}]
+  success_callback: ["posthog"]
+  failure_callback: ["posthog"]
+
+
+# router_settings:
+#   routing_strategy: simple-shuffle # Literal["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle" # all requests with `gpt-4` will be routed to models with `gpt-3.5-turbo`
+#   num_retries: 2
+#   timeout: 30
+#   model_group_alias: {"gemini-2.5-flash": "gemini-2.5-flash"}
+
+
+  # success_callback: ["langsmith"]
+  # callbacks: ["datadog"] # logs llm success + failure logs on datadog
+  # service_callbacks: ["datadog"] # logs redis, postgres failures on datadog
+
+# environment_variables:
+#   LANGSMITH_API_KEY: "your-langsmith-api-key-here"
+#   LANGSMITH_PROJECT: "litellm-proxy"
+#   LANGSMITH_BASE_URL: "https://api.smith.langchain.com"
