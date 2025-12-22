@@ -391,20 +391,8 @@ def generic_response_convertor(
     )
 
 
-async def get_generic_sso_response(
-    request: Request,
-    jwt_handler: JWTHandler,
-    sso_jwt_handler: Optional[
-        JWTHandler
-    ],  # sso specific jwt handler - used for restricted sso group access control
-    generic_client_id: str,
-    redirect_url: str,
-) -> Tuple[Union[OpenID, dict], Optional[dict]]:  # return received response
-    # make generic sso provider
-    from fastapi_sso.sso.base import DiscoveryDocument
-    from fastapi_sso.sso.generic import create_provider
-
-    received_response: Optional[dict] = None
+def _setup_generic_sso_env_vars(generic_client_id: str, redirect_url: str) -> Tuple[str, List[str], str, str, str, bool]:
+    """Setup and validate Generic SSO environment variables."""
     generic_client_secret = os.getenv("GENERIC_CLIENT_SECRET", None)
     generic_scope = os.getenv("GENERIC_SCOPE", "openid email profile").split(" ")
     generic_authorization_endpoint = os.getenv("GENERIC_AUTHORIZATION_ENDPOINT", None)
@@ -413,6 +401,8 @@ async def get_generic_sso_response(
     generic_include_client_id = (
         os.getenv("GENERIC_INCLUDE_CLIENT_ID", "false").lower() == "true"
     )
+
+    # Validate required environment variables
     if generic_client_secret is None:
         raise ProxyException(
             message="GENERIC_CLIENT_SECRET not set. Set it in .env file",
@@ -441,12 +431,87 @@ async def get_generic_sso_response(
             param="GENERIC_USERINFO_ENDPOINT",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
     verbose_proxy_logger.debug(
         f"authorization_endpoint: {generic_authorization_endpoint}\ntoken_endpoint: {generic_token_endpoint}\nuserinfo_endpoint: {generic_userinfo_endpoint}"
     )
     verbose_proxy_logger.debug(
         f"GENERIC_REDIRECT_URI: {redirect_url}\nGENERIC_CLIENT_ID: {generic_client_id}\n"
     )
+
+    return (
+        generic_client_secret,
+        generic_scope,
+        generic_authorization_endpoint,
+        generic_token_endpoint,
+        generic_userinfo_endpoint,
+        generic_include_client_id,
+    )
+
+
+async def _setup_role_mappings() -> Optional["RoleMappings"]:
+    """Setup role mappings from SSO database settings."""
+    role_mappings: Optional["RoleMappings"] = None
+    try:
+        from litellm.proxy.utils import get_prisma_client_or_throw
+
+        prisma_client = get_prisma_client_or_throw(
+            "Prisma client is None, connect a database to your proxy"
+        )
+
+        # Get SSO config from dedicated table
+        sso_db_record = await prisma_client.db.litellm_ssoconfig.find_unique(
+            where={"id": "sso_config"}
+        )
+
+        if sso_db_record and sso_db_record.sso_settings:
+            sso_settings_dict = dict(sso_db_record.sso_settings)
+            role_mappings_data = sso_settings_dict.get("role_mappings")
+
+            if role_mappings_data:
+                from litellm.types.proxy.management_endpoints.ui_sso import RoleMappings
+                if isinstance(role_mappings_data, dict):
+                    role_mappings = RoleMappings(**role_mappings_data)
+                elif isinstance(role_mappings_data, RoleMappings):
+                    role_mappings = role_mappings_data
+
+                if role_mappings:
+                    verbose_proxy_logger.debug(
+                        f"Loaded role_mappings for provider '{role_mappings.provider}'"
+                    )
+    except Exception as e:
+        # If we can't load role_mappings, continue with existing logic
+        verbose_proxy_logger.debug(
+            f"Could not load role_mappings from database: {e}. Continuing with existing role logic."
+        )
+
+    return role_mappings
+
+
+async def get_generic_sso_response(
+    request: Request,
+    jwt_handler: JWTHandler,
+    sso_jwt_handler: Optional[
+        JWTHandler
+    ],  # sso specific jwt handler - used for restricted sso group access control
+    generic_client_id: str,
+    redirect_url: str,
+) -> Tuple[Union[OpenID, dict], Optional[dict]]:  # return received response
+    # make generic sso provider
+    from fastapi_sso.sso.base import DiscoveryDocument
+    from fastapi_sso.sso.generic import create_provider
+
+    received_response: Optional[dict] = None
+
+    # Setup environment variables
+    (
+        generic_client_secret,
+        generic_scope,
+        generic_authorization_endpoint,
+        generic_token_endpoint,
+        generic_userinfo_endpoint,
+        generic_include_client_id,
+    ) = _setup_generic_sso_env_vars(generic_client_id, redirect_url)
 
     discovery = DiscoveryDocument(
         authorization_endpoint=generic_authorization_endpoint,
@@ -455,38 +520,7 @@ async def get_generic_sso_response(
     )
 
     # Get role_mappings from SSO settings if available
-    role_mappings: Optional["RoleMappings"] = None
-    try:
-        from litellm.proxy.utils import get_prisma_client_or_throw
-        
-        prisma_client = get_prisma_client_or_throw(
-            "Prisma client is None, connect a database to your proxy"
-        )
-        
-        # Get SSO config from dedicated table
-        sso_db_record = await prisma_client.db.litellm_ssoconfig.find_unique(
-            where={"id": "sso_config"}
-        )
-        
-        if sso_db_record and sso_db_record.sso_settings:
-            sso_settings_dict = dict(sso_db_record.sso_settings)
-            role_mappings_data = sso_settings_dict.get("role_mappings")
-            
-            if role_mappings_data:
-                from litellm.types.proxy.management_endpoints.ui_sso import RoleMappings
-                if isinstance(role_mappings_data, dict):
-                    role_mappings = RoleMappings(**role_mappings_data)
-                elif isinstance(role_mappings_data, RoleMappings):
-                    role_mappings = role_mappings_data
-                
-                verbose_proxy_logger.debug(
-                    f"Loaded role_mappings for provider '{role_mappings.provider}'"
-                )
-    except Exception as e:
-        # If we can't load role_mappings, continue with existing logic
-        verbose_proxy_logger.debug(
-            f"Could not load role_mappings from database: {e}. Continuing with existing role logic."
-        )
+    role_mappings = await _setup_role_mappings()
     
     def response_convertor(response, client):
         nonlocal received_response  # return for user debugging
