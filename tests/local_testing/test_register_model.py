@@ -62,4 +62,4 @@ def test_update_model_cost_via_completion():
         pytest.fail(f"An error occurred: {e}")
 
 
-# test_update_model_cost_via_completion()
+test_update_model_cost_via_completion()
