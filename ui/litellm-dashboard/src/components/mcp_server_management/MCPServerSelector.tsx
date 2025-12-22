@@ -1,8 +1,7 @@
-import React from "react";
-import { Select } from "antd";
-import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPAccessGroups } from "@/app/(dashboard)/hooks/mcpServers/useMCPAccessGroups";
-import { MCPServer } from "../mcp_tools/types";
+import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
+import { Select } from "antd";
+import React from "react";
 
 interface MCPServerSelectorProps {
   onChange: (selected: { servers: string[]; accessGroups: string[] }) => void;
