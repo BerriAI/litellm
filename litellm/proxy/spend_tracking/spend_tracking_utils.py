@@ -561,7 +561,28 @@ def _get_messages_for_spend_logs_payload(
     standard_logging_payload: Optional[StandardLoggingPayload],
     metadata: Optional[dict] = None,
 ) -> str:
-    return "{}"
+    if not _should_store_prompts_and_responses_in_spend_logs():
+        return "{}"
+
+    messages: Any = None
+    if isinstance(standard_logging_payload, dict):
+        messages = standard_logging_payload.get("messages")
+
+    # Fallback: sometimes messages may be attached to metadata
+    if messages is None and isinstance(metadata, dict):
+        messages = metadata.get("messages")
+
+    if messages is None:
+        return "{}"
+
+    sanitized_wrapper = _sanitize_request_body_for_spend_logs_payload({"messages": messages})
+    sanitized_messages = sanitized_wrapper.get("messages", messages)
+
+    if sanitized_messages is None:
+        return "{}"
+    if isinstance(sanitized_messages, str):
+        return sanitized_messages
+    return safe_dumps(sanitized_messages)
 
 
 def _sanitize_request_body_for_spend_logs_payload(
