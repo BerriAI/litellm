@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } from "../../utils/roles";
 import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "../callback_info_helpers";
 import AutoRotationView from "../common_components/AutoRotationView";
+import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import LoggingSettingsView from "../logging_settings_view";
@@ -59,6 +60,7 @@ export default function KeyInfoView({
   const [isEditing, setIsEditing] = useState(false);
   const [form] = Form.useForm();
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
   const [isRegenerateModalOpen, setIsRegenerateModalOpen] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
@@ -237,6 +239,7 @@ export default function KeyInfoView({
 
   const handleDelete = async () => {
     try {
+      setDeleteLoading(true);
       if (!accessToken) return;
       await keyDeleteCall(accessToken as string, currentKeyData.token || currentKeyData.token_id);
       NotificationManager.success("Key deleted successfully");
@@ -247,9 +250,11 @@ export default function KeyInfoView({
     } catch (error) {
       console.error("Error deleting the key:", error);
       NotificationManager.fromBackend(error);
+    } finally {
+      setDeleteLoading(false);
+      setIsDeleteModalOpen(false);
+      setDeleteConfirmInput("");
     }
-    // Reset the confirmation input
-    setDeleteConfirmInput("");
   };
 
   const copyToClipboard = async (text: string, key: string) => {
@@ -302,6 +307,7 @@ export default function KeyInfoView({
     });
     return `${dateStr} at ${timeStr}`;
   };
+  console.log("userRole", userRole);
 
   const canModifyKey =
     isProxyAdminRole(userRole || "") ||
@@ -310,7 +316,7 @@ export default function KeyInfoView({
         teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0],
         userID || "",
       )) ||
-    userID === currentKeyData.user_id;
+    (userID === currentKeyData.user_id && userRole !== "Internal Viewer");
 
   return (
     <div className="w-full h-screen p-4">
@@ -401,90 +407,40 @@ export default function KeyInfoView({
       />
 
       {/* Delete Confirmation Modal */}
-      {isDeleteModalOpen &&
-        (() => {
-          const keyName = currentKeyData?.key_alias || currentKeyData?.token_id || "Virtual Key";
-          const isValid = deleteConfirmInput === keyName;
-          return (
-            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-              <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl min-h-[380px] py-6 overflow-hidden transform transition-all flex flex-col justify-between">
-                <div>
-                  <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
-                    <h3 className="text-lg font-semibold text-gray-900">Delete Key</h3>
-                    <button
-                      onClick={() => {
-                        setIsDeleteModalOpen(false);
-                        setDeleteConfirmInput("");
-                      }}
-                      className="text-gray-400 hover:text-gray-500 focus:outline-none"
-                    >
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    </button>
-                  </div>
-                  <div className="px-6 py-4">
-                    <div className="flex items-start gap-3 p-4 bg-red-50 border border-red-100 rounded-md mb-5">
-                      <div className="text-red-500 mt-0.5">
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.082 16.5c-.77.833.192 2.5 1.732 2.5z"
-                          />
-                        </svg>
-                      </div>
-                      <div>
-                        <p className="text-base font-medium text-red-600">
-                          Warning: You are about to delete this Virtual Key.
-                        </p>
-                        <p className="text-base text-red-600 mt-2">
-                          This action is irreversible and will immediately revoke access for any applications using this
-                          key.
-                        </p>
-                      </div>
-                    </div>
-                    <p className="text-base text-gray-600 mb-5">Are you sure you want to delete this Virtual Key?</p>
-                    <div className="mb-5">
-                      <label className="block text-base font-medium text-gray-700 mb-2">
-                        {`Type `}
-                        <span className="underline">{keyName}</span>
-                        {` to confirm deletion:`}
-                      </label>
-                      <input
-                        type="text"
-                        value={deleteConfirmInput}
-                        onChange={(e) => setDeleteConfirmInput(e.target.value)}
-                        placeholder="Enter key name exactly"
-                        className="w-full px-4 py-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-base"
-                        autoFocus
-                      />
-                    </div>
-                  </div>
-                </div>
-                <div className="px-6 py-4 bg-gray-50 flex justify-end gap-4">
-                  <button
-                    onClick={() => {
-                      setIsDeleteModalOpen(false);
-                      setDeleteConfirmInput("");
-                    }}
-                    className="px-5 py-3 bg-white border border-gray-300 rounded-md text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={handleDelete}
-                    disabled={!isValid}
-                    className={`px-5 py-3 rounded-md text-base font-medium text-white focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 ${isValid ? "bg-red-600 hover:bg-red-700" : "bg-red-300 cursor-not-allowed"}`}
-                  >
-                    Delete Key
-                  </button>
-                </div>
-              </div>
-            </div>
-          );
-        })()}
+      <DeleteResourceModal
+        isOpen={isDeleteModalOpen}
+        title="Delete Key"
+        alertMessage="This action is irreversible and will immediately revoke access for any applications using this key."
+        message="Are you sure you want to delete this Virtual Key?"
+        resourceInformationTitle="Key Information"
+        resourceInformation={[
+          {
+            label: "Key Alias",
+            value: currentKeyData?.key_alias || "-",
+          },
+          {
+            label: "Key ID",
+            value: currentKeyData?.token_id || currentKeyData?.token || "-",
+            code: true,
+          },
+          {
+            label: "Team ID",
+            value: currentKeyData?.team_id || "-",
+            code: true,
+          },
+          {
+            label: "Spend",
+            value: currentKeyData?.spend ? `$${formatNumberWithCommas(currentKeyData.spend, 4)}` : "$0.0000",
+          },
+        ]}
+        onCancel={() => {
+          setIsDeleteModalOpen(false);
+          setDeleteConfirmInput("");
+        }}
+        onOk={handleDelete}
+        confirmLoading={deleteLoading}
+        requiredConfirmation={currentKeyData?.key_alias}
+      />
 
       <TabGroup>
         <TabList className="mb-4">

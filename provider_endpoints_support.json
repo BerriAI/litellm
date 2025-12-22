@@ -205,6 +205,22 @@
         "a2a": true
       }
     },
+    "aws_polly": {
+      "display_name": "AWS - Polly (`aws_polly`)",
+      "url": "https://docs.litellm.ai/docs/providers/aws_polly",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": true,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
+      }
+    },
     "azure": {
       "display_name": "Azure (`azure`)",
       "url": "https://docs.litellm.ai/docs/providers/azure",
@@ -2007,6 +2023,40 @@
         "chat_completions": false,
         "messages": false,
         "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true
+      }
+    },
+    "stability": {
+      "display_name": "Stability AI (`stability`)",
+      "url": "https://docs.litellm.ai/docs/providers/stability",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": true,
+        "image_edits": true,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
+      }
+    },
+    "venice": {
+      "display_name": "Venice.ai (`venice`)",
+      "url": "https://docs.litellm.ai/docs/providers/venice",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
         "embeddings": false,
         "image_generations": false,
         "audio_transcriptions": false,

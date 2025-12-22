@@ -463,6 +463,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       }
       delete values.agents_and_groups;
 
+      // Handle vector stores permissions
+      if (values.vector_stores && values.vector_stores.length > 0) {
+        updateData.object_permission.vector_stores = values.vector_stores;
+      }
+
       const response = await teamUpdateCall(accessToken, updateData);
 
       NotificationsManager.success("Team settings updated successfully");
@@ -503,7 +508,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             Back to Teams
           </TremorButton>
           <Title>{info.team_alias}</Title>
-          <div className="flex items-center cursor-pointer">
+          <div className="flex items-center">
             <Text className="text-gray-500 font-mono">{info.team_id}</Text>
             <Button
               type="text"
@@ -824,7 +829,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <Switch checkedChildren="Yes" unCheckedChildren="No" />
                   </Form.Item>
 
-                  <Form.Item label="Vector Stores" name="vector_stores">
+                  <Form.Item label="Vector Stores" name="vector_stores" aria-label="Vector Stores">
                     <VectorStoreSelector
                       onChange={(values: string[]) => form.setFieldValue("vector_stores", values)}
                       value={form.getFieldValue("vector_stores")}

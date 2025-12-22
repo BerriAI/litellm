@@ -5,8 +5,8 @@ import os
 import socket
 import subprocess
 import sys
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
@@ -128,7 +128,7 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
 
 def test_login_v2_returns_json_on_proxy_exception(monkeypatch):
     """Test that /v2/login returns JSON error when ProxyException is raised"""
-    from litellm.proxy._types import ProxyException, ProxyErrorTypes
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
 
     mock_prisma_client = MagicMock()
     mock_authenticate_user = AsyncMock(
@@ -559,7 +559,7 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
         assert master_key == test_master_key
 
     # Test Case 2: Master key from environment variable
-    test_env_master_key = "sk-test-67890"
+    test_env_master_key = "sk-67890"
 
     # Create empty config
     empty_config = {"general_settings": {}}
@@ -2813,9 +2813,10 @@ def test_get_prompt_spec_for_db_prompt_with_versions():
 
 
 def test_root_redirect_when_docs_url_not_root_and_redirect_url_set(monkeypatch):
+    from fastapi.responses import RedirectResponse
+
     from litellm.proxy.proxy_server import cleanup_router_config_variables
     from litellm.proxy.utils import _get_docs_url
-    from fastapi.responses import RedirectResponse
 
     cleanup_router_config_variables()
     filepath = os.path.dirname(os.path.abspath(__file__))
