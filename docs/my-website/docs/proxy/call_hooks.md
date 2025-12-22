@@ -357,9 +357,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 ## Advanced - Transform Error Responses
 
-Transform technical API errors into user-friendly messages using `async_post_call_failure_hook`. This allows you to customize error messages sent to clients, similar to how `async_post_call_success_hook` can modify successful responses.
-
-### 1. Create Custom Handler
+Transform technical API errors into user-friendly messages using `async_post_call_failure_hook`. Return an `HTTPException` to replace the original error, or `None` to use the original exception.
 
 ```python
 from litellm.integrations.custom_logger import CustomLogger
@@ -368,9 +366,6 @@ from typing import Optional
 import litellm
 
 class MyErrorTransformer(CustomLogger):
-    def __init__(self):
-        pass
-
     async def async_post_call_failure_hook(
         self,
         request_data: dict,
@@ -378,82 +373,19 @@ class MyErrorTransformer(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: Optional[str] = None,
     ) -> Optional[HTTPException]:
-        """
-        Transform technical errors into user-friendly messages.
-        
-        Return HTTPException to replace the original error.
-        Return None to use the original exception.
-        """
-        # Transform context window errors
         if isinstance(original_exception, litellm.ContextWindowExceededError):
             return HTTPException(
                 status_code=400,
                 detail="Your prompt is too long. Please reduce the length and try again."
             )
-        
-        # Transform rate limit errors
         if isinstance(original_exception, litellm.RateLimitError):
             return HTTPException(
                 status_code=429,
                 detail="Rate limit exceeded. Please try again in a moment."
             )
-        
-        # Transform authentication errors
-        if "authentication" in str(original_exception).lower():
-            return HTTPException(
-                status_code=401,
-                detail="Authentication failed. Please check your API key."
-            )
-        
-        # Return None to use original exception for other errors
-        return None
+        return None  # Use original exception
 
 proxy_handler_instance = MyErrorTransformer()
 ```
 
-### 2. Update config.yaml
-
-```yaml
-model_list:
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: gpt-3.5-turbo
-
-litellm_settings:
-  callbacks: custom_callbacks.proxy_handler_instance
-```
-
-### 3. Test it!
-
-When an error occurs, clients will receive your transformed error message instead of the technical error:
-
-**Before (Technical Error):**
-```json
-{
-  "error": {
-    "message": "ContextWindowExceededError: Prompt exceeds context window",
-    "type": "invalid_request_error",
-    "code": 400
-  }
-}
-```
-
-**After (User-Friendly Error):**
-```json
-{
-  "error": {
-    "message": "Your prompt is too long. Please reduce the length and try again.",
-    "type": "invalid_request_error",
-    "code": 400
-  }
-}
-```
-
-### Comparison: Success vs Failure Hooks
-
-| Hook | Can Modify Response | Return Type | Use Case |
-|------|---------------------|-------------|----------|
-| `async_post_call_success_hook` | ✅ Yes - modifies successful responses | `Any` (modified response) | Transform successful LLM responses |
-| `async_post_call_failure_hook` | ✅ Yes - transforms error responses | `Optional[HTTPException]` | Transform error messages sent to clients |
-
-Both hooks are now awaited (not fire-and-forget), allowing you to modify what clients receive.
+**Result:** Clients receive `"Your prompt is too long..."` instead of `"ContextWindowExceededError: Prompt exceeds context window"`.
