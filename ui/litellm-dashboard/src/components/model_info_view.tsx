@@ -1,3 +1,4 @@
+import { useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { ArrowLeftIcon, KeyIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
 import {
@@ -19,6 +20,7 @@ import { useEffect, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import { formItemValidateJSON, truncateString } from "../utils/textUtils";
 import CacheControlSettings from "./add_model/cache_control_settings";
+import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
 import ReuseCredentialsModal from "./model_add/reuse_credentials";
 import NotificationsManager from "./molecules/notifications_manager";
@@ -37,7 +39,6 @@ import { getProviderLogoAndName } from "./provider_info_helpers";
 import NumericalInput from "./shared/numerical_input";
 import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
-import { useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -69,6 +70,7 @@ export default function ModelInfoView({
   const [form] = Form.useForm();
   const [localModelData, setLocalModelData] = useState<any>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
   const [isCredentialModalOpen, setIsCredentialModalOpen] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -318,6 +320,7 @@ export default function ModelInfoView({
 
   const handleDelete = async () => {
     try {
+      setDeleteLoading(true);
       if (!accessToken) return;
       await modelDeleteCall(accessToken, modelId);
       NotificationsManager.success("Model deleted successfully");
@@ -333,6 +336,9 @@ export default function ModelInfoView({
     } catch (error) {
       console.error("Error deleting the model:", error);
       NotificationsManager.fromBackend("Failed to delete model");
+    } finally {
+      setDeleteLoading(false);
+      setIsDeleteModalOpen(false);
     }
   };
 
@@ -1046,39 +1052,34 @@ export default function ModelInfoView({
         </TabPanels>
       </TabGroup>
 
-      {/* Delete Confirmation Modal */}
-      {isDeleteModalOpen && (
-        <div className="fixed z-10 inset-0 overflow-y-auto">
-          <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-            <div className="fixed inset-0 transition-opacity" aria-hidden="true">
-              <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
-            </div>
-
-            <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">
-              &#8203;
-            </span>
-
-            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                <div className="sm:flex sm:items-start">
-                  <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
-                    <h3 className="text-lg leading-6 font-medium text-gray-900">Delete Model</h3>
-                    <div className="mt-2">
-                      <p className="text-sm text-gray-500">Are you sure you want to delete this model?</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                <Button onClick={handleDelete} className="ml-2" danger>
-                  Delete
-                </Button>
-                <Button onClick={() => setIsDeleteModalOpen(false)}>Cancel</Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <DeleteResourceModal
+        isOpen={isDeleteModalOpen}
+        title="Delete Model"
+        alertMessage="This action cannot be undone."
+        message="Are you sure you want to delete this model?"
+        resourceInformationTitle="Model Information"
+        resourceInformation={[
+          {
+            label: "Model Name",
+            value: modelData?.model_name || "Not Set",
+          },
+          {
+            label: "LiteLLM Model Name",
+            value: modelData?.litellm_model_name || "Not Set",
+          },
+          {
+            label: "Provider",
+            value: modelData?.provider || "Not Set",
+          },
+          {
+            label: "Created By",
+            value: modelData?.model_info?.created_by || "Not Set",
+          },
+        ]}
+        onCancel={() => setIsDeleteModalOpen(false)}
+        onOk={handleDelete}
+        confirmLoading={deleteLoading}
+      />
 
       {isCredentialModalOpen && !usingExistingCredential ? (
         <ReuseCredentialsModal

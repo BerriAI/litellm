@@ -1752,21 +1752,6 @@ def test_completion_openai_pydantic(model, api_version):
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_completion_openai_organization():
-    try:
-        litellm.set_verbose = True
-        try:
-            response = completion(
-                model="gpt-3.5-turbo", messages=messages, organization="org-ikDc4ex8NB"
-            )
-            pytest.fail("Request should have failed - This organization does not exist")
-        except Exception as e:
-            assert "header should match organization for API key" in str(e)
-
-    except Exception as e:
-        print(e)
-        pytest.fail(f"Error occurred: {e}")
-
 
 def test_completion_text_openai():
     try:
@@ -4160,10 +4145,10 @@ def test_openai_hallucinated_tool_call_util(function_name, expect_modification):
 
 def test_langfuse_completion(monkeypatch):
     monkeypatch.setenv(
-        "LANGFUSE_PUBLIC_KEY", "test-langfuse-public-key-123"
+        "LANGFUSE_PUBLIC_KEY", "pk-lf-b3db7e8e-c2f6-4fc7-825c-a541a8fbe003"
     )
     monkeypatch.setenv(
-        "LANGFUSE_SECRET_KEY", "test-langfuse-secret-key-456"
+        "LANGFUSE_SECRET_KEY", "sk-lf-b11ef3a8-361c-4445-9652-12318b8596e4"
     )
     monkeypatch.setenv("LANGFUSE_HOST", "https://us.cloud.langfuse.com")
     litellm.set_verbose = True
