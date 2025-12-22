@@ -1,4 +1,5 @@
-import { render, waitFor } from "@testing-library/react";
+import { waitFor } from "@testing-library/react";
+import { renderWithProviders } from "../../../tests/test-utils";
 import { describe, expect, it, vi } from "vitest";
 import { KeyEditView } from "./key_edit_view";
 import { KeyResponse } from "../key_team_helpers/key_list";
@@ -89,7 +90,7 @@ describe("KeyEditView", () => {
     key_rotation_at: undefined,
   };
   it("should render", async () => {
-    const { getByText } = render(
+    const { getByText } = renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
         onCancel={() => {}}
@@ -107,7 +108,7 @@ describe("KeyEditView", () => {
   });
 
   it("should render tags", async () => {
-    const { getByText } = render(
+    const { getByText } = renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
         onCancel={() => {}}
@@ -125,7 +126,7 @@ describe("KeyEditView", () => {
   });
 
   it("should not render tags in metadata textarea", async () => {
-    const { getByLabelText } = render(
+    const { getByLabelText } = renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
         onCancel={() => {}}
