@@ -200,4 +200,81 @@ describe("RequestResponsePanel", () => {
     expect(responseData).toEqual({ responseData: "this should appear in response" });
     expect(responseData).not.toEqual({ requestData: "this should not appear in response" });
   });
+
+  it("renders model request data and copies it successfully", async () => {
+    const user = userEvent.setup();
+    const mockGetClientRequest = vi.fn().mockReturnValue({ test: "request data" });
+    const mockGetModelRequest = vi.fn().mockReturnValue({ model: "request data" });
+    const mockFormattedResponse = vi.fn().mockReturnValue({ test: "response data" });
+    const mockWriteText = vi.fn().mockResolvedValue(undefined);
+
+    if (navigator.clipboard) {
+      vi.spyOn(navigator.clipboard, "writeText").mockImplementation(mockWriteText);
+    }
+
+    render(
+      <RequestResponsePanel
+        row={{ original: baseLogEntry }}
+        hasClientRequest={true}
+        hasModelRequest={true}
+        hasClientResponse={true}
+        hasError={false}
+        errorInfo={null}
+        getClientRequest={mockGetClientRequest}
+        getModelRequest={mockGetModelRequest}
+        formattedResponse={mockFormattedResponse}
+      />,
+    );
+
+    expect(screen.getByText("Request to model/endpoint")).toBeInTheDocument();
+    expect(mockGetModelRequest).toHaveBeenCalled();
+
+    const copyModelButton = screen.getByTitle("Copy request to model/endpoint");
+    expect(copyModelButton).not.toBeDisabled();
+
+    await act(async () => {
+      await user.click(copyModelButton);
+    });
+
+    expect(mockWriteText).toHaveBeenCalledWith(JSON.stringify({ model: "request data" }, null, 2));
+    expect(mockNotificationsManager.success).toHaveBeenCalledWith("Request to model/endpoint copied to clipboard");
+  });
+
+  it("shows guidance and disables copy when model request data is missing", () => {
+    const mockGetClientRequest = vi.fn().mockReturnValue({ test: "request data" });
+    const mockGetModelRequest = vi.fn();
+    const mockFormattedResponse = vi.fn().mockReturnValue({ test: "response" });
+
+    render(
+      <RequestResponsePanel
+        row={{ original: baseLogEntry }}
+        hasClientRequest={true}
+        hasModelRequest={false}
+        hasClientResponse={true}
+        hasError={false}
+        errorInfo={null}
+        getClientRequest={mockGetClientRequest}
+        getModelRequest={mockGetModelRequest}
+        formattedResponse={mockFormattedResponse}
+      />,
+    );
+
+    expect(screen.getByText(/Request not available/)).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "store_prompts_in_spend_logs", hidden: true }),
+    ).toHaveAttribute(
+      "href",
+      "https://docs.litellm.ai/docs/proxy/config_settings#store_prompts_in_spend_logs",
+    );
+    expect(
+      screen.getByRole("link", { name: "MAX_STRING_LENGTH_PROMPT_IN_DB", hidden: true }),
+    ).toHaveAttribute(
+      "href",
+      "https://docs.litellm.ai/docs/proxy/config_settings#store_prompts_in_spend_logs#MAX_STRING_LENGTH_PROMPT_IN_DB",
+    );
+
+    const copyModelRequestButton = screen.getByTitle("Copy request to model/endpoint");
+    expect(copyModelRequestButton).toBeDisabled();
+    expect(mockGetModelRequest).not.toHaveBeenCalled();
+  });
 });
