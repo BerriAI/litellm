@@ -88,8 +88,8 @@ export function RequestResponsePanel({
       successMessage: "Request to model/endpoint copied to clipboard",
       errorMessage: "Failed to copy request to model/endpoint",
       emptyText: (
-        <span>
-          Request to model/endpoint not available. Enable{" "}
+        <span className="block whitespace-normal break-words text-left max-w-prose mx-auto">
+          Request not available. Enable{" "}
           <a
             className="text-blue-600 underline"
             href="https://docs.litellm.ai/docs/proxy/config_settings#store_prompts_in_spend_logs"
