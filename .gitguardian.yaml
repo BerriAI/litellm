@@ -81,4 +81,8 @@ secret:
     # Generic test API key patterns
     - name: Test API key patterns
       match: test-api-key
+    
+    # Inkeep public API key (public key meant for client-side use, not a secret)
+    - name: Inkeep public API key
+      match: 0cb9c9916ec71bfe0e53c9d7f83ff046daee3fa9ef318f6a
 

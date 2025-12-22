@@ -8,7 +8,9 @@ const darkCodeTheme = require('prism-react-renderer/themes/dracula');
 
 const inkeepConfig = {
   baseSettings: {
-    apiKey: "test-inkeep-api-key-123",
+    // Inkeep public API key - safe to expose in client-side code
+    // Can be overridden with INKEEP_API_KEY environment variable for different environments
+    apiKey: process.env.INKEEP_API_KEY || "0cb9c9916ec71bfe0e53c9d7f83ff046daee3fa9ef318f6a",
     organizationDisplayName: 'liteLLM',
     primaryBrandColor: '#4965f5',
     theme: {
