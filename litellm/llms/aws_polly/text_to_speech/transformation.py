@@ -179,13 +179,13 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         engine = self._extract_engine_from_model(model)
         mapped_params["engine"] = engine
 
-        # Pass through Polly-specific parameters
+        # Pass through Polly-specific parameters (use AWS API casing)
         if "language_code" in kwargs:
-            mapped_params["language_code"] = kwargs["language_code"]
+            mapped_params["LanguageCode"] = kwargs["language_code"]
         if "lexicon_names" in kwargs:
-            mapped_params["lexicon_names"] = kwargs["lexicon_names"]
+            mapped_params["LexiconNames"] = kwargs["lexicon_names"]
         if "sample_rate" in kwargs:
-            mapped_params["sample_rate"] = kwargs["sample_rate"]
+            mapped_params["SampleRate"] = kwargs["sample_rate"]
 
         return mapped_voice, mapped_params
 
@@ -349,13 +349,10 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         else:
             request_body["TextType"] = "text"
 
-        # Add optional parameters
-        if "language_code" in optional_params:
-            request_body["LanguageCode"] = optional_params["language_code"]
-        if "lexicon_names" in optional_params:
-            request_body["LexiconNames"] = optional_params["lexicon_names"]
-        if "sample_rate" in optional_params:
-            request_body["SampleRate"] = optional_params["sample_rate"]
+        # Add optional Polly parameters (already in AWS casing from map_openai_params)
+        for key in ["LanguageCode", "LexiconNames", "SampleRate"]:
+            if key in optional_params:
+                request_body[key] = optional_params[key]
 
         # Get endpoint URL
         endpoint_url = self.get_complete_url(
