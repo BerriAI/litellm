@@ -1,36 +1,25 @@
-This is a [Next.js](https://nextjs.org/) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
+## LiteLLM Dashboard
 
-## Getting Started
+This is the Next.js app for the LiteLLM admin dashboard. Most builds ship the precompiled static output already committed to `proxy/_experimental/out`. Rebuild the UI only when you change dashboard code.
 
-First, run the development server:
-
+### Local dev
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm ci # or pnpm install --frozen-lockfile
+npm run dev # or pnpm dev
 ```
+Open http://localhost:3000.
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### Rebuild the static UI (what Docker images use)
+From this folder:
+```bash
+./build_ui.sh
+```
+This will:
+- Use Node 20 (via `nvm use v20`)
+- `npm run build`
+- Copy the build output into `../..//litellm/proxy/_experimental/out`
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### When to commit the build artifacts
+If you change dashboard code and want downstream users (or Docker builds that skip UI rebuilds) to pick it up, run `./build_ui.sh` and commit the updated files in `litellm/proxy/_experimental/out`.
 
-This project uses [`next/font`](https://nextjs.org/docs/basic-features/font-optimization) to automatically optimize and load Inter, a custom Google Font.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js/) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/deployment) for more details.
+If you do not commit the build output, make sure your image pipeline runs the UI build step (e.g., `build_ui.sh` in Docker) so the new UI is included.
