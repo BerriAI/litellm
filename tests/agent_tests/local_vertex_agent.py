@@ -21,7 +21,7 @@ from google.auth.transport.requests import Request
 import httpx
 
 # Configuration - update these for your agent
-PROJECT_ID = "test-gcp-project-id-123"  # Your GCP project ID (test value)
+PROJECT_ID = "gen-lang-client-0682925754"  # Your GCP project ID
 LOCATION = "us-central1"  # Your agent's location
 
 # For Reasoning Engines, use just the numeric ID at the end

@@ -812,9 +812,19 @@
   },
   {
     "provider": "Databricks",
-    "provider_display_name": "Databricks (Qwen API)",
+    "provider_display_name": "Databricks",
     "litellm_provider": "databricks",
     "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
       {
         "key": "api_key",
         "label": "API Key",
