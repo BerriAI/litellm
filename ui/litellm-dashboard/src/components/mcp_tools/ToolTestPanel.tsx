@@ -409,7 +409,7 @@ export function ToolTestPanel({
                         ...(prop.type === "object" || prop.type === "array"
                           ? [
                               {
-                                validator: (_, value) => {
+                                validator: (_rule: any, value: any) => {
                                   if (
                                     (value === undefined || value === null || value === "") &&
                                     !actualSchema.required?.includes(key)
