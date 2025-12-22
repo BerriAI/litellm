@@ -450,7 +450,7 @@ async def test_aaapass_through_endpoint_pass_through_keys_langfuse(
         response = client.post(
             "/api/public/ingestion",
             json=_json_data,
-            headers={"Authorization": "Basic test-base64-auth-token-123"},
+            headers={"Authorization": f"Basic {auth_token}"},
         )
 
         print("JSON response: ", _json_data)
