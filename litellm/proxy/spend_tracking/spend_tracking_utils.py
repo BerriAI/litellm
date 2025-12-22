@@ -635,7 +635,7 @@ def _sanitize_request_body_for_spend_logs_payload(
                 # Build the truncated string: beginning + truncation marker + end
                 truncated_value = (
                     f"{value[:start_chars]}"
-                    f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+                    f"\n...\n({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars)\n...\n"
                     f"{value[-end_chars:]}"
                 )
                 return truncated_value
