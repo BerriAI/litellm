@@ -128,17 +128,23 @@ class DBSpendUpdateWriter:
             if litellm_params and isinstance(litellm_params, dict):
                 _litellm_model = litellm_params.get("model")
 
+            # Check if ANY of the model identifiers match (models with hosted_vllm/* prefix OR in FREE_MODELS env are free)
+            import os
             FREE_MODELS_ENV = os.getenv('FREE_MODELS', '')
             FREE_MODELS = [m.strip() for m in FREE_MODELS_ENV.split(',') if m.strip()]
+            FREE_MODELS_LOWER = [m.lower() for m in FREE_MODELS] if FREE_MODELS else []
 
-            # Check if ANY of the model identifiers match (case-insensitive)
             is_free_model = False
             _model_to_log = _payload_model or _request_model or _litellm_model
             matched_free_model = None
-            if FREE_MODELS:
-                FREE_MODELS_LOWER = [m.lower() for m in FREE_MODELS]
-                for model_name in [_payload_model, _request_model, _litellm_model]:
-                    if model_name and model_name.lower() in FREE_MODELS_LOWER:
+            for model_name in [_payload_model, _request_model, _litellm_model]:
+                if model_name:
+                    # Check if model starts with hosted_vllm/ OR is in FREE_MODELS list (case-insensitive)
+                    if model_name.lower().startswith("hosted_vllm/"):
+                        is_free_model = True
+                        matched_free_model = model_name
+                        break
+                    elif FREE_MODELS and model_name.lower() in FREE_MODELS_LOWER:
                         is_free_model = True
                         matched_free_model = model_name
                         break

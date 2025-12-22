@@ -152,16 +152,21 @@ class _ProxyDBLogger(CustomLogger):
                 if litellm_params and isinstance(litellm_params, dict):
                     _litellm_model = litellm_params.get("model")  # e.g., "MiniMaxAI/MiniMax-M2" (actual)
 
+                # Check if ANY of the model identifiers match (models with hosted_vllm/* prefix OR in FREE_MODELS env are free)
                 FREE_MODELS_ENV = os.getenv('FREE_MODELS', '')
                 FREE_MODELS = [m.strip() for m in FREE_MODELS_ENV.split(',') if m.strip()]
+                FREE_MODELS_LOWER = [m.lower() for m in FREE_MODELS] if FREE_MODELS else []
 
-                # Check if ANY of the model identifiers match (case-insensitive)
                 is_free_model = False
                 matched_model = None
-                if FREE_MODELS:
-                    FREE_MODELS_LOWER = [m.lower() for m in FREE_MODELS]
-                    for model_name in [_request_model, _litellm_model]:
-                        if model_name and model_name.lower() in FREE_MODELS_LOWER:
+                for model_name in [_request_model, _litellm_model]:
+                    if model_name:
+                        # Check if model starts with hosted_vllm/ OR is in FREE_MODELS list (case-insensitive)
+                        if model_name.lower().startswith("hosted_vllm/"):
+                            is_free_model = True
+                            matched_model = model_name
+                            break
+                        elif FREE_MODELS and model_name.lower() in FREE_MODELS_LOWER:
                             is_free_model = True
                             matched_model = model_name
                             break
@@ -190,7 +195,7 @@ class _ProxyDBLogger(CustomLogger):
                         org_id=org_id,
                     )
 
-                    # Update cache - use 0.0 cost for FREE_MODELS to prevent budget blocking
+                    # Update cache - use 0.0 cost for free models to prevent budget blocking
                     if is_free_model:
                         # Free model: set cost to 0.0 for cache (budget checks won't block)
                         asyncio.create_task(

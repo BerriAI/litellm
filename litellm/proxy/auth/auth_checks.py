@@ -187,13 +187,29 @@ async def common_checks(
         print(f"[METADATA_ENDPOINT] Budget check SKIPPED - Route: {route}, User: {user_object.user_id if user_object else 'unknown'}")
 
     if user_object is not None and user_object.max_budget is not None and should_check_budget:
-        # Check if model is in free models list (bypass budget check for internal models)
+        # Check if model is a free model (models with hosted_vllm/* prefix OR in FREE_MODELS env are free)
+        # Skip budget check for free models
         import os
         FREE_MODELS_ENV = os.getenv('FREE_MODELS', '')
         FREE_MODELS = [m.strip() for m in FREE_MODELS_ENV.split(',') if m.strip()]
+        FREE_MODELS_LOWER = [m.lower() for m in FREE_MODELS] if FREE_MODELS else []
 
-        # Skip budget check for free models
-        if _model and FREE_MODELS and _model in FREE_MODELS:
+        is_free_model = False
+        if isinstance(_model, str):
+            # FIX: Use .lower() before checking startswith
+            if _model.lower().startswith("hosted_vllm/"):
+                is_free_model = True
+            elif FREE_MODELS and _model.lower() in FREE_MODELS_LOWER:
+                is_free_model = True
+
+        elif isinstance(_model, list) and _model:
+            # FIX: Use .lower() here too
+            if _model[0].lower().startswith("hosted_vllm/"):
+                is_free_model = True
+            elif FREE_MODELS and _model[0].lower() in FREE_MODELS_LOWER:
+                is_free_model = True
+
+        if is_free_model:
             user_email = user_object.user_email if user_object.user_email else user_object.user_id
             # print(f"[FREE_MODELS] Budget check BYPASSED - Route: {route}, User: {user_email}, Model: {_model}, UserSpend: ${user_object.spend:.4f}, Budget: ${user_object.max_budget:.4f}")
             verbose_proxy_logger.info(f"Free model usage - User: {user_email}, Model: {_model}")
@@ -226,7 +242,7 @@ async def common_checks(
                 error_message = (
                     f"You have exceeded your {period_text} limit for external paid models. "
                     f"Current spend: ${user_object.spend:.2f}, Limit: ${user_budget:.2f}. "
-                    f"You can continue using free internal models: {free_models_list}. "
+                    f"You can continue using free internal models: {free_models_list} or models with 'hosted_vllm/' prefix. "
                     f"Contact your administrator to increase your budget."
                 )
 
@@ -1934,14 +1950,24 @@ async def _virtual_key_max_budget_check(
     Args:
         model: The model being requested. If it's a free model, budget check is skipped.
     """
-    # Check if model is in free models list (bypass budget check for internal models)
+    # Check if model is a free model (models with hosted_vllm/* prefix OR in FREE_MODELS env are free)
     import os
     FREE_MODELS_ENV = os.getenv('FREE_MODELS', '')
     FREE_MODELS = [m.strip() for m in FREE_MODELS_ENV.split(',') if m.strip()]
+    FREE_MODELS_LOWER = [m.lower() for m in FREE_MODELS] if FREE_MODELS else []
 
-    if model and FREE_MODELS and model in FREE_MODELS:
+    is_free_model = False
+    if model:
+        # Check if model starts with hosted_vllm/ OR is in FREE_MODELS list (case-insensitive)
+        if model.lower().startswith("hosted_vllm/"):
+            is_free_model = True
+        elif FREE_MODELS and model.lower() in FREE_MODELS_LOWER:
+            is_free_model = True
+
+    if is_free_model:
         user_email = user_obj.user_email if user_obj and user_obj.user_email else (user_obj.user_id if user_obj else "unknown")
-        verbose_proxy_logger.info(f"Free model usage - User: {user_email}, Model: {model}, Key: {valid_token.token[:10]}...")
+        key_preview = valid_token.token[:10] + "..." if valid_token and valid_token.token else "unknown"
+        verbose_proxy_logger.info(f"Free model usage - User: {user_email}, Model: {model}, Key: {key_preview}")
         return  # Skip budget check for free models
 
     if valid_token.spend is not None and valid_token.max_budget is not None:
