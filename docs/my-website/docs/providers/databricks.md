@@ -11,6 +11,99 @@ LiteLLM supports all models on Databricks
 
 :::
 
+## Authentication
+
+LiteLLM supports multiple authentication methods for Databricks, listed in order of preference:
+
+### OAuth M2M (Recommended for Production)
+
+OAuth Machine-to-Machine authentication using Service Principal credentials is the **recommended method for production** deployments per Databricks Partner requirements.
+
+```python
+import os
+from litellm import completion
+
+# Set OAuth credentials (Service Principal)
+os.environ["DATABRICKS_CLIENT_ID"] = "your-service-principal-application-id"
+os.environ["DATABRICKS_CLIENT_SECRET"] = "your-service-principal-secret"
+os.environ["DATABRICKS_API_BASE"] = "https://adb-xxx.azuredatabricks.net/serving-endpoints"
+
+response = completion(
+    model="databricks/databricks-dbrx-instruct",
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+```
+
+### Personal Access Token (PAT)
+
+PAT authentication is supported for development and testing scenarios.
+
+```python
+import os
+from litellm import completion
+
+os.environ["DATABRICKS_API_KEY"] = "dapi..."  # Your Personal Access Token
+os.environ["DATABRICKS_API_BASE"] = "https://adb-xxx.azuredatabricks.net/serving-endpoints"
+
+response = completion(
+    model="databricks/databricks-dbrx-instruct",
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+```
+
+### Databricks SDK Authentication (Automatic)
+
+If no credentials are provided, LiteLLM will use the Databricks SDK for automatic authentication. This supports OAuth, Azure AD, and other unified auth methods configured in your environment.
+
+```python
+from litellm import completion
+
+# No environment variables needed - uses Databricks SDK unified auth
+# Requires: pip install databricks-sdk
+response = completion(
+    model="databricks/databricks-dbrx-instruct",
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+```
+
+## Custom User-Agent for Partner Attribution
+
+If you're building a product on top of LiteLLM that integrates with Databricks, you can pass your own partner identifier for proper attribution in Databricks telemetry.
+
+The partner name will be prefixed to the LiteLLM user agent:
+
+```python
+# Via parameter
+response = completion(
+    model="databricks/databricks-dbrx-instruct",
+    messages=[{"role": "user", "content": "Hello!"}],
+    user_agent="mycompany/1.0.0",
+)
+# Resulting User-Agent: mycompany_litellm/1.79.1
+
+# Via environment variable
+os.environ["DATABRICKS_USER_AGENT"] = "mycompany/1.0.0"
+# Resulting User-Agent: mycompany_litellm/1.79.1
+```
+
+| Input | Resulting User-Agent |
+|-------|---------------------|
+| (none) | `litellm/1.79.1` |
+| `mycompany/1.0.0` | `mycompany_litellm/1.79.1` |
+| `partner_product/2.5.0` | `partner_product_litellm/1.79.1` |
+| `acme` | `acme_litellm/1.79.1` |
+
+**Note:** The version from your custom user agent is ignored; LiteLLM's version is always used.
+
+## Security
+
+LiteLLM automatically redacts sensitive information (tokens, secrets, API keys) from all debug logs to prevent credential leakage. This includes:
+
+- Authorization headers
+- API keys and tokens
+- Client secrets
+- Personal access tokens (PATs)
+
 ## Usage
 
 <Tabs>
@@ -51,6 +144,7 @@ response = completion(
         model: databricks/databricks-dbrx-instruct
         api_key: os.environ/DATABRICKS_API_KEY
         api_base: os.environ/DATABRICKS_API_BASE
+        user_agent: "mycompany/1.0.0"  # Optional: for partner attribution
   ```
 
 
