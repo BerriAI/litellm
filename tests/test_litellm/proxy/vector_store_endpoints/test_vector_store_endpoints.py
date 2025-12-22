@@ -648,7 +648,7 @@ class TestIsAllowedToCallVectorStoreEndpoint:
         mock_request.method = "GET"
         mock_request.url.path = "/azure_ai/indexes/dall-e-4/docs/search"
         mock_user_api_key = UserAPIKeyAuth(
-            token="sk-test-mock-token-404",
+            token="b637312ebffb9745321224644430ba9e4916a291c8281f293d21182c5e80bc5a",
             key_name="sk-...plNQ",
             metadata={
                 "allowed_vector_store_indexes": [
