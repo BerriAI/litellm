@@ -8,6 +8,7 @@ to detect and block/mask sensitive content.
 import asyncio
 import os
 import re
+from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -34,6 +35,7 @@ from litellm.types.utils import ModelResponseStream
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.utils import GenericGuardrailAPIInputs
+
 from litellm.types.guardrails import (
     BlockedWord,
     ContentFilterAction,
@@ -42,8 +44,14 @@ from litellm.types.guardrails import (
     Mode,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
+    BlockedWordDetection,
+    CategoryKeywordDetection,
     ContentFilterCategoryConfig,
+    ContentFilterDetection,
+    DetectionType,
+    PatternDetection,
 )
+
 from .patterns import get_compiled_pattern
 
 
@@ -508,7 +516,9 @@ class ContentFilterGuardrail(CustomGuardrail):
                 return (keyword, action, description)
         return None
 
-    def _filter_single_text(self, text: str) -> str:
+    def _filter_single_text(
+        self, text: str, detections: Optional[List[ContentFilterDetection]] = None
+    ) -> str:
         """
         Apply all content filtering checks to a single text.
 
@@ -519,6 +529,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         Args:
             text: Text to filter
+            detections: Optional list to append detection information
 
         Returns:
             Filtered text (with masking applied if action is MASK)
@@ -535,6 +546,15 @@ class ContentFilterGuardrail(CustomGuardrail):
         category_keyword_match = self._check_category_keywords(text, all_exceptions)
         if category_keyword_match:
             keyword, category_name, severity, action = category_keyword_match
+            if detections is not None:
+                category_detection: CategoryKeywordDetection = {
+                    "type": "category_keyword",
+                    "category": category_name,
+                    "keyword": keyword,
+                    "severity": severity,
+                    "action": action.value,
+                }
+                detections.append(category_detection)
             if action == ContentFilterAction.BLOCK:
                 error_msg = (
                     f"Content blocked: {category_name} category keyword '{keyword}' detected "
@@ -568,6 +588,15 @@ class ContentFilterGuardrail(CustomGuardrail):
             if not match:
                 continue
 
+            if detections is not None:
+                # Don't log matched_text to avoid exposing sensitive content (emails, credit cards, etc.)
+                pattern_detection: PatternDetection = {
+                    "type": "pattern",
+                    "pattern_name": pattern_name,
+                    "action": action.value,
+                }
+                detections.append(pattern_detection)
+
             if action == ContentFilterAction.BLOCK:
                 error_msg = f"Content blocked: {pattern_name} pattern detected"
                 verbose_proxy_logger.warning(error_msg)
@@ -595,6 +624,15 @@ class ContentFilterGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug(
                 f"Blocked word '{keyword}' found with action {action}"
             )
+
+            if detections is not None:
+                blocked_word_detection: BlockedWordDetection = {
+                    "type": "blocked_word",
+                    "keyword": keyword,
+                    "action": action.value,
+                    "description": description,
+                }
+                detections.append(blocked_word_detection)
 
             if action == ContentFilterAction.BLOCK:
                 error_msg = f"Content blocked: keyword '{keyword}' detected"
@@ -664,81 +702,141 @@ class ContentFilterGuardrail(CustomGuardrail):
         Raises:
             HTTPException: If sensitive content is detected and action is BLOCK
         """
-        texts = inputs.get("texts", [])
-        images = inputs.get("images", [])
-        if images and self.image_model and self.llm_router:
-            tasks = []
-            for image in images:
-                task = self.llm_router.acompletion(
-                    model=self.image_model,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": "Describe the image in detail.",
-                        },
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "image_url", "image_url": {"url": image}},
-                            ],
-                        },
-                    ],
-                    stream=False,
-                )
-                tasks.append(task)
+        from litellm.types.utils import GuardrailStatus
 
-            responses = await asyncio.gather(*tasks)
-            descriptions = []
-            for response in responses:
-                choice = response.choices[0]
-                message = getattr(choice, "message", None)
-                if message and getattr(message, "content", None):
-                    image_description = message.content
-                    verbose_proxy_logger.debug(
-                        f"Image description: {image_description}"
+        start_time = datetime.now()
+        detections: List[ContentFilterDetection] = []
+        masked_entity_count: Dict[str, int] = {}
+        status: GuardrailStatus = "success"
+        exception_str: str = ""
+
+        try:
+            texts = inputs.get("texts", [])
+            images = inputs.get("images", [])
+            if images and self.image_model and self.llm_router:
+                tasks = []
+                for image in images:
+                    task = self.llm_router.acompletion(
+                        model=self.image_model,
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": "Describe the image in detail.",
+                            },
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "image_url", "image_url": {"url": image}},
+                                ],
+                            },
+                        ],
+                        stream=False,
                     )
-                    descriptions.append(image_description)
-                else:
-                    verbose_proxy_logger.warning("No image description found")
+                    tasks.append(task)
 
-            # Apply content filtering to image descriptions
-            verbose_proxy_logger.debug(
-                f"ContentFilterGuardrail: Applying guardrail to {len(descriptions)} image description(s)"
-            )
-            for description in descriptions:
-                # This will raise HTTPException if BLOCK action is triggered
-                try:
-                    self._filter_single_text(description)
-                except HTTPException as e:
-                    # e.detail can be a string or dict
-                    if isinstance(e.detail, dict) and "error" in e.detail:
-                        detail_dict = cast(Dict[str, Any], e.detail)
-                        detail_dict["error"] = (
-                            detail_dict["error"]
-                            + " (Image description): "
-                            + description
+                responses = await asyncio.gather(*tasks)
+                descriptions = []
+                for response in responses:
+                    choice = response.choices[0]
+                    message = getattr(choice, "message", None)
+                    if message and getattr(message, "content", None):
+                        image_description = message.content
+                        verbose_proxy_logger.debug(
+                            f"Image description: {image_description}"
                         )
-                    elif isinstance(e.detail, str):
-                        e.detail = e.detail + " (Image description): " + description
+                        descriptions.append(image_description)
                     else:
-                        e.detail = (
-                            "Content blocked: Image description detected" + description
+                        verbose_proxy_logger.warning("No image description found")
+
+                # Apply content filtering to image descriptions
+                verbose_proxy_logger.debug(
+                    f"ContentFilterGuardrail: Applying guardrail to {len(descriptions)} image description(s)"
+                )
+                for description in descriptions:
+                    # This will raise HTTPException if BLOCK action is triggered
+                    try:
+                        self._filter_single_text(description, detections=detections)
+                    except HTTPException as e:
+                        # e.detail can be a string or dict
+                        if isinstance(e.detail, dict) and "error" in e.detail:
+                            detail_dict = cast(Dict[str, Any], e.detail)
+                            detail_dict["error"] = (
+                                detail_dict["error"]
+                                + " (Image description): "
+                                + description
+                            )
+                        elif isinstance(e.detail, str):
+                            e.detail = e.detail + " (Image description): " + description
+                        else:
+                            e.detail = (
+                                "Content blocked: Image description detected" + description
+                            )
+                        raise e
+            verbose_proxy_logger.debug(
+                f"ContentFilterGuardrail: Applying guardrail to {len(texts)} text(s)"
+            )
+
+            processed_texts = []
+            for text in texts:
+                filtered_text = self._filter_single_text(text, detections=detections)
+                processed_texts.append(filtered_text)
+
+            verbose_proxy_logger.debug(
+                "ContentFilterGuardrail: Guardrail applied successfully"
+            )
+            inputs["texts"] = processed_texts
+
+            # Count masked entities by type
+            for detection in detections:
+                if detection["action"] == ContentFilterAction.MASK.value:
+                    detection_type = detection["type"]
+                    if detection_type == "pattern":
+                        pattern_detection = cast(PatternDetection, detection)
+                        pattern_name = pattern_detection["pattern_name"]
+                        masked_entity_count[pattern_name] = (
+                            masked_entity_count.get(pattern_name, 0) + 1
                         )
-                    raise e
-        verbose_proxy_logger.debug(
-            f"ContentFilterGuardrail: Applying guardrail to {len(texts)} text(s)"
-        )
+                    elif detection_type == "blocked_word":
+                        entity_type = "blocked_word"
+                        masked_entity_count[entity_type] = (
+                            masked_entity_count.get(entity_type, 0) + 1
+                        )
+                    elif detection_type == "category_keyword":
+                        category_detection = cast(CategoryKeywordDetection, detection)
+                        category = category_detection["category"]
+                        masked_entity_count[category] = (
+                            masked_entity_count.get(category, 0) + 1
+                        )
 
-        processed_texts = []
-        for text in texts:
-            filtered_text = self._filter_single_text(text)
-            processed_texts.append(filtered_text)
+            return inputs
+        except HTTPException:
+            status = "guardrail_intervened"
+            raise
+        except Exception as e:
+            status = "guardrail_failed_to_respond"
+            exception_str = str(e)
+            raise e
+        finally:
+            # Create Guardrail Trace for logging on Langfuse, Datadog, etc.
+            # Convert TypedDict detections to regular dicts for JSON serialization
+            guardrail_json_response: Union[Exception, str, dict, List[dict]] = [
+                dict(detection) for detection in detections
+            ]
+            if status != "success":
+                guardrail_json_response = exception_str if exception_str else [
+                    dict(detection) for detection in detections
+                ]
 
-        verbose_proxy_logger.debug(
-            "ContentFilterGuardrail: Guardrail applied successfully"
-        )
-        inputs["texts"] = processed_texts
-        return inputs
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_provider=self.guardrail_provider,
+                guardrail_json_response=guardrail_json_response,
+                request_data=request_data,
+                guardrail_status=status,
+                start_time=start_time.timestamp(),
+                end_time=datetime.now().timestamp(),
+                duration=(datetime.now() - start_time).total_seconds(),
+                masked_entity_count=masked_entity_count,
+            )
 
     async def async_post_call_streaming_iterator_hook(
         self,
