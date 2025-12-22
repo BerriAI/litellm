@@ -37,7 +37,13 @@ async def test_test_tools_list_forwards_mcp_auth_header(monkeypatch):
 
     captured: dict = {}
 
-    async def fake_execute(request, operation, mcp_auth_header=None, oauth2_headers=None):
+    async def fake_execute(
+        request,
+        operation,
+        mcp_auth_header=None,
+        oauth2_headers=None,
+        raw_headers=None,
+    ):
         captured["mcp_auth_header"] = mcp_auth_header
         captured["oauth2_headers"] = oauth2_headers
         return {
@@ -87,7 +93,13 @@ async def test_test_tools_list_extracts_oauth2_headers(monkeypatch):
 
     captured: dict = {}
 
-    async def fake_execute(request, operation, mcp_auth_header=None, oauth2_headers=None):
+    async def fake_execute(
+        request,
+        operation,
+        mcp_auth_header=None,
+        oauth2_headers=None,
+        raw_headers=None,
+    ):
         captured["mcp_auth_header"] = mcp_auth_header
         captured["oauth2_headers"] = oauth2_headers
         return {
