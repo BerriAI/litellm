@@ -49,12 +49,12 @@ model_list:
 
 AWS Polly supports different speech synthesis engines. Specify the engine in the model name:
 
-| Model | Engine | Description |
-|-------|--------|-------------|
-| `aws_polly/neural` | Neural | More natural, human-like speech (recommended) |
-| `aws_polly/standard` | Standard | Original Polly voices, faster and lower cost |
-| `aws_polly/long-form` | Long-form | Optimized for long content like articles |
-| `aws_polly/generative` | Generative | Most expressive, highest quality (limited voices) |
+| Model | Engine | Cost (per 1M chars) | Description |
+|-------|--------|---------------------|-------------|
+| `aws_polly/standard` | Standard | $4.00 | Original Polly voices, faster and lowest cost |
+| `aws_polly/neural` | Neural | $16.00 | More natural, human-like speech (recommended) |
+| `aws_polly/generative` | Generative | $30.00 | Most expressive, highest quality (limited voices) |
+| `aws_polly/long-form` | Long-form | $100.00 | Optimized for long content like articles |
 
 ### **LiteLLM SDK**
 
