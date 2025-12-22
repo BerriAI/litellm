@@ -790,7 +790,7 @@ curl -X POST "http://localhost:4000/v1/chat/completions" \
     "messages": [
       {
         "role": "user", 
-        "content": "Generate python code that accesses my Github repo using this PAT: ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
+        "content": "Generate python code that accesses my Github repo using this PAT: example-github-token-123"
       }
     ],
     "max_tokens": 50
@@ -815,7 +815,7 @@ curl -X POST "http://localhost:4000/v1/chat/completions" \
             "type": "github_token",
             "start_idx": 66,
             "end_idx": 106,
-            "evidence": "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8",
+            "evidence": "example-github-token-123",
           }
         ]
       }

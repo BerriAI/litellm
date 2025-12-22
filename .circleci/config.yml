@@ -667,7 +667,7 @@ jobs:
             docker run -d \
               --name postgres-db \
               -e POSTGRES_USER=postgres \
-              -e POSTGRES_PASSWORD=postgres \
+              -e POSTGRES_PASSWORD=test-postgres \
               -e POSTGRES_DB=circle_test \
               -p 5432:5432 \
               postgres:14
@@ -2127,7 +2127,7 @@ jobs:
             docker run -d \
               --name postgres-db \
               -e POSTGRES_USER=postgres \
-              -e POSTGRES_PASSWORD=postgres \
+              -e POSTGRES_PASSWORD=test-postgres \
               -e POSTGRES_DB=circle_test \
               -p 5432:5432 \
               postgres:14
@@ -2269,7 +2269,7 @@ jobs:
             docker run -d \
               --name postgres-db \
               -e POSTGRES_USER=postgres \
-              -e POSTGRES_PASSWORD=postgres \
+              -e POSTGRES_PASSWORD=test-postgres \
               -e POSTGRES_DB=circle_test \
               -p 5432:5432 \
               postgres:14
@@ -2409,7 +2409,7 @@ jobs:
             docker run -d \
               --name postgres-db \
               -e POSTGRES_USER=postgres \
-              -e POSTGRES_PASSWORD=postgres \
+              -e POSTGRES_PASSWORD=test-postgres \
               -e POSTGRES_DB=circle_test \
               -p 5432:5432 \
               postgres:14
@@ -2570,7 +2570,7 @@ jobs:
             docker run -d \
               --name postgres-db \
               -e POSTGRES_USER=postgres \
-              -e POSTGRES_PASSWORD=postgres \
+              -e POSTGRES_PASSWORD=test-postgres \
               -e POSTGRES_DB=circle_test \
               -p 5432:5432 \
               postgres:14
@@ -2683,7 +2683,7 @@ jobs:
             docker run -d \
               --name postgres-db \
               -e POSTGRES_USER=postgres \
-              -e POSTGRES_PASSWORD=postgres \
+              -e POSTGRES_PASSWORD=test-postgres \
               -e POSTGRES_DB=circle_test \
               -p 5432:5432 \
               postgres:14
@@ -2819,7 +2819,7 @@ jobs:
             docker run -d \
               --name postgres-db \
               -e POSTGRES_USER=postgres \
-              -e POSTGRES_PASSWORD=postgres \
+              -e POSTGRES_PASSWORD=test-postgres \
               -e POSTGRES_DB=circle_test \
               -p 5432:5432 \
               postgres:14
@@ -3051,7 +3051,7 @@ jobs:
             docker run -d \
               --name postgres-db \
               -e POSTGRES_USER=postgres \
-              -e POSTGRES_PASSWORD=postgres \
+              -e POSTGRES_PASSWORD=test-postgres \
               -e POSTGRES_DB=circle_test \
               -p 5432:5432 \
               postgres:14
@@ -3568,7 +3568,7 @@ jobs:
             docker run -d \
               --name postgres-db \
               -e POSTGRES_USER=postgres \
-              -e POSTGRES_PASSWORD=postgres \
+              -e POSTGRES_PASSWORD=test-postgres \
               -e POSTGRES_DB=circle_test \
               -p 5432:5432 \
               postgres:14
