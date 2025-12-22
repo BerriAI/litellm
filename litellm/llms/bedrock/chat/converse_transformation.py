@@ -1545,6 +1545,13 @@ class AmazonConverseConfig(BaseConfig):
         if "trace" in completion_response:
             setattr(model_response, "trace", completion_response["trace"])
 
+        # Add service_tier if present in Bedrock response
+        # Map Bedrock serviceTier (object) to OpenAI service_tier (string)
+        if "serviceTier" in completion_response:
+            service_tier_block = completion_response["serviceTier"]
+            if isinstance(service_tier_block, dict) and "type" in service_tier_block:
+                setattr(model_response, "service_tier", service_tier_block["type"])
+
         return model_response
 
     def get_error_class(
