@@ -1,8 +1,9 @@
-import pytest
-import polars as pl
-
-from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import polars as pl
+import pytest
+
 from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
 from litellm.integrations.cloudzero.cz_stream_api import CloudZeroStreamer
 from litellm.integrations.cloudzero.database import LiteLLMDatabase
@@ -46,7 +47,7 @@ class TestCloudZeroHourlyExport:
             {
                 "team_id": ["a3d6b0bb-098f-4260-81d6-fabae695b622"],
                 "key_alias": ["key_1"],
-                "token": ["sk-test-cloudzero-token-010"],
+                "token": ["c1465c9a821f420927b3d81972323fb516745bc93a4a54ceca0ce6ddf6100c39"],
             }
         )
 

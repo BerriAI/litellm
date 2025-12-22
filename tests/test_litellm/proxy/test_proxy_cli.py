@@ -180,7 +180,7 @@ class TestProxyInitializationHelpers:
         test_env = {
             "DATABASE_HOST": "localhost:5432",
             "DATABASE_USERNAME": "user@with+special",
-            "DATABASE_PASSWORD": "test-password-special-chars",
+            "DATABASE_PASSWORD": "pass&word!@#$%",
             "DATABASE_NAME": "db_name/test",
         }
 
@@ -205,7 +205,7 @@ class TestProxyInitializationHelpers:
             database_url = f"postgresql://{database_username_enc}:{database_password_enc}@{database_host}/{database_name_enc}"
 
             # Assert the correct URL was constructed with properly escaped characters
-            expected_url = "postgresql://user%40with%2Bspecial:test-password-special-chars@localhost:5432/db_name%2Ftest"
+            expected_url = "postgresql://user%40with%2Bspecial:pass%26word%21%40%23%24%25@localhost:5432/db_name%2Ftest"
             assert database_url == expected_url
 
             # Test appending query parameters
@@ -381,13 +381,13 @@ class TestProxyInitializationHelpers:
         test_env_special = {
             "DATABASE_HOST": "localhost:5432",
             "DATABASE_USERNAME": "user@with+special",
-            "DATABASE_PASSWORD": "test-password-special-chars",
+            "DATABASE_PASSWORD": "pass&word!@#$%",
             "DATABASE_NAME": "db_name/test",
         }
 
         with patch.dict(os.environ, test_env_special):
             result = construct_database_url_from_env_vars()
-            expected_url = "postgresql://user%40with%2Bspecial:test-password-special-chars@localhost:5432/db_name%2Ftest"
+            expected_url = "postgresql://user%40with%2Bspecial:pass%26word%21%40%23%24%25@localhost:5432/db_name%2Ftest"
             assert result == expected_url
 
         # Test without password (should still work)

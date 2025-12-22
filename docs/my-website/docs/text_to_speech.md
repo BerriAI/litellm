@@ -14,7 +14,7 @@ import TabItem from '@theme/TabItem';
 | Fallbacks | ✅ | Works between supported models |
 | Loadbalancing | ✅ | Works between supported models |
 | Guardrails | ✅ | Applies to input text (non-streaming only) |
-| Supported Providers | OpenAI, Azure OpenAI, Vertex AI | |
+| Supported Providers | OpenAI, Azure OpenAI, Vertex AI, AWS Polly, ElevenLabs | |
 
 ## **LiteLLM Python SDK Usage**
 ### Quick Start 
@@ -101,6 +101,7 @@ litellm --config /path/to/config.yaml
 | OpenAI      |   [Usage](#quick-start)                 |
 | Azure OpenAI|   [Usage](../docs/providers/azure#azure-text-to-speech-tts)                 |
 | Azure AI Speech Service (AVA)|   [Usage](../docs/providers/azure_ai_speech)                 |
+| AWS Polly   |   [Usage](#aws-polly-text-to-speech)                 |
 | Vertex AI   |   [Usage](../docs/providers/vertex#text-to-speech-apis)                 |
 | Gemini      |   [Usage](#gemini-text-to-speech)                 |
 | ElevenLabs  |   [Usage](../docs/providers/elevenlabs#text-to-speech-tts)                 |
@@ -245,6 +246,12 @@ curl http://0.0.0.0:4000/v1/audio/speech \
   }' \
   --output vertex_speech.mp3
 ```
+
+### AWS Polly Text-to-Speech
+
+AWS Polly provides neural and standard text-to-speech engines with support for multiple voices and languages.
+
+See the [AWS Polly provider documentation](../docs/providers/aws_polly) for detailed usage examples.
 
 ## ✨ Enterprise LiteLLM Proxy - Set Max Request File Size 
 
