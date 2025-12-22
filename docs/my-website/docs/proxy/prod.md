@@ -33,7 +33,7 @@ litellm_settings:
 
 Set slack webhook url in your env
 ```shell
-export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/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"
+export SLACK_WEBHOOK_URL="example-slack-webhook-url"
 ```
 
 Turn off FASTAPI's default info logs
