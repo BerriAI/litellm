@@ -142,16 +142,14 @@ The first JSON-configured provider:
 ```python
 import litellm
 import os
-import json
 
 # Define provider inline
-custom_providers = {
+os.environ["LITELLM_CUSTOM_PROVIDERS"] = """
     "my_provider": {
         "base_url": "https://api.myprovider.com/v1",
         "api_key_env": "MY_PROVIDER_KEY"
     }
-}
-os.environ["LITELLM_CUSTOM_PROVIDERS"] = json.dumps(custom_providers)
+"""
 
 # Use your custom provider
 response = litellm.completion(
@@ -235,12 +233,3 @@ The JSON system is integrated at:
 - `litellm/litellm_core_utils/get_llm_provider_logic.py` - Provider resolution
 - `litellm/utils.py` - ProviderConfigManager
 - `litellm/constants.py` - openai_compatible_providers list
-
-### Custom Provider Loading
-
-The custom provider loading features:
-- **JSON string**: Parses inline JSON from `LITELLM_CUSTOM_PROVIDERS` env var
-- **URL loading**: Uses `httpx.Client` with 10-second timeout for `LITELLM_CUSTOM_PROVIDERS_URL`
-- Graceful error handling (logs warnings, doesn't crash)
-- Merge behavior: custom providers can overwrite built-in ones
-- Single fetch/parse at startup (no repeated operations)
