@@ -157,46 +157,51 @@ class LiteLLMResponsesInteractionsStreamingIterator:
         if self.finished:
             raise StopIteration
         
-        try:
-            # Get next chunk from responses API stream
-            # BaseResponsesAPIStreamingIterator subclasses implement __iter__/__next__
-            # Cast to sync iterator for type checking
-            sync_iterator = cast(SyncResponsesAPIStreamingIterator, self.responses_stream_iterator)
-            chunk = sync_iterator.__next__()
-            
-            # Transform chunk (chunk is already a ResponsesAPIStreamingResponse)
-            transformed = self._transform_responses_chunk_to_interactions_chunk(chunk)
-            
-            if transformed:
-                # If we finished and content was started, send content.stop before interaction.complete
-                if self.finished and self.sent_content_start and transformed.event_type == "interaction.complete":
-                    # Send content.stop first
-                    content_stop = InteractionsAPIStreamingResponse(
+        # Check if we have a pending interaction.complete to send
+        if hasattr(self, "_pending_interaction_complete"):
+            pending: InteractionsAPIStreamingResponse = getattr(self, "_pending_interaction_complete")
+            delattr(self, "_pending_interaction_complete")
+            return pending
+        
+        # Use a loop instead of recursion to avoid stack overflow
+        sync_iterator = cast(SyncResponsesAPIStreamingIterator, self.responses_stream_iterator)
+        while True:
+            try:
+                # Get next chunk from responses API stream
+                chunk = next(sync_iterator)
+                
+                # Transform chunk (chunk is already a ResponsesAPIStreamingResponse)
+                transformed = self._transform_responses_chunk_to_interactions_chunk(chunk)
+                
+                if transformed:
+                    # If we finished and content was started, send content.stop before interaction.complete
+                    if self.finished and self.sent_content_start and transformed.event_type == "interaction.complete":
+                        # Send content.stop first
+                        content_stop = InteractionsAPIStreamingResponse(
+                            event_type="content.stop",
+                            id=transformed.id,
+                            object="content",
+                            delta={"type": "text", "text": self.collected_text},
+                        )
+                        # Store the interaction.complete to send next
+                        self._pending_interaction_complete = transformed
+                        return content_stop
+                    return transformed
+                
+                # If no transformation, continue to next chunk (loop continues)
+                
+            except StopIteration:
+                self.finished = True
+                
+                # Send final events if needed
+                if self.sent_content_start:
+                    return InteractionsAPIStreamingResponse(
                         event_type="content.stop",
-                        id=transformed.id,
                         object="content",
                         delta={"type": "text", "text": self.collected_text},
                     )
-                    # Store the interaction.complete to send next
-                    self._pending_interaction_complete = transformed
-                    return content_stop
-                return transformed
-            
-            # If no transformation, try next chunk
-            return self.__next__()
-            
-        except StopIteration:
-            self.finished = True
-            
-            # Send final events if needed
-            if self.sent_content_start:
-                return InteractionsAPIStreamingResponse(
-                    event_type="content.stop",
-                    object="content",
-                    delta={"type": "text", "text": self.collected_text},
-                )
-            
-            raise StopIteration
+                
+                raise StopIteration
 
     def __aiter__(self) -> AsyncIterator[InteractionsAPIStreamingResponse]:
         """Async iterator implementation."""
@@ -213,44 +218,43 @@ class LiteLLMResponsesInteractionsStreamingIterator:
             delattr(self, "_pending_interaction_complete")
             return pending
         
-        try:
-            # Get next chunk from responses API stream
-            # BaseResponsesAPIStreamingIterator subclasses implement __aiter__/__anext__
-            # Cast to async iterator for type checking
-            async_iterator = cast(ResponsesAPIStreamingIterator, self.responses_stream_iterator)
-            chunk = await async_iterator.__anext__()
-            
-            # Transform chunk (chunk is already a ResponsesAPIStreamingResponse)
-            transformed = self._transform_responses_chunk_to_interactions_chunk(chunk)
-            
-            if transformed:
-                # If we finished and content was started, send content.stop before interaction.complete
-                if self.finished and self.sent_content_start and transformed.event_type == "interaction.complete":
-                    # Send content.stop first
-                    content_stop = InteractionsAPIStreamingResponse(
+        # Use a loop instead of recursion to avoid stack overflow
+        async_iterator = cast(ResponsesAPIStreamingIterator, self.responses_stream_iterator)
+        while True:
+            try:
+                # Get next chunk from responses API stream
+                chunk = await async_iterator.__anext__()
+                
+                # Transform chunk (chunk is already a ResponsesAPIStreamingResponse)
+                transformed = self._transform_responses_chunk_to_interactions_chunk(chunk)
+                
+                if transformed:
+                    # If we finished and content was started, send content.stop before interaction.complete
+                    if self.finished and self.sent_content_start and transformed.event_type == "interaction.complete":
+                        # Send content.stop first
+                        content_stop = InteractionsAPIStreamingResponse(
+                            event_type="content.stop",
+                            id=transformed.id,
+                            object="content",
+                            delta={"type": "text", "text": self.collected_text},
+                        )
+                        # Store the interaction.complete to send next
+                        self._pending_interaction_complete = transformed
+                        return content_stop
+                    return transformed
+                
+                # If no transformation, continue to next chunk (loop continues)
+                
+            except StopAsyncIteration:
+                self.finished = True
+                
+                # Send final events if needed
+                if self.sent_content_start:
+                    return InteractionsAPIStreamingResponse(
                         event_type="content.stop",
-                        id=transformed.id,
                         object="content",
                         delta={"type": "text", "text": self.collected_text},
                     )
-                    # Store the interaction.complete to send next
-                    self._pending_interaction_complete = transformed
-                    return content_stop
-                return transformed
-            
-            # If no transformation, try next chunk
-            return await self.__anext__()
-            
-        except StopAsyncIteration:
-            self.finished = True
-            
-            # Send final events if needed
-            if self.sent_content_start:
-                return InteractionsAPIStreamingResponse(
-                    event_type="content.stop",
-                    object="content",
-                    delta={"type": "text", "text": self.collected_text},
-                )
-            
-            raise StopAsyncIteration
+                
+                raise StopAsyncIteration
 
