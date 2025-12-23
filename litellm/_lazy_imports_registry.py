@@ -218,6 +218,23 @@ LLM_CONFIG_NAMES = (
     "FireworksAIConfig",
     "FireworksAITextCompletionConfig",
     "FireworksAIAudioTranscriptionConfig",
+    "FireworksAIEmbeddingConfig",
+    "FriendliaiChatConfig",
+    "JinaAIEmbeddingConfig",
+    "XAIChatConfig",
+    "ZAIChatConfig",
+    "AIMLChatConfig",
+    "VolcEngineChatConfig",
+    "CodestralTextCompletionConfig",
+    "AzureOpenAIAssistantsAPIConfig",
+    "HerokuChatConfig",
+    "CometAPIConfig",
+    "AzureOpenAIConfig",
+    "AzureOpenAIGPT5Config",
+    "AzureOpenAITextConfig",
+    "HostedVLLMChatConfig",
+    # Alias for backwards compatibility
+    "VolcEngineConfig",  # Alias for VolcEngineChatConfig
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -449,6 +466,23 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "FireworksAIConfig": (".llms.fireworks_ai.chat.transformation", "FireworksAIConfig"),
     "FireworksAITextCompletionConfig": (".llms.fireworks_ai.completion.transformation", "FireworksAITextCompletionConfig"),
     "FireworksAIAudioTranscriptionConfig": (".llms.fireworks_ai.audio_transcription.transformation", "FireworksAIAudioTranscriptionConfig"),
+    "FireworksAIEmbeddingConfig": (".llms.fireworks_ai.embed.fireworks_ai_transformation", "FireworksAIEmbeddingConfig"),
+    "FriendliaiChatConfig": (".llms.friendliai.chat.transformation", "FriendliaiChatConfig"),
+    "JinaAIEmbeddingConfig": (".llms.jina_ai.embedding.transformation", "JinaAIEmbeddingConfig"),
+    "XAIChatConfig": (".llms.xai.chat.transformation", "XAIChatConfig"),
+    "ZAIChatConfig": (".llms.zai.chat.transformation", "ZAIChatConfig"),
+    "AIMLChatConfig": (".llms.aiml.chat.transformation", "AIMLChatConfig"),
+    "VolcEngineChatConfig": (".llms.volcengine.chat.transformation", "VolcEngineChatConfig"),
+    "CodestralTextCompletionConfig": (".llms.codestral.completion.transformation", "CodestralTextCompletionConfig"),
+    "AzureOpenAIAssistantsAPIConfig": (".llms.azure.azure", "AzureOpenAIAssistantsAPIConfig"),
+    "HerokuChatConfig": (".llms.heroku.chat.transformation", "HerokuChatConfig"),
+    "CometAPIConfig": (".llms.cometapi.chat.transformation", "CometAPIConfig"),
+    "AzureOpenAIConfig": (".llms.azure.chat.gpt_transformation", "AzureOpenAIConfig"),
+    "AzureOpenAIGPT5Config": (".llms.azure.chat.gpt_5_transformation", "AzureOpenAIGPT5Config"),
+    "AzureOpenAITextConfig": (".llms.azure.completion.transformation", "AzureOpenAITextConfig"),
+    "HostedVLLMChatConfig": (".llms.hosted_vllm.chat.transformation", "HostedVLLMChatConfig"),
+    # Alias for backwards compatibility
+    "VolcEngineConfig": (".llms.volcengine.chat.transformation", "VolcEngineChatConfig"),  # Alias
 }
 
 # Export all name tuples and import maps for use in _lazy_imports.py

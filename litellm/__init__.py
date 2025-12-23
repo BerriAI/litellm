@@ -1090,29 +1090,10 @@ from .llms.topaz.common_utils import TopazModelInfo
 
 # OpenAIOSeriesConfig is lazy loaded - openaiOSeriesConfig will be created on first access
 # OpenAIGPTConfig, OpenAIGPT5Config, etc. are lazy loaded - instances will be created on first access
-from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
-    FireworksAIEmbeddingConfig,
-)
-from .llms.friendliai.chat.transformation import FriendliaiChatConfig
-from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
-from .llms.xai.chat.transformation import XAIChatConfig
 from .llms.xai.common_utils import XAIModelInfo
-from .llms.zai.chat.transformation import ZAIChatConfig
-from .llms.aiml.chat.transformation import AIMLChatConfig
-from .llms.volcengine.chat.transformation import (
-    VolcEngineChatConfig as VolcEngineConfig,
-)
-from .llms.codestral.completion.transformation import CodestralTextCompletionConfig
 from .llms.azure.azure import (
     AzureOpenAIError,
-    AzureOpenAIAssistantsAPIConfig,
 )
-from .llms.heroku.chat.transformation import HerokuChatConfig
-from .llms.cometapi.chat.transformation import CometAPIConfig
-from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
-from .llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
-from .llms.azure.completion.transformation import AzureOpenAITextConfig
-from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
 from .llms.llamafile.chat.transformation import LlamafileChatConfig
 from .llms.litellm_proxy.chat.transformation import LiteLLMProxyChatConfig
 from .llms.vllm.completion.transformation import VLLMConfig
@@ -1431,6 +1412,21 @@ if TYPE_CHECKING:
     from .llms.fireworks_ai.chat.transformation import FireworksAIConfig as FireworksAIConfig
     from .llms.fireworks_ai.completion.transformation import FireworksAITextCompletionConfig as FireworksAITextCompletionConfig
     from .llms.fireworks_ai.audio_transcription.transformation import FireworksAIAudioTranscriptionConfig as FireworksAIAudioTranscriptionConfig
+    from .llms.fireworks_ai.embed.fireworks_ai_transformation import FireworksAIEmbeddingConfig as FireworksAIEmbeddingConfig
+    from .llms.friendliai.chat.transformation import FriendliaiChatConfig as FriendliaiChatConfig
+    from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig as JinaAIEmbeddingConfig
+    from .llms.xai.chat.transformation import XAIChatConfig as XAIChatConfig
+    from .llms.zai.chat.transformation import ZAIChatConfig as ZAIChatConfig
+    from .llms.aiml.chat.transformation import AIMLChatConfig as AIMLChatConfig
+    from .llms.volcengine.chat.transformation import VolcEngineChatConfig as VolcEngineChatConfig, VolcEngineChatConfig as VolcEngineConfig
+    from .llms.codestral.completion.transformation import CodestralTextCompletionConfig as CodestralTextCompletionConfig
+    from .llms.azure.azure import AzureOpenAIAssistantsAPIConfig as AzureOpenAIAssistantsAPIConfig
+    from .llms.heroku.chat.transformation import HerokuChatConfig as HerokuChatConfig
+    from .llms.cometapi.chat.transformation import CometAPIConfig as CometAPIConfig
+    from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig as AzureOpenAIConfig
+    from .llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config as AzureOpenAIGPT5Config
+    from .llms.azure.completion.transformation import AzureOpenAITextConfig as AzureOpenAITextConfig
+    from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig as HostedVLLMChatConfig
     from litellm.caching.llm_caching_handler import LLMClientCache
     from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
     from litellm.types.utils import (
