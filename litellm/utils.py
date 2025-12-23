@@ -927,9 +927,9 @@ def function_setup(  # noqa: PLR0915
                         if "messages" in kwargs:
                             kwargs["messages"] = processed_messages
                         elif len(args) > 1:
-                            args = list(args)
-                            args[1] = processed_messages
-                            args = tuple(args)
+                            args_list = list(args)
+                            args_list[1] = processed_messages
+                            args = tuple(args_list)
 
                 except Exception as e:
                     # Log the error but don't fail the request
