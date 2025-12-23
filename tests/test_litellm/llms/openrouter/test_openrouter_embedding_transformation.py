@@ -62,6 +62,9 @@ def test_openrouter_embedding_validate_environment():
     # Should include OpenRouter-specific headers
     assert "HTTP-Referer" in headers
     assert "X-Title" in headers
+    # Should include Content-Type header
+    assert "Content-Type" in headers
+    assert headers["Content-Type"] == "application/json"
     # Should include Authorization header
     assert "Authorization" in headers
     assert headers["Authorization"] == "Bearer test-api-key"
@@ -81,6 +84,7 @@ def test_openrouter_embedding_validate_environment():
     # Should still include OpenRouter headers but not Authorization
     assert "HTTP-Referer" in headers_no_key
     assert "X-Title" in headers_no_key
+    assert "Content-Type" in headers_no_key
     assert "Authorization" not in headers_no_key
 
 

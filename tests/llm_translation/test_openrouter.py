@@ -38,7 +38,7 @@ def test_openrouter_embedding():
     """Test OpenRouter embeddings support."""
     litellm._turn_on_debug()
     resp = litellm.embedding(
-        model="openrouter/google/text-embedding-004",
+        model="openrouter/openai/text-embedding-3-small",
         input=["Hello world", "How are you?"],
     )
     print(resp)
