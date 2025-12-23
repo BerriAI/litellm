@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cas
 
 from fastapi import HTTPException
 
+import litellm
 from litellm import Router, verbose_logger
 from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
@@ -836,13 +837,41 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         return response
 
     async def afile_retrieve(
-        self, file_id: str, litellm_parent_otel_span: Optional[Span]
+        self, file_id: str, litellm_parent_otel_span: Optional[Span], llm_router=None
     ) -> OpenAIFileObject:
         stored_file_object = await self.get_unified_file_id(
             file_id, litellm_parent_otel_span
         )
         if stored_file_object:
-            return stored_file_object.file_object
+            # PATCHED: If file_object is None (batch output files), fetch from provider
+            if stored_file_object.file_object:
+                return stored_file_object.file_object
+            elif stored_file_object.model_mappings and llm_router:
+                for model_id, model_file_id in stored_file_object.model_mappings.items():
+                    # PATCHED: Get deployment info and credentials from router
+                    deployment = llm_router.get_deployment(model_id=model_id)
+                    if deployment:
+                        credentials = llm_router.get_deployment_credentials(model_id=model_id) or {}
+                        # Extract custom_llm_provider - afile_retrieve needs it as explicit param
+                        custom_llm_provider = credentials.pop("custom_llm_provider", None)
+                        if not custom_llm_provider:
+                            # Infer from model name (e.g., "azure/gpt-5" -> "azure")
+                            model_name = deployment.litellm_params.model or ""
+                            if "/" in model_name:
+                                custom_llm_provider = model_name.split("/")[0]
+                            else:
+                                custom_llm_provider = "openai"
+                        response = await litellm.afile_retrieve(
+                            file_id=model_file_id,
+                            custom_llm_provider=custom_llm_provider,
+                            **credentials
+                        )
+                        response.id = file_id  # Replace with unified ID
+                        return response
+                    else:
+                        raise Exception(f"No deployment found for model_id={model_id}")
+            else:
+                raise Exception(f"LiteLLM Managed File object with id={file_id} has no file_object, or no model_mappings/llm_router to fetch from provider")
         else:
             raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
 
@@ -868,10 +897,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             [file_id], litellm_parent_otel_span
         )
 
+        # PATCHED: Capture delete response from provider
+        delete_response = None
         specific_model_file_id_mapping = model_file_id_mapping.get(file_id)
         if specific_model_file_id_mapping:
             for model_id, model_file_id in specific_model_file_id_mapping.items():
-                await llm_router.afile_delete(model=model_id, file_id=model_file_id, **data)  # type: ignore
+                delete_response = await llm_router.afile_delete(model=model_id, file_id=model_file_id, **data)  # type: ignore
 
         stored_file_object = await self.delete_unified_file_id(
             file_id, litellm_parent_otel_span
@@ -879,6 +910,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         if stored_file_object:
             return stored_file_object
+        # PATCHED: Return provider response with unified ID when stored_file_object is None
+        elif delete_response:
+            delete_response.id = file_id
+            return delete_response
         else:
             raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
 

@@ -574,6 +574,7 @@ async def list_batches(
                 raise ValueError("target_model_names is required for this routing scenario")
             model = target_model_names.split(",")[0]
             data.pop("model", None)
+            data.pop("target_model_names", None)  # PATCHED: Remove to avoid passing to downstream
             response = await llm_router.alist_batches(
                 model=model,
                 after=after,
