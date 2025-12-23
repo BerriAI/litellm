@@ -1387,6 +1387,8 @@ if TYPE_CHECKING:
     from .llms.watsonx.completion.transformation import IBMWatsonXAIConfig as _IBMWatsonXAIConfig
     from .llms.litellm_proxy.chat.transformation import LiteLLMProxyChatConfig as _LiteLLMProxyChatConfig
     from .llms.deepinfra.chat.transformation import DeepInfraConfig as _DeepInfraConfig
+    from .llms.llamafile.chat.transformation import LlamafileChatConfig as _LlamafileChatConfig
+    from .llms.lm_studio.chat.transformation import LMStudioChatConfig as _LMStudioChatConfig
     
     # Type stubs for lazy-loaded config classes (to help mypy understand types)
     VLLMConfig: Type[_VLLMConfig]
@@ -1400,6 +1402,8 @@ if TYPE_CHECKING:
     IBMWatsonXAIConfig: Type[_IBMWatsonXAIConfig]
     LiteLLMProxyChatConfig: Type[_LiteLLMProxyChatConfig]
     DeepInfraConfig: Type[_DeepInfraConfig]
+    LlamafileChatConfig: Type[_LlamafileChatConfig]
+    LMStudioChatConfig: Type[_LMStudioChatConfig]
     
     from .llms.featherless_ai.chat.transformation import FeatherlessAIConfig as FeatherlessAIConfig
     from .llms.cerebras.chat import CerebrasConfig as CerebrasConfig
