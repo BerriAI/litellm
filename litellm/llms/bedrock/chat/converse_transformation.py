@@ -3,6 +3,7 @@ Translating between OpenAI's `/chat/completion` format and Amazon's `/converse` 
 """
 
 import copy
+import json
 import time
 import types
 from typing import List, Literal, Optional, Tuple, Union, cast, overload
@@ -1548,6 +1549,66 @@ class AmazonConverseConfig(BaseConfig):
 
         return content_str, tools, reasoningContentBlocks, citationsContentBlocks
 
+    def _filter_json_mode_tools(
+        self,
+        tools: List[ChatCompletionToolCallChunk],
+        json_mode: Optional[bool],
+        chat_completion_message: ChatCompletionResponseMessage,
+    ) -> List[ChatCompletionToolCallChunk]:
+        """
+        Filter out json_tool_call from tools if json_mode is enabled.
+        This handles the case where both real tools and response_format are used together.
+        
+        Returns the filtered list of tools.
+        """
+        filtered_tools = list(tools)
+        json_tool_call_found = False
+        
+        if json_mode is True and tools is not None and len(tools) > 0:
+            # Check if json_tool_call is present
+            json_tool_call_index = None
+            for idx, tool in enumerate(tools):
+                if tool["function"].get("name") == RESPONSE_FORMAT_TOOL_NAME:
+                    json_tool_call_index = idx
+                    json_tool_call_found = True
+                    break
+            
+            # If json_tool_call is the ONLY tool, convert it to content (existing behavior)
+            if len(tools) == 1 and json_tool_call_found:
+                verbose_logger.debug(
+                    "Processing JSON tool call response for response_format (single tool)"
+                )
+                json_mode_content_str: Optional[str] = tools[0]["function"].get("arguments")
+                if json_mode_content_str is not None:
+                    # Bedrock returns the response wrapped in a "properties" object
+                    # We need to extract the actual content from this wrapper
+                    try:
+                        response_data = json.loads(json_mode_content_str)
+
+                        # If Bedrock wrapped the response in "properties", extract the content
+                        if (
+                            isinstance(response_data, dict)
+                            and "properties" in response_data
+                            and len(response_data) == 1
+                        ):
+                            response_data = response_data["properties"]
+                            json_mode_content_str = json.dumps(response_data)
+                    except json.JSONDecodeError:
+                        # If parsing fails, use the original response
+                        pass
+
+                    chat_completion_message["content"] = json_mode_content_str
+                # Don't set tool_calls when json_tool_call is the only tool
+                filtered_tools = []
+            # If there are multiple tools and json_tool_call is present, filter it out
+            elif len(tools) > 1 and json_tool_call_found and json_tool_call_index is not None:
+                verbose_logger.debug(
+                    f"Filtering out {RESPONSE_FORMAT_TOOL_NAME} from tool calls (multiple tools present)"
+                )
+                filtered_tools = [tool for idx, tool in enumerate(tools) if idx != json_tool_call_index]
+        
+        return filtered_tools
+
     def _transform_response( # noqa: PLR0915
         self,
         model: str,
@@ -1654,56 +1715,14 @@ class AmazonConverseConfig(BaseConfig):
         chat_completion_message["content"] = content_str
         
         # Filter out json_tool_call from tools if json_mode is enabled
-        # This handles the case where both real tools and response_format are used together
-        filtered_tools = tools
-        json_tool_call_found = False
-        if json_mode is True and tools is not None and len(tools) > 0:
-            # Check if json_tool_call is present
-            json_tool_call_index = None
-            for idx, tool in enumerate(tools):
-                if tool["function"].get("name") == RESPONSE_FORMAT_TOOL_NAME:
-                    json_tool_call_index = idx
-                    json_tool_call_found = True
-                    break
-            
-            # If json_tool_call is the ONLY tool, convert it to content (existing behavior)
-            if len(tools) == 1 and json_tool_call_found:
-                verbose_logger.debug(
-                    "Processing JSON tool call response for response_format (single tool)"
-                )
-                json_mode_content_str: Optional[str] = tools[0]["function"].get("arguments")
-                if json_mode_content_str is not None:
-                    import json
-
-                    # Bedrock returns the response wrapped in a "properties" object
-                    # We need to extract the actual content from this wrapper
-                    try:
-                        response_data = json.loads(json_mode_content_str)
-
-                        # If Bedrock wrapped the response in "properties", extract the content
-                        if (
-                            isinstance(response_data, dict)
-                            and "properties" in response_data
-                            and len(response_data) == 1
-                        ):
-                            response_data = response_data["properties"]
-                            json_mode_content_str = json.dumps(response_data)
-                    except json.JSONDecodeError:
-                        # If parsing fails, use the original response
-                        pass
-
-                    chat_completion_message["content"] = json_mode_content_str
-                # Don't set tool_calls when json_tool_call is the only tool
-                filtered_tools = []
-            # If there are multiple tools and json_tool_call is present, filter it out
-            elif len(tools) > 1 and json_tool_call_found and json_tool_call_index is not None:
-                verbose_logger.debug(
-                    f"Filtering out {RESPONSE_FORMAT_TOOL_NAME} from tool calls (multiple tools present)"
-                )
-                filtered_tools = [tool for idx, tool in enumerate(tools) if idx != json_tool_call_index]
+        filtered_tools = self._filter_json_mode_tools(
+            tools=tools,
+            json_mode=json_mode,
+            chat_completion_message=chat_completion_message,
+        )
         
         # Only set tool_calls if there are tools remaining after filtering
-        if filtered_tools and len(filtered_tools) > 0:
+        if filtered_tools:
             chat_completion_message["tool_calls"] = filtered_tools
 
         ## CALCULATING USAGE - bedrock returns usage in the headers
