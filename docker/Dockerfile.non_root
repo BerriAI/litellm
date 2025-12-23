@@ -79,7 +79,7 @@ ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
     XDG_CACHE_HOME=/app/.cache \
     PATH="/usr/lib/python3.13/site-packages/nodejs/bin:${PATH}"
 
-RUN pip install --no-cache-dir prisma==0.11.0 nodejs-bin==18.4.0a4 \
+RUN pip install --no-cache-dir prisma==0.11.0 nodejs-wheel-binaries==24.12.0 \
     && mkdir -p /app/.cache/npm
 
 RUN NPM_CONFIG_CACHE=/app/.cache/npm \

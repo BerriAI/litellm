@@ -1482,6 +1482,7 @@ if TYPE_CHECKING:
     from .llms.bytez.chat.transformation import BytezChatConfig as BytezChatConfig
     from .llms.compactifai.chat.transformation import CompactifAIChatConfig as CompactifAIChatConfig
     from .llms.empower.chat.transformation import EmpowerChatConfig as EmpowerChatConfig
+    from .llms.minimax.chat.transformation import MinimaxChatConfig as MinimaxChatConfig
     from .llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig as AiohttpOpenAIChatConfig
     from .llms.huggingface.chat.transformation import HuggingFaceChatConfig as HuggingFaceChatConfig
     from .llms.huggingface.embedding.transformation import HuggingFaceEmbeddingConfig as HuggingFaceEmbeddingConfig
@@ -1573,93 +1574,26 @@ if TYPE_CHECKING:
 
 
 def __getattr__(name: str) -> Any:
-    """Lazy import handler"""
-    from ._lazy_imports import (
-        COST_CALCULATOR_NAMES,
-        LITELLM_LOGGING_NAMES,
-        UTILS_NAMES,
-        TOKEN_COUNTER_NAMES,
-        LLM_CLIENT_CACHE_NAMES,
-        BEDROCK_TYPES_NAMES,
-        TYPES_UTILS_NAMES,
-        CACHING_NAMES,
-        HTTP_HANDLER_NAMES,
-        DOTPROMPT_NAMES,
-        LLM_CONFIG_NAMES,
-        TYPES_NAMES,
-    )
+    """Lazy import handler with cached registry for improved performance."""
+    # Use cached registry from _lazy_imports instead of importing tuples every time
+    from ._lazy_imports import _get_lazy_import_registry
     
-    # Lazy load cost_calculator functions
-    if name in COST_CALCULATOR_NAMES:
-        from ._lazy_imports import _lazy_import_cost_calculator
-        return _lazy_import_cost_calculator(name)
-
-    # Lazy load litellm_logging functions
-    if name in LITELLM_LOGGING_NAMES:
-        from ._lazy_imports import _lazy_import_litellm_logging
-        return _lazy_import_litellm_logging(name)
-
-    # Lazy load utils functions
-    if name in UTILS_NAMES:
-        from ._lazy_imports import _lazy_import_utils
-        return _lazy_import_utils(name)
+    registry = _get_lazy_import_registry()
     
-    # Lazy load token counter utilities
-    if name in TOKEN_COUNTER_NAMES:
-        from ._lazy_imports import _lazy_import_token_counter
-        return _lazy_import_token_counter(name)
-    
-    # Lazy load Bedrock type aliases
-    if name in BEDROCK_TYPES_NAMES:
-        from ._lazy_imports import _lazy_import_bedrock_types
-        return _lazy_import_bedrock_types(name)
-    
-    # Lazy load common types.utils symbols
-    if name in TYPES_UTILS_NAMES:
-        from ._lazy_imports import _lazy_import_types_utils
-        return _lazy_import_types_utils(name)
-    
-    # Lazy load LLM client cache and its singleton
-    if name in LLM_CLIENT_CACHE_NAMES:
-        from ._lazy_imports import _lazy_import_llm_client_cache
-        return _lazy_import_llm_client_cache(name)
-    
-    # Lazy load caching classes
-    if name in CACHING_NAMES:
-        from ._lazy_imports import _lazy_import_caching
-        return _lazy_import_caching(name)
-    
-    # Lazy-load HTTP handler singletons used across the codebase
-    if name in HTTP_HANDLER_NAMES:
-        from ._lazy_imports import _lazy_import_http_handlers
-
-        return _lazy_import_http_handlers(name)
-
-    # Lazy load dotprompt integration globals
-    if name in DOTPROMPT_NAMES:
-        from ._lazy_imports import _lazy_import_dotprompt
-
-        return _lazy_import_dotprompt(name)
-
-    # Lazy load LLM config classes
-    if name in LLM_CONFIG_NAMES:
-        from ._lazy_imports import _lazy_import_llm_configs
-
-        return _lazy_import_llm_configs(name)
-
-    # Lazy load types
-    if name in TYPES_NAMES:
-        from ._lazy_imports import _lazy_import_types
-
-        return _lazy_import_types(name)
+    # Check if name is in registry and call the cached handler function
+    if name in registry:
+        handler_func = registry[name]
+        return handler_func(name)
 
     # Lazy load encoding from main.py to avoid heavy tiktoken import
     if name == "encoding":
-        from .main import encoding as _encoding
-        # Cache it in the module's __dict__ for subsequent accesses
-        import sys
-        sys.modules[__name__].__dict__["encoding"] = _encoding
-        return _encoding
+        from ._lazy_imports import _get_litellm_globals
+        _globals = _get_litellm_globals()
+        # Check if already cached
+        if "encoding" not in _globals:
+            from .main import encoding as _encoding
+            _globals["encoding"] = _encoding
+        return _globals["encoding"]
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

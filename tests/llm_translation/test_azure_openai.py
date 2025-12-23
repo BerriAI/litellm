@@ -196,7 +196,7 @@ def test_process_azure_endpoint_url(api_base, model, expected_endpoint):
             "azure_deployment": model,
             "max_retries": 2,
             "timeout": 600,
-            "api_key": "f28ab7b695af4154bc53498e5bdccb07",
+            "api_key": "sk-test-mock-key-505",
         },
         "model": model,
     }
@@ -618,6 +618,9 @@ def test_azure_safety_result():
 
     response = completion(
         model="azure/gpt-4.1-mini",
+        api_key=os.getenv("AZURE_API_KEY"),
+        api_base=os.getenv("AZURE_API_BASE"),
+        api_version="2024-12-01-preview",
         messages=[{"role": "user", "content": "Hello world"}],
     )
     print(f"response: {response}")

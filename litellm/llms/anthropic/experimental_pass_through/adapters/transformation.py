@@ -740,9 +740,7 @@ class LiteLLMAnthropicMessagesAdapter:
         from litellm.types.llms.anthropic import TextBlock, ToolUseBlock
 
         for choice in choices:
-            if choice.delta.content is not None and len(choice.delta.content) > 0:
-                return "text", TextBlock(type="text", text="")
-            elif (
+            if (
                 choice.delta.tool_calls is not None
                 and len(choice.delta.tool_calls) > 0
                 and choice.delta.tool_calls[0].function is not None
@@ -753,6 +751,8 @@ class LiteLLMAnthropicMessagesAdapter:
                     name=choice.delta.tool_calls[0].function.name or "",
                     input={},  # type: ignore[typeddict-item]
                 )
+            elif choice.delta.content is not None and len(choice.delta.content) > 0:
+                return "text", TextBlock(type="text", text="")
             elif isinstance(choice, StreamingChoices) and hasattr(
                 choice.delta, "thinking_blocks"
             ):
@@ -796,7 +796,7 @@ class LiteLLMAnthropicMessagesAdapter:
         for choice in choices:
             if choice.delta.content is not None and len(choice.delta.content) > 0:
                 text += choice.delta.content
-            elif choice.delta.tool_calls is not None:
+            if choice.delta.tool_calls is not None:
                 partial_json = ""
                 for tool in choice.delta.tool_calls:
                     if (
