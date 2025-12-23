@@ -1,0 +1,84 @@
+{
+  "bridge_name": "imagen_to_litellm",
+  "description": "Transforms between Vertex AI Imagen format and LiteLLM image_generation format",
+  
+  "request_transform": {
+    "source_format": "imagen",
+    "target_format": "litellm",
+    "target_method": "image_generation",
+    
+    "field_mappings": [
+      {
+        "source": "instances[0].prompt",
+        "target": "prompt",
+        "required": true
+      },
+      {
+        "source": "parameters.sampleCount",
+        "target": "n",
+        "required": false,
+        "default": 1
+      },
+      {
+        "source": "parameters.aspectRatio",
+        "target": "size",
+        "required": false,
+        "transform": "aspect_ratio_to_size"
+      },
+      {
+        "source": "parameters.quality",
+        "target": "quality",
+        "required": false
+      }
+    ],
+    
+    "transforms": {
+      "aspect_ratio_to_size": {
+        "type": "map",
+        "mapping": {
+          "1:1": "1024x1024",
+          "16:9": "1792x1024",
+          "9:16": "1024x1792",
+          "4:3": "1024x768",
+          "3:4": "768x1024",
+          "3:2": "1536x1024",
+          "2:3": "1024x1536"
+        },
+        "default": "1024x1024"
+      }
+    }
+  },
+  
+  "response_transform": {
+    "source_format": "litellm",
+    "target_format": "imagen",
+    
+    "field_mappings": [
+      {
+        "source": "data[*].b64_json",
+        "target": "predictions[*].bytesBase64Encoded",
+        "required": false
+      },
+      {
+        "source": "data[*].url",
+        "target": "predictions[*].url",
+        "required": false
+      },
+      {
+        "source": "data[*].revised_prompt",
+        "target": "predictions[*].prompt",
+        "required": false
+      }
+    ],
+    
+    "static_fields": {
+      "predictions[*].mimeType": "image/png"
+    }
+  },
+  
+  "model_config": {
+    "supports_response_format": ["dall-e-2", "dall-e-3"],
+    "default_response_format": "b64_json"
+  }
+}
+

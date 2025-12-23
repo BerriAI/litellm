@@ -47,6 +47,74 @@
             }
           }
         }
+      },
+      "defaults": {
+        "model": "imagen-3.0-generate-002"
+      }
+    },
+    
+    "edit": {
+      "method": "POST",
+      "path": "/{api_version}/projects/{project_id}/locations/{region}/publishers/google/models/{model}:predict",
+      "path_params": ["project_id", "region", "model"],
+      
+      "request": {
+        "body_schema": {
+          "instances": {
+            "type": "array",
+            "required": true,
+            "items": {
+              "prompt": {"type": "string", "required": true, "description": "Text prompt describing the desired edit"},
+              "image": {
+                "type": "object",
+                "required": true,
+                "properties": {
+                  "bytesBase64Encoded": {"type": "string", "description": "Base64 encoded source image"}
+                }
+              },
+              "mask": {
+                "type": "object",
+                "required": false,
+                "properties": {
+                  "bytesBase64Encoded": {"type": "string", "description": "Base64 encoded mask image (white=edit area, black=preserve)"}
+                }
+              }
+            }
+          },
+          "parameters": {
+            "type": "object",
+            "required": false,
+            "properties": {
+              "sampleCount": {"type": "integer", "description": "Number of images to generate (1-4)"},
+              "seed": {"type": "integer", "description": "Random seed (1-2147483647)"},
+              "safetyFilterLevel": {"type": "string", "description": "block_low_and_above, block_medium_and_above, block_only_high"},
+              "personGeneration": {"type": "string", "description": "allow_adult or dont_allow"},
+              "editConfig": {
+                "type": "object",
+                "description": "Edit configuration",
+                "properties": {
+                  "editMode": {"type": "string", "description": "Edit mode: inpaint-insert, inpaint-remove, outpaint, product-image"}
+                }
+              }
+            }
+          }
+        }
+      },
+      
+      "response": {
+        "type": "ImagenEditResponse",
+        "body_schema": {
+          "predictions": {
+            "type": "array",
+            "items": {
+              "bytesBase64Encoded": {"type": "string", "description": "Base64 encoded edited image"},
+              "mimeType": {"type": "string", "description": "Image MIME type (image/png, image/jpeg)"}
+            }
+          }
+        }
+      },
+      "defaults": {
+        "model": "imagen-3.0-capability-001"
       }
     }
   },
@@ -58,7 +126,6 @@
   },
   
   "defaults": {
-    "region": "us-central1",
-    "model": "imagen-3.0-generate-002"
+    "region": "us-central1"
   }
 }
