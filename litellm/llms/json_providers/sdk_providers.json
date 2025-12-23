@@ -3,6 +3,50 @@
   "_version": "2.0.0",
   "_schema": "Accepts native provider format, transforms response to LiteLLM format",
   
+  "openai_conversations": {
+    "provider_name": "openai",
+    "provider_type": "conversations",
+    "api_base": "https://api.openai.com/v1",
+    "api_base_env": "OPENAI_API_BASE",
+    
+    "authentication": {
+      "type": "bearer_token",
+      "env_var": "OPENAI_API_KEY"
+    },
+    
+    "endpoints": {
+      "create": {
+        "path": "/conversations",
+        "method": "POST",
+        "supported_models": [
+          "gpt-4o",
+          "gpt-4o-mini",
+          "gpt-4-turbo",
+          "gpt-4",
+          "gpt-3.5-turbo"
+        ]
+      }
+    },
+    
+    "transformations": {
+      "response": {
+        "type": "jsonpath",
+        "mappings": {
+          "id": "$.id",
+          "object": "$.object",
+          "created": "$.created",
+          "status": "$.status",
+          "metadata": "$.metadata"
+        }
+      }
+    },
+    
+    "cost_tracking": {
+      "enabled": false,
+      "unit": "per_request"
+    }
+  },
+  
   "google_imagen": {
     "provider_name": "google_imagen",
     "provider_type": "image_generation",
