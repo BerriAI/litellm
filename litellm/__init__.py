@@ -1374,6 +1374,33 @@ if TYPE_CHECKING:
     openAIGPT5Config: OpenAIGPT5Config
     nvidiaNimConfig: NvidiaNimConfig
     nvidiaNimEmbeddingConfig: NvidiaNimEmbeddingConfig
+    
+    # Import config classes that need type stubs (for mypy) - import with _ prefix to avoid circular reference
+    from .llms.vllm.completion.transformation import VLLMConfig as _VLLMConfig
+    from .llms.deepseek.chat.transformation import DeepSeekChatConfig as _DeepSeekChatConfig
+    from .llms.sap.chat.transformation import GenAIHubOrchestrationConfig as _GenAIHubOrchestrationConfig
+    from .llms.sap.embed.transformation import GenAIHubEmbeddingConfig as _GenAIHubEmbeddingConfig
+    from .llms.azure.chat.o_series_transformation import AzureOpenAIO1Config as _AzureOpenAIO1Config
+    from .llms.perplexity.chat.transformation import PerplexityChatConfig as _PerplexityChatConfig
+    from .llms.nscale.chat.transformation import NscaleConfig as _NscaleConfig
+    from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig as _IBMWatsonXChatConfig
+    from .llms.watsonx.completion.transformation import IBMWatsonXAIConfig as _IBMWatsonXAIConfig
+    from .llms.litellm_proxy.chat.transformation import LiteLLMProxyChatConfig as _LiteLLMProxyChatConfig
+    from .llms.deepinfra.chat.transformation import DeepInfraConfig as _DeepInfraConfig
+    
+    # Type stubs for lazy-loaded config classes (to help mypy understand types)
+    VLLMConfig: Type[_VLLMConfig]
+    DeepSeekChatConfig: Type[_DeepSeekChatConfig]
+    GenAIHubOrchestrationConfig: Type[_GenAIHubOrchestrationConfig]
+    GenAIHubEmbeddingConfig: Type[_GenAIHubEmbeddingConfig]
+    AzureOpenAIO1Config: Type[_AzureOpenAIO1Config]
+    PerplexityChatConfig: Type[_PerplexityChatConfig]
+    NscaleConfig: Type[_NscaleConfig]
+    IBMWatsonXChatConfig: Type[_IBMWatsonXChatConfig]
+    IBMWatsonXAIConfig: Type[_IBMWatsonXAIConfig]
+    LiteLLMProxyChatConfig: Type[_LiteLLMProxyChatConfig]
+    DeepInfraConfig: Type[_DeepInfraConfig]
+    
     from .llms.featherless_ai.chat.transformation import FeatherlessAIConfig as FeatherlessAIConfig
     from .llms.cerebras.chat import CerebrasConfig as CerebrasConfig
     from .llms.baseten.chat import BasetenConfig as BasetenConfig
