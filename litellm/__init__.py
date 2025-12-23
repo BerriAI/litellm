@@ -74,7 +74,6 @@ from litellm.constants import (
     DEFAULT_SOFT_BUDGET,
     DEFAULT_ALLOWED_FAILS,
 )
-from litellm.types.utils import LlmProviders
 from litellm.types.utils import PriorityReservationSettings
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
@@ -915,7 +914,7 @@ model_list = list(
 
 model_list_set = set(model_list)
 
-provider_list: List[Union[LlmProviders, str]] = list(LlmProviders)
+# provider_list is lazy-loaded via __getattr__ to avoid importing LlmProviders at import time
 
 
 models_by_provider: dict = {
@@ -1091,6 +1090,10 @@ from .llms.topaz.common_utils import TopazModelInfo
 from .llms.xai.common_utils import XAIModelInfo
 # PublicAI now uses JSON-based configuration (see litellm/llms/openai_like/providers.json)
 # All remaining configs are now lazy loaded - see _lazy_imports_registry.py
+
+# Import LlmProviders here (before main import) because it's imported during import time
+# in multiple places including openai.py (via main import)
+from litellm.types.utils import LlmProviders
 
 ## Lazy loading this is not straightforward, will leave it here for now.
 from .main import *  # type: ignore
@@ -1594,6 +1597,17 @@ def __getattr__(name: str) -> Any:
     if name == "OpenAIO1Config":
         return __getattr__("OpenAIOSeriesConfig")
     
+    # Lazy load provider_list
+    if name == "provider_list":
+        from ._lazy_imports import _get_litellm_globals
+        _globals = _get_litellm_globals()
+        # Check if already cached
+        if "provider_list" not in _globals:
+            # LlmProviders is eagerly imported above, so we can import it directly
+            from litellm.types.utils import LlmProviders
+            _globals["provider_list"] = list(LlmProviders)
+        return _globals["provider_list"]
+
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

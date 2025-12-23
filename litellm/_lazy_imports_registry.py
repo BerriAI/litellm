@@ -278,6 +278,8 @@ TYPES_NAMES = (
     "DefaultTeamSSOParams",
     "LiteLLM_UpperboundKeyGenerateParams",
     "KeyManagementSystem",
+    # Note: LlmProviders is NOT lazy-loaded because it's imported during import time
+    # in multiple places including openai.py (via main import)
     # Note: KeyManagementSettings is NOT lazy-loaded because _key_management_settings
     # is accessed during import time in secret_managers/main.py
 )
