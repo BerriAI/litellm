@@ -556,6 +556,11 @@ openai_compatible_endpoints: List = [
     "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "https://api.moonshot.ai/v1",
     "https://api.publicai.co/v1",
+    "https://api.synthetic.new/openai/v1",
+    "https://api.stima.tech/v1",
+    "https://nano-gpt.com/api/v1",
+    "https://api.poe.com/v1",
+    "https://llm.chutes.ai/v1/",
     "https://api.v0.dev/v1",
     "https://api.morphllm.com/v1",
     "https://api.lambda.ai/v1",
@@ -599,12 +604,16 @@ openai_compatible_providers: List = [
     "novita",
     "meta_llama",
     "publicai",  # PublicAI - JSON-configured provider
+    "synthetic",  # Synthetic - JSON-configured provider
+    "apertis",  # Apertis - JSON-configured provider
+    "nano-gpt",  # Nano-GPT - JSON-configured provider
+    "poe",  # Poe - JSON-configured provider
+    "chutes",  # Chutes - JSON-configured provider
     "featherless_ai",
     "nscale",
     "nebius",
     "dashscope",
     "moonshot",
-    "publicai",
     "v0",
     "helicone",
     "morph",
@@ -630,6 +639,11 @@ openai_text_completion_compatible_providers: List = (
         "dashscope",
         "moonshot",
         "publicai",
+        "synthetic",
+        "apertis",
+        "nano-gpt",
+        "poe",
+        "chutes",
         "v0",
         "lambda_ai",
         "hyperbolic",

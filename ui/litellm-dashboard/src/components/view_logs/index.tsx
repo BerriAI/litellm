@@ -366,6 +366,24 @@ export default function SpendLogsTable({
     setExpandedRequestId(requestId);
   };
 
+  // Function to extract unique error codes from logs
+  const extractErrorCodes = (logs: LogEntry[], searchText: string = "") => {
+    const errorCodes = new Set<string>();
+    logs.forEach((log) => {
+      const metadata = log.metadata || {};
+      if (metadata.status === "failure" && metadata.error_information) {
+        const errorCode = metadata.error_information.error_code;
+        if (errorCode && (!searchText || errorCode.toLowerCase().includes(searchText.toLowerCase()))) {
+          errorCodes.add(errorCode);
+        }
+      }
+    });
+    return Array.from(errorCodes).map((code) => ({
+      label: code,
+      value: code,
+    }));
+  };
+
   const logFilterOptions: FilterOption[] = [
     {
       name: "Team ID",
@@ -424,6 +442,14 @@ export default function SpendLogsTable({
         const users = data?.map((u: any) => u.user_id) || [];
         const filtered = users.filter((u: string) => u.toLowerCase().includes(searchText.toLowerCase()));
         return filtered.map((u: string) => ({ label: u, value: u }));
+      },
+    },
+    {
+      name: "Error Code",
+      label: "Error Code",
+      isSearchable: true,
+      searchFn: async (searchText: string) => {
+        return extractErrorCodes(logsData.data, searchText);
       },
     },
     {
