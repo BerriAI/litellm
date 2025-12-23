@@ -1515,6 +1515,10 @@ if TYPE_CHECKING:
 
     # Custom logger class (lazy-loaded)
     from litellm.integrations.custom_logger import CustomLogger
+    
+    # Logging callback manager class and instance (lazy-loaded)
+    from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
+    logging_callback_manager: LoggingCallbackManager
 
     # Note: AmazonConverseConfig and OpenAILikeChatConfig are imported above in TYPE_CHECKING block
 
