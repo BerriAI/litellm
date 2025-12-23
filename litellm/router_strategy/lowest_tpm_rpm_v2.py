@@ -246,6 +246,11 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
 
             total_tokens = standard_logging_object.get("total_tokens")
 
+            # Apply cached tokens exclusion if configured
+            from litellm.litellm_core_utils.core_helpers import get_tokens_for_tpm
+            usage_object = (standard_logging_object.get("hidden_params") or {}).get("usage_object") or (standard_logging_object.get("metadata") or {}).get("usage_object")
+            tpm_tokens = get_tokens_for_tpm(int(total_tokens or 0), usage_object)
+
             # ------------
             # Setup values
             # ------------
@@ -262,7 +267,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
 
             ## TPM
             self.router_cache.increment_cache(
-                key=tpm_key, value=total_tokens, ttl=self.routing_args.ttl
+                key=tpm_key, value=tpm_tokens, ttl=self.routing_args.ttl
             )
             ### TESTING ###
             if self.test_flag:
@@ -293,6 +298,12 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             elif isinstance(id, int):
                 id = str(id)
             total_tokens = standard_logging_object.get("total_tokens")
+
+            # Apply cached tokens exclusion if configured
+            from litellm.litellm_core_utils.core_helpers import get_tokens_for_tpm
+            usage_object = (standard_logging_object.get("hidden_params") or {}).get("usage_object") or (standard_logging_object.get("metadata") or {}).get("usage_object")
+            tpm_tokens = get_tokens_for_tpm(int(total_tokens or 0), usage_object)
+
             # ------------
             # Setup values
             # ------------
@@ -310,7 +321,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             ## TPM
             await self.router_cache.async_increment_cache(
                 key=tpm_key,
-                value=total_tokens,
+                value=tpm_tokens,
                 ttl=self.routing_args.ttl,
                 parent_otel_span=parent_otel_span,
             )

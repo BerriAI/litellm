@@ -414,6 +414,36 @@ curl --location 'http://localhost:4000/v1/chat/completions' \
 </TabItem>
 </Tabs>
 
+#### Exclude Cached Tokens from TPM Calculation
+
+When using prompt caching (e.g., with Anthropic or OpenAI), cached tokens are included in the `total_tokens` count by default. However, cached tokens don't count against your rate limits with most providers.
+
+To get more accurate TPM tracking, you can exclude cached tokens from TPM calculations:
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm
+
+# Enable excluding cached tokens from TPM calculations
+litellm.exclude_cached_tokens_from_tpm = True
+```
+
+</TabItem>
+<TabItem value="proxy" label="Proxy">
+
+Set in your environment or config:
+
+```yaml
+litellm_settings:
+  exclude_cached_tokens_from_tpm: true
+```
+
+</TabItem>
+</Tabs>
+
+When enabled, LiteLLM will subtract `cached_tokens` from `total_tokens` when tracking TPM usage. This applies to all routing strategies that track TPM (usage-based-routing, lowest-latency, lowest-cost).
 
 </TabItem>
 <TabItem value="latency-based" label="Latency-Based">

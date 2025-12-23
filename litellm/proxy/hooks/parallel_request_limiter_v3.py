@@ -1388,6 +1388,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         from litellm.litellm_core_utils.core_helpers import (
             _get_parent_otel_span_from_kwargs,
+            get_tokens_for_tpm,
         )
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
@@ -1423,14 +1424,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
             # Get total tokens from response
             total_tokens = 0
+            usage_object = None
             # spot fix for /responses api
             if isinstance(response_obj, ModelResponse) or isinstance(
                 response_obj, BaseLiteLLMOpenAIResponseObject
             ):
-                _usage = getattr(response_obj, "usage", None)
+                usage_object = getattr(response_obj, "usage", None)
                 total_tokens = self._get_total_tokens_from_usage(
-                    usage=_usage, rate_limit_type=rate_limit_type
+                    usage=usage_object, rate_limit_type=rate_limit_type
                 )
+
+            # Apply cached tokens exclusion if configured
+            tpm_tokens = get_tokens_for_tpm(int(total_tokens), usage_object)
 
             # Create pipeline operations for TPM increments
             pipeline_operations: List[RedisPipelineIncrementOperation] = []
@@ -1455,7 +1460,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         key="api_key",
                         value=user_api_key,
                         rate_limit_type="tokens",
-                        total_tokens=total_tokens,
+                        total_tokens=tpm_tokens,
                     )
                 )
 
@@ -1467,7 +1472,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         key="user",
                         value=user_api_key_user_id,
                         rate_limit_type="tokens",
-                        total_tokens=total_tokens,
+                        total_tokens=tpm_tokens,
                     )
                 )
 
@@ -1478,7 +1483,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         key="team",
                         value=user_api_key_team_id,
                         rate_limit_type="tokens",
-                        total_tokens=total_tokens,
+                        total_tokens=tpm_tokens,
                     )
                 )
             # Team Member TPM
@@ -1488,7 +1493,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         key="team_member",
                         value=f"{user_api_key_team_id}:{user_api_key_user_id}",
                         rate_limit_type="tokens",
-                        total_tokens=total_tokens,
+                        total_tokens=tpm_tokens,
                     )
                 )
 
@@ -1499,7 +1504,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         key="end_user",
                         value=user_api_key_end_user_id,
                         rate_limit_type="tokens",
-                        total_tokens=total_tokens,
+                        total_tokens=tpm_tokens,
                     )
                 )
 
@@ -1510,7 +1515,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         key="model_per_key",
                         value=f"{user_api_key}:{model_group}",
                         rate_limit_type="tokens",
-                        total_tokens=total_tokens,
+                        total_tokens=tpm_tokens,
                     )
                 )
             if model_group and user_api_key_team_id:
@@ -1519,7 +1524,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         key="model_per_team",
                         value=f"{user_api_key_team_id}:{model_group}",
                         rate_limit_type="tokens",
-                        total_tokens=total_tokens,
+                        total_tokens=tpm_tokens,
                     )
                 )
 
@@ -1529,7 +1534,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         key="model_per_organization",
                         value=f"{user_api_key_organization_id}:{model_group}",
                         rate_limit_type="tokens",
-                        total_tokens=total_tokens,
+                        total_tokens=tpm_tokens,
                     )
                 )
 

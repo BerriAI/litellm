@@ -1261,6 +1261,9 @@ async def health_readiness():
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
                 "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
+                "stably_settings": {
+                    "exclude_cached_tokens_from_tpm": litellm.exclude_cached_tokens_from_tpm,
+                },
                 **db_health_status,
             }
         else:
@@ -1271,6 +1274,9 @@ async def health_readiness():
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
                 "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
+                "stably_settings": {
+                    "exclude_cached_tokens_from_tpm": litellm.exclude_cached_tokens_from_tpm,
+                },
             }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Service Unhealthy ({str(e)})")

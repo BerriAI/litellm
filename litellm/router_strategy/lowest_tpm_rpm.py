@@ -50,6 +50,11 @@ class LowestTPMLoggingHandler(CustomLogger):
 
                 total_tokens = response_obj["usage"]["total_tokens"]
 
+                # Apply cached tokens exclusion if configured
+                from litellm.litellm_core_utils.core_helpers import get_tokens_for_tpm
+                usage = response_obj.get("usage") if isinstance(response_obj, dict) else getattr(response_obj, "usage", None)
+                tpm_tokens = get_tokens_for_tpm(total_tokens, usage)
+
                 # ------------
                 # Setup values
                 # ------------
@@ -63,7 +68,7 @@ class LowestTPMLoggingHandler(CustomLogger):
 
                 ## TPM
                 request_count_dict = self.router_cache.get_cache(key=tpm_key) or {}
-                request_count_dict[id] = request_count_dict.get(id, 0) + total_tokens
+                request_count_dict[id] = request_count_dict.get(id, 0) + tpm_tokens
 
                 self.router_cache.set_cache(
                     key=tpm_key, value=request_count_dict, ttl=self.routing_args.ttl
@@ -116,6 +121,11 @@ class LowestTPMLoggingHandler(CustomLogger):
                     return
                 total_tokens = response_obj["usage"]["total_tokens"]
 
+                # Apply cached tokens exclusion if configured
+                from litellm.litellm_core_utils.core_helpers import get_tokens_for_tpm
+                usage = response_obj.get("usage") if isinstance(response_obj, dict) else getattr(response_obj, "usage", None)
+                tpm_tokens = get_tokens_for_tpm(total_tokens, usage)
+
                 # ------------
                 # Setup values
                 # ------------
@@ -132,7 +142,7 @@ class LowestTPMLoggingHandler(CustomLogger):
                 request_count_dict = (
                     await self.router_cache.async_get_cache(key=tpm_key) or {}
                 )
-                request_count_dict[id] = request_count_dict.get(id, 0) + total_tokens
+                request_count_dict[id] = request_count_dict.get(id, 0) + tpm_tokens
 
                 await self.router_cache.async_set_cache(
                     key=tpm_key, value=request_count_dict, ttl=self.routing_args.ttl

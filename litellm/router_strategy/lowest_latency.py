@@ -90,12 +90,14 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 final_value: Union[float, timedelta] = response_ms
                 time_to_first_token: Optional[float] = None
                 total_tokens = 0
+                usage = None
 
                 if isinstance(response_obj, ModelResponse):
                     _usage = getattr(response_obj, "usage", None)
                     if _usage is not None:
                         completion_tokens = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
+                        usage = _usage
                         
                         # Handle both timedelta and float response times
                         if isinstance(response_ms, timedelta):
@@ -117,6 +119,10 @@ class LowestLatencyLoggingHandler(CustomLogger):
                             time_to_first_token = safe_divide_seconds(
                                 ttft_seconds, completion_tokens
                             )
+
+                # Apply cached tokens exclusion if configured
+                from litellm.litellm_core_utils.core_helpers import get_tokens_for_tpm
+                tpm_tokens = get_tokens_for_tpm(total_tokens, usage)
 
                 # ------------
                 # Update usage
@@ -166,7 +172,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
 
                 ## TPM
                 request_count_dict[id][precise_minute]["tpm"] = (
-                    request_count_dict[id][precise_minute].get("tpm", 0) + total_tokens
+                    request_count_dict[id][precise_minute].get("tpm", 0) + tpm_tokens
                 )
 
                 ## RPM
@@ -311,12 +317,14 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 final_value: Union[float, timedelta] = response_ms
                 total_tokens = 0
                 time_to_first_token: Optional[float] = None
+                usage = None
 
                 if isinstance(response_obj, ModelResponse):
                     _usage = getattr(response_obj, "usage", None)
                     if _usage is not None:
                         completion_tokens = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
+                        usage = _usage
                         
                         # Handle both timedelta and float response times
                         if isinstance(response_ms, timedelta):
@@ -338,6 +346,11 @@ class LowestLatencyLoggingHandler(CustomLogger):
                             time_to_first_token = safe_divide_seconds(
                                 ttft_seconds, completion_tokens
                             )
+
+                # Apply cached tokens exclusion if configured
+                from litellm.litellm_core_utils.core_helpers import get_tokens_for_tpm
+                tpm_tokens = get_tokens_for_tpm(total_tokens, usage)
+
                 # ------------
                 # Update usage
                 # ------------
@@ -388,7 +401,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
 
                 ## TPM
                 request_count_dict[id][precise_minute]["tpm"] = (
-                    request_count_dict[id][precise_minute].get("tpm", 0) + total_tokens
+                    request_count_dict[id][precise_minute].get("tpm", 0) + tpm_tokens
                 )
 
                 ## RPM

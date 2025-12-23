@@ -59,13 +59,19 @@ class LowestCostLoggingHandler(CustomLogger):
                 response_ms: timedelta = end_time - start_time
 
                 total_tokens = 0
+                usage = None
 
                 if isinstance(response_obj, ModelResponse):
                     _usage = getattr(response_obj, "usage", None)
                     if _usage is not None and isinstance(_usage, litellm.Usage):
                         completion_tokens = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
+                        usage = _usage
                         float(response_ms.total_seconds() / completion_tokens)
+
+                # Apply cached tokens exclusion if configured
+                from litellm.litellm_core_utils.core_helpers import get_tokens_for_tpm
+                tpm_tokens = get_tokens_for_tpm(total_tokens, usage)
 
                 # ------------
                 # Update usage
@@ -83,7 +89,7 @@ class LowestCostLoggingHandler(CustomLogger):
 
                 ## TPM
                 request_count_dict[id][precise_minute]["tpm"] = (
-                    request_count_dict[id][precise_minute].get("tpm", 0) + total_tokens
+                    request_count_dict[id][precise_minute].get("tpm", 0) + tpm_tokens
                 )
 
                 ## RPM
@@ -145,14 +151,20 @@ class LowestCostLoggingHandler(CustomLogger):
                 response_ms: timedelta = end_time - start_time
 
                 total_tokens = 0
+                usage = None
 
                 if isinstance(response_obj, ModelResponse):
                     _usage = getattr(response_obj, "usage", None)
                     if _usage is not None and isinstance(_usage, litellm.Usage):
                         completion_tokens = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
+                        usage = _usage
 
                         float(response_ms.total_seconds() / completion_tokens)
+
+                # Apply cached tokens exclusion if configured
+                from litellm.litellm_core_utils.core_helpers import get_tokens_for_tpm
+                tpm_tokens = get_tokens_for_tpm(total_tokens, usage)
 
                 # ------------
                 # Update usage
@@ -169,7 +181,7 @@ class LowestCostLoggingHandler(CustomLogger):
 
                 ## TPM
                 request_count_dict[id][precise_minute]["tpm"] = (
-                    request_count_dict[id][precise_minute].get("tpm", 0) + total_tokens
+                    request_count_dict[id][precise_minute].get("tpm", 0) + tpm_tokens
                 )
 
                 ## RPM

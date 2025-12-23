@@ -11,7 +11,7 @@ import litellm
 from litellm import DualCache, ModelResponse
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs, get_tokens_for_tpm
 from litellm.proxy._types import CommonProxyErrors, CurrentItemRateLimit, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     get_key_model_rpm_limit,
@@ -503,6 +503,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             if isinstance(response_obj, ModelResponse):
                 total_tokens = response_obj.usage.total_tokens  # type: ignore
 
+            # Apply cached tokens exclusion if configured
+            tpm_tokens = get_tokens_for_tpm(int(total_tokens), response_obj.usage if isinstance(response_obj, ModelResponse) else None)
+
             # ------------
             # Update usage - API Key
             # ------------
@@ -525,7 +528,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
 
                 new_val = {
                     "current_requests": max(current["current_requests"] - 1, 0),
-                    "current_tpm": current["current_tpm"] + total_tokens,
+                    "current_tpm": current["current_tpm"] + tpm_tokens,
                     "current_rpm": current["current_rpm"],
                 }
 
@@ -562,7 +565,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
 
                 new_val = {
                     "current_requests": max(current["current_requests"] - 1, 0),
-                    "current_tpm": current["current_tpm"] + total_tokens,
+                    "current_tpm": current["current_tpm"] + tpm_tokens,
                     "current_rpm": current["current_rpm"],
                 }
 
@@ -580,6 +583,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 if isinstance(response_obj, ModelResponse):
                     total_tokens = response_obj.usage.total_tokens  # type: ignore
 
+                # Apply cached tokens exclusion if configured
+                tpm_tokens = get_tokens_for_tpm(int(total_tokens), response_obj.usage if isinstance(response_obj, ModelResponse) else None)
+
                 request_count_api_key = (
                     f"{user_api_key_user_id}::{precise_minute}::request_count"
                 )
@@ -589,13 +595,13 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
                     "current_requests": 1,
-                    "current_tpm": total_tokens,
+                    "current_tpm": tpm_tokens,
                     "current_rpm": 1,
                 }
 
                 new_val = {
                     "current_requests": max(current["current_requests"] - 1, 0),
-                    "current_tpm": current["current_tpm"] + total_tokens,
+                    "current_tpm": current["current_tpm"] + tpm_tokens,
                     "current_rpm": current["current_rpm"],
                 }
 
@@ -613,6 +619,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 if isinstance(response_obj, ModelResponse):
                     total_tokens = response_obj.usage.total_tokens  # type: ignore
 
+                # Apply cached tokens exclusion if configured
+                tpm_tokens = get_tokens_for_tpm(int(total_tokens), response_obj.usage if isinstance(response_obj, ModelResponse) else None)
+
                 request_count_api_key = (
                     f"{user_api_key_team_id}::{precise_minute}::request_count"
                 )
@@ -622,13 +631,13 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
                     "current_requests": 1,
-                    "current_tpm": total_tokens,
+                    "current_tpm": tpm_tokens,
                     "current_rpm": 1,
                 }
 
                 new_val = {
                     "current_requests": max(current["current_requests"] - 1, 0),
-                    "current_tpm": current["current_tpm"] + total_tokens,
+                    "current_tpm": current["current_tpm"] + tpm_tokens,
                     "current_rpm": current["current_rpm"],
                 }
 
@@ -646,6 +655,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 if isinstance(response_obj, ModelResponse):
                     total_tokens = response_obj.usage.total_tokens  # type: ignore
 
+                # Apply cached tokens exclusion if configured
+                tpm_tokens = get_tokens_for_tpm(int(total_tokens), response_obj.usage if isinstance(response_obj, ModelResponse) else None)
+
                 request_count_api_key = (
                     f"{user_api_key_end_user_id}::{precise_minute}::request_count"
                 )
@@ -655,13 +667,13 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
                     "current_requests": 1,
-                    "current_tpm": total_tokens,
+                    "current_tpm": tpm_tokens,
                     "current_rpm": 1,
                 }
 
                 new_val = {
                     "current_requests": max(current["current_requests"] - 1, 0),
-                    "current_tpm": current["current_tpm"] + total_tokens,
+                    "current_tpm": current["current_tpm"] + tpm_tokens,
                     "current_rpm": current["current_rpm"],
                 }
 

@@ -10,11 +10,57 @@ from litellm.types.llms.openai import AllMessageValues
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    from litellm.types.utils import ModelResponseStream
+    from litellm.types.utils import ModelResponseStream, Usage
 
     Span = Union[_Span, Any]
 else:
     Span = Any
+
+
+def _get_cached_tokens_from_details(details: Optional[Union[dict, Any]]) -> int:
+    """Extract cached_tokens from a token details object (dict or object)."""
+    if details is None:
+        return 0
+    if isinstance(details, dict):
+        return details.get('cached_tokens', 0) or 0
+    return getattr(details, 'cached_tokens', 0) or 0
+
+
+def _get_attr_or_key(obj: Union[dict, Any], key: str) -> Any:
+    """Get attribute from object or key from dict."""
+    if isinstance(obj, dict):
+        return obj.get(key)
+    return getattr(obj, key, None)
+
+
+def get_tokens_for_tpm(total_tokens: int, usage: Optional[Union["Usage", dict]] = None) -> int:
+    """
+    Calculate tokens to use for TPM tracking.
+    If exclude_cached_tokens_from_tpm is True, subtract cached_tokens from total_tokens.
+    
+    Args:
+        total_tokens: The total tokens from the usage object
+        usage: The usage object that may contain cached_tokens in either:
+               - input_tokens_details.cached_tokens (Responses API)
+               - prompt_tokens_details.cached_tokens (Chat Completions API)
+        
+    Returns:
+        The number of tokens to use for TPM calculation
+    """
+    import litellm
+    
+    if not litellm.exclude_cached_tokens_from_tpm:
+        return total_tokens
+    
+    if usage is None:
+        return total_tokens
+    
+    # Try input_tokens_details first (Responses API), then prompt_tokens_details (Chat Completions API)
+    cached_tokens = _get_cached_tokens_from_details(_get_attr_or_key(usage, 'input_tokens_details'))
+    if cached_tokens == 0:
+        cached_tokens = _get_cached_tokens_from_details(_get_attr_or_key(usage, 'prompt_tokens_details'))
+    
+    return max(0, total_tokens - cached_tokens)
 
 
 def safe_divide_seconds(
