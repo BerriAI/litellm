@@ -1,3 +1,4 @@
+import importlib
 import sys
 from typing import Any, Optional, cast, Callable
 
@@ -165,7 +166,6 @@ def _lazy_import_utils(name: str) -> Any:
     module_path, attr_name = _UTILS_IMPORT_MAP[name]
     
     # importlib.import_module() already caches in sys.modules, so no need for extra caching
-    import importlib
     module = importlib.import_module(module_path, package="litellm")
     value = getattr(module, attr_name)
     
@@ -187,7 +187,6 @@ def _lazy_import_cost_calculator(name: str) -> Any:
     module_path, attr_name = _COST_CALCULATOR_IMPORT_MAP[name]
     
     # importlib.import_module() already caches in sys.modules, so no need for extra caching
-    import importlib
     module = importlib.import_module(module_path, package="litellm")
     value = getattr(module, attr_name)
     
@@ -209,7 +208,6 @@ def _lazy_import_token_counter(name: str) -> Any:
     module_path, attr_name = _TOKEN_COUNTER_IMPORT_MAP[name]
     
     # importlib.import_module() already caches in sys.modules, so no need for extra caching
-    import importlib
     module = importlib.import_module(module_path)
     value = getattr(module, attr_name)
     
@@ -231,7 +229,6 @@ def _lazy_import_bedrock_types(name: str) -> Any:
     module_path, attr_name = _BEDROCK_TYPES_IMPORT_MAP[name]
     
     # importlib.import_module() already caches in sys.modules, so no need for extra caching
-    import importlib
     module = importlib.import_module(module_path)
     value = getattr(module, attr_name)
     
@@ -253,7 +250,6 @@ def _lazy_import_types_utils(name: str) -> Any:
     module_path, attr_name = _TYPES_UTILS_IMPORT_MAP[name]
     
     # importlib.import_module() already caches in sys.modules, so no need for extra caching
-    import importlib
     module = importlib.import_module(module_path, package="litellm")
     value = getattr(module, attr_name)
     
@@ -275,7 +271,6 @@ def _lazy_import_caching(name: str) -> Any:
     module_path, attr_name = _CACHING_IMPORT_MAP[name]
     
     # importlib.import_module() already caches in sys.modules, so no need for extra caching
-    import importlib
     module = importlib.import_module(module_path)
     value = getattr(module, attr_name)
     
@@ -293,7 +288,6 @@ def _lazy_import_llm_client_cache(name: str) -> Any:
     
     # Import the class
     # importlib.import_module() already caches in sys.modules, so no need for extra caching
-    import importlib
     module = importlib.import_module("litellm.caching.llm_caching_handler")
     LLMClientCache = getattr(module, "LLMClientCache")
     
@@ -325,7 +319,6 @@ def _lazy_import_litellm_logging(name: str) -> Any:
     module_path, attr_name = _LITELLM_LOGGING_IMPORT_MAP[name]
     
     # importlib.import_module() already caches in sys.modules, so no need for extra caching
-    import importlib
     module = importlib.import_module(module_path)
     value = getattr(module, attr_name)
     
@@ -379,7 +372,6 @@ def _lazy_import_dotprompt(name: str) -> Any:
     module_path, attr_name = _DOTPROMPT_IMPORT_MAP[name]
     
     # importlib.import_module() already caches in sys.modules, so no need for extra caching
-    import importlib
     module = importlib.import_module(module_path)
     value = getattr(module, attr_name)
     
@@ -401,7 +393,6 @@ def _lazy_import_types(name: str) -> Any:
     module_path, attr_name = _TYPES_IMPORT_MAP[name]
     
     # importlib.import_module() already caches in sys.modules, so no need for extra caching
-    import importlib
     module = importlib.import_module(module_path)
     value = getattr(module, attr_name)
     
@@ -423,7 +414,6 @@ def _lazy_import_llm_configs(name: str) -> Any:
     module_path, attr_name = _LLM_CONFIGS_IMPORT_MAP[name]
     
     # importlib.import_module() already caches in sys.modules, so no need for extra caching
-    import importlib
     module = importlib.import_module(module_path, package="litellm")
     value = getattr(module, attr_name)
     
