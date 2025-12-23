@@ -1482,6 +1482,7 @@ if TYPE_CHECKING:
     from .llms.bytez.chat.transformation import BytezChatConfig as BytezChatConfig
     from .llms.compactifai.chat.transformation import CompactifAIChatConfig as CompactifAIChatConfig
     from .llms.empower.chat.transformation import EmpowerChatConfig as EmpowerChatConfig
+    from .llms.minimax.chat.transformation import MinimaxChatConfig as MinimaxChatConfig
     from .llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig as AiohttpOpenAIChatConfig
     from .llms.huggingface.chat.transformation import HuggingFaceChatConfig as HuggingFaceChatConfig
     from .llms.huggingface.embedding.transformation import HuggingFaceEmbeddingConfig as HuggingFaceEmbeddingConfig
