@@ -31,7 +31,7 @@ UTILS_NAMES = (
     "get_supported_openai_params", "get_api_base", "get_first_chars_messages",
     "ModelResponse", "ModelResponseStream", "EmbeddingResponse", "ImageResponse",
     "TranscriptionResponse", "TextCompletionResponse", "get_provider_fields",
-    "ModelResponseListIterator", "get_valid_models",
+    "ModelResponseListIterator", "get_valid_models", "timeout",
 )
 
 # Token counter names that support lazy loading via _lazy_import_token_counter
@@ -275,6 +275,16 @@ LLM_CONFIG_NAMES = (
 # Types that support lazy loading via _lazy_import_types
 TYPES_NAMES = (
     "GuardrailItem",
+    "DefaultTeamSSOParams",
+    "LiteLLM_UpperboundKeyGenerateParams",
+    "KeyManagementSystem",
+    "PriorityReservationSettings",
+    "CustomLogger",
+    "LoggingCallbackManager",
+    # Note: LlmProviders is NOT lazy-loaded because it's imported during import time
+    # in multiple places including openai.py (via main import)
+    # Note: KeyManagementSettings is NOT lazy-loaded because _key_management_settings
+    # is accessed during import time in secret_managers/main.py
 )
 
 # Import maps for registry pattern - reduces repetition
@@ -319,6 +329,7 @@ _UTILS_IMPORT_MAP = {
     "get_provider_fields": (".utils", "get_provider_fields"),
     "ModelResponseListIterator": (".utils", "ModelResponseListIterator"),
     "get_valid_models": (".utils", "get_valid_models"),
+    "timeout": (".timeout", "timeout"),
 }
 
 _COST_CALCULATOR_IMPORT_MAP = {
@@ -367,6 +378,12 @@ _DOTPROMPT_IMPORT_MAP = {
 
 _TYPES_IMPORT_MAP = {
     "GuardrailItem": ("litellm.types.guardrails", "GuardrailItem"),
+    "DefaultTeamSSOParams": ("litellm.types.proxy.management_endpoints.ui_sso", "DefaultTeamSSOParams"),
+    "LiteLLM_UpperboundKeyGenerateParams": ("litellm.types.proxy.management_endpoints.ui_sso", "LiteLLM_UpperboundKeyGenerateParams"),
+    "KeyManagementSystem": ("litellm.types.secret_managers.main", "KeyManagementSystem"),
+    "PriorityReservationSettings": ("litellm.types.utils", "PriorityReservationSettings"),
+    "CustomLogger": ("litellm.integrations.custom_logger", "CustomLogger"),
+    "LoggingCallbackManager": ("litellm.litellm_core_utils.logging_callback_manager", "LoggingCallbackManager"),
 }
 
 _LLM_CONFIGS_IMPORT_MAP = {
