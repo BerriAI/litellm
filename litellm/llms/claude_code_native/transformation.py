@@ -58,6 +58,26 @@ class ClaudeCodeNativeConfig(AnthropicConfig):
     def custom_llm_provider(self) -> Optional[str]:
         return "claude_code_native"
 
+    @staticmethod
+    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+        """
+        Get the API key for Claude Code Native provider.
+
+        Priority:
+        1. User-provided api_key parameter
+        2. CLAUDE_CODE_API_KEY environment variable
+
+        Returns:
+            Optional[str]: The API key if found, None otherwise
+        """
+        from litellm.secret_managers.main import get_secret_str
+
+        if api_key is not None:
+            return api_key
+
+        # Get CLAUDE_CODE_API_KEY from environment
+        return get_secret_str("CLAUDE_CODE_API_KEY")
+
     def validate_environment(
         self,
         headers: dict,
