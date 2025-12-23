@@ -219,7 +219,7 @@ def fetch_credentials(service_key: Optional[str] = None, profile: Optional[str] 
     out: Dict[str, str] = {}
     for cred in CREDENTIAL_VALUES:
         value = _resolve_value(cred, kwargs=kwargs, env=env, config=config, service_like=service_like, # type: ignore
-                               vcap_service=vcap_service)
+                               vcap_service=vcap_service)   # type: ignore
         if value is None:
             continue
         if cred.transform_fn:
