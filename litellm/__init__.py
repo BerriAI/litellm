@@ -1519,6 +1519,10 @@ if TYPE_CHECKING:
     # Logging callback manager class and instance (lazy-loaded)
     from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
     logging_callback_manager: LoggingCallbackManager
+    
+    # provider_list is lazy-loaded
+    from litellm.types.utils import LlmProviders
+    provider_list: List[Union[LlmProviders, str]]
 
     # Note: AmazonConverseConfig and OpenAILikeChatConfig are imported above in TYPE_CHECKING block
 
