@@ -74,10 +74,6 @@ from litellm.constants import (
     DEFAULT_SOFT_BUDGET,
     DEFAULT_ALLOWED_FAILS,
 )
-from litellm.types.secret_managers.main import (
-    KeyManagementSystem,
-    KeyManagementSettings,
-)
 from litellm.types.utils import LlmProviders
 from litellm.types.utils import PriorityReservationSettings
 from litellm.integrations.custom_logger import CustomLogger
@@ -419,8 +415,11 @@ secret_manager_client: Optional[Any] = (
     None  # list of instantiated key management clients - e.g. azure kv, infisical, etc.
 )
 _google_kms_resource_name: Optional[str] = None
-_key_management_system: Optional[KeyManagementSystem] = None
-_key_management_settings: KeyManagementSettings = KeyManagementSettings()
+_key_management_system: Optional["KeyManagementSystem"] = None
+# Note: KeyManagementSettings must be eagerly imported because _key_management_settings
+# is accessed during import time in secret_managers/main.py
+# We'll import it after the lazy import system is set up
+# We can't define it here because KeyManagementSettings is lazy-loaded
 #### PII MASKING ####
 output_parse_pii: bool = False
 #############################################
@@ -1054,6 +1053,12 @@ openai_video_generation_models = ["sora-2"]
 from .timeout import timeout
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
+
+# Import KeyManagementSettings here (before utils import) because _key_management_settings
+# is accessed during import time in secret_managers/main.py (via dd_tracing -> datadog -> _service_logger -> utils)
+from litellm.types.secret_managers.main import KeyManagementSettings
+_key_management_settings: KeyManagementSettings = KeyManagementSettings()
+
 # client must be imported immediately as it's used as a decorator at function definition time
 from .utils import client
 # Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py
@@ -1507,6 +1512,12 @@ if TYPE_CHECKING:
     # Azure exception class (lazy-loaded)
     from litellm.llms.azure.common_utils import AzureOpenAIError
 
+    # Secret manager types (lazy-loaded)
+    from litellm.types.secret_managers.main import (
+        KeyManagementSystem,
+        KeyManagementSettings,  # Not lazy-loaded - needed for _key_management_settings initialization
+    )
+
     # Note: AmazonConverseConfig and OpenAILikeChatConfig are imported above in TYPE_CHECKING block
 
 
@@ -1582,7 +1593,7 @@ def __getattr__(name: str) -> Any:
     # Handle OpenAIO1Config alias
     if name == "OpenAIO1Config":
         return __getattr__("OpenAIOSeriesConfig")
-
+    
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

@@ -277,6 +277,9 @@ TYPES_NAMES = (
     "GuardrailItem",
     "DefaultTeamSSOParams",
     "LiteLLM_UpperboundKeyGenerateParams",
+    "KeyManagementSystem",
+    # Note: KeyManagementSettings is NOT lazy-loaded because _key_management_settings
+    # is accessed during import time in secret_managers/main.py
 )
 
 # Import maps for registry pattern - reduces repetition
@@ -371,6 +374,7 @@ _TYPES_IMPORT_MAP = {
     "GuardrailItem": ("litellm.types.guardrails", "GuardrailItem"),
     "DefaultTeamSSOParams": ("litellm.types.proxy.management_endpoints.ui_sso", "DefaultTeamSSOParams"),
     "LiteLLM_UpperboundKeyGenerateParams": ("litellm.types.proxy.management_endpoints.ui_sso", "LiteLLM_UpperboundKeyGenerateParams"),
+    "KeyManagementSystem": ("litellm.types.secret_managers.main", "KeyManagementSystem"),
 }
 
 _LLM_CONFIGS_IMPORT_MAP = {
