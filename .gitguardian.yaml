@@ -80,6 +80,10 @@ secret:
     - name: Inkeep API key in documentation config
       match: c366657791bfb5fc69045ec11d49452f09a0aebbc8648f94e2469b4025e29a75
     
+    # Langfuse credentials in test_completion.py - test credentials for integration test
+    - name: Langfuse test credentials in test_completion
+      match: c39310f68cc3d3e22f7b298bb6353c4f45759adcc37080d8b7f4e535d3cfd7f4
+    
     # === Preventive patterns for test keys (pattern-based) ===
     
     # Test API keys (124 instances across 45 files)
