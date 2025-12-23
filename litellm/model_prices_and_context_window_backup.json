@@ -19350,6 +19350,34 @@
         "output_cost_per_token": 1.2e-06,
         "supports_system_messages": true
     },
+    "minimax/MiniMax-M2": {
+        "cache_creation_input_token_cost": 3.75e-07,
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "minimax",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "minimax/MiniMax-M2-Stable": {
+        "cache_creation_input_token_cost": 3.75e-07,
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "minimax",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
     "mistral.magistral-small-2509": {
         "input_cost_per_token": 5e-07,
         "litellm_provider": "bedrock_converse",

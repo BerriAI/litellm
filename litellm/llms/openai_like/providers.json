@@ -1,4 +1,8 @@
 {
+  "minimax": {
+    "base_url": "https://api.minimax.io/v1",
+    "api_key_env": "MINIMAX_API_KEY"
+  },
   "publicai": {
     "base_url": "https://api.publicai.co/v1",
     "api_key_env": "PUBLICAI_API_KEY",

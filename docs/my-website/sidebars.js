@@ -721,6 +721,7 @@ const sidebars = {
         "providers/lm_studio",
         "providers/meta_llama",
         "providers/milvus_vector_stores",
+        "providers/minimax",
         "providers/mistral",
         "providers/moonshot",
         "providers/morph",
