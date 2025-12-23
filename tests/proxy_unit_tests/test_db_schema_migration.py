@@ -21,7 +21,7 @@ def test_aaaasschema_migration_check(schema_setup, monkeypatch):
     """Test to check if schema requires migration"""
     # Set test database URL
     test_db_url = f"postgresql://{schema_setup.info.user}:@{schema_setup.info.host}:{schema_setup.info.port}/{schema_setup.info.dbname}"
-    # test_db_url = "postgresql://neondb_owner:npg_JiZPS0DAhRn4@ep-delicate-wave-a55cvbuc.us-east-2.aws.neon.tech/neondb?sslmode=require"
+    # test_db_url = "postgresql://test-user:test-password@test-host.example.com/test-db?sslmode=require"
     monkeypatch.setenv("DATABASE_URL", test_db_url)
 
     deploy_dir = Path("./litellm-proxy-extras/litellm_proxy_extras")
