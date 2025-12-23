@@ -1,0 +1,57 @@
+model_list:
+  - model_name: openai-fake-gpt-3.5-turbo
+    litellm_params:
+      model: openai/openai-fake-gpt-3.5-turbo
+      api_base: http://localhost:8090/v1
+      api_key: fake-key
+  - model_name: openai-fake-gpt-4
+    litellm_params:
+      model: openai/openai-fake-gpt-4
+      api_base: http://localhost:8090/v1
+      api_key: fake-key
+  - model_name: openai-fake-gpt-4o
+    litellm_params:
+      model: openai/openai-fake-gpt-4o
+      api_base: http://localhost:8090/v1
+      api_key: fake-key
+  - model_name: fake-text-embedding-3-small
+    litellm_params:
+      model: openai/fake-text-embedding-3-small
+      api_base: http://localhost:8090/v1
+      api_key: fake-key
+  - model_name: o3-mini-batch-2025-01-31
+    litellm_params:
+      model: openai/o3-mini-batch-2025-01-31
+      api_base: http://localhost:8090/openai/v1
+      api_key: fake-key
+    model_info:
+      mode: batch
+  - model_name: azure-fake-gpt-5-batch-2025-08-07
+    litellm_params:
+      api_base: http://localhost:8090
+      api_key: fake-key
+      api_version: 2025-03-01-preview
+      base_model: azure/gpt-5
+      model: azure/gpt-5-batch-2025-08-07
+      custom_llm_provider: azure
+    model_info:
+      mode: batch
+  - model_name: gpt-5-batch-2025-08-07
+    litellm_params:
+      api_base: os.environ/OPENAI_API_BASE
+      api_key: os.environ/OPENAI_API_KEY
+      api_version: 2025-03-01-preview
+      base_model: azure/gpt-5
+      model: azure/gpt-5-batch-2025-08-07
+      custom_llm_provider: azure
+    model_info:
+      mode: batch
+
+general_settings:
+  master_key: sk-1234
+  database_url: "postgresql://llmproxy:dbpassword9090@localhost:5432/litellm"
+
+litellm_settings:
+  drop_params: true
+  set_verbose: true
+  json_logs: true

@@ -3756,7 +3756,7 @@ class SpendUpdateQueueItem(TypedDict, total=False):
 
 class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
     unified_file_id: str
-    file_object: OpenAIFileObject
+    file_object: Optional[OpenAIFileObject] = None  # PATCHED: Allow None for batch output files
     model_mappings: Dict[str, str]
     flat_model_file_ids: List[str]
     created_by: Optional[str]
