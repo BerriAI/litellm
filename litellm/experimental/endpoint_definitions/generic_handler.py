@@ -335,7 +335,10 @@ class GenericEndpointHandler:
         else:
             raise ValueError(f"Unsupported method: {operation.method}")
         
+        # Log response status and body for debugging
+        verbose_logger.debug(f"Generic handler response status: {response.status_code}")
         raw_response = response.json()
+        verbose_logger.debug(f"Generic handler response body: {str(raw_response)[:500]}")
         
         # Apply response template if defined, otherwise return raw
         if operation.response.response_template:
@@ -422,7 +425,10 @@ class GenericEndpointHandler:
         else:
             raise ValueError(f"Unsupported method: {operation.method}")
         
+        # Log response status and body for debugging
+        verbose_logger.debug(f"Generic handler async response status: {response.status_code}")
         raw_response = response.json()
+        verbose_logger.debug(f"Generic handler async response body: {str(raw_response)[:500]}")
         
         # Apply response template if defined, otherwise return raw
         if operation.response.response_template:

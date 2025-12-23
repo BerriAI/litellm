@@ -10,15 +10,18 @@ import base64
 
 import pytest
 
+import litellm
 from litellm.experimental.endpoint_definitions.vertex_ai.imagen import generate_image
 
 
 def test_vertex_imagen_generate():
     """Test generating an image with Vertex AI Imagen API."""
+    litellm._turn_on_debug()
     response = generate_image(
         instances=[{"prompt": "A simple red circle on a white background"}],
         parameters={"sampleCount": 1},
     )
+    print("RESPONSE: ", response)
 
     # Verify response structure matches Vertex AI API
     assert "predictions" in response
