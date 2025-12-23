@@ -137,6 +137,22 @@
         "a2a": true
       }
     },
+    "apertis": {
+      "display_name": "Apertis (`apertis`)",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": true,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "assemblyai": {
       "display_name": "AssemblyAI (`assemblyai`)",
       "url": "https://docs.litellm.ai/docs/pass_through/assembly_ai",
@@ -356,6 +372,22 @@
         "batches": false,
         "rerank": false,
         "a2a": true
+      }
+    },
+    "chutes": {
+      "display_name": "Chutes (`chutes`)",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": true,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
       }
     },
     "clarifai": {
@@ -1226,6 +1258,22 @@
         "a2a": true
       }
     },
+    "nanogpt": {
+      "display_name": "NanoGPT (`nanogpt`)",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": true,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "nebius": {
       "display_name": "Nebius AI Studio (`nebius`)",
       "url": "https://docs.litellm.ai/docs/providers/nebius",
@@ -1507,6 +1555,22 @@
         "a2a": true
       }
     },
+    "poe": {
+      "display_name": "Poe (`poe`)",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": true,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "publicai": {
       "display_name": "PublicAI (`publicai`)",
       "url": "https://docs.litellm.ai/docs/providers/publicai",
@@ -1674,6 +1738,22 @@
         "batches": false,
         "rerank": false,
         "a2a": true
+      }
+    },
+    "synthetic": {
+      "display_name": "Synthetic (`synthetic`)",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": true,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
       }
     },
     "text-completion-codestral": {

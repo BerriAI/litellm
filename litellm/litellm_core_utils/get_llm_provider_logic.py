@@ -270,6 +270,21 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "platform.publicai.co/v1":
                         custom_llm_provider = "publicai"
                         dynamic_api_key = get_secret_str("PUBLICAI_API_KEY")
+                    elif endpoint == "https://api.synthetic.new/openai/v1":
+                        custom_llm_provider = "synthetic"
+                        dynamic_api_key = get_secret_str("SYNTHETIC_API_KEY")
+                    elif endpoint == "https://api.stima.tech/v1":
+                        custom_llm_provider = "apertis"
+                        dynamic_api_key = get_secret_str("STIMA_API_KEY")
+                    elif endpoint == "https://nano-gpt.com/api/v1":
+                        custom_llm_provider = "nano-gpt"
+                        dynamic_api_key = get_secret_str("NANOGPT_API_KEY")
+                    elif endpoint == "https://api.poe.com/v1":
+                        custom_llm_provider = "poe"
+                        dynamic_api_key = get_secret_str("POE_API_KEY")
+                    elif endpoint == "https://llm.chutes.ai/v1/":
+                        custom_llm_provider = "chutes"
+                        dynamic_api_key = get_secret_str("CHUTES_API_KEY")
                     elif endpoint == "https://api.v0.dev/v1":
                         custom_llm_provider = "v0"
                         dynamic_api_key = get_secret_str("V0_API_KEY")
