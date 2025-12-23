@@ -130,6 +130,16 @@ LLM_CONFIG_NAMES = (
     "VoyageRerankConfig",
     "ClarifaiConfig",
     "AI21ChatConfig",
+    "LlamaAPIConfig",
+    "TogetherAITextCompletionConfig",
+    "CloudflareChatConfig",
+    "NovitaConfig",
+    "PetalsConfig",
+    "OllamaChatConfig",
+    "OllamaConfig",
+    "SagemakerConfig",
+    "SagemakerChatConfig",
+    "CohereChatConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -273,6 +283,16 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "VoyageRerankConfig": (".llms.voyage.rerank.transformation", "VoyageRerankConfig"),
     "ClarifaiConfig": (".llms.clarifai.chat.transformation", "ClarifaiConfig"),
     "AI21ChatConfig": (".llms.ai21.chat.transformation", "AI21ChatConfig"),
+    "LlamaAPIConfig": (".llms.meta_llama.chat.transformation", "LlamaAPIConfig"),
+    "TogetherAITextCompletionConfig": (".llms.together_ai.completion.transformation", "TogetherAITextCompletionConfig"),
+    "CloudflareChatConfig": (".llms.cloudflare.chat.transformation", "CloudflareChatConfig"),
+    "NovitaConfig": (".llms.novita.chat.transformation", "NovitaConfig"),
+    "PetalsConfig": (".llms.petals.completion.transformation", "PetalsConfig"),
+    "OllamaChatConfig": (".llms.ollama.chat.transformation", "OllamaChatConfig"),
+    "OllamaConfig": (".llms.ollama.completion.transformation", "OllamaConfig"),
+    "SagemakerConfig": (".llms.sagemaker.completion.transformation", "SagemakerConfig"),
+    "SagemakerChatConfig": (".llms.sagemaker.chat.transformation", "SagemakerChatConfig"),
+    "CohereChatConfig": (".llms.cohere.chat.transformation", "CohereChatConfig"),
 }
 
 # Export all name tuples and import maps for use in _lazy_imports.py

@@ -1066,7 +1066,6 @@ from .utils import client
 from .llms.custom_llm import CustomLLM
 from .llms.anthropic.common_utils import AnthropicModelInfo
 from .llms.ai21.chat.transformation import AI21ChatConfig, AI21ChatConfig as AI21Config
-from .llms.meta_llama.chat.transformation import LlamaAPIConfig
 from .llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
@@ -1074,14 +1073,10 @@ from .llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformat
     AmazonAnthropicClaudeMessagesConfig,
 )
 from .llms.together_ai.chat import TogetherAIConfig
-from .llms.together_ai.completion.transformation import TogetherAITextCompletionConfig
-from .llms.cloudflare.chat.transformation import CloudflareChatConfig
-from .llms.novita.chat.transformation import NovitaConfig
 from .llms.deprecated_providers.palm import (
     PalmConfig,
 )  # here to prevent breaking changes
 from .llms.nlp_cloud.chat.handler import NLPCloudConfig
-from .llms.petals.completion.transformation import PetalsConfig
 from .llms.deprecated_providers.aleph_alpha import AlephAlphaConfig
 from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
@@ -1109,10 +1104,6 @@ from .llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import (
 from .llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import (
     VertexAIAi21Config,
 )
-from .llms.ollama.chat.transformation import OllamaChatConfig
-from .llms.ollama.completion.transformation import OllamaConfig
-from .llms.sagemaker.completion.transformation import SagemakerConfig
-from .llms.sagemaker.chat.transformation import SagemakerChatConfig
 from .llms.bedrock.chat.invoke_handler import (
     AmazonCohereChatConfig,
     bedrock_tool_name_mappings,
@@ -1174,7 +1165,6 @@ from .llms.bedrock.embed.amazon_titan_multimodal_transformation import (
 from .llms.bedrock.embed.amazon_titan_v2_transformation import (
     AmazonTitanV2Config,
 )
-from .llms.cohere.chat.transformation import CohereChatConfig
 from .llms.cohere.chat.v2_transformation import CohereV2ChatConfig
 from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig
 from .llms.bedrock.embed.twelvelabs_marengo_transformation import (
@@ -1517,6 +1507,16 @@ if TYPE_CHECKING:
     from .llms.voyage.rerank.transformation import VoyageRerankConfig as VoyageRerankConfig
     from .llms.clarifai.chat.transformation import ClarifaiConfig as ClarifaiConfig
     from .llms.ai21.chat.transformation import AI21ChatConfig as AI21ChatConfig
+    from .llms.meta_llama.chat.transformation import LlamaAPIConfig as LlamaAPIConfig
+    from .llms.together_ai.completion.transformation import TogetherAITextCompletionConfig as TogetherAITextCompletionConfig
+    from .llms.cloudflare.chat.transformation import CloudflareChatConfig as CloudflareChatConfig
+    from .llms.novita.chat.transformation import NovitaConfig as NovitaConfig
+    from .llms.petals.completion.transformation import PetalsConfig as PetalsConfig
+    from .llms.ollama.chat.transformation import OllamaChatConfig as OllamaChatConfig
+    from .llms.ollama.completion.transformation import OllamaConfig as OllamaConfig
+    from .llms.sagemaker.completion.transformation import SagemakerConfig as SagemakerConfig
+    from .llms.sagemaker.chat.transformation import SagemakerChatConfig as SagemakerChatConfig
+    from .llms.cohere.chat.transformation import CohereChatConfig as CohereChatConfig
     from litellm.caching.llm_caching_handler import LLMClientCache
     from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
     from litellm.types.utils import (
