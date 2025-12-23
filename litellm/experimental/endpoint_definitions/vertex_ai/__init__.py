@@ -1,0 +1,2 @@
+"""Vertex AI endpoint definitions."""
+
