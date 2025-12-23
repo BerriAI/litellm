@@ -7,7 +7,7 @@ Provides:
 """
 
 import base64
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
