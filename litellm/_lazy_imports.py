@@ -199,6 +199,7 @@ LLM_CONFIG_NAMES = (
     "FireworksAIRerankConfig",
     "VoyageRerankConfig",
     "ClarifaiConfig",
+    "AI21ChatConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -386,6 +387,7 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "FireworksAIRerankConfig": (".llms.fireworks_ai.rerank.transformation", "FireworksAIRerankConfig"),
     "VoyageRerankConfig": (".llms.voyage.rerank.transformation", "VoyageRerankConfig"),
     "ClarifaiConfig": (".llms.clarifai.chat.transformation", "ClarifaiConfig"),
+    "AI21ChatConfig": (".llms.ai21.chat.transformation", "AI21ChatConfig"),
 }
 
 # Lazy import for utils module - imports only the requested item by name.
