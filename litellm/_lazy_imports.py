@@ -164,13 +164,9 @@ def _lazy_import_utils(name: str) -> Any:
     
     module_path, attr_name = _UTILS_IMPORT_MAP[name]
     
-    # Cache module reference to avoid repeated importlib calls
-    _module_cache_key = f"_cached_module_{module_path}"
-    if _module_cache_key not in _globals:
-        import importlib
-        _globals[_module_cache_key] = importlib.import_module(module_path, package="litellm")
-    
-    module = _globals[_module_cache_key]
+    # importlib.import_module() already caches in sys.modules, so no need for extra caching
+    import importlib
+    module = importlib.import_module(module_path, package="litellm")
     value = getattr(module, attr_name)
     
     _globals[name] = value
@@ -190,13 +186,9 @@ def _lazy_import_cost_calculator(name: str) -> Any:
     
     module_path, attr_name = _COST_CALCULATOR_IMPORT_MAP[name]
     
-    # Cache module reference to avoid repeated importlib calls
-    _module_cache_key = f"_cached_module_{module_path}"
-    if _module_cache_key not in _globals:
-        import importlib
-        _globals[_module_cache_key] = importlib.import_module(module_path, package="litellm")
-    
-    module = _globals[_module_cache_key]
+    # importlib.import_module() already caches in sys.modules, so no need for extra caching
+    import importlib
+    module = importlib.import_module(module_path, package="litellm")
     value = getattr(module, attr_name)
     
     _globals[name] = value
@@ -216,13 +208,9 @@ def _lazy_import_token_counter(name: str) -> Any:
     
     module_path, attr_name = _TOKEN_COUNTER_IMPORT_MAP[name]
     
-    # Cache module reference to avoid repeated importlib calls
-    _module_cache_key = f"_cached_module_{module_path}"
-    if _module_cache_key not in _globals:
-        import importlib
-        _globals[_module_cache_key] = importlib.import_module(module_path)
-    
-    module = _globals[_module_cache_key]
+    # importlib.import_module() already caches in sys.modules, so no need for extra caching
+    import importlib
+    module = importlib.import_module(module_path)
     value = getattr(module, attr_name)
     
     _globals[name] = value
@@ -242,13 +230,9 @@ def _lazy_import_bedrock_types(name: str) -> Any:
     
     module_path, attr_name = _BEDROCK_TYPES_IMPORT_MAP[name]
     
-    # Cache module reference to avoid repeated importlib calls
-    _module_cache_key = f"_cached_module_{module_path}"
-    if _module_cache_key not in _globals:
-        import importlib
-        _globals[_module_cache_key] = importlib.import_module(module_path)
-    
-    module = _globals[_module_cache_key]
+    # importlib.import_module() already caches in sys.modules, so no need for extra caching
+    import importlib
+    module = importlib.import_module(module_path)
     value = getattr(module, attr_name)
     
     _globals[name] = value
@@ -268,13 +252,9 @@ def _lazy_import_types_utils(name: str) -> Any:
     
     module_path, attr_name = _TYPES_UTILS_IMPORT_MAP[name]
     
-    # Cache module reference to avoid repeated importlib calls
-    _module_cache_key = f"_cached_module_{module_path}"
-    if _module_cache_key not in _globals:
-        import importlib
-        _globals[_module_cache_key] = importlib.import_module(module_path, package="litellm")
-    
-    module = _globals[_module_cache_key]
+    # importlib.import_module() already caches in sys.modules, so no need for extra caching
+    import importlib
+    module = importlib.import_module(module_path, package="litellm")
     value = getattr(module, attr_name)
     
     _globals[name] = value
@@ -294,13 +274,9 @@ def _lazy_import_caching(name: str) -> Any:
     
     module_path, attr_name = _CACHING_IMPORT_MAP[name]
     
-    # Cache module reference to avoid repeated importlib calls
-    _module_cache_key = f"_cached_module_{module_path}"
-    if _module_cache_key not in _globals:
-        import importlib
-        _globals[_module_cache_key] = importlib.import_module(module_path)
-    
-    module = _globals[_module_cache_key]
+    # importlib.import_module() already caches in sys.modules, so no need for extra caching
+    import importlib
+    module = importlib.import_module(module_path)
     value = getattr(module, attr_name)
     
     _globals[name] = value
@@ -316,13 +292,9 @@ def _lazy_import_llm_client_cache(name: str) -> Any:
         return _globals[name]
     
     # Import the class
-    module_path = "litellm.caching.llm_caching_handler"
-    _module_cache_key = f"_cached_module_{module_path}"
-    if _module_cache_key not in _globals:
-        import importlib
-        _globals[_module_cache_key] = importlib.import_module(module_path)
-    
-    module = _globals[_module_cache_key]
+    # importlib.import_module() already caches in sys.modules, so no need for extra caching
+    import importlib
+    module = importlib.import_module("litellm.caching.llm_caching_handler")
     LLMClientCache = getattr(module, "LLMClientCache")
     
     if name == "LLMClientCache":
@@ -352,13 +324,9 @@ def _lazy_import_litellm_logging(name: str) -> Any:
     
     module_path, attr_name = _LITELLM_LOGGING_IMPORT_MAP[name]
     
-    # Cache module reference to avoid repeated importlib calls
-    _module_cache_key = f"_cached_module_{module_path}"
-    if _module_cache_key not in _globals:
-        import importlib
-        _globals[_module_cache_key] = importlib.import_module(module_path)
-    
-    module = _globals[_module_cache_key]
+    # importlib.import_module() already caches in sys.modules, so no need for extra caching
+    import importlib
+    module = importlib.import_module(module_path)
     value = getattr(module, attr_name)
     
     _globals[name] = value
@@ -410,13 +378,9 @@ def _lazy_import_dotprompt(name: str) -> Any:
     
     module_path, attr_name = _DOTPROMPT_IMPORT_MAP[name]
     
-    # Cache module reference to avoid repeated importlib calls
-    _module_cache_key = f"_cached_module_{module_path}"
-    if _module_cache_key not in _globals:
-        import importlib
-        _globals[_module_cache_key] = importlib.import_module(module_path)
-    
-    module = _globals[_module_cache_key]
+    # importlib.import_module() already caches in sys.modules, so no need for extra caching
+    import importlib
+    module = importlib.import_module(module_path)
     value = getattr(module, attr_name)
     
     _globals[name] = value
@@ -436,13 +400,9 @@ def _lazy_import_types(name: str) -> Any:
     
     module_path, attr_name = _TYPES_IMPORT_MAP[name]
     
-    # Cache module reference to avoid repeated importlib calls
-    _module_cache_key = f"_cached_module_{module_path}"
-    if _module_cache_key not in _globals:
-        import importlib
-        _globals[_module_cache_key] = importlib.import_module(module_path)
-    
-    module = _globals[_module_cache_key]
+    # importlib.import_module() already caches in sys.modules, so no need for extra caching
+    import importlib
+    module = importlib.import_module(module_path)
     value = getattr(module, attr_name)
     
     _globals[name] = value
@@ -462,13 +422,9 @@ def _lazy_import_llm_configs(name: str) -> Any:
     
     module_path, attr_name = _LLM_CONFIGS_IMPORT_MAP[name]
     
-    # Cache module reference to avoid repeated importlib calls
-    _module_cache_key = f"_cached_module_{module_path}"
-    if _module_cache_key not in _globals:
-        import importlib
-        _globals[_module_cache_key] = importlib.import_module(module_path, package="litellm")
-    
-    module = _globals[_module_cache_key]
+    # importlib.import_module() already caches in sys.modules, so no need for extra caching
+    import importlib
+    module = importlib.import_module(module_path, package="litellm")
     value = getattr(module, attr_name)
     
     _globals[name] = value
