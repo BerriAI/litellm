@@ -3707,6 +3707,32 @@
             "/v1/images/generations"
         ]
     },
+    "azure/gpt-image-1.5": {
+        "cache_read_input_image_token_cost": 2e-06,
+        "cache_read_input_token_cost": 1.25e-06,
+        "input_cost_per_token": 5e-06,
+        "input_cost_per_image_token": 8e-06,
+        "litellm_provider": "azure",
+        "mode": "image_generation",
+        "output_cost_per_image_token": 3.2e-05,
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ]
+    },
+    "azure/gpt-image-1.5-2025-12-16": {
+        "cache_read_input_image_token_cost": 2e-06,
+        "cache_read_input_token_cost": 1.25e-06,
+        "input_cost_per_token": 5e-06,
+        "input_cost_per_image_token": 8e-06,
+        "litellm_provider": "azure",
+        "mode": "image_generation",
+        "output_cost_per_image_token": 3.2e-05,
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ]
+    },
     "azure/low/1024-x-1024/gpt-image-1-mini": {
         "input_cost_per_pixel": 2.0751953125e-09,
         "litellm_provider": "azure",
