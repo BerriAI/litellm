@@ -173,6 +173,21 @@ LLM_CONFIG_NAMES = (
     "AmazonNovaCanvasConfig",
     "AmazonTitanG1Config",
     "AmazonTitanMultimodalEmbeddingG1Config",
+    "CohereV2ChatConfig",
+    "BedrockCohereEmbeddingConfig",
+    "TwelveLabsMarengoEmbeddingConfig",
+    "AmazonNovaEmbeddingConfig",
+    "OpenAIConfig",
+    "MistralEmbeddingConfig",
+    "OpenAIImageVariationConfig",
+    "DeepInfraConfig",
+    "DeepgramAudioTranscriptionConfig",
+    "TopazImageVariationConfig",
+    "OpenAITextCompletionConfig",
+    "GroqChatConfig",
+    "GenAIHubOrchestrationConfig",
+    "VoyageEmbeddingConfig",
+    "VoyageContextualEmbeddingConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -359,6 +374,21 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "AmazonNovaCanvasConfig": (".llms.bedrock.image_generation.amazon_nova_canvas_transformation", "AmazonNovaCanvasConfig"),
     "AmazonTitanG1Config": (".llms.bedrock.embed.amazon_titan_g1_transformation", "AmazonTitanG1Config"),
     "AmazonTitanMultimodalEmbeddingG1Config": (".llms.bedrock.embed.amazon_titan_multimodal_transformation", "AmazonTitanMultimodalEmbeddingG1Config"),
+    "CohereV2ChatConfig": (".llms.cohere.chat.v2_transformation", "CohereV2ChatConfig"),
+    "BedrockCohereEmbeddingConfig": (".llms.bedrock.embed.cohere_transformation", "BedrockCohereEmbeddingConfig"),
+    "TwelveLabsMarengoEmbeddingConfig": (".llms.bedrock.embed.twelvelabs_marengo_transformation", "TwelveLabsMarengoEmbeddingConfig"),
+    "AmazonNovaEmbeddingConfig": (".llms.bedrock.embed.amazon_nova_transformation", "AmazonNovaEmbeddingConfig"),
+    "OpenAIConfig": (".llms.openai.openai", "OpenAIConfig"),
+    "MistralEmbeddingConfig": (".llms.openai.openai", "MistralEmbeddingConfig"),
+    "OpenAIImageVariationConfig": (".llms.openai.image_variations.transformation", "OpenAIImageVariationConfig"),
+    "DeepInfraConfig": (".llms.deepinfra.chat.transformation", "DeepInfraConfig"),
+    "DeepgramAudioTranscriptionConfig": (".llms.deepgram.audio_transcription.transformation", "DeepgramAudioTranscriptionConfig"),
+    "TopazImageVariationConfig": (".llms.topaz.image_variations.transformation", "TopazImageVariationConfig"),
+    "OpenAITextCompletionConfig": ("litellm.llms.openai.completion.transformation", "OpenAITextCompletionConfig"),
+    "GroqChatConfig": (".llms.groq.chat.transformation", "GroqChatConfig"),
+    "GenAIHubOrchestrationConfig": (".llms.sap.chat.transformation", "GenAIHubOrchestrationConfig"),
+    "VoyageEmbeddingConfig": (".llms.voyage.embedding.transformation", "VoyageEmbeddingConfig"),
+    "VoyageContextualEmbeddingConfig": (".llms.voyage.embedding.transformation_contextual", "VoyageContextualEmbeddingConfig"),
 }
 
 # Export all name tuples and import maps for use in _lazy_imports.py
