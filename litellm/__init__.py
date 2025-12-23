@@ -1094,29 +1094,8 @@ from .llms.xai.common_utils import XAIModelInfo
 from .llms.azure.azure import (
     AzureOpenAIError,
 )
-from .llms.github_copilot.responses.transformation import (
-    GithubCopilotResponsesAPIConfig,
-)
-from .llms.github_copilot.embedding.transformation import GithubCopilotEmbeddingConfig
-from .llms.nebius.chat.transformation import NebiusConfig
-from .llms.wandb.chat.transformation import WandbConfig
-from .llms.dashscope.chat.transformation import DashScopeChatConfig
-from .llms.moonshot.chat.transformation import MoonshotChatConfig
 # PublicAI now uses JSON-based configuration (see litellm/llms/openai_like/providers.json)
-from .llms.docker_model_runner.chat.transformation import DockerModelRunnerChatConfig
-from .llms.v0.chat.transformation import V0ChatConfig
-from .llms.oci.chat.transformation import OCIChatConfig
-from .llms.morph.chat.transformation import MorphChatConfig
-from .llms.ragflow.chat.transformation import RAGFlowConfig
-from .llms.lambda_ai.chat.transformation import LambdaAIChatConfig
-from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig
-from .llms.vercel_ai_gateway.chat.transformation import VercelAIGatewayConfig
-from .llms.ovhcloud.chat.transformation import OVHCloudChatConfig
-from .llms.ovhcloud.embedding.transformation import OVHCloudEmbeddingConfig
-from .llms.cometapi.embed.transformation import CometAPIEmbeddingConfig
-from .llms.lemonade.chat.transformation import LemonadeChatConfig
-from .llms.snowflake.embedding.transformation import SnowflakeEmbeddingConfig
-from .llms.amazon_nova.chat.transformation import AmazonNovaChatConfig
+# All remaining configs are now lazy loaded - see _lazy_imports_registry.py
 
 ## Lazy loading this is not straightforward, will leave it here for now.
 from .main import *  # type: ignore
@@ -1410,6 +1389,27 @@ if TYPE_CHECKING:
     from .llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config as AzureOpenAIGPT5Config
     from .llms.azure.completion.transformation import AzureOpenAITextConfig as AzureOpenAITextConfig
     from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig as HostedVLLMChatConfig
+    from .llms.github_copilot.chat.transformation import GithubCopilotConfig as GithubCopilotConfig
+    from .llms.github_copilot.responses.transformation import GithubCopilotResponsesAPIConfig as GithubCopilotResponsesAPIConfig
+    from .llms.github_copilot.embedding.transformation import GithubCopilotEmbeddingConfig as GithubCopilotEmbeddingConfig
+    from .llms.nebius.chat.transformation import NebiusConfig as NebiusConfig
+    from .llms.wandb.chat.transformation import WandbConfig as WandbConfig
+    from .llms.dashscope.chat.transformation import DashScopeChatConfig as DashScopeChatConfig
+    from .llms.moonshot.chat.transformation import MoonshotChatConfig as MoonshotChatConfig
+    from .llms.docker_model_runner.chat.transformation import DockerModelRunnerChatConfig as DockerModelRunnerChatConfig
+    from .llms.v0.chat.transformation import V0ChatConfig as V0ChatConfig
+    from .llms.oci.chat.transformation import OCIChatConfig as OCIChatConfig
+    from .llms.morph.chat.transformation import MorphChatConfig as MorphChatConfig
+    from .llms.ragflow.chat.transformation import RAGFlowConfig as RAGFlowConfig
+    from .llms.lambda_ai.chat.transformation import LambdaAIChatConfig as LambdaAIChatConfig
+    from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig as HyperbolicChatConfig
+    from .llms.vercel_ai_gateway.chat.transformation import VercelAIGatewayConfig as VercelAIGatewayConfig
+    from .llms.ovhcloud.chat.transformation import OVHCloudChatConfig as OVHCloudChatConfig
+    from .llms.ovhcloud.embedding.transformation import OVHCloudEmbeddingConfig as OVHCloudEmbeddingConfig
+    from .llms.cometapi.embed.transformation import CometAPIEmbeddingConfig as CometAPIEmbeddingConfig
+    from .llms.lemonade.chat.transformation import LemonadeChatConfig as LemonadeChatConfig
+    from .llms.snowflake.embedding.transformation import SnowflakeEmbeddingConfig as SnowflakeEmbeddingConfig
+    from .llms.amazon_nova.chat.transformation import AmazonNovaChatConfig as AmazonNovaChatConfig
     from litellm.caching.llm_caching_handler import LLMClientCache
     from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
     from litellm.types.utils import (
