@@ -1771,7 +1771,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         if error_code is not None:
             metadata_filters.append({
                 "path": ["error_information", "error_code"],
-                "equals": error_code,
+                "equals": f'"{error_code}"',
             })
 
         if metadata_filters:
@@ -1781,7 +1781,6 @@ async def ui_view_spend_logs(  # noqa: PLR0915
                 where_conditions["AND"] = where_conditions.get("AND", []) + [
                     {"metadata": filter_cond} for filter_cond in metadata_filters
                 ]
-
         if end_user is not None:
             where_conditions["end_user"] = end_user
 
