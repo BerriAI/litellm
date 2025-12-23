@@ -1357,6 +1357,20 @@
         "litellm_provider": "azure",
         "mode": "chat"
     },
+    "azure_ai/gpt-oss-120b": {
+        "input_cost_per_token": 1.5e-7,
+        "output_cost_per_token": 6e-7,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "source": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
     "azure/eu/gpt-4o-2024-08-06": {
         "deprecation_date": "2026-02-27",
         "cache_read_input_token_cost": 1.375e-06,
