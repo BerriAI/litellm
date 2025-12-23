@@ -1366,6 +1366,14 @@ if TYPE_CHECKING:
     from .llms.openai.chat.gpt_audio_transformation import OpenAIGPTAudioConfig as OpenAIGPTAudioConfig
     from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig as NvidiaNimConfig
     from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig as NvidiaNimEmbeddingConfig
+    
+    # Type stubs for lazy-loaded config instances
+    openaiOSeriesConfig: OpenAIOSeriesConfig
+    openAIGPTConfig: OpenAIGPTConfig
+    openAIGPTAudioConfig: OpenAIGPTAudioConfig
+    openAIGPT5Config: OpenAIGPT5Config
+    nvidiaNimConfig: NvidiaNimConfig
+    nvidiaNimEmbeddingConfig: NvidiaNimEmbeddingConfig
     from .llms.featherless_ai.chat.transformation import FeatherlessAIConfig as FeatherlessAIConfig
     from .llms.cerebras.chat import CerebrasConfig as CerebrasConfig
     from .llms.baseten.chat import BasetenConfig as BasetenConfig
