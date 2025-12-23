@@ -1587,11 +1587,13 @@ def __getattr__(name: str) -> Any:
 
     # Lazy load encoding from main.py to avoid heavy tiktoken import
     if name == "encoding":
-        from .main import encoding as _encoding
-        # Cache it in the module's __dict__ for subsequent accesses
-        import sys
-        sys.modules[__name__].__dict__["encoding"] = _encoding
-        return _encoding
+        from ._lazy_imports import _get_litellm_globals
+        _globals = _get_litellm_globals()
+        # Check if already cached
+        if "encoding" not in _globals:
+            from .main import encoding as _encoding
+            _globals["encoding"] = _encoding
+        return _globals["encoding"]
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
