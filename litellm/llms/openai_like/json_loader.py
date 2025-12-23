@@ -48,6 +48,14 @@ class JSONProviderRegistry:
         try:
             verbose_logger.debug(f"Attempting to load custom providers from URL: {url}")
             
+            # Basic URL validation to prevent SSRF
+            # Allow http/https schemes only
+            if not url.startswith(("http://", "https://")):
+                verbose_logger.warning(
+                    f"Invalid URL scheme for custom providers: {url}. Only http:// and https:// are allowed."
+                )
+                return
+            
             # Use httpx to fetch the JSON from URL
             with httpx.Client(timeout=10.0) as client:
                 response = client.get(url)

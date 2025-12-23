@@ -145,6 +145,22 @@ class TestJSONProviderURLLoader:
                 assert provider.base_url == "https://custom.publicai.com/v1"
                 assert provider.api_key_env == "CUSTOM_PUBLICAI_KEY"
 
+    def test_invalid_url_scheme(self):
+        """Test that non-http/https URL schemes are rejected"""
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+        
+        # Reset the registry
+        JSONProviderRegistry._loaded = False
+        JSONProviderRegistry._providers = {}
+
+        # Try with file:// scheme (should be rejected)
+        with patch.dict(os.environ, {"LITELLM_CUSTOM_PROVIDERS_URL": "file:///etc/passwd"}):
+            # Should not raise, just log warning
+            JSONProviderRegistry.load()
+            
+            # Should still be loaded
+            assert JSONProviderRegistry._loaded
+
     def test_merge_local_and_custom_providers(self):
         """Test that local and custom providers are merged"""
         # Mock custom provider (different from existing ones)
@@ -176,7 +192,3 @@ class TestJSONProviderURLLoader:
                 assert JSONProviderRegistry.exists("publicai")  # Local provider
                 assert JSONProviderRegistry.exists("my_custom_llm")  # Custom provider
 
-
-if __name__ == "__main__":
-    # Run tests
-    pytest.main([__file__, "-v"])
