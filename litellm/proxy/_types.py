@@ -388,6 +388,8 @@ class LiteLLMRoutes(enum.Enum):
     litellm_native_routes = [
         "/rag/ingest",
         "/v1/rag/ingest",
+        "/rag/query",
+        "/v1/rag/query",
     ]
 
     anthropic_routes = [

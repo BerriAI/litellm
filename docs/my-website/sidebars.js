@@ -528,7 +528,14 @@ const sidebars = {
             "proxy/pass_through_guardrails"
           ]
         },
-        "rag_ingest",
+        {
+          type: "category",
+          label: "/rag",
+          items: [
+            "rag_ingest",
+            "rag_query",
+          ]
+        },
         "realtime",
         "rerank",
         "response_api",
