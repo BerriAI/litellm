@@ -915,7 +915,7 @@ def function_setup(  # noqa: PLR0915
                     # Only process if target is NOT a Gemini model
                     if not _is_gemini_model(model, custom_llm_provider):
                         verbose_logger.debug(
-                            f"Removing thought signatures from tool call IDs for non-Gemini model: {model}"
+                            "Removing thought signatures from tool call IDs for non-Gemini model"
                         )
                         
                         # Process messages to remove thought signatures
