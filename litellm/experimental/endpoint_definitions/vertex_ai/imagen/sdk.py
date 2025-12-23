@@ -1,12 +1,5 @@
 """
-Vertex AI Imagen SDK - True Passthrough with Model Routing.
-
-The SDK matches the Vertex AI API exactly. Users pass the same JSON body
-they would pass to the API directly.
-
-When a non-Imagen model is specified (e.g., "gpt-image-1", "dall-e-3"),
-the request is automatically transformed and routed through litellm.image_generation,
-then the response is transformed back to Imagen format.
+Vertex AI Imagen SDK - Passthrough with Model Routing.
 
 Usage:
     from litellm.experimental.endpoint_definitions.vertex_ai.imagen import (
@@ -24,17 +17,12 @@ Usage:
     response = generate_image(
         model="gpt-image-1",
         instances=[{"prompt": "A photorealistic image of a cat"}],
-        parameters={"sampleCount": 2},
     )
-    
-    # Response is always in Imagen format
-    for prediction in response["predictions"]:
-        image_bytes = base64.b64decode(prediction["bytesBase64Encoded"])
 """
 
 import json
 import os
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional
 
 from litellm.experimental.endpoint_definitions.generic_handler import (
     GenericEndpointHandler,
@@ -53,21 +41,17 @@ IMAGEN_MODELS = {
     "imagen-3.0-generate-002",
     "imagen-3.0-generate-001",
     "imagen-3.0-fast-generate-001",
-    "imagegeneration@006",
-    "imagegeneration@005",
-    "imagegeneration@002",
+    "imagen-3.0-capability-001",
 }
 
 
 def _load_definition() -> EndpointDefinition:
-    """Load the endpoint definition from the JSON file in this directory."""
+    """Load the endpoint definition from the JSON file."""
     definition_path = os.path.join(os.path.dirname(__file__), "definition.json")
     with open(definition_path) as f:
-        data = json.load(f)
-    return EndpointDefinition(**data)
+        return EndpointDefinition(**json.load(f))
 
 
-# Load the endpoint definition and create handler with auth hook
 _definition = _load_definition()
 _hook = VertexAIImagenAuthHook()
 _handler = GenericEndpointHandler(_definition, hooks=_hook)
@@ -93,38 +77,26 @@ def generate_image(
     Generate images using Imagen-style API.
     
     When model is an Imagen model (default), calls Vertex AI directly.
-    When model is another provider (e.g., "gpt-image-1", "dall-e-3"),
-    routes through litellm.image_generation and transforms the response.
+    When model is another provider (e.g., "gpt-image-1"), routes through litellm.
     
     Args:
         instances: List of instance objects, e.g. [{"prompt": "A cat"}]
         parameters: Optional parameters dict, e.g. {"sampleCount": 2}
-        project_id: Google Cloud project ID (for Imagen models)
-        region: Google Cloud region (for Imagen models, default: us-central1)
         model: Model to use. Imagen models route to Vertex AI, others to litellm.
-               Examples: "imagen-3.0-generate-002", "gpt-image-1", "dall-e-3"
-        vertex_credentials: Optional path to credentials JSON (for Imagen models)
-        **kwargs: Additional kwargs passed to litellm.image_generation (for non-Imagen models)
         
     Returns:
         Imagen-style response: {"predictions": [{"bytesBase64Encoded": "...", "mimeType": "..."}]}
     """
-    # Route to litellm.image_generation for non-Imagen models
     if not _is_imagen_model(model):
         return call_litellm_image_generation(
-            model=model,
-            instances=instances,
-            parameters=parameters,
-            timeout=timeout,
-            **kwargs,
+            model=model, instances=instances, parameters=parameters, timeout=timeout, **kwargs
         )
     
-    # Use Vertex AI Imagen directly
     body: Dict[str, Any] = {"instances": instances}
     if parameters:
         body["parameters"] = parameters
     
-    result = _handler.execute_sync(
+    return _handler.execute_sync(
         operation_name="generate",
         extra_headers=extra_headers,
         timeout=timeout,
@@ -134,7 +106,6 @@ def generate_image(
         vertex_credentials=vertex_credentials,
         **body,
     )
-    return cast(Dict[str, Any], result)
 
 
 async def agenerate_image(
@@ -149,22 +120,16 @@ async def agenerate_image(
     **kwargs,
 ) -> Dict[str, Any]:
     """Async version of generate_image()."""
-    # Route to litellm.aimage_generation for non-Imagen models
     if not _is_imagen_model(model):
         return await acall_litellm_image_generation(
-            model=model,
-            instances=instances,
-            parameters=parameters,
-            timeout=timeout,
-            **kwargs,
+            model=model, instances=instances, parameters=parameters, timeout=timeout, **kwargs
         )
     
-    # Use Vertex AI Imagen directly
     body: Dict[str, Any] = {"instances": instances}
     if parameters:
         body["parameters"] = parameters
     
-    result = await _handler.execute_async(
+    return await _handler.execute_async(
         operation_name="generate",
         extra_headers=extra_headers,
         timeout=timeout,
@@ -174,7 +139,6 @@ async def agenerate_image(
         vertex_credentials=vertex_credentials,
         **body,
     )
-    return cast(Dict[str, Any], result)
 
 
 def edit_image(
@@ -190,28 +154,18 @@ def edit_image(
     """
     Edit images using Vertex AI Imagen API.
     
-    This is a true passthrough - the request/response format matches
-    the Vertex AI API exactly.
-    
     Args:
-        instances: List of instance objects containing:
-            - prompt: Text prompt describing the desired edit
-            - image: {"bytesBase64Encoded": "..."} - The source image
-            - mask: {"bytesBase64Encoded": "..."} - Optional mask (white=edit, black=preserve)
-        parameters: Optional parameters dict, e.g. {"sampleCount": 2, "editConfig": {"editMode": "inpaint-insert"}}
-        project_id: Google Cloud project ID (optional, uses VERTEXAI_PROJECT env var if not set)
-        region: Google Cloud region (default: us-central1)
-        model: Imagen model version (default: imagen-3.0-capability-001)
-        vertex_credentials: Optional path to credentials JSON or credentials dict
+        instances: List containing prompt, image, and optional mask
+        parameters: Optional parameters dict
         
     Returns:
-        Raw API response: {"predictions": [{"bytesBase64Encoded": "...", "mimeType": "..."}]}
+        Imagen-style response: {"predictions": [{"bytesBase64Encoded": "...", "mimeType": "..."}]}
     """
     body: Dict[str, Any] = {"instances": instances}
     if parameters:
         body["parameters"] = parameters
     
-    result = _handler.execute_sync(
+    return _handler.execute_sync(
         operation_name="edit",
         extra_headers=extra_headers,
         timeout=timeout,
@@ -221,7 +175,6 @@ def edit_image(
         vertex_credentials=vertex_credentials,
         **body,
     )
-    return cast(Dict[str, Any], result)
 
 
 async def aedit_image(
@@ -239,7 +192,7 @@ async def aedit_image(
     if parameters:
         body["parameters"] = parameters
     
-    result = await _handler.execute_async(
+    return await _handler.execute_async(
         operation_name="edit",
         extra_headers=extra_headers,
         timeout=timeout,
@@ -249,5 +202,3 @@ async def aedit_image(
         vertex_credentials=vertex_credentials,
         **body,
     )
-    return cast(Dict[str, Any], result)
-
