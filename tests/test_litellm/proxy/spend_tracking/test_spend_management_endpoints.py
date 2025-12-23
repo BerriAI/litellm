@@ -1895,9 +1895,12 @@ async def test_ui_view_spend_logs_with_error_code(client):
                 metadata_filter = where_conditions["metadata"]
                 if metadata_filter.get("path") == ["error_information", "error_code"]:
                     error_code = metadata_filter.get("equals")
-                    if error_code == "404":
+                    # Handle both string and integer error codes
+                    # The endpoint wraps error_code in quotes, so strip them for comparison
+                    error_code_value = str(error_code).strip('"')
+                    if error_code_value == "404":
                         return [mock_spend_logs[0]]
-                    elif error_code == "500":
+                    elif error_code_value == "500":
                         return [mock_spend_logs[1]]
             return mock_spend_logs
 
@@ -1907,9 +1910,12 @@ async def test_ui_view_spend_logs_with_error_code(client):
                 metadata_filter = where_conditions["metadata"]
                 if metadata_filter.get("path") == ["error_information", "error_code"]:
                     error_code = metadata_filter.get("equals")
-                    if error_code == "404":
+                    # Handle both string and integer error codes
+                    # The endpoint wraps error_code in quotes, so strip them for comparison
+                    error_code_value = str(error_code).strip('"')
+                    if error_code_value == "404":
                         return 1
-                    elif error_code == "500":
+                    elif error_code_value == "500":
                         return 1
             return len(mock_spend_logs)
 
@@ -1995,7 +2001,10 @@ async def test_ui_view_spend_logs_with_error_code_and_key_alias(client):
                         elif metadata_filter.get("path") == ["error_information", "error_code"]:
                             error_code_filter = metadata_filter.get("equals")
 
-                if key_alias_filter == "test-key-1" and error_code_filter == "500":
+                # Handle both string and integer error codes
+                # The endpoint wraps error_code in quotes, so strip them for comparison
+                error_code_value = str(error_code_filter).strip('"')
+                if key_alias_filter == "test-key-1" and error_code_value == "500":
                     return [mock_spend_logs[2]]  # Only log3 matches both conditions
             return mock_spend_logs
 
@@ -2012,7 +2021,10 @@ async def test_ui_view_spend_logs_with_error_code_and_key_alias(client):
                         elif metadata_filter.get("path") == ["error_information", "error_code"]:
                             error_code_filter = metadata_filter.get("equals")
 
-                if key_alias_filter == "test-key-1" and error_code_filter == "500":
+                # Handle both string and integer error codes
+                # The endpoint wraps error_code in quotes, so strip them for comparison
+                error_code_value = str(error_code_filter).strip('"')
+                if key_alias_filter == "test-key-1" and error_code_value == "500":
                     return 1
             return len(mock_spend_logs)
 
