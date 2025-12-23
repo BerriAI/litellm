@@ -1,18 +1,14 @@
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
-from fastapi.testclient import TestClient
 from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
 from litellm.caching import DualCache
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
 )
-from litellm.types.utils import SpecialEnums
 
 
 def test_get_file_ids_from_messages():
@@ -255,7 +251,7 @@ async def test_can_user_call_unified_file_id(call_type):
     )
     unified_file_id = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9vY3RldC1zdHJlYW07dW5pZmllZF9pZCxmMTNlNDAzZS01YWM3LTRhZjktOGQzNS0wNDgwZDMxOTgyYTg7dGFyZ2V0X21vZGVsX25hbWVzLGdwdC00by1taW5pLW9wZW5haTtsbG1fb3V0cHV0X2ZpbGVfaWQsZmlsZS1Ib3UxZDFXc3c1SDNKcjFMYllpZDJiO2xsbV9vdXRwdXRfZmlsZV9tb2RlbF9pZCxmODBiNWU2NzQ1NzdkNjkyMjM4YmVhNTIxZDdiMGI5ZGYyY2FmMTEwMTU2YmU5YzBjM2NjMmNkNTBjOTM1ZDI0"
 
-    with pytest.raises(HTTPException) as e:
+    with pytest.raises(HTTPException):
         await proxy_managed_files.async_pre_call_hook(
             user_api_key_dict=UserAPIKeyAuth(
                 user_id="456", parent_otel_span=MagicMock()
@@ -310,7 +306,7 @@ async def test_router_acreate_batch_only_selects_from_file_id_mapping(monkeypatc
         litellm, "acreate_batch", return_value=AsyncMock()
     ) as mock_acreate_batch:
         for _ in range(1000):
-            response = await router.acreate_batch(
+            await router.acreate_batch(
                 model="gpt-3.5-turbo",
                 input_file_id=file_id,
                 model_file_id_mapping=model_file_id_mapping,
@@ -329,7 +325,6 @@ async def test_output_file_id_for_batch_retrieve():
 
     from openai.types.batch import BatchRequestCounts
 
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.utils import LiteLLMBatch
 
     batch = LiteLLMBatch(
@@ -381,8 +376,6 @@ async def test_output_file_id_for_batch_retrieve():
 @pytest.mark.asyncio
 async def test_async_post_call_success_hook_twice_assert_no_unique_violation():
     import asyncio
-    from litellm.proxy.proxy_server import proxy_logging_obj
-    from litellm.proxy.utils import PrismaClient
     from litellm.types.utils import LiteLLMBatch
     from litellm.proxy._types import UserAPIKeyAuth
     from openai.types.batch import BatchRequestCounts
