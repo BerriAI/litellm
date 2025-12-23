@@ -1,0 +1,75 @@
+{
+  "_comment": "SDK-level provider configurations with transformations and cost tracking",
+  "_version": "1.0.0",
+  "_schema": "See SDK_LEVEL_JSON_CONFIGURATION_PROPOSAL.md for full documentation",
+  
+  "google_imagen": {
+    "provider_name": "google_imagen",
+    "provider_type": "image_generation",
+    "api_base": "https://generativelanguage.googleapis.com/v1beta",
+    "api_base_env": "GOOGLE_IMAGEN_API_BASE",
+    
+    "authentication": {
+      "type": "query_param",
+      "env_var": "GOOGLE_API_KEY",
+      "param_name": "key"
+    },
+    
+    "endpoints": {
+      "generate": {
+        "path": "/models/{model}:predict",
+        "method": "POST",
+        "supported_models": [
+          "imagen-3.0-generate-001",
+          "imagen-3.0-fast-generate-001",
+          "imagen-3.0-capability-generate-001",
+          "imagen-2.0-generate-001"
+        ]
+      }
+    },
+    
+    "transformations": {
+      "request": {
+        "type": "jinja",
+        "template": {
+          "instances": [
+            {
+              "prompt": "{{ prompt }}"
+            }
+          ],
+          "parameters": {
+            "sampleCount": "{{ n }}",
+            "aspectRatio": "{{ aspect_ratio if aspect_ratio else '1:1' }}",
+            "negativePrompt": "{{ negative_prompt if negative_prompt else none }}"
+          }
+        }
+      },
+      "response": {
+        "type": "jsonpath",
+        "mappings": {
+          "images": "$.predictions[*].bytesBase64Encoded",
+          "format": "b64_json"
+        }
+      }
+    },
+    
+    "cost_tracking": {
+      "enabled": true,
+      "cost_per_image": {
+        "imagen-3.0-generate-001": 0.04,
+        "imagen-3.0-fast-generate-001": 0.02,
+        "imagen-3.0-capability-generate-001": 0.04,
+        "imagen-2.0-generate-001": 0.02
+      },
+      "unit": "per_image"
+    },
+    
+    "capabilities": {
+      "max_images": 4,
+      "supported_sizes": ["256x256", "512x512", "1024x1024"],
+      "supports_negative_prompt": true,
+      "supports_aspect_ratio": true,
+      "aspect_ratios": ["1:1", "9:16", "16:9", "3:4", "4:3"]
+    }
+  }
+}
