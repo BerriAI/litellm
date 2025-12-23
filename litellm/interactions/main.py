@@ -293,7 +293,6 @@ def create(
                 custom_llm_provider=custom_llm_provider,
                 _is_async=_is_async,
                 stream=stream,
-                litellm_metadata=kwargs.get("litellm_metadata", {}),
                 **kwargs,
             )
         

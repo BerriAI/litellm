@@ -6,10 +6,9 @@ This module handles transforming between:
 - Responses API format (OpenAI's format with input[], instructions, etc.)
 """
 
-from typing import Any, Dict, List, Optional, Union, cast
+from typing import Any, Dict, List, Optional, cast
 
 from litellm.types.interactions import (
-    Content,
     InteractionInput,
     InteractionsAPIOptionalRequestParams,
     InteractionsAPIResponse,
@@ -17,7 +16,6 @@ from litellm.types.interactions import (
 )
 from litellm.types.llms.openai import (
     ResponseInputParam,
-    ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
 )
 
@@ -129,7 +127,13 @@ class LiteLLMResponsesInteractionsConfig:
                     content = turn.content if hasattr(turn, "content") else []
                     
                     # Ensure content is a list for _transform_content_array
-                    content_list: List[Any] = content if isinstance(content, list) else [content] if content is not None else []
+                    # Cast to List[Any] to handle various content types
+                    if isinstance(content, list):
+                        content_list: List[Any] = list(content)
+                    elif content is not None:
+                        content_list = [content]
+                    else:
+                        content_list = []
                     
                     transformed_content = (
                         LiteLLMResponsesInteractionsConfig._transform_content_array(content_list)
@@ -140,28 +144,28 @@ class LiteLLMResponsesInteractionsConfig:
                         "content": transformed_content,
                     })
             
-            return messages
+            return cast(ResponseInputParam, messages)
         
         # Single content object - wrap in message
         if isinstance(input, dict):
-            return [{
+            return cast(ResponseInputParam, [{
                 "role": "user",
                 "content": LiteLLMResponsesInteractionsConfig._transform_content_array(
                     input.get("content", []) if isinstance(input.get("content"), list) else [input]
                 ),
-            }]
+            }])
         
         # Fallback: convert to string
         return cast(ResponseInputParam, str(input))
 
     @staticmethod
-    def _transform_content_array(content: List[Any]) -> List[Any]:
+    def _transform_content_array(content: List[Any]) -> List[Dict[str, Any]]:
         """Transform Interactions API content array to Responses API format."""
         if not isinstance(content, list):
             # Single content item - wrap in array
             content = [content]
         
-        transformed = []
+        transformed: List[Dict[str, Any]] = []
         for item in content:
             if isinstance(item, dict):
                 # Already in dict format, pass through
@@ -172,11 +176,22 @@ class LiteLLMResponsesInteractionsConfig:
             else:
                 # Pydantic model or other - convert to dict
                 if hasattr(item, "model_dump"):
-                    transformed.append(item.model_dump())
+                    dumped = item.model_dump()
+                    if isinstance(dumped, dict):
+                        transformed.append(dumped)
+                    else:
+                        # Fallback: wrap in text format
+                        transformed.append({"type": "text", "text": str(dumped)})
                 elif hasattr(item, "dict"):
-                    transformed.append(item.dict())
+                    dumped = item.dict()
+                    if isinstance(dumped, dict):
+                        transformed.append(dumped)
+                    else:
+                        # Fallback: wrap in text format
+                        transformed.append({"type": "text", "text": str(dumped)})
                 else:
-                    transformed.append(str(item))
+                    # Fallback: wrap in text format
+                    transformed.append({"type": "text", "text": str(item)})
         
         return transformed
 

@@ -2,7 +2,7 @@
 Streaming iterator for transforming Responses API stream to Interactions API stream.
 """
 
-from typing import Any, AsyncIterator, Dict, Iterator, Optional, Union, cast
+from typing import Any, AsyncIterator, Dict, Iterator, Optional, cast
 
 from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
@@ -19,7 +19,6 @@ from litellm.types.llms.openai import (
     ResponseCompletedEvent,
     ResponseCreatedEvent,
     ResponseInProgressEvent,
-    ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
 )
 
@@ -210,7 +209,7 @@ class LiteLLMResponsesInteractionsStreamingIterator:
         
         # Check if we have a pending interaction.complete to send
         if hasattr(self, "_pending_interaction_complete"):
-            pending = self._pending_interaction_complete
+            pending: InteractionsAPIStreamingResponse = getattr(self, "_pending_interaction_complete")
             delattr(self, "_pending_interaction_complete")
             return pending
         
