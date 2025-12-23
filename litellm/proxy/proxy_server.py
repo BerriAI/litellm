@@ -946,20 +946,19 @@ try:
     # This prevents mutating the packaged UI directory (e.g. site-packages or the repo checkout)
     # and ensures extensionless routes like /ui/login work via <route>/index.html.
     is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
-    runtime_ui_path = "/tmp/litellm_ui"
 
-    if _dir_has_content(runtime_ui_path):
-        if is_non_root:
+    # Only use runtime UI path in Docker/non-root environments
+    # In local development, use the packaged UI directly
+    if is_non_root:
+        # Use /var/lib/litellm/ui for Docker (more secure than /tmp)
+        runtime_ui_path = "/var/lib/litellm/ui"
+
+        if _dir_has_content(runtime_ui_path):
             verbose_proxy_logger.info(
                 f"Using pre-built UI for non-root Docker: {runtime_ui_path}"
             )
+            ui_path = runtime_ui_path
         else:
-            verbose_proxy_logger.info(
-                f"Using cached runtime UI directory: {runtime_ui_path}"
-            )
-        ui_path = runtime_ui_path
-    else:
-        if is_non_root:
             verbose_proxy_logger.error(
                 f"UI not found at {runtime_ui_path}. Attempting to populate it from packaged UI."
             )
@@ -967,32 +966,32 @@ try:
                 f"Path exists: {os.path.exists(runtime_ui_path)}, Has content: {_dir_has_content(runtime_ui_path)}"
             )
 
-        try:
-            os.makedirs(runtime_ui_path, exist_ok=True)
-            if not _dir_has_content(runtime_ui_path) and _dir_has_content(
-                packaged_ui_path
-            ):
-                shutil.copytree(
-                    packaged_ui_path,
-                    runtime_ui_path,
-                    dirs_exist_ok=True,
-                )
-        except Exception as e:
-            if is_non_root:
+            try:
+                os.makedirs(runtime_ui_path, exist_ok=True)
+                if not _dir_has_content(runtime_ui_path) and _dir_has_content(
+                    packaged_ui_path
+                ):
+                    shutil.copytree(
+                        packaged_ui_path,
+                        runtime_ui_path,
+                        dirs_exist_ok=True,
+                    )
+            except Exception as e:
                 verbose_proxy_logger.exception(
                     f"Failed to populate runtime UI directory {runtime_ui_path} from {packaged_ui_path}: {e}"
                 )
-        else:
-            if _dir_has_content(runtime_ui_path):
-                if is_non_root:
+            else:
+                if _dir_has_content(runtime_ui_path):
                     verbose_proxy_logger.info(
                         f"Using populated UI for non-root Docker: {runtime_ui_path}"
                     )
-                else:
-                    verbose_proxy_logger.info(
-                        f"Using populated runtime UI directory: {runtime_ui_path}"
-                    )
-                ui_path = runtime_ui_path
+                    ui_path = runtime_ui_path
+    else:
+        # Local development: use packaged UI directly, no runtime copy needed
+        verbose_proxy_logger.info(
+            f"Using packaged UI directory for local development: {packaged_ui_path}"
+        )
+        ui_path = packaged_ui_path
 
     # Only modify files if a custom server root path is set
     if server_root_path and server_root_path != "/":
@@ -8885,7 +8884,7 @@ def get_image():
     default_site_logo = os.path.join(current_dir, "logo.jpg")
 
     is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
-    assets_dir = "/tmp/litellm_assets" if is_non_root else current_dir
+    assets_dir = "/var/lib/litellm/assets" if is_non_root else current_dir
 
     if is_non_root:
         os.makedirs(assets_dir, exist_ok=True)
