@@ -1066,27 +1066,11 @@ from .utils import client
 from .llms.custom_llm import CustomLLM
 from .llms.anthropic.common_utils import AnthropicModelInfo
 from .llms.ai21.chat.transformation import AI21ChatConfig, AI21ChatConfig as AI21Config
-from .llms.anthropic.experimental_pass_through.messages.transformation import (
-    AnthropicMessagesConfig,
-)
-from .llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
-    AmazonAnthropicClaudeMessagesConfig,
-)
-from .llms.together_ai.chat import TogetherAIConfig
 from .llms.deprecated_providers.palm import (
     PalmConfig,
 )  # here to prevent breaking changes
-from .llms.nlp_cloud.chat.handler import NLPCloudConfig
 from .llms.deprecated_providers.aleph_alpha import AlephAlphaConfig
-from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-    VertexGeminiConfig,
-    VertexGeminiConfig as VertexAIConfig,
-)
 from .llms.gemini.common_utils import GeminiModelInfo
-from .llms.gemini.chat.transformation import (
-    GoogleAIStudioGeminiConfig,
-    GoogleAIStudioGeminiConfig as GeminiConfig,  # aliased to maintain backwards compatibility
-)
 
 
 from .llms.vertex_ai.vertex_embeddings.transformation import (
@@ -1095,35 +1079,10 @@ from .llms.vertex_ai.vertex_embeddings.transformation import (
 
 vertexAITextEmbeddingConfig = VertexAITextEmbeddingConfig()
 
-from .llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
-    VertexAIAnthropicConfig,
-)
-from .llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import (
-    VertexAILlama3Config,
-)
-from .llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import (
-    VertexAIAi21Config,
-)
 from .llms.bedrock.chat.invoke_handler import (
-    AmazonCohereChatConfig,
     bedrock_tool_name_mappings,
 )
 
-from .llms.bedrock.common_utils import (
-    AmazonBedrockGlobalConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation import (
-    AmazonAI21Config,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_nova_transformation import (
-    AmazonInvokeNovaConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_qwen2_transformation import (
-    AmazonQwen2Config,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_qwen3_transformation import (
-    AmazonQwen3Config,
-)
 from .llms.bedrock.chat.invoke_transformations.anthropic_claude2_transformation import (
     AmazonAnthropicConfig,
 )
@@ -1517,6 +1476,21 @@ if TYPE_CHECKING:
     from .llms.sagemaker.completion.transformation import SagemakerConfig as SagemakerConfig
     from .llms.sagemaker.chat.transformation import SagemakerChatConfig as SagemakerChatConfig
     from .llms.cohere.chat.transformation import CohereChatConfig as CohereChatConfig
+    from .llms.anthropic.experimental_pass_through.messages.transformation import AnthropicMessagesConfig as AnthropicMessagesConfig
+    from .llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import AmazonAnthropicClaudeMessagesConfig as AmazonAnthropicClaudeMessagesConfig
+    from .llms.together_ai.chat import TogetherAIConfig as TogetherAIConfig
+    from .llms.nlp_cloud.chat.handler import NLPCloudConfig as NLPCloudConfig
+    from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig as VertexGeminiConfig
+    from .llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig as GoogleAIStudioGeminiConfig
+    from .llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig as VertexAIAnthropicConfig
+    from .llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import VertexAILlama3Config as VertexAILlama3Config
+    from .llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import VertexAIAi21Config as VertexAIAi21Config
+    from .llms.bedrock.chat.invoke_handler import AmazonCohereChatConfig as AmazonCohereChatConfig
+    from .llms.bedrock.common_utils import AmazonBedrockGlobalConfig as AmazonBedrockGlobalConfig
+    from .llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation import AmazonAI21Config as AmazonAI21Config
+    from .llms.bedrock.chat.invoke_transformations.amazon_nova_transformation import AmazonInvokeNovaConfig as AmazonInvokeNovaConfig
+    from .llms.bedrock.chat.invoke_transformations.amazon_qwen2_transformation import AmazonQwen2Config as AmazonQwen2Config
+    from .llms.bedrock.chat.invoke_transformations.amazon_qwen3_transformation import AmazonQwen3Config as AmazonQwen3Config
     from litellm.caching.llm_caching_handler import LLMClientCache
     from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
     from litellm.types.utils import (

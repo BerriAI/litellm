@@ -140,6 +140,24 @@ LLM_CONFIG_NAMES = (
     "SagemakerConfig",
     "SagemakerChatConfig",
     "CohereChatConfig",
+    "AnthropicMessagesConfig",
+    "AmazonAnthropicClaudeMessagesConfig",
+    "TogetherAIConfig",
+    "NLPCloudConfig",
+    "VertexGeminiConfig",
+    "GoogleAIStudioGeminiConfig",
+    "VertexAIAnthropicConfig",
+    "VertexAILlama3Config",
+    "VertexAIAi21Config",
+    "AmazonCohereChatConfig",
+    "AmazonBedrockGlobalConfig",
+    "AmazonAI21Config",
+    "AmazonInvokeNovaConfig",
+    "AmazonQwen2Config",
+    "AmazonQwen3Config",
+    # Aliases for backwards compatibility
+    "VertexAIConfig",  # Alias for VertexGeminiConfig
+    "GeminiConfig",  # Alias for GoogleAIStudioGeminiConfig
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -293,6 +311,24 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "SagemakerConfig": (".llms.sagemaker.completion.transformation", "SagemakerConfig"),
     "SagemakerChatConfig": (".llms.sagemaker.chat.transformation", "SagemakerChatConfig"),
     "CohereChatConfig": (".llms.cohere.chat.transformation", "CohereChatConfig"),
+    "AnthropicMessagesConfig": (".llms.anthropic.experimental_pass_through.messages.transformation", "AnthropicMessagesConfig"),
+    "AmazonAnthropicClaudeMessagesConfig": (".llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation", "AmazonAnthropicClaudeMessagesConfig"),
+    "TogetherAIConfig": (".llms.together_ai.chat", "TogetherAIConfig"),
+    "NLPCloudConfig": (".llms.nlp_cloud.chat.handler", "NLPCloudConfig"),
+    "VertexGeminiConfig": (".llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini", "VertexGeminiConfig"),
+    "GoogleAIStudioGeminiConfig": (".llms.gemini.chat.transformation", "GoogleAIStudioGeminiConfig"),
+    "VertexAIAnthropicConfig": (".llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation", "VertexAIAnthropicConfig"),
+    "VertexAILlama3Config": (".llms.vertex_ai.vertex_ai_partner_models.llama3.transformation", "VertexAILlama3Config"),
+    "VertexAIAi21Config": (".llms.vertex_ai.vertex_ai_partner_models.ai21.transformation", "VertexAIAi21Config"),
+    "AmazonCohereChatConfig": (".llms.bedrock.chat.invoke_handler", "AmazonCohereChatConfig"),
+    "AmazonBedrockGlobalConfig": (".llms.bedrock.common_utils", "AmazonBedrockGlobalConfig"),
+    "AmazonAI21Config": (".llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation", "AmazonAI21Config"),
+    "AmazonInvokeNovaConfig": (".llms.bedrock.chat.invoke_transformations.amazon_nova_transformation", "AmazonInvokeNovaConfig"),
+    "AmazonQwen2Config": (".llms.bedrock.chat.invoke_transformations.amazon_qwen2_transformation", "AmazonQwen2Config"),
+    "AmazonQwen3Config": (".llms.bedrock.chat.invoke_transformations.amazon_qwen3_transformation", "AmazonQwen3Config"),
+    # Aliases for backwards compatibility
+    "VertexAIConfig": (".llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini", "VertexGeminiConfig"),  # Alias
+    "GeminiConfig": (".llms.gemini.chat.transformation", "GoogleAIStudioGeminiConfig"),  # Alias
 }
 
 # Export all name tuples and import maps for use in _lazy_imports.py
