@@ -89,7 +89,7 @@ export const provider_map: Record<string, string> = {
   Infinity: "infinity",
 };
 
-const asset_logos_folder = "../ui/assets/logos/";
+const asset_logos_folder = "/assets/logos/";
 
 export const providerLogoMap: Record<string, string> = {
   [Providers.A2A_Agent]: `${asset_logos_folder}a2a_agent.png`,

@@ -46,7 +46,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <ThemeProvider accessToken={""}>
-      <div className="flex flex-col min-h-screen">
+      <div className="flex flex-col min-h-screen bg-white dark:bg-[#141414]">
         <Navbar
           isPublicPage={false}
           sidebarCollapsed={sidebarCollapsed}
@@ -63,7 +63,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           <div className="mt-2">
             <Sidebar2 defaultSelectedKey={page} accessToken={accessToken} userRole={userRole} />
           </div>
-          <main className="flex-1">{children}</main>
+          <main className="flex-1 bg-gray-50 dark:bg-[#1a1a1a] text-gray-900 dark:text-gray-100">{children}</main>
         </div>
       </div>
     </ThemeProvider>

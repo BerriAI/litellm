@@ -2,7 +2,8 @@ import React, { useState } from "react";
 import { Button } from "antd";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { coy, oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { useTheme } from "@/contexts/ThemeContext";
 import { DownOutlined, RightOutlined, BulbOutlined } from "@ant-design/icons";
 
 interface ReasoningContentProps {
@@ -10,6 +11,7 @@ interface ReasoningContentProps {
 }
 
 const ReasoningContent: React.FC<ReasoningContentProps> = ({ reasoningContent }) => {
+  const { isDarkMode } = useTheme();
   const [isExpanded, setIsExpanded] = useState(true);
 
   if (!reasoningContent) return null;
@@ -27,7 +29,7 @@ const ReasoningContent: React.FC<ReasoningContentProps> = ({ reasoningContent })
       </Button>
 
       {isExpanded && (
-        <div className="mt-2 p-3 bg-gray-50 border border-gray-200 rounded-md text-sm text-gray-700">
+        <div className="mt-2 p-3 bg-gray-50 dark:bg-[#1a1a1a] border border-gray-200 dark:border-[#2a2a2a] rounded-md text-sm text-gray-700 dark:text-gray-300">
           <ReactMarkdown
             components={{
               code({
@@ -43,7 +45,7 @@ const ReasoningContent: React.FC<ReasoningContentProps> = ({ reasoningContent })
                 const match = /language-(\w+)/.exec(className || "");
                 return !inline && match ? (
                   <SyntaxHighlighter
-                    style={coy as any}
+                    style={isDarkMode ? oneDark as any : coy as any}
                     language={match[1]}
                     PreTag="div"
                     className="rounded-md my-2"
@@ -52,7 +54,7 @@ const ReasoningContent: React.FC<ReasoningContentProps> = ({ reasoningContent })
                     {String(children).replace(/\n$/, "")}
                   </SyntaxHighlighter>
                 ) : (
-                  <code className={`${className} px-1.5 py-0.5 rounded bg-gray-100 text-sm font-mono`} {...props}>
+                  <code className={`${className} px-1.5 py-0.5 rounded bg-gray-100 dark:bg-[#252525] text-sm font-mono`} {...props}>
                     {children}
                   </code>
                 );

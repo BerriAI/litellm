@@ -703,7 +703,7 @@ export default function KeyInfoView({
 
                   <div>
                     <Text className="font-medium">Metadata</Text>
-                    <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
+                    <pre className="bg-gray-100 dark:bg-zinc-800 p-2 rounded text-xs overflow-auto mt-1 text-gray-900 dark:text-gray-100">
                       {formatMetadataForDisplay(stripTagsFromMetadata(currentKeyData.metadata))}
                     </pre>
                   </div>

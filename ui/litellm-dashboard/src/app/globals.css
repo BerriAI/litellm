@@ -2,20 +2,49 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ============================================
+   CSS Variables - Dark Mode Colors
+   ============================================ */
 :root {
   --foreground-rgb: 0, 0, 0;
   --background-start-rgb: 255, 255, 255;
   --background-end-rgb: 255, 255, 255;
   --neutral-border: #dcddeb;
+
+  /* Dark mode color tokens (for reference and non-component usage) */
+  /* Using a more subtle gradient with less contrast between levels */
+  --dark-bg-base: #141414;        /* Main background - slightly lighter for less stark contrast */
+  --dark-bg-elevated: #1a1a1a;    /* Cards, panels - subtle elevation */
+  --dark-bg-surface: #1e1e1e;     /* Interior content areas */
+  --dark-bg-hover: #252525;       /* Hover states */
+  --dark-border: #2a2a2a;         /* Subtle borders */
+  --dark-border-hover: #3a3a3a;   /* Hover borders */
+  --dark-text-primary: #e5e7eb;
+  --dark-text-secondary: #a1a1aa;
+  --dark-text-muted: #71717a;
+  --dark-accent-blue: #3b82f6;
 }
 
-/* @media (prefers-color-scheme: dark) {
-  :root {
-    --foreground-rgb: 255, 255, 255;
-    --background-start-rgb: 0, 0, 0;
-    --background-end-rgb: 0, 0, 0;
-  }
-} */
+.dark {
+  --foreground-rgb: 229, 231, 235;
+  --background-start-rgb: 20, 20, 20;  /* Matches --dark-bg-base #141414 */
+  --background-end-rgb: 20, 20, 20;
+  --neutral-border: #2a2a2a;  /* Matches --dark-border */
+
+  /* Tremor CSS variable overrides for dark mode */
+  --tremor-background-muted: #141414;
+  --tremor-background-subtle: #1a1a1a;
+  --tremor-background-default: #141414;
+  --tremor-background-emphasis: #252525;
+  --tremor-border-default: #2a2a2a;
+  --tremor-ring-default: #2a2a2a;
+  --tremor-content-default: #e5e7eb;
+  --tremor-content-emphasis: #e5e7eb;
+  --tremor-content-strong: #e5e7eb;
+  --tremor-content-moderate: #a1a1aa;
+  --tremor-content-subtle: #71717a;
+  --tremor-content-inverted: #141414;
+}
 
 body {
   color: rgb(var(--foreground-rgb));
@@ -28,9 +57,11 @@ body {
   }
 }
 
+/* ============================================
+   Layout Utilities
+   ============================================ */
 .table-wrapper {
   overflow-x: scroll;
-  /* max-width: 80%; */
   margin: 0px 24px;
 }
 
@@ -38,7 +69,10 @@ body {
   border: 1px solid var(--neutral-border);
 }
 
-/* Custom dropdown styles */
+/* ============================================
+   Ant Design Dropdown - Custom Behavior
+   (These are behavioral overrides, not theme colors)
+   ============================================ */
 .ant-dropdown-menu-item {
   padding: 0 !important;
 }
@@ -64,4 +98,1734 @@ body {
 
 .ant-dropdown-menu-item-divider {
   margin: 4px 0;
+}
+
+/* ============================================
+   Tremor Components - Dark Mode
+   (Tremor is not controlled by Ant Design ConfigProvider)
+   ============================================ */
+.dark [class*="tremor-Card"],
+.dark .tremor-Card-root {
+  background-color: var(--dark-bg-base) !important;
+  border-color: transparent !important;
+  --tw-ring-color: transparent !important;
+  --tw-ring-opacity: 0 !important;
+  box-shadow: none !important;
+}
+
+.dark [class*="tremor-TextInput"],
+.dark .tremor-TextInput-root {
+  background-color: var(--dark-bg-elevated) !important;
+  border-color: var(--dark-border) !important;
+  color: var(--dark-text-primary) !important;
+}
+
+.dark [class*="tremor-Title"],
+.dark .tremor-Title {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark [class*="tremor-Text"],
+.dark .tremor-Text {
+  color: var(--dark-text-secondary) !important;
+}
+
+.dark [class*="tremor-Metric"],
+.dark .tremor-Metric {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark [class*="tremor-Table"],
+.dark .tremor-Table-root {
+  background-color: transparent !important;
+}
+
+.dark .tremor-Table-root table,
+.dark .tremor-Table-table {
+  background-color: transparent !important;
+}
+
+.dark [class*="tremor-TableHead"],
+.dark .tremor-TableHead-root {
+  background-color: transparent !important;
+}
+
+.dark [class*="tremor-TableHeaderCell"] {
+  color: var(--dark-text-secondary) !important;
+  border-color: var(--dark-border) !important;
+  background-color: transparent !important;
+}
+
+.dark [class*="tremor-TableBody"],
+.dark .tremor-TableBody-root {
+  background-color: transparent !important;
+}
+
+.dark [class*="tremor-TableRow"],
+.dark .tremor-TableRow-row {
+  background-color: transparent !important;
+}
+
+.dark [class*="tremor-TableCell"] {
+  color: var(--dark-text-primary) !important;
+  border-color: var(--dark-border) !important;
+  background-color: transparent !important;
+}
+
+.dark [class*="tremor-TableRow"]:hover {
+  background-color: var(--dark-bg-hover) !important;
+}
+
+.dark [class*="tremor-Select"],
+.dark .tremor-Select-root {
+  background-color: var(--dark-bg-elevated) !important;
+  border-color: var(--dark-border) !important;
+}
+
+.dark [class*="tremor-Button"][class*="secondary"] {
+  background-color: var(--dark-bg-elevated) !important;
+  border-color: var(--dark-border) !important;
+  color: var(--dark-text-primary) !important;
+}
+
+/* Tremor buttons with blue backgrounds (used in tables for IDs) */
+.dark [class*="tremor-Button"].bg-blue-50 {
+  background-color: rgba(59, 130, 246, 0.15) !important;
+}
+
+.dark [class*="tremor-Button"].bg-blue-50:hover,
+.dark [class*="tremor-Button"].hover\:bg-blue-100:hover {
+  background-color: rgba(59, 130, 246, 0.25) !important;
+}
+
+/* ============================================
+   Provider Logo - Dark Mode Utility
+   ============================================ */
+.provider-logo {
+  /* Light mode: no background needed */
+}
+
+.dark .provider-logo {
+  background-color: var(--dark-bg-hover);
+  border-radius: 4px;
+  padding: 2px;
+}
+
+/* ============================================
+   Code Blocks
+   ============================================ */
+.dark pre,
+.dark code {
+  background-color: var(--dark-bg-elevated) !important;
+  color: var(--dark-text-primary) !important;
+}
+
+/* ============================================
+   Scrollbar Styling
+   ============================================ */
+.dark ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.dark ::-webkit-scrollbar-track {
+  background: var(--dark-bg-elevated);
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: var(--dark-border-hover);
+  border-radius: 4px;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #4a4a4a;
+}
+
+/* ============================================
+   Ant Design Components - Supplementary Overrides
+   (Only for components/states not fully covered by ConfigProvider)
+   ============================================ */
+
+/* Dropdown dark mode - ConfigProvider doesn't fully control dropdowns rendered in portals */
+.dark .ant-dropdown-menu {
+  background-color: #141414 !important;
+  border-color: var(--dark-border) !important;
+}
+
+.dark .ant-dropdown-menu-item {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-dropdown-menu-item:hover {
+  background-color: var(--dark-bg-hover) !important;
+}
+
+/* Select dropdown (rendered in portal) */
+.dark .ant-select-dropdown {
+  background-color: var(--dark-bg-elevated) !important;
+  border-color: var(--dark-border) !important;
+}
+
+.dark .ant-select-item {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-select-item-option-active,
+.dark .ant-select-item-option-selected {
+  background-color: var(--dark-bg-hover) !important;
+}
+
+/* Tooltip (rendered in portal) */
+.dark .ant-tooltip-inner {
+  background-color: var(--dark-bg-hover) !important;
+  color: var(--dark-text-primary) !important;
+}
+
+/* Popover (rendered in portal) */
+.dark .ant-popover-inner {
+  background-color: var(--dark-bg-elevated) !important;
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-popover-title {
+  color: var(--dark-text-primary) !important;
+  border-color: var(--dark-border) !important;
+}
+
+/* Modal (rendered in portal) */
+.dark .ant-modal-content {
+  background-color: var(--dark-bg-elevated) !important;
+}
+
+.dark .ant-modal-header {
+  background-color: var(--dark-bg-elevated) !important;
+  border-color: var(--dark-border) !important;
+}
+
+.dark .ant-modal-title {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-modal-close {
+  color: var(--dark-text-secondary) !important;
+}
+
+.dark .ant-modal-close:hover {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-modal-body {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-modal-footer {
+  border-color: var(--dark-border) !important;
+}
+
+/* Alert styling */
+.dark .ant-alert {
+  border-color: var(--dark-border) !important;
+}
+
+.dark .ant-alert-info {
+  background-color: rgba(59, 130, 246, 0.1) !important;
+  border-color: var(--dark-accent-blue) !important;
+}
+
+.dark .ant-alert-message {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-alert-description {
+  color: var(--dark-text-secondary) !important;
+}
+
+/* Empty state description */
+.dark .ant-empty-description {
+  color: var(--dark-text-secondary) !important;
+}
+
+/* ============================================
+   Ant Design Menu - Sidebar
+   ============================================ */
+.dark .ant-menu {
+  background-color: var(--dark-bg-base) !important;
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-menu-item {
+  color: var(--dark-text-secondary) !important;
+}
+
+.dark .ant-menu-item:hover {
+  background-color: var(--dark-bg-elevated) !important;
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-menu-item-selected {
+  background-color: var(--dark-bg-elevated) !important;
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-menu-item-selected::after {
+  border-color: var(--dark-accent-blue) !important;
+}
+
+.dark .ant-menu-submenu-title {
+  color: var(--dark-text-secondary) !important;
+}
+
+.dark .ant-menu-submenu-title:hover {
+  background-color: var(--dark-bg-elevated) !important;
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-menu-submenu-arrow {
+  color: var(--dark-text-muted) !important;
+}
+
+.dark .ant-menu-submenu-arrow::before,
+.dark .ant-menu-submenu-arrow::after {
+  background: var(--dark-text-muted) !important;
+}
+
+.dark .ant-menu-sub {
+  background-color: var(--dark-bg-base) !important;
+}
+
+.dark .ant-menu-inline .ant-menu-item,
+.dark .ant-menu-inline .ant-menu-submenu-title {
+  color: var(--dark-text-secondary) !important;
+}
+
+.dark .ant-menu-inline .ant-menu-item:hover,
+.dark .ant-menu-inline .ant-menu-submenu-title:hover {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-menu-inline .ant-menu-item-selected {
+  color: var(--dark-text-primary) !important;
+  background-color: var(--dark-bg-elevated) !important;
+}
+
+/* ============================================
+   Ant Design Layout
+   ============================================ */
+.dark .ant-layout-sider {
+  background-color: var(--dark-bg-base) !important;
+}
+
+.dark .ant-layout-sider-light {
+  background-color: var(--dark-bg-base) !important;
+}
+
+.dark .ant-layout-sider-children {
+  background-color: var(--dark-bg-base) !important;
+}
+
+.dark .ant-layout {
+  background-color: var(--dark-bg-base) !important;
+}
+
+/* ============================================
+   Ant Design Card
+   ============================================ */
+.dark .ant-card {
+  background-color: var(--dark-bg-elevated) !important;
+  border-color: var(--dark-border) !important;
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-card-head {
+  background-color: var(--dark-bg-elevated) !important;
+  border-color: var(--dark-border) !important;
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-card-head-title {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-card-body {
+  color: var(--dark-text-primary) !important;
+}
+
+/* ============================================
+   Ant Design Table
+   ============================================ */
+.dark .ant-table {
+  background-color: var(--dark-bg-elevated) !important;
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-table-thead > tr > th {
+  background-color: var(--dark-bg-base) !important;
+  color: var(--dark-text-secondary) !important;
+  border-color: var(--dark-border) !important;
+}
+
+.dark .ant-table-tbody > tr > td {
+  background-color: var(--dark-bg-elevated) !important;
+  color: var(--dark-text-primary) !important;
+  border-color: var(--dark-border) !important;
+}
+
+.dark .ant-table-tbody > tr:hover > td {
+  background-color: var(--dark-bg-hover) !important;
+}
+
+.dark .ant-table-row:hover {
+  background-color: var(--dark-bg-hover) !important;
+}
+
+.dark .ant-table-placeholder {
+  background-color: var(--dark-bg-elevated) !important;
+  color: var(--dark-text-secondary) !important;
+}
+
+.dark .ant-table-container {
+  border-color: var(--dark-border) !important;
+}
+
+.dark .ant-table-cell {
+  border-color: var(--dark-border) !important;
+}
+
+/* ============================================
+   Ant Design Typography
+   (Headings and text rendered by Typography component)
+   ============================================ */
+.dark .ant-typography {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark h1.ant-typography,
+.dark h2.ant-typography,
+.dark h3.ant-typography,
+.dark h4.ant-typography,
+.dark h5.ant-typography,
+.dark .ant-typography h1,
+.dark .ant-typography h2,
+.dark .ant-typography h3,
+.dark .ant-typography h4,
+.dark .ant-typography h5 {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-typography.ant-typography-secondary {
+  color: var(--dark-text-secondary) !important;
+}
+
+.dark .ant-typography a {
+  color: #60a5fa !important;
+}
+
+.dark .ant-typography a:hover {
+  color: #93c5fd !important;
+}
+
+/* ============================================
+   Ant Design Form/Input
+   ============================================ */
+.dark .ant-input {
+  background-color: var(--dark-bg-base) !important;
+  border-color: var(--dark-border) !important;
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-input:hover,
+.dark .ant-input:focus {
+  border-color: var(--dark-border-hover) !important;
+}
+
+.dark .ant-input::placeholder {
+  color: var(--dark-text-muted) !important;
+}
+
+.dark .ant-input-affix-wrapper {
+  background-color: var(--dark-bg-base) !important;
+  border-color: var(--dark-border) !important;
+}
+
+.dark .ant-input-affix-wrapper > .ant-input {
+  background-color: transparent !important;
+}
+
+.dark .ant-input-group-addon {
+  background-color: var(--dark-bg-hover) !important;
+  border-color: var(--dark-border) !important;
+  color: var(--dark-text-secondary) !important;
+}
+
+.dark .ant-input-number {
+  background-color: var(--dark-bg-base) !important;
+  border-color: var(--dark-border) !important;
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-input-number-input {
+  background-color: transparent !important;
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-input-number-handler-wrap {
+  background-color: var(--dark-bg-hover) !important;
+}
+
+.dark .ant-input-number-handler {
+  border-color: var(--dark-border) !important;
+  color: var(--dark-text-secondary) !important;
+}
+
+.dark .ant-input-textarea {
+  background-color: var(--dark-bg-base) !important;
+}
+
+.dark .ant-input-textarea > textarea {
+  background-color: var(--dark-bg-base) !important;
+  border-color: var(--dark-border) !important;
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-select-selector {
+  background-color: var(--dark-bg-base) !important;
+  border-color: var(--dark-border) !important;
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-select:not(.ant-select-disabled):hover .ant-select-selector {
+  border-color: var(--dark-border-hover) !important;
+}
+
+.dark .ant-select-selection-placeholder {
+  color: var(--dark-text-muted) !important;
+}
+
+.dark .ant-select-selection-item {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-select-arrow {
+  color: var(--dark-text-secondary) !important;
+}
+
+.dark .ant-select-clear {
+  background-color: var(--dark-bg-base) !important;
+  color: var(--dark-text-secondary) !important;
+}
+
+.dark .ant-select-multiple .ant-select-selection-item {
+  background-color: var(--dark-bg-hover) !important;
+  border-color: var(--dark-border) !important;
+}
+
+.dark .ant-picker {
+  background-color: var(--dark-bg-base) !important;
+  border-color: var(--dark-border) !important;
+}
+
+.dark .ant-picker-input > input {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-picker-suffix {
+  color: var(--dark-text-secondary) !important;
+}
+
+.dark .ant-picker-clear {
+  background-color: var(--dark-bg-base) !important;
+  color: var(--dark-text-secondary) !important;
+}
+
+/* ============================================
+   Ant Design Button
+   ============================================ */
+.dark .ant-btn-default {
+  background-color: var(--dark-bg-elevated) !important;
+  border-color: var(--dark-border) !important;
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-btn-default:hover {
+  background-color: var(--dark-bg-hover) !important;
+  border-color: var(--dark-border-hover) !important;
+  color: #ffffff !important;
+}
+
+/* ============================================
+   Ant Design Tabs
+   ============================================ */
+.dark .ant-tabs-tab {
+  color: var(--dark-text-secondary) !important;
+}
+
+.dark .ant-tabs-tab:hover {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-tabs-ink-bar {
+  background-color: var(--dark-accent-blue) !important;
+}
+
+.dark .ant-tabs-nav::before {
+  border-color: var(--dark-border) !important;
+}
+
+/* ============================================
+   Ant Design Form
+   ============================================ */
+.dark .ant-form-item-label > label {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-form-item-explain-error {
+  color: #ef4444 !important;
+}
+
+/* ============================================
+   Ant Design Pagination
+   ============================================ */
+.dark .ant-pagination-item {
+  background-color: var(--dark-bg-elevated) !important;
+  border-color: var(--dark-border) !important;
+}
+
+.dark .ant-pagination-item a {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-pagination-item-active {
+  border-color: var(--dark-accent-blue) !important;
+}
+
+.dark .ant-pagination-prev .ant-pagination-item-link,
+.dark .ant-pagination-next .ant-pagination-item-link {
+  background-color: var(--dark-bg-elevated) !important;
+  border-color: var(--dark-border) !important;
+  color: var(--dark-text-primary) !important;
+}
+
+/* ============================================
+   Ant Design Spin
+   ============================================ */
+.dark .ant-spin-text {
+  color: var(--dark-text-primary) !important;
+}
+
+/* ============================================
+   Ant Design Icons - Global Color Override
+   (Icons inherit currentColor but some contexts don't set color)
+   ============================================ */
+.dark .anticon {
+  color: var(--dark-text-secondary);
+}
+
+.dark .anticon svg {
+  fill: currentColor;
+}
+
+/* Ensure icons in specific contexts get proper colors */
+.dark .ant-empty .anticon {
+  color: var(--dark-text-muted) !important;
+}
+
+.dark .ant-upload .anticon {
+  color: var(--dark-text-secondary) !important;
+}
+
+.dark .ant-upload-drag-icon .anticon {
+  color: var(--dark-text-secondary) !important;
+}
+
+/* ============================================
+   Ant Design Tag
+   ============================================ */
+.dark .ant-tag {
+  background-color: var(--dark-bg-hover) !important;
+  border-color: var(--dark-border-hover) !important;
+  color: var(--dark-text-primary) !important;
+}
+
+/* ============================================
+   Ant Design Divider
+   ============================================ */
+.dark .ant-divider {
+  border-color: var(--dark-border) !important;
+}
+
+/* ============================================
+   Ant Design Collapse/Accordion
+   ============================================ */
+.dark .ant-collapse {
+  background-color: var(--dark-bg-elevated) !important;
+  border-color: var(--dark-border) !important;
+}
+
+.dark .ant-collapse-header {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-collapse-content {
+  background-color: var(--dark-bg-elevated) !important;
+  border-color: var(--dark-border) !important;
+  color: var(--dark-text-primary) !important;
+}
+
+/* ============================================
+   Ant Design Checkbox
+   ============================================ */
+.dark .ant-checkbox-inner {
+  background-color: var(--dark-bg-elevated) !important;
+  border-color: var(--dark-border-hover) !important;
+}
+
+.dark .ant-checkbox-wrapper {
+  color: var(--dark-text-primary) !important;
+}
+
+/* ============================================
+   Ant Design Radio
+   ============================================ */
+.dark .ant-radio-inner {
+  background-color: var(--dark-bg-elevated) !important;
+  border-color: var(--dark-border-hover) !important;
+}
+
+.dark .ant-radio-wrapper {
+  color: var(--dark-text-primary) !important;
+}
+
+/* ============================================
+   Ant Design Switch
+   ============================================ */
+.dark .ant-switch {
+  background-color: var(--dark-border-hover) !important;
+}
+
+/* ============================================
+   Ant Design Breadcrumb
+   ============================================ */
+.dark .ant-breadcrumb-link {
+  color: var(--dark-text-secondary) !important;
+}
+
+.dark .ant-breadcrumb-link:hover {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .ant-breadcrumb-separator {
+  color: var(--dark-text-muted) !important;
+}
+
+/* ============================================
+   Tremor Components - Extended Dark Mode
+   (Comprehensive overrides for all Tremor components)
+   ============================================ */
+
+/* Tremor Tabs */
+.dark [class*="tremor-Tab-root"],
+.dark [class*="tremor-TabList"],
+.dark .tremor-TabList-root {
+  border-color: var(--dark-border) !important;
+}
+
+.dark [class*="tremor-Tab-root"] {
+  color: var(--dark-text-secondary) !important;
+}
+
+.dark [class*="tremor-Tab-root"]:hover {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark [class*="tremor-Tab-root"][data-headlessui-state*="selected"],
+.dark [class*="tremor-Tab-root"][aria-selected="true"] {
+  color: var(--dark-text-primary) !important;
+  border-color: var(--dark-accent-blue) !important;
+}
+
+.dark [class*="tremor-TabPanel"],
+.dark .tremor-TabPanel-root {
+  background-color: transparent !important;
+}
+
+/* Tremor Grid/Col */
+.dark [class*="tremor-Grid"],
+.dark .tremor-Grid-root {
+  background-color: transparent !important;
+}
+
+.dark [class*="tremor-Col"],
+.dark .tremor-Col-root {
+  background-color: transparent !important;
+}
+
+/* Tremor Badge */
+.dark [class*="tremor-Badge"],
+.dark .tremor-Badge-root {
+  background-color: var(--dark-bg-hover) !important;
+  color: var(--dark-text-primary) !important;
+}
+
+/* Tremor Accordion */
+.dark [class*="tremor-Accordion"],
+.dark .tremor-Accordion-root {
+  background-color: var(--dark-bg-elevated) !important;
+  border-color: var(--dark-border) !important;
+}
+
+.dark [class*="tremor-AccordionHeader"],
+.dark .tremor-AccordionHeader-root {
+  background-color: var(--dark-bg-elevated) !important;
+  color: var(--dark-text-primary) !important;
+}
+
+.dark [class*="tremor-AccordionBody"],
+.dark .tremor-AccordionBody-root {
+  background-color: var(--dark-bg-elevated) !important;
+  color: var(--dark-text-primary) !important;
+}
+
+/* Tremor Callout */
+.dark [class*="tremor-Callout"],
+.dark .tremor-Callout-root {
+  background-color: var(--dark-bg-elevated) !important;
+  border-color: var(--dark-border) !important;
+  color: var(--dark-text-primary) !important;
+}
+
+/* Tremor Icon */
+.dark [class*="tremor-Icon"],
+.dark .tremor-Icon-root {
+  color: var(--dark-text-secondary) !important;
+}
+
+/* Tremor NumberInput */
+.dark [class*="tremor-NumberInput"],
+.dark .tremor-NumberInput-root {
+  background-color: var(--dark-bg-elevated) !important;
+  border-color: var(--dark-border) !important;
+  color: var(--dark-text-primary) !important;
+}
+
+/* Tremor Switch */
+.dark [class*="tremor-Switch"],
+.dark .tremor-Switch-root {
+  background-color: var(--dark-border-hover) !important;
+}
+
+/* Tremor List */
+.dark [class*="tremor-List"],
+.dark .tremor-List-root {
+  background-color: transparent !important;
+}
+
+.dark [class*="tremor-ListItem"],
+.dark .tremor-ListItem-root {
+  color: var(--dark-text-primary) !important;
+}
+
+/* Tremor MultiSelect */
+.dark [class*="tremor-MultiSelect"],
+.dark .tremor-MultiSelect-root {
+  background-color: var(--dark-bg-elevated) !important;
+  border-color: var(--dark-border) !important;
+}
+
+/* Tremor DateRangePicker */
+.dark [class*="tremor-DateRangePicker"],
+.dark .tremor-DateRangePicker-root {
+  background-color: var(--dark-bg-elevated) !important;
+  border-color: var(--dark-border) !important;
+}
+
+/* Tremor SearchSelect */
+.dark [class*="tremor-SearchSelect"],
+.dark .tremor-SearchSelect-root {
+  background-color: var(--dark-bg-elevated) !important;
+  border-color: var(--dark-border) !important;
+}
+
+/* Tremor AreaChart / BarChart / LineChart */
+.dark [class*="tremor-AreaChart"],
+.dark [class*="tremor-BarChart"],
+.dark [class*="tremor-LineChart"] {
+  background-color: transparent !important;
+}
+
+/* Tremor Legend */
+.dark [class*="tremor-Legend"],
+.dark .tremor-Legend-root {
+  color: var(--dark-text-secondary) !important;
+}
+
+/* Tremor Dropdown Menu (Headless UI) */
+.dark [class*="tremor-Dropdown"],
+.dark .tremor-DropdownMenu-root {
+  background-color: var(--dark-bg-elevated) !important;
+  border-color: var(--dark-border) !important;
+}
+
+.dark [class*="tremor-DropdownItem"] {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark [class*="tremor-DropdownItem"]:hover {
+  background-color: var(--dark-bg-hover) !important;
+}
+
+/* Tremor SelectItem */
+.dark [class*="tremor-SelectItem"] {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark [class*="tremor-SelectItem"]:hover,
+.dark [class*="tremor-SelectItem"][data-headlessui-state*="active"] {
+  background-color: var(--dark-bg-hover) !important;
+}
+
+/* Tremor Dialog/Modal */
+.dark [class*="tremor-Dialog"],
+.dark .tremor-Dialog-root {
+  background-color: var(--dark-bg-elevated) !important;
+  border-color: var(--dark-border) !important;
+}
+
+/* Tremor Tracker */
+.dark [class*="tremor-Tracker"],
+.dark .tremor-Tracker-root {
+  background-color: transparent !important;
+}
+
+/* Headless UI Listbox (used by Tremor Select internally) */
+.dark [data-headlessui-state] {
+  color: var(--dark-text-primary);
+}
+
+/* Headless UI Popover panel */
+.dark [class*="tremor"][role="listbox"] {
+  background-color: var(--dark-bg-elevated) !important;
+  border-color: var(--dark-border) !important;
+}
+
+/* Tremor divider */
+.dark [class*="tremor-Divider"] {
+  background-color: var(--dark-border) !important;
+}
+
+/* Tremor DonutChart center text */
+.dark [class*="tremor-DonutChart"] text {
+  fill: var(--dark-text-primary) !important;
+}
+
+/* Tremor ProgressBar */
+.dark [class*="tremor-ProgressBar"] {
+  background-color: var(--dark-bg-hover) !important;
+}
+
+/* ============================================
+   Tremor/Headless UI Popovers and Dropdowns
+   (These render in portals outside the main app)
+   ============================================ */
+
+/* Generic dark mode for any floating panel */
+.dark [data-headlessui-portal] [role="listbox"],
+.dark [data-headlessui-portal] [role="menu"],
+.dark [data-headlessui-portal] [role="dialog"] {
+  background-color: var(--dark-bg-elevated) !important;
+  border-color: var(--dark-border) !important;
+  color: var(--dark-text-primary) !important;
+}
+
+/* Options in dropdowns */
+.dark [data-headlessui-portal] [role="option"] {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark [data-headlessui-portal] [role="option"]:hover,
+.dark [data-headlessui-portal] [role="option"][data-headlessui-state*="active"] {
+  background-color: var(--dark-bg-hover) !important;
+}
+
+/* Calendar/Date picker popover */
+.dark [data-headlessui-portal] .react-datepicker,
+.dark .react-datepicker {
+  background-color: var(--dark-bg-elevated) !important;
+  border-color: var(--dark-border) !important;
+  color: var(--dark-text-primary) !important;
+}
+
+.dark [data-headlessui-portal] .react-datepicker__header,
+.dark .react-datepicker__header {
+  background-color: var(--dark-bg-base) !important;
+  border-color: var(--dark-border) !important;
+}
+
+.dark [data-headlessui-portal] .react-datepicker__day,
+.dark .react-datepicker__day {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark [data-headlessui-portal] .react-datepicker__day:hover,
+.dark .react-datepicker__day:hover {
+  background-color: var(--dark-bg-hover) !important;
+}
+
+.dark [data-headlessui-portal] .react-datepicker__day--selected,
+.dark .react-datepicker__day--selected {
+  background-color: var(--dark-accent-blue) !important;
+}
+
+.dark [data-headlessui-portal] .react-datepicker__current-month,
+.dark .react-datepicker__current-month,
+.dark [data-headlessui-portal] .react-datepicker__day-name,
+.dark .react-datepicker__day-name {
+  color: var(--dark-text-primary) !important;
+}
+
+/* ============================================
+   Recharts (used by Tremor charts internally)
+   ============================================ */
+.dark .recharts-cartesian-axis-tick-value {
+  fill: var(--dark-text-secondary) !important;
+}
+
+.dark .recharts-legend-item-text {
+  color: var(--dark-text-secondary) !important;
+}
+
+.dark .recharts-tooltip-wrapper .recharts-default-tooltip {
+  background-color: var(--dark-bg-elevated) !important;
+  border-color: var(--dark-border) !important;
+}
+
+.dark .recharts-tooltip-item {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .recharts-tooltip-label {
+  color: var(--dark-text-primary) !important;
+}
+
+/* ============================================
+   Generic Tailwind bg-white/bg-gray overrides
+   (For components using hardcoded Tailwind classes)
+   ============================================ */
+
+/* Override bg-white in dark mode - use base for consistency */
+.dark .bg-white {
+  background-color: var(--dark-bg-base) !important;
+}
+
+/* Override bg-gray-50 in dark mode */
+.dark .bg-gray-50 {
+  background-color: var(--dark-bg-base) !important;
+}
+
+/* Override bg-gray-100 in dark mode */
+.dark .bg-gray-100 {
+  background-color: var(--dark-bg-hover) !important;
+}
+
+/* Override text-gray colors in dark mode for better contrast */
+.dark .text-gray-900 {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .text-gray-800 {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .text-gray-700 {
+  color: var(--dark-text-secondary) !important;
+}
+
+.dark .text-gray-600 {
+  color: var(--dark-text-secondary) !important;
+}
+
+.dark .text-gray-500 {
+  color: var(--dark-text-muted) !important;
+}
+
+.dark .text-gray-400 {
+  color: var(--dark-text-muted) !important;
+}
+
+/* Override border-gray colors in dark mode */
+.dark .border-gray-200 {
+  border-color: var(--dark-border) !important;
+}
+
+.dark .border-gray-300 {
+  border-color: var(--dark-border-hover) !important;
+}
+
+/* Override hover states */
+.dark .hover\:bg-gray-50:hover {
+  background-color: var(--dark-bg-hover) !important;
+}
+
+.dark .hover\:bg-gray-100:hover {
+  background-color: var(--dark-bg-hover) !important;
+}
+
+.dark .hover\:bg-white:hover {
+  background-color: var(--dark-bg-elevated) !important;
+}
+
+/* Override shadow in dark mode */
+.dark .shadow,
+.dark .shadow-sm,
+.dark .shadow-md,
+.dark .shadow-lg,
+.dark .shadow-xl {
+  --tw-shadow-color: rgba(0, 0, 0, 0.5);
+}
+
+/* Override rounded-lg with white background */
+.dark .rounded-lg.bg-white,
+.dark .rounded-lg.shadow {
+  background-color: var(--dark-bg-elevated) !important;
+}
+
+/* Override specific component patterns */
+.dark .border-b {
+  border-color: var(--dark-border) !important;
+}
+
+.dark .border-t {
+  border-color: var(--dark-border) !important;
+}
+
+/* Ring overrides for focused elements */
+.dark .ring-gray-200,
+.dark .ring-gray-300 {
+  --tw-ring-color: var(--dark-border) !important;
+}
+
+/* Ensure p, div, span inherit dark text colors when using text-gray-* */
+.dark p.text-gray-600,
+.dark div.text-gray-600,
+.dark span.text-gray-600 {
+  color: var(--dark-text-secondary) !important;
+}
+
+/* Override white/80 opacity patterns */
+.dark .bg-white\/80 {
+  background-color: rgba(18, 18, 18, 0.8) !important;
+}
+
+/* Override outline colors */
+.dark .outline {
+  outline-color: var(--dark-border) !important;
+}
+
+/* ============================================
+   Blue Highlight Overrides (bg-blue-50/100)
+   (Used extensively for ID buttons, selection states, etc.)
+   ============================================ */
+
+/* Blue backgrounds */
+.dark .bg-blue-50 {
+  background-color: rgba(59, 130, 246, 0.1) !important;
+}
+
+.dark .bg-blue-100 {
+  background-color: rgba(59, 130, 246, 0.2) !important;
+}
+
+/* Blue hover states */
+.dark .hover\:bg-blue-50:hover {
+  background-color: rgba(59, 130, 246, 0.15) !important;
+}
+
+.dark .hover\:bg-blue-100:hover {
+  background-color: rgba(59, 130, 246, 0.25) !important;
+}
+
+/* Blue text colors */
+.dark .text-blue-600 {
+  color: #60a5fa !important;
+}
+
+.dark .text-blue-700 {
+  color: #60a5fa !important;
+}
+
+.dark .text-blue-800 {
+  color: #93c5fd !important;
+}
+
+/* Blue border colors */
+.dark .border-blue-100 {
+  border-color: rgba(59, 130, 246, 0.3) !important;
+}
+
+.dark .border-blue-200 {
+  border-color: rgba(59, 130, 246, 0.4) !important;
+}
+
+/* ============================================
+   Green Highlight Overrides
+   (Used for success states, active indicators)
+   ============================================ */
+
+.dark .bg-green-50 {
+  background-color: rgba(34, 197, 94, 0.1) !important;
+}
+
+.dark .bg-green-100 {
+  background-color: rgba(34, 197, 94, 0.2) !important;
+}
+
+.dark .hover\:bg-green-50:hover {
+  background-color: rgba(34, 197, 94, 0.15) !important;
+}
+
+.dark .hover\:bg-green-100:hover {
+  background-color: rgba(34, 197, 94, 0.25) !important;
+}
+
+.dark .text-green-600 {
+  color: #4ade80 !important;
+}
+
+.dark .text-green-700 {
+  color: #4ade80 !important;
+}
+
+.dark .text-green-800 {
+  color: #86efac !important;
+}
+
+.dark .border-green-100 {
+  border-color: rgba(34, 197, 94, 0.3) !important;
+}
+
+.dark .border-green-200 {
+  border-color: rgba(34, 197, 94, 0.4) !important;
+}
+
+/* ============================================
+   Red Highlight Overrides
+   (Used for error states, delete buttons)
+   ============================================ */
+
+.dark .bg-red-50 {
+  background-color: rgba(239, 68, 68, 0.1) !important;
+}
+
+.dark .bg-red-100 {
+  background-color: rgba(239, 68, 68, 0.2) !important;
+}
+
+.dark .hover\:bg-red-50:hover {
+  background-color: rgba(239, 68, 68, 0.15) !important;
+}
+
+.dark .hover\:bg-red-100:hover {
+  background-color: rgba(239, 68, 68, 0.25) !important;
+}
+
+.dark .text-red-600 {
+  color: #f87171 !important;
+}
+
+.dark .text-red-700 {
+  color: #f87171 !important;
+}
+
+.dark .text-red-800 {
+  color: #fca5a5 !important;
+}
+
+.dark .border-red-100 {
+  border-color: rgba(239, 68, 68, 0.3) !important;
+}
+
+.dark .border-red-200 {
+  border-color: rgba(239, 68, 68, 0.4) !important;
+}
+
+/* ============================================
+   Yellow/Amber Highlight Overrides
+   (Used for warning states)
+   ============================================ */
+
+.dark .bg-yellow-50 {
+  background-color: rgba(234, 179, 8, 0.1) !important;
+}
+
+.dark .bg-yellow-100 {
+  background-color: rgba(234, 179, 8, 0.2) !important;
+}
+
+.dark .bg-amber-50 {
+  background-color: rgba(245, 158, 11, 0.1) !important;
+}
+
+.dark .bg-amber-100 {
+  background-color: rgba(245, 158, 11, 0.2) !important;
+}
+
+.dark .hover\:bg-yellow-50:hover {
+  background-color: rgba(234, 179, 8, 0.15) !important;
+}
+
+.dark .hover\:bg-yellow-100:hover {
+  background-color: rgba(234, 179, 8, 0.25) !important;
+}
+
+.dark .text-yellow-600 {
+  color: #facc15 !important;
+}
+
+.dark .text-yellow-700 {
+  color: #facc15 !important;
+}
+
+.dark .text-yellow-800 {
+  color: #fde047 !important;
+}
+
+.dark .text-amber-600 {
+  color: #fbbf24 !important;
+}
+
+.dark .text-amber-700 {
+  color: #fbbf24 !important;
+}
+
+.dark .border-yellow-100 {
+  border-color: rgba(234, 179, 8, 0.3) !important;
+}
+
+.dark .border-yellow-200 {
+  border-color: rgba(234, 179, 8, 0.4) !important;
+}
+
+/* ============================================
+   Purple/Indigo Highlight Overrides
+   (Used for special states)
+   ============================================ */
+
+.dark .bg-purple-50 {
+  background-color: rgba(168, 85, 247, 0.1) !important;
+}
+
+.dark .bg-purple-100 {
+  background-color: rgba(168, 85, 247, 0.2) !important;
+}
+
+.dark .bg-indigo-50 {
+  background-color: rgba(99, 102, 241, 0.1) !important;
+}
+
+.dark .bg-indigo-100 {
+  background-color: rgba(99, 102, 241, 0.2) !important;
+}
+
+.dark .text-purple-600 {
+  color: #c084fc !important;
+}
+
+.dark .text-purple-700 {
+  color: #c084fc !important;
+}
+
+.dark .text-indigo-600 {
+  color: #818cf8 !important;
+}
+
+.dark .text-indigo-700 {
+  color: #818cf8 !important;
+}
+
+.dark .border-purple-100 {
+  border-color: rgba(168, 85, 247, 0.3) !important;
+}
+
+.dark .border-indigo-100 {
+  border-color: rgba(99, 102, 241, 0.3) !important;
+}
+
+/* ============================================
+   Orange Highlight Overrides
+   (Used for warning/attention states)
+   ============================================ */
+
+.dark .bg-orange-50 {
+  background-color: rgba(249, 115, 22, 0.1) !important;
+}
+
+.dark .bg-orange-100 {
+  background-color: rgba(249, 115, 22, 0.2) !important;
+}
+
+.dark .hover\:bg-orange-50:hover {
+  background-color: rgba(249, 115, 22, 0.15) !important;
+}
+
+.dark .hover\:bg-orange-100:hover {
+  background-color: rgba(249, 115, 22, 0.25) !important;
+}
+
+.dark .text-orange-600 {
+  color: #fb923c !important;
+}
+
+.dark .text-orange-700 {
+  color: #fb923c !important;
+}
+
+.dark .border-orange-100 {
+  border-color: rgba(249, 115, 22, 0.3) !important;
+}
+
+/* ============================================
+   Slate/Zinc Backgrounds
+   (Used for neutral backgrounds)
+   ============================================ */
+
+.dark .bg-slate-50 {
+  background-color: var(--dark-bg-base) !important;
+}
+
+.dark .bg-slate-100 {
+  background-color: var(--dark-bg-hover) !important;
+}
+
+.dark .bg-zinc-50 {
+  background-color: var(--dark-bg-base) !important;
+}
+
+.dark .bg-zinc-100 {
+  background-color: var(--dark-bg-hover) !important;
+}
+
+/* ============================================
+   Form Element Overrides
+   (For various form backgrounds)
+   ============================================ */
+
+/* Input focus ring */
+.dark .focus\:ring-blue-500:focus {
+  --tw-ring-color: rgba(59, 130, 246, 0.5) !important;
+}
+
+.dark .focus\:ring-blue-300:focus {
+  --tw-ring-color: rgba(59, 130, 246, 0.3) !important;
+}
+
+/* Focus border states */
+.dark .focus\:border-blue-500:focus {
+  border-color: #3b82f6 !important;
+}
+
+.dark .focus\:border-blue-300:focus {
+  border-color: rgba(59, 130, 246, 0.5) !important;
+}
+
+/* Placeholder text */
+.dark .placeholder-gray-400::placeholder {
+  color: var(--dark-text-muted) !important;
+}
+
+.dark .placeholder-gray-500::placeholder {
+  color: var(--dark-text-muted) !important;
+}
+
+/* ============================================
+   Divide Borders
+   (For list dividers and table separators)
+   ============================================ */
+
+.dark .divide-gray-100 > :not([hidden]) ~ :not([hidden]) {
+  border-color: var(--dark-border) !important;
+}
+
+.dark .divide-gray-200 > :not([hidden]) ~ :not([hidden]) {
+  border-color: var(--dark-border) !important;
+}
+
+.dark .divide-gray-300 > :not([hidden]) ~ :not([hidden]) {
+  border-color: var(--dark-border-hover) !important;
+}
+
+/* ============================================
+   Disabled States
+   (For disabled buttons and inputs)
+   ============================================ */
+
+.dark .disabled\:bg-gray-100:disabled {
+  background-color: var(--dark-bg-hover) !important;
+}
+
+.dark .disabled\:text-gray-400:disabled {
+  color: var(--dark-text-muted) !important;
+}
+
+.dark .disabled\:opacity-50:disabled {
+  opacity: 0.5;
+}
+
+/* ============================================
+   Selection/Active States
+   (For selected items in lists)
+   ============================================ */
+
+.dark .active\:bg-gray-100:active {
+  background-color: var(--dark-bg-hover) !important;
+}
+
+.dark .active\:bg-blue-100:active {
+  background-color: rgba(59, 130, 246, 0.25) !important;
+}
+
+/* ============================================
+   Odd/Even Row Backgrounds
+   (For striped tables)
+   ============================================ */
+
+.dark .odd\:bg-white:nth-child(odd) {
+  background-color: var(--dark-bg-elevated) !important;
+}
+
+.dark .even\:bg-gray-50:nth-child(even) {
+  background-color: var(--dark-bg-base) !important;
+}
+
+/* ============================================
+   Group Hover States
+   (For parent-child hover interactions)
+   ============================================ */
+
+.dark .group:hover .group-hover\:bg-gray-50 {
+  background-color: var(--dark-bg-hover) !important;
+}
+
+.dark .group:hover .group-hover\:bg-gray-100 {
+  background-color: var(--dark-bg-hover) !important;
+}
+
+.dark .group:hover .group-hover\:text-gray-700 {
+  color: var(--dark-text-primary) !important;
+}
+
+.dark .group:hover .group-hover\:text-gray-900 {
+  color: var(--dark-text-primary) !important;
+}
+
+/* ============================================
+   Specific Component Patterns
+   (Common patterns found across the codebase)
+   ============================================ */
+
+/* Card headers with bg-gray-50 */
+.dark .bg-gray-50.rounded-t-lg {
+  background-color: var(--dark-bg-base) !important;
+}
+
+/* Footer sections */
+.dark .bg-gray-50.rounded-b-lg {
+  background-color: var(--dark-bg-base) !important;
+}
+
+/* Info boxes with bg-blue-50 */
+.dark .bg-blue-50.rounded-lg {
+  background-color: rgba(59, 130, 246, 0.1) !important;
+}
+
+.dark .bg-blue-50.rounded-md {
+  background-color: rgba(59, 130, 246, 0.1) !important;
+}
+
+/* Warning boxes with bg-yellow-50 */
+.dark .bg-yellow-50.rounded-lg {
+  background-color: rgba(234, 179, 8, 0.1) !important;
+}
+
+.dark .bg-yellow-50.rounded-md {
+  background-color: rgba(234, 179, 8, 0.1) !important;
+}
+
+/* Error boxes with bg-red-50 */
+.dark .bg-red-50.rounded-lg {
+  background-color: rgba(239, 68, 68, 0.1) !important;
+}
+
+.dark .bg-red-50.rounded-md {
+  background-color: rgba(239, 68, 68, 0.1) !important;
+}
+
+/* Success boxes with bg-green-50 */
+.dark .bg-green-50.rounded-lg {
+  background-color: rgba(34, 197, 94, 0.1) !important;
+}
+
+.dark .bg-green-50.rounded-md {
+  background-color: rgba(34, 197, 94, 0.1) !important;
+}
+
+/* ============================================
+   Input/Select Specific Overrides
+   (Form elements that may not be covered by Ant Design)
+   ============================================ */
+
+.dark input[type="text"],
+.dark input[type="email"],
+.dark input[type="password"],
+.dark input[type="number"],
+.dark input[type="search"],
+.dark input[type="url"],
+.dark input[type="tel"],
+.dark textarea {
+  background-color: var(--dark-bg-elevated);
+  border-color: var(--dark-border);
+  color: var(--dark-text-primary);
+}
+
+.dark input[type="text"]:focus,
+.dark input[type="email"]:focus,
+.dark input[type="password"]:focus,
+.dark input[type="number"]:focus,
+.dark input[type="search"]:focus,
+.dark input[type="url"]:focus,
+.dark input[type="tel"]:focus,
+.dark textarea:focus {
+  border-color: var(--dark-accent-blue);
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
+.dark input::placeholder,
+.dark textarea::placeholder {
+  color: var(--dark-text-muted);
+}
+
+.dark select {
+  background-color: var(--dark-bg-elevated);
+  border-color: var(--dark-border);
+  color: var(--dark-text-primary);
+}
+
+.dark select:focus {
+  border-color: var(--dark-accent-blue);
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
+/* ============================================
+   Link Colors
+   (Ensure links are visible in dark mode)
+   ============================================ */
+
+.dark a.text-blue-600 {
+  color: #60a5fa !important;
+}
+
+.dark a.text-blue-600:hover {
+  color: #93c5fd !important;
+}
+
+.dark a.hover\:text-blue-800:hover {
+  color: #93c5fd !important;
+}
+
+/* ============================================
+   Icon Button Backgrounds
+   (Common pattern for icon-only buttons)
+   ============================================ */
+
+.dark button.bg-gray-100 {
+  background-color: var(--dark-bg-hover) !important;
+}
+
+.dark button.hover\:bg-gray-200:hover {
+  background-color: #27272a !important;
+}
+
+.dark button.bg-white {
+  background-color: var(--dark-bg-elevated) !important;
+}
+
+/* ============================================
+   Status Dot Colors
+   (Colored dots for status indicators)
+   ============================================ */
+
+.dark .bg-green-500 {
+  background-color: #22c55e !important;
+}
+
+.dark .bg-red-500 {
+  background-color: #ef4444 !important;
+}
+
+.dark .bg-yellow-500 {
+  background-color: #eab308 !important;
+}
+
+.dark .bg-blue-500 {
+  background-color: #3b82f6 !important;
+}
+
+.dark .bg-gray-500 {
+  background-color: #6b7280 !important;
+}
+
+/* ============================================
+   Prose/Content Overrides
+   (For rich text content areas)
+   ============================================ */
+
+.dark .prose {
+  color: var(--dark-text-primary);
+}
+
+.dark .prose h1,
+.dark .prose h2,
+.dark .prose h3,
+.dark .prose h4,
+.dark .prose h5,
+.dark .prose h6 {
+  color: var(--dark-text-primary);
+}
+
+.dark .prose p {
+  color: var(--dark-text-secondary);
+}
+
+.dark .prose a {
+  color: #60a5fa;
+}
+
+.dark .prose strong {
+  color: var(--dark-text-primary);
+}
+
+.dark .prose code {
+  background-color: var(--dark-bg-hover);
+  color: var(--dark-text-primary);
+}
+
+.dark .prose blockquote {
+  border-color: var(--dark-border);
+  color: var(--dark-text-secondary);
+}
+
+.dark .prose hr {
+  border-color: var(--dark-border);
+}
+
+.dark .prose ul > li::before {
+  background-color: var(--dark-text-muted);
+}
+
+.dark .prose ol > li::before {
+  color: var(--dark-text-muted);
 }

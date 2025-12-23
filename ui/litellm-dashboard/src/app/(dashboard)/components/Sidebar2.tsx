@@ -32,6 +32,8 @@ import { useRouter, usePathname } from "next/navigation";
 import { all_admin_roles, internalUserRoles, isAdminRole, rolesWithWriteAccess } from "@/utils/roles";
 import UsageIndicator from "@/components/usage_indicator";
 import { serverRootPath } from "@/components/networking";
+import { useTheme } from "@/contexts/ThemeContext";
+import { getAntdTheme, darkModeColors } from "@/config/antdTheme";
 
 const { Sider } = Layout;
 
@@ -302,6 +304,7 @@ const menuItems: MenuItemCfg[] = [
 const Sidebar2: React.FC<SidebarProps> = ({ accessToken, userRole, defaultSelectedKey, collapsed = false }) => {
   const router = useRouter();
   const pathname = usePathname() || "/";
+  const { isDarkMode } = useTheme();
 
   // ----- Filter by role without mutating originals -----
   const filteredMenuItems = React.useMemo<MenuItemCfg[]>(() => {
@@ -356,27 +359,19 @@ const Sidebar2: React.FC<SidebarProps> = ({ accessToken, userRole, defaultSelect
   };
 
   return (
-    <Layout style={{ minHeight: "100vh" }}>
-      <Sider
-        theme="light"
-        width={220}
-        collapsed={collapsed}
-        collapsedWidth={80}
-        collapsible
-        trigger={null}
-        style={{
-          transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
-          position: "relative",
-        }}
-      >
-        <ConfigProvider
-          theme={{
-            components: {
-              Menu: {
-                iconSize: 18,
-                fontSize: 14,
-              },
-            },
+    <Layout style={{ minHeight: "100vh", background: isDarkMode ? darkModeColors.bgBase : "transparent" }}>
+      <ConfigProvider theme={getAntdTheme(isDarkMode)}>
+        <Sider
+          theme={isDarkMode ? "dark" : "light"}
+          width={220}
+          collapsed={collapsed}
+          collapsedWidth={80}
+          collapsible
+          trigger={null}
+          style={{
+            transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
+            position: "relative",
+            background: isDarkMode ? darkModeColors.bgBase : "#fff",
           }}
         >
           <Menu
@@ -387,7 +382,7 @@ const Sidebar2: React.FC<SidebarProps> = ({ accessToken, userRole, defaultSelect
             className="custom-sidebar-menu"
             style={{
               borderRight: 0,
-              backgroundColor: "transparent",
+              backgroundColor: isDarkMode ? darkModeColors.bgBase : "transparent",
               fontSize: "14px",
             }}
             items={filteredMenuItems.map((item) => ({
@@ -403,9 +398,9 @@ const Sidebar2: React.FC<SidebarProps> = ({ accessToken, userRole, defaultSelect
               onClick: !item.children ? () => goTo(item.page) : undefined,
             }))}
           />
-        </ConfigProvider>
-        {isAdminRole(userRole) && !collapsed && <UsageIndicator accessToken={accessToken} width={220} />}
-      </Sider>
+          {isAdminRole(userRole) && !collapsed && <UsageIndicator accessToken={accessToken} width={220} />}
+        </Sider>
+      </ConfigProvider>
     </Layout>
   );
 };

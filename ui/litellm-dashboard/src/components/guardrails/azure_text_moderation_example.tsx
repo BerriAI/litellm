@@ -73,7 +73,7 @@ const AzureTextModerationExample: React.FC = () => {
       </Card>
 
       <Card title="Current Configuration" size="small">
-        <pre style={{ fontSize: 12, backgroundColor: "#f5f5f5", padding: 12, borderRadius: 4 }}>
+        <pre className="bg-gray-100 dark:bg-[#1a1a1a] text-gray-900 dark:text-gray-100" style={{ fontSize: 12, padding: 12, borderRadius: 4 }}>
           {JSON.stringify(
             {
               categories: selectedCategories,

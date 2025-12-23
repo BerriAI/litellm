@@ -521,8 +521,8 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
     }
 
     return (
-      <div className="w-150 rounded-tremor-default border border-tremor-border bg-tremor-background p-2 text-tremor-default shadow-tremor-dropdown">
-        {date && <p className="text-tremor-content-emphasis mb-2">Date: {date}</p>}
+      <div className="w-150 rounded-tremor-default border border-tremor-border dark:border-[#2a2a2a] bg-tremor-background dark:bg-[#1a1a1a] p-2 text-tremor-default shadow-tremor-dropdown">
+        {date && <p className="text-tremor-content-emphasis dark:text-gray-200 mb-2">Date: {date}</p>}
         {sortedPayload.map((category: any, idx: number) => {
           const roundedValue = parseFloat(category.value.toFixed(5));
           const displayValue = roundedValue === 0 && category.value > 0 ? "<0.00001" : roundedValue.toFixed(5);
@@ -530,9 +530,9 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
             <div key={idx} className="flex justify-between">
               <div className="flex items-center space-x-2">
                 <div className={`w-2 h-2 mt-1 rounded-full bg-${category.color}-500`} />
-                <p className="text-tremor-content">{category.dataKey}</p>
+                <p className="text-tremor-content dark:text-gray-400">{category.dataKey}</p>
               </div>
-              <p className="font-medium text-tremor-content-emphasis text-righ ml-2">{displayValue}</p>
+              <p className="font-medium text-tremor-content-emphasis dark:text-gray-200 text-righ ml-2">{displayValue}</p>
             </div>
           );
         })}
@@ -584,11 +584,11 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
           {/* Model Management Header */}
           <div className="flex justify-between items-center mb-4">
             <div>
-              <h2 className="text-lg font-semibold">Model Management</h2>
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Model Management</h2>
               {!all_admin_roles.includes(userRole) ? (
-                <p className="text-sm text-gray-600">Add models for teams you are an admin for.</p>
+                <p className="text-sm text-gray-600 dark:text-gray-400">Add models for teams you are an admin for.</p>
               ) : (
-                <p className="text-sm text-gray-600">Add and manage models for the proxy</p>
+                <p className="text-sm text-gray-600 dark:text-gray-400">Add and manage models for the proxy</p>
               )}
             </div>
           </div>
