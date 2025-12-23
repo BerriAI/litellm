@@ -80,17 +80,19 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
 
   const handleSelectAll = (serverId: string) => {
     const tools = serverTools[serverId] || [];
-    onChange({
+    const newPermissions = {
       ...toolPermissions,
       [serverId]: tools.map((t) => t.name),
-    });
+    };
+    onChange(newPermissions);
   };
 
   const handleDeselectAll = (serverId: string) => {
-    onChange({
+    const newPermissions = {
       ...toolPermissions,
       [serverId]: [],
-    });
+    };
+    onChange(newPermissions);
   };
 
   if (selectedServers.length === 0) {
@@ -116,6 +118,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
               </div>
               <div className="flex items-center gap-3">
                 <button
+                  type="button"
                   className="text-sm text-blue-600 hover:text-blue-700 font-medium"
                   onClick={() => handleSelectAll(server.server_id)}
                   disabled={disabled || isLoading}
@@ -123,6 +126,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                   Select All
                 </button>
                 <button
+                  type="button"
                   className="text-sm text-blue-600 hover:text-blue-700 font-medium"
                   onClick={() => handleDeselectAll(server.server_id)}
                   disabled={disabled || isLoading}
@@ -130,6 +134,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                   Deselect All
                 </button>
                 <button
+                  type="button"
                   className="text-gray-400 hover:text-gray-600"
                   onClick={() => {
                     // Handle remove server if needed
