@@ -25,7 +25,7 @@ MiniMax offers three models through their Anthropic-compatible API:
 ```python
 import litellm
 
-response = litellm.completion(
+response = litellm.anthropic.messages.acreate(
     model="minimax/MiniMax-M2.1",
     messages=[{"role": "user", "content": "Hello, how are you?"}],
     api_key="your-minimax-api-key",
@@ -45,7 +45,7 @@ export MINIMAX_API_BASE="https://api.minimax.io/anthropic/v1/messages"
 ```python
 import litellm
 
-response = litellm.completion(
+response = litellm.anthropic.messages.acreate(
     model="minimax/MiniMax-M2.1",
     messages=[{"role": "user", "content": "Hello!"}]
 )
@@ -54,7 +54,7 @@ response = litellm.completion(
 ### With Thinking (M2.1 Feature)
 
 ```python
-response = litellm.completion(
+response = litellm.anthropic.messages.acreate(
     model="minimax/MiniMax-M2.1",
     messages=[{"role": "user", "content": "Solve: 2+2=?"}],
     thinking={"type": "enabled", "budget_tokens": 1000},
@@ -87,7 +87,7 @@ tools = [
     }
 ]
 
-response = litellm.completion(
+response = litellm.anthropic.messages.acreate(
     model="minimax/MiniMax-M2.1",
     messages=[{"role": "user", "content": "What's the weather in SF?"}],
     tools=tools,
@@ -95,20 +95,7 @@ response = litellm.completion(
 )
 ```
 
-### Streaming
 
-```python
-response = litellm.completion(
-    model="minimax/MiniMax-M2.1",
-    messages=[{"role": "user", "content": "Tell me a story"}],
-    stream=True,
-    api_key="your-minimax-api-key"
-)
-
-for chunk in response:
-    if chunk.choices[0].delta.content:
-        print(chunk.choices[0].delta.content, end="")
-```
 
 ## Usage with LiteLLM Proxy 
 
