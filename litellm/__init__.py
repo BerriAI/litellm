@@ -1075,9 +1075,6 @@ from .llms.vertex_ai.vertex_embeddings.transformation import (
 
 vertexAITextEmbeddingConfig = VertexAITextEmbeddingConfig()
 
-from .llms.bedrock.chat.invoke_handler import (
-    bedrock_tool_name_mappings,
-)
 
 from .llms.bedrock.embed.amazon_titan_v2_transformation import (
     AmazonTitanV2Config,
@@ -1506,6 +1503,10 @@ if TYPE_CHECKING:
     module_level_aclient: AsyncHTTPHandler
     module_level_client: HTTPHandler
 
+    # Bedrock tool name mappings instance (lazy-loaded)
+    from litellm.caching.caching import InMemoryCache
+    bedrock_tool_name_mappings: InMemoryCache
+
     # Note: AmazonConverseConfig and OpenAILikeChatConfig are imported above in TYPE_CHECKING block
 
 
@@ -1530,6 +1531,16 @@ def __getattr__(name: str) -> Any:
             from .main import encoding as _encoding
             _globals["encoding"] = _encoding
         return _globals["encoding"]
+    
+    # Lazy load bedrock_tool_name_mappings instance
+    if name == "bedrock_tool_name_mappings":
+        from ._lazy_imports import _get_litellm_globals
+        _globals = _get_litellm_globals()
+        # Check if already cached
+        if "bedrock_tool_name_mappings" not in _globals:
+            from .llms.bedrock.chat.invoke_handler import bedrock_tool_name_mappings as _bedrock_tool_name_mappings
+            _globals["bedrock_tool_name_mappings"] = _bedrock_tool_name_mappings
+        return _globals["bedrock_tool_name_mappings"]
     
     # Lazy load openaiOSeriesConfig instance
     if name == "openaiOSeriesConfig":
