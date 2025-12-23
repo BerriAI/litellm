@@ -1084,9 +1084,6 @@ from .llms.topaz.common_utils import TopazModelInfo
 # OpenAIOSeriesConfig is lazy loaded - openaiOSeriesConfig will be created on first access
 # OpenAIGPTConfig, OpenAIGPT5Config, etc. are lazy loaded - instances will be created on first access
 from .llms.xai.common_utils import XAIModelInfo
-from .llms.azure.azure import (
-    AzureOpenAIError,
-)
 # PublicAI now uses JSON-based configuration (see litellm/llms/openai_like/providers.json)
 # All remaining configs are now lazy loaded - see _lazy_imports_registry.py
 
@@ -1507,6 +1504,9 @@ if TYPE_CHECKING:
     from litellm.caching.caching import InMemoryCache
     bedrock_tool_name_mappings: InMemoryCache
 
+    # Azure exception class (lazy-loaded)
+    from litellm.llms.azure.common_utils import AzureOpenAIError
+
     # Note: AmazonConverseConfig and OpenAILikeChatConfig are imported above in TYPE_CHECKING block
 
 
@@ -1541,6 +1541,16 @@ def __getattr__(name: str) -> Any:
             from .llms.bedrock.chat.invoke_handler import bedrock_tool_name_mappings as _bedrock_tool_name_mappings
             _globals["bedrock_tool_name_mappings"] = _bedrock_tool_name_mappings
         return _globals["bedrock_tool_name_mappings"]
+    
+    # Lazy load AzureOpenAIError exception class
+    if name == "AzureOpenAIError":
+        from ._lazy_imports import _get_litellm_globals
+        _globals = _get_litellm_globals()
+        # Check if already cached
+        if "AzureOpenAIError" not in _globals:
+            from .llms.azure.common_utils import AzureOpenAIError as _AzureOpenAIError
+            _globals["AzureOpenAIError"] = _AzureOpenAIError
+        return _globals["AzureOpenAIError"]
     
     # Lazy load openaiOSeriesConfig instance
     if name == "openaiOSeriesConfig":
