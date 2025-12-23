@@ -890,7 +890,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             [file_id], litellm_parent_otel_span
         )
 
-        # PATCHED: Capture delete response from provider
         delete_response = None
         specific_model_file_id_mapping = model_file_id_mapping.get(file_id)
         if specific_model_file_id_mapping:
@@ -903,7 +902,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         if stored_file_object:
             return stored_file_object
-        # PATCHED: Return provider response with unified ID when stored_file_object is None
         elif delete_response:
             delete_response.id = file_id
             return delete_response
