@@ -6,9 +6,8 @@ This document describes bugs found in LiteLLM's managed batch/files functionalit
 
 1. [Bug 1: File Deletion Fails for Batch Output Files](#bug-1-file-deletion-fails-for-batch-output-files)
 2. [Bug 2: File Deletion Returns Wrong Response](#bug-2-file-deletion-returns-wrong-response)
-3. [Bug 3: Batch Listing Fails with Duplicate Argument](#bug-3-batch-listing-fails-with-duplicate-argument)
-4. [Bug 4: File Retrieve Returns None for Batch Output Files](#bug-4-file-retrieve-returns-none-for-batch-output-files)
-5. [Mock Server: Azure-like Credential Validation](#mock-server-azure-like-credential-validation)
+3. [Bug 3: File Retrieve Returns None for Batch Output Files](#bug-3-file-retrieve-returns-none-for-batch-output-files)
+4. [Known Limitation: Error Files Not Retrievable](#known-limitation-error-files-not-retrievable)
 6. [Test Setup Instructions](#test-setup-instructions)
 
 ---
@@ -30,20 +29,6 @@ openai.InternalServerError: Error code: 500 - {
 
 **Root Cause:** When LiteLLM stores batch output files in `LiteLLM_ManagedFileTable`, it sets `file_object=None`. However, the Pydantic model requires this field to be a valid `OpenAIFileObject`.
 
-### Patch
-
-**File:** `litellm/proxy/_types.py`, line ~3759
-
-```python
-# Before
-class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
-    file_object: OpenAIFileObject
-
-# After
-class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
-    file_object: Optional[OpenAIFileObject] = None  # PATCHED
-```
-
 ---
 
 ## Bug 2: File Deletion Returns Wrong Response
@@ -59,78 +44,9 @@ Exception: LiteLLM Managed File object with id=... not found
 
 **Root Cause:** `afile_delete` in `managed_files.py` calls `llm_router.afile_delete()` (which deletes the file at the provider) but discards the response.
 
-### Patch
-
-**File:** `enterprise/litellm_enterprise/proxy/hooks/managed_files.py`, line ~879
-
-```python
-# Before
-async def afile_delete(self, file_id, ...):
-    for model_id, model_file_id in mapping.items():
-        await llm_router.afile_delete(model=model_id, file_id=model_file_id, **data)
-    # Returns None when stored_file_object is None
-
-# After
-async def afile_delete(self, file_id, ...):
-    delete_response = None  # PATCHED: Capture response
-    for model_id, model_file_id in mapping.items():
-        delete_response = await llm_router.afile_delete(model=model_id, file_id=model_file_id, **data)
-    
-    stored_file_object = await self.delete_unified_file_id(file_id, ...)
-    if stored_file_object:
-        return stored_file_object
-    elif delete_response:  # PATCHED: Return provider response
-        delete_response.id = file_id  # Replace with unified ID
-        return delete_response
-    else:
-        raise Exception(...)
-```
-
 ---
 
-## Bug 3: Batch Listing Fails with Duplicate Argument
-
-### Description
-
-**Broken Feature:** `GET /batches?target_model_names=...` - Listing batches fails when using `target_model_names` query parameter.
-
-**Error Message:**
-```
-openai.InternalServerError: Error code: 500 - {
-  'error': {
-    'message': "alist_batches() got multiple values for keyword argument 'model'"
-  }
-}
-```
-
-**Root Cause:** The code passes `model` explicitly AND includes it in `**data`:
-```python
-model = target_model_names.split(",")[0]
-response = await llm_router.alist_batches(
-    model=model,        # Passed explicitly
-    **data,             # Also contains 'model' and 'target_model_names' keys
-)
-```
-
-### Patch
-
-**File:** `litellm/proxy/batches_endpoints/endpoints.py`, line ~576-577
-
-```python
-# Before
-model = target_model_names.split(",")[0]
-response = await llm_router.alist_batches(model=model, **data)
-
-# After
-model = target_model_names.split(",")[0]
-data.pop("model", None)              # PATCHED: Remove duplicate
-data.pop("target_model_names", None) # PATCHED: Remove to avoid passing to downstream
-response = await llm_router.alist_batches(model=model, **data)
-```
-
----
-
-## Bug 4: File Retrieve Returns None for Batch Output Files
+## Bug 3: File Retrieve Returns None for Batch Output Files
 
 ### Description
 
@@ -143,70 +59,28 @@ AttributeError: 'NoneType' object has no attribute 'id'
 
 **Root Cause:** `afile_retrieve` returns `stored_file_object.file_object` which is `None` for batch output files. It should fetch the file metadata from the provider instead.
 
-### Patch (Part A)
-
-**File:** `enterprise/litellm_enterprise/proxy/hooks/managed_files.py`, line ~839-868
-
-Add `import litellm` at the top of the file, then modify `afile_retrieve`:
-
-```python
-# Before
-async def afile_retrieve(self, file_id, litellm_parent_otel_span):
-    stored = await self.get_unified_file_id(file_id, ...)
-    return stored.file_object  # Returns None for batch output files!
-
-# After
-import litellm  # Added at top of file
-
-async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router=None):  # PATCHED: Added llm_router
-    stored = await self.get_unified_file_id(file_id, ...)
-    if stored:
-        if stored.file_object:
-            return stored.file_object
-        # PATCHED: Fetch from provider when file_object is None
-        elif stored.model_mappings and llm_router:
-            for model_id, model_file_id in stored.model_mappings.items():
-                deployment = llm_router.get_deployment(model_id=model_id)
-                if deployment:
-                    credentials = llm_router.get_deployment_credentials(model_id=model_id) or {}
-                    # Extract custom_llm_provider - afile_retrieve needs it as explicit param
-                    custom_llm_provider = credentials.pop("custom_llm_provider", None)
-                    if not custom_llm_provider:
-                        # Infer from model name (e.g., "azure/gpt-5" -> "azure")
-                        model_name = deployment.litellm_params.model or ""
-                        if "/" in model_name:
-                            custom_llm_provider = model_name.split("/")[0]
-                        else:
-                            custom_llm_provider = "openai"
-                    response = await litellm.afile_retrieve(
-                        file_id=model_file_id,
-                        custom_llm_provider=custom_llm_provider,  # Explicit param for Azure
-                        **credentials
-                    )
-                    response.id = file_id  # Replace with unified ID
-                    return response
-```
-
-### Patch (Part B)
-
-**File:** `litellm/proxy/openai_files_endpoints/files_endpoints.py`, line ~888
-
-```python
-# Before
-response = await managed_files_obj.afile_retrieve(
-    file_id=file_id,
-    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
-)
-
-# After
-response = await managed_files_obj.afile_retrieve(
-    file_id=file_id,
-    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
-    llm_router=llm_router,  # PATCHED: Pass router to fetch from provider
-)
-```
-
 ---
+
+## Known Limitation: Error Files Not Retrievable
+
+### Description
+
+When a batch fails, the provider returns an `error_file_id` containing details about failed requests. Currently, **error files are NOT retrievable** through the managed files API (`GET /files/{file_id}`).
+
+### Root Cause
+
+Only `output_file_id` is stored in `LiteLLM_ManagedFileTable` when a batch completes. The `error_file_id` is encoded in the batch response but never stored in the managed files table.
+
+**In `async_post_call_success_hook`:**
+```python
+# Only output_file_id is handled:
+if response.output_file_id and model_id:
+    await self.store_unified_file_id(
+        file_id=response.output_file_id,
+        ...
+    )
+# error_file_id is NOT stored
+```
 
 ## Test Setup Instructions
 

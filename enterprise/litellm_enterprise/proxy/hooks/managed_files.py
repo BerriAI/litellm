@@ -842,38 +842,31 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         stored_file_object = await self.get_unified_file_id(
             file_id, litellm_parent_otel_span
         )
-        if stored_file_object:
-            # PATCHED: If file_object is None (batch output files), fetch from provider
-            if stored_file_object.file_object:
-                return stored_file_object.file_object
-            elif stored_file_object.model_mappings and llm_router:
-                for model_id, model_file_id in stored_file_object.model_mappings.items():
-                    # PATCHED: Get deployment info and credentials from router
-                    deployment = llm_router.get_deployment(model_id=model_id)
-                    if deployment:
-                        credentials = llm_router.get_deployment_credentials(model_id=model_id) or {}
-                        # Extract custom_llm_provider - afile_retrieve needs it as explicit param
-                        custom_llm_provider = credentials.pop("custom_llm_provider", None)
-                        if not custom_llm_provider:
-                            # Infer from model name (e.g., "azure/gpt-5" -> "azure")
-                            model_name = deployment.litellm_params.model or ""
-                            if "/" in model_name:
-                                custom_llm_provider = model_name.split("/")[0]
-                            else:
-                                custom_llm_provider = "openai"
-                        response = await litellm.afile_retrieve(
-                            file_id=model_file_id,
-                            custom_llm_provider=custom_llm_provider,
-                            **credentials
-                        )
-                        response.id = file_id  # Replace with unified ID
-                        return response
-                    else:
-                        raise Exception(f"No deployment found for model_id={model_id}")
-            else:
-                raise Exception(f"LiteLLM Managed File object with id={file_id} has no file_object, or no model_mappings/llm_router to fetch from provider")
-        else:
+
+        # Case 1 : This is not a managed file
+        if not stored_file_object:
             raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
+        
+        # Case 2: Managed file and the file object exists in the database
+        if stored_file_object and stored_file_object.file_object:
+            return stored_file_object.file_object
+
+        # Case 3: Managed file exists in the database but not the file object (for. e.g the batch task might not have run)
+        # So we fetch the file object from the provider. We deliberately do not store the result to avoid interfering with batch cost tracking code.
+        if not llm_router:
+            raise Exception(
+                f"LiteLLM Managed File object with id={file_id} has no file_object "
+                f"and llm_router is required to fetch from provider"
+            )
+
+        try:
+            model_id, model_file_id = next(iter(stored_file_object.model_mappings.items()))
+            credentials = llm_router.get_deployment_credentials_with_provider(model_id) or {}
+            response = await litellm.afile_retrieve(file_id=model_file_id, **credentials)
+            response.id = file_id  # Replace with unified ID
+            return response
+        except Exception as e:
+            raise Exception(f"Failed to retrieve file {file_id} from provider: {str(e)}") from e
 
     async def afile_list(
         self,
