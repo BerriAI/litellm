@@ -29,7 +29,8 @@ response = litellm.anthropic.messages.acreate(
     model="minimax/MiniMax-M2.1",
     messages=[{"role": "user", "content": "Hello, how are you?"}],
     api_key="your-minimax-api-key",
-    api_base="https://api.minimax.io/anthropic/v1/messages"
+    api_base="https://api.minimax.io/anthropic/v1/messages",
+    max_tokens=1000
 )
 
 print(response.choices[0].message.content)
@@ -47,7 +48,8 @@ import litellm
 
 response = litellm.anthropic.messages.acreate(
     model="minimax/MiniMax-M2.1",
-    messages=[{"role": "user", "content": "Hello!"}]
+    messages=[{"role": "user", "content": "Hello!"}],
+    max_tokens=1000
 )
 ```
 
@@ -91,7 +93,8 @@ response = litellm.anthropic.messages.acreate(
     model="minimax/MiniMax-M2.1",
     messages=[{"role": "user", "content": "What's the weather in SF?"}],
     tools=tools,
-    api_key="your-minimax-api-key"
+    api_key="your-minimax-api-key",
+    max_tokens=1000
 )
 ```
 
