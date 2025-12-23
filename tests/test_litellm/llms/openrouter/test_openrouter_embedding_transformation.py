@@ -49,19 +49,39 @@ def test_openrouter_embedding_validate_environment():
     """Test environment validation and header setup."""
     config = OpenrouterEmbeddingConfig()
 
+    # Test with API key
     headers = config.validate_environment(
         headers={"Custom-Header": "value"},
         model="test-model",
         messages=[],
         optional_params={},
         litellm_params={},
+        api_key="test-api-key",
     )
 
     # Should include OpenRouter-specific headers
     assert "HTTP-Referer" in headers
     assert "X-Title" in headers
+    # Should include Authorization header
+    assert "Authorization" in headers
+    assert headers["Authorization"] == "Bearer test-api-key"
     # Should preserve custom headers
     assert headers["Custom-Header"] == "value"
+
+    # Test without API key
+    headers_no_key = config.validate_environment(
+        headers={},
+        model="test-model",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+    )
+
+    # Should still include OpenRouter headers but not Authorization
+    assert "HTTP-Referer" in headers_no_key
+    assert "X-Title" in headers_no_key
+    assert "Authorization" not in headers_no_key
 
 
 def test_openrouter_embedding_get_complete_url():

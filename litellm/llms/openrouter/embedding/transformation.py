@@ -46,6 +46,7 @@ class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
         Validate environment and set up headers for OpenRouter API.
 
         OpenRouter requires:
+        - Authorization header with Bearer token
         - HTTP-Referer header (site URL)
         - X-Title header (app name)
         """
@@ -59,6 +60,10 @@ class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
             "HTTP-Referer": openrouter_site_url,
             "X-Title": openrouter_app_name,
         }
+
+        # Add Authorization header if api_key is provided
+        if api_key:
+            openrouter_headers["Authorization"] = f"Bearer {api_key}"
 
         # Merge with existing headers (user's extra_headers take priority)
         merged_headers = {**openrouter_headers, **headers}
