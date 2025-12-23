@@ -74,39 +74,24 @@ from litellm.constants import (
     DEFAULT_SOFT_BUDGET,
     DEFAULT_ALLOWED_FAILS,
 )
-from litellm.types.secret_managers.main import (
-    KeyManagementSystem,
-    KeyManagementSettings,
-)
-from litellm.types.proxy.management_endpoints.ui_sso import (
-    DefaultTeamSSOParams,
-    LiteLLM_UpperboundKeyGenerateParams,
-)
-from litellm.types.utils import LlmProviders
-from litellm.types.utils import PriorityReservationSettings
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
 import httpx
 import dotenv
-from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
+# register_async_client_cleanup is lazy-loaded and called on first access
 
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
     dotenv.load_dotenv()
-
-# Register async client cleanup to prevent resource leaks
-register_async_client_cleanup()
 ####################################################
 if set_verbose:
     _turn_on_debug()
 ####################################################
 ### Callbacks /Logging / Success / Failure Handlers #####
-CALLBACK_TYPES = Union[str, Callable, CustomLogger]
+CALLBACK_TYPES = Union[str, Callable, "CustomLogger"]  # CustomLogger is lazy-loaded
 input_callback: List[CALLBACK_TYPES] = []
 success_callback: List[CALLBACK_TYPES] = []
 failure_callback: List[CALLBACK_TYPES] = []
 service_callback: List[CALLBACK_TYPES] = []
-logging_callback_manager = LoggingCallbackManager()
+# logging_callback_manager is lazy-loaded via __getattr__
 _custom_logger_compatible_callbacks_literal = Literal[
     "lago",
     "openmeter",
@@ -158,7 +143,7 @@ _known_custom_logger_compatible_callbacks: List = list(
     get_args(_custom_logger_compatible_callbacks_literal)
 )
 callbacks: List[
-    Union[Callable, _custom_logger_compatible_callbacks_literal, CustomLogger]
+    Union[Callable, _custom_logger_compatible_callbacks_literal, "CustomLogger"]  # CustomLogger is lazy-loaded
 ] = []
 callback_settings: Dict[str, Dict[str, Any]] = {}
 initialized_langfuse_clients: int = 0
@@ -175,13 +160,13 @@ generic_api_use_v1: Optional[bool] = (
     False  # if you want to use v1 generic api logged payload
 )
 argilla_transformation_object: Optional[Dict[str, Any]] = None
-_async_input_callback: List[Union[str, Callable, CustomLogger]] = (
+_async_input_callback: List[Union[str, Callable, "CustomLogger"]] = (  # CustomLogger is lazy-loaded
     []
 )  # internal variable - async custom callbacks are routed here.
-_async_success_callback: List[Union[str, Callable, CustomLogger]] = (
+_async_success_callback: List[Union[str, Callable, "CustomLogger"]] = (  # CustomLogger is lazy-loaded
     []
 )  # internal variable - async custom callbacks are routed here.
-_async_failure_callback: List[Union[str, Callable, CustomLogger]] = (
+_async_failure_callback: List[Union[str, Callable, "CustomLogger"]] = (  # CustomLogger is lazy-loaded
     []
 )  # internal variable - async custom callbacks are routed here.
 pre_call_rules: List[Callable] = []
@@ -388,9 +373,7 @@ public_model_groups_links: Dict[str, Union[str, Dict[str, Any]]] = {}
 priority_reservation: Optional[
     Dict[str, Union[float, "PriorityReservationDict"]]
 ] = None
-priority_reservation_settings: "PriorityReservationSettings" = (
-    PriorityReservationSettings()
-)
+# priority_reservation_settings is lazy-loaded via __getattr__
 
 
 ######## Networking Settings ########
@@ -423,8 +406,11 @@ secret_manager_client: Optional[Any] = (
     None  # list of instantiated key management clients - e.g. azure kv, infisical, etc.
 )
 _google_kms_resource_name: Optional[str] = None
-_key_management_system: Optional[KeyManagementSystem] = None
-_key_management_settings: KeyManagementSettings = KeyManagementSettings()
+_key_management_system: Optional["KeyManagementSystem"] = None
+# Note: KeyManagementSettings must be eagerly imported because _key_management_settings
+# is accessed during import time in secret_managers/main.py
+# We'll import it after the lazy import system is set up
+# We can't define it here because KeyManagementSettings is lazy-loaded
 #### PII MASKING ####
 output_parse_pii: bool = False
 #############################################
@@ -920,7 +906,7 @@ model_list = list(
 
 model_list_set = set(model_list)
 
-provider_list: List[Union[LlmProviders, str]] = list(LlmProviders)
+# provider_list is lazy-loaded via __getattr__ to avoid importing LlmProviders at import time
 
 
 models_by_provider: dict = {
@@ -1055,9 +1041,15 @@ openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 ####### VIDEO GENERATION MODELS ###################
 openai_video_generation_models = ["sora-2"]
 
-from .timeout import timeout
+# timeout is lazy-loaded via __getattr__
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
+
+# Import KeyManagementSettings here (before utils import) because _key_management_settings
+# is accessed during import time in secret_managers/main.py (via dd_tracing -> datadog -> _service_logger -> utils)
+from litellm.types.secret_managers.main import KeyManagementSettings
+_key_management_settings: KeyManagementSettings = KeyManagementSettings()
+
 # client must be imported immediately as it's used as a decorator at function definition time
 from .utils import client
 # Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py
@@ -1079,9 +1071,6 @@ from .llms.vertex_ai.vertex_embeddings.transformation import (
 
 vertexAITextEmbeddingConfig = VertexAITextEmbeddingConfig()
 
-from .llms.bedrock.chat.invoke_handler import (
-    bedrock_tool_name_mappings,
-)
 
 from .llms.bedrock.embed.amazon_titan_v2_transformation import (
     AmazonTitanV2Config,
@@ -1091,11 +1080,12 @@ from .llms.topaz.common_utils import TopazModelInfo
 # OpenAIOSeriesConfig is lazy loaded - openaiOSeriesConfig will be created on first access
 # OpenAIGPTConfig, OpenAIGPT5Config, etc. are lazy loaded - instances will be created on first access
 from .llms.xai.common_utils import XAIModelInfo
-from .llms.azure.azure import (
-    AzureOpenAIError,
-)
 # PublicAI now uses JSON-based configuration (see litellm/llms/openai_like/providers.json)
 # All remaining configs are now lazy loaded - see _lazy_imports_registry.py
+
+# Import LlmProviders here (before main import) because it's imported during import time
+# in multiple places including openai.py (via main import)
+from litellm.types.utils import LlmProviders
 
 ## Lazy loading this is not straightforward, will leave it here for now.
 from .main import *  # type: ignore
@@ -1462,6 +1452,10 @@ if TYPE_CHECKING:
         StandardKeyGenerationConfig,
     )
     from litellm.types.guardrails import GuardrailItem
+    from litellm.types.proxy.management_endpoints.ui_sso import (
+        DefaultTeamSSOParams,
+        LiteLLM_UpperboundKeyGenerateParams,
+    )
 
     # Cost calculator functions
     cost_per_token: Callable[..., Tuple[float, float]]
@@ -1506,11 +1500,46 @@ if TYPE_CHECKING:
     module_level_aclient: AsyncHTTPHandler
     module_level_client: HTTPHandler
 
+    # Bedrock tool name mappings instance (lazy-loaded)
+    from litellm.caching.caching import InMemoryCache
+    bedrock_tool_name_mappings: InMemoryCache
+
+    # Azure exception class (lazy-loaded)
+    from litellm.llms.azure.common_utils import AzureOpenAIError
+
+    # Secret manager types (lazy-loaded)
+    from litellm.types.secret_managers.main import (
+        KeyManagementSystem,
+        KeyManagementSettings,  # Not lazy-loaded - needed for _key_management_settings initialization
+    )
+
+    # Custom logger class (lazy-loaded)
+    from litellm.integrations.custom_logger import CustomLogger
+    
+    # Logging callback manager class and instance (lazy-loaded)
+    from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
+    logging_callback_manager: LoggingCallbackManager
+    
+    # provider_list is lazy-loaded
+    from litellm.types.utils import LlmProviders
+    provider_list: List[Union[LlmProviders, str]]
+
     # Note: AmazonConverseConfig and OpenAILikeChatConfig are imported above in TYPE_CHECKING block
+
+
+# Track if async client cleanup has been registered (for lazy loading)
+_async_client_cleanup_registered = False
 
 
 def __getattr__(name: str) -> Any:
     """Lazy import handler with cached registry for improved performance."""
+    global _async_client_cleanup_registered
+    # Register async client cleanup on first access (only once)
+    if not _async_client_cleanup_registered:
+        from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
+        register_async_client_cleanup()
+        _async_client_cleanup_registered = True
+    
     # Use cached registry from _lazy_imports instead of importing tuples every time
     from ._lazy_imports import _get_lazy_import_registry
     
@@ -1530,6 +1559,26 @@ def __getattr__(name: str) -> Any:
             from .main import encoding as _encoding
             _globals["encoding"] = _encoding
         return _globals["encoding"]
+    
+    # Lazy load bedrock_tool_name_mappings instance
+    if name == "bedrock_tool_name_mappings":
+        from ._lazy_imports import _get_litellm_globals
+        _globals = _get_litellm_globals()
+        # Check if already cached
+        if "bedrock_tool_name_mappings" not in _globals:
+            from .llms.bedrock.chat.invoke_handler import bedrock_tool_name_mappings as _bedrock_tool_name_mappings
+            _globals["bedrock_tool_name_mappings"] = _bedrock_tool_name_mappings
+        return _globals["bedrock_tool_name_mappings"]
+    
+    # Lazy load AzureOpenAIError exception class
+    if name == "AzureOpenAIError":
+        from ._lazy_imports import _get_litellm_globals
+        _globals = _get_litellm_globals()
+        # Check if already cached
+        if "AzureOpenAIError" not in _globals:
+            from .llms.azure.common_utils import AzureOpenAIError as _AzureOpenAIError
+            _globals["AzureOpenAIError"] = _AzureOpenAIError
+        return _globals["AzureOpenAIError"]
     
     # Lazy load openaiOSeriesConfig instance
     if name == "openaiOSeriesConfig":
@@ -1561,6 +1610,39 @@ def __getattr__(name: str) -> Any:
     # Handle OpenAIO1Config alias
     if name == "OpenAIO1Config":
         return __getattr__("OpenAIOSeriesConfig")
+    
+    # Lazy load provider_list
+    if name == "provider_list":
+        from ._lazy_imports import _get_litellm_globals
+        _globals = _get_litellm_globals()
+        # Check if already cached
+        if "provider_list" not in _globals:
+            # LlmProviders is eagerly imported above, so we can import it directly
+            from litellm.types.utils import LlmProviders
+            _globals["provider_list"] = list(LlmProviders)
+        return _globals["provider_list"]
+    
+    # Lazy load priority_reservation_settings instance
+    if name == "priority_reservation_settings":
+        from ._lazy_imports import _get_litellm_globals
+        _globals = _get_litellm_globals()
+        # Check if already cached
+        if "priority_reservation_settings" not in _globals:
+            # Import the class and instantiate it
+            PriorityReservationSettings = __getattr__("PriorityReservationSettings")
+            _globals["priority_reservation_settings"] = PriorityReservationSettings()
+        return _globals["priority_reservation_settings"]
+    
+    # Lazy load logging_callback_manager instance
+    if name == "logging_callback_manager":
+        from ._lazy_imports import _get_litellm_globals
+        _globals = _get_litellm_globals()
+        # Check if already cached
+        if "logging_callback_manager" not in _globals:
+            # Import the class and instantiate it
+            LoggingCallbackManager = __getattr__("LoggingCallbackManager")
+            _globals["logging_callback_manager"] = LoggingCallbackManager()
+        return _globals["logging_callback_manager"]
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
