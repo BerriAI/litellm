@@ -74,7 +74,6 @@ from litellm.constants import (
     DEFAULT_SOFT_BUDGET,
     DEFAULT_ALLOWED_FAILS,
 )
-from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
 import httpx
 import dotenv
 from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
@@ -95,7 +94,7 @@ input_callback: List[CALLBACK_TYPES] = []
 success_callback: List[CALLBACK_TYPES] = []
 failure_callback: List[CALLBACK_TYPES] = []
 service_callback: List[CALLBACK_TYPES] = []
-logging_callback_manager = LoggingCallbackManager()
+# logging_callback_manager is lazy-loaded via __getattr__
 _custom_logger_compatible_callbacks_literal = Literal[
     "lago",
     "openmeter",
@@ -1617,6 +1616,17 @@ def __getattr__(name: str) -> Any:
             PriorityReservationSettings = __getattr__("PriorityReservationSettings")
             _globals["priority_reservation_settings"] = PriorityReservationSettings()
         return _globals["priority_reservation_settings"]
+    
+    # Lazy load logging_callback_manager instance
+    if name == "logging_callback_manager":
+        from ._lazy_imports import _get_litellm_globals
+        _globals = _get_litellm_globals()
+        # Check if already cached
+        if "logging_callback_manager" not in _globals:
+            # Import the class and instantiate it
+            LoggingCallbackManager = __getattr__("LoggingCallbackManager")
+            _globals["logging_callback_manager"] = LoggingCallbackManager()
+        return _globals["logging_callback_manager"]
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

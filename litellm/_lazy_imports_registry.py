@@ -280,6 +280,7 @@ TYPES_NAMES = (
     "KeyManagementSystem",
     "PriorityReservationSettings",
     "CustomLogger",
+    "LoggingCallbackManager",
     # Note: LlmProviders is NOT lazy-loaded because it's imported during import time
     # in multiple places including openai.py (via main import)
     # Note: KeyManagementSettings is NOT lazy-loaded because _key_management_settings
@@ -381,6 +382,7 @@ _TYPES_IMPORT_MAP = {
     "KeyManagementSystem": ("litellm.types.secret_managers.main", "KeyManagementSystem"),
     "PriorityReservationSettings": ("litellm.types.utils", "PriorityReservationSettings"),
     "CustomLogger": ("litellm.integrations.custom_logger", "CustomLogger"),
+    "LoggingCallbackManager": ("litellm.litellm_core_utils.logging_callback_manager", "LoggingCallbackManager"),
 }
 
 _LLM_CONFIGS_IMPORT_MAP = {
