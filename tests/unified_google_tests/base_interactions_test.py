@@ -9,7 +9,7 @@ import os
 from abc import ABC, abstractmethod
 
 import pytest
-
+import litellm
 import litellm.interactions as interactions
 
 
@@ -32,6 +32,7 @@ class BaseInteractionsTest(ABC):
     
     def test_create_simple_string_input(self):
         """Test creating an interaction with a simple string input."""
+        litellm._turn_on_debug()
         api_key = self.get_api_key()
         if not api_key:
             pytest.skip(f"API key not set for {self.__class__.__name__}")
@@ -49,13 +50,14 @@ class BaseInteractionsTest(ABC):
             assert len(response.outputs) > 0
         
         # Check usage per OpenAPI spec
+        # The spec defines: total_input_tokens, total_output_tokens
         if response.usage:
             # Usage is a dict in InteractionsAPIResponse
             if isinstance(response.usage, dict):
-                assert response.usage.get("input_tokens") is not None or response.usage.get("output_tokens") is not None
+                assert response.usage.get("total_input_tokens") is not None or response.usage.get("total_output_tokens") is not None
             else:
                 # If it's an object, check attributes
-                assert hasattr(response.usage, "input_tokens") or hasattr(response.usage, "output_tokens")
+                assert hasattr(response.usage, "total_input_tokens") or hasattr(response.usage, "total_output_tokens")
     
     def test_create_with_system_instruction(self):
         """Test creating an interaction with system_instruction."""

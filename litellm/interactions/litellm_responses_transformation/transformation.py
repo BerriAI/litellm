@@ -243,11 +243,13 @@ class LiteLLMResponsesInteractionsConfig:
         }
         
         # Add usage if available
+        # Map Responses API usage (input_tokens, output_tokens) to Interactions API spec format
+        # (total_input_tokens, total_output_tokens)
         usage = getattr(responses_response, "usage", None)
         if usage:
             interactions_response_dict["usage"] = {
-                "input_tokens": getattr(usage, "input_tokens", 0),
-                "output_tokens": getattr(usage, "output_tokens", 0),
+                "total_input_tokens": getattr(usage, "input_tokens", 0),
+                "total_output_tokens": getattr(usage, "output_tokens", 0),
             }
         
         # Add role
