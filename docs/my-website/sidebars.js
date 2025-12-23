@@ -649,7 +649,14 @@ const sidebars = {
             "providers/google_ai_studio/realtime",
           ]
         },
-        "providers/anthropic",
+                {
+        type: "category",
+          label: "Anthropic",
+          items: [
+            "providers/anthropic",
+            "providers/claude_code_native",
+          ]
+        },
         "providers/aws_sagemaker",
         {
           type: "category",
