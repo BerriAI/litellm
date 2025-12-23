@@ -1089,43 +1089,7 @@ from .llms.bedrock.embed.amazon_titan_v2_transformation import (
 from .llms.topaz.common_utils import TopazModelInfo
 
 # OpenAIOSeriesConfig is lazy loaded - openaiOSeriesConfig will be created on first access
-from .llms.openai.chat.gpt_transformation import (
-    OpenAIGPTConfig,
-)
-from .llms.openai.chat.gpt_5_transformation import (
-    OpenAIGPT5Config,
-)
-from .llms.openai.transcriptions.whisper_transformation import (
-    OpenAIWhisperAudioTranscriptionConfig,
-)
-from .llms.openai.transcriptions.gpt_transformation import (
-    OpenAIGPTAudioTranscriptionConfig,
-)
-
-openAIGPTConfig = OpenAIGPTConfig()
-from .llms.openai.chat.gpt_audio_transformation import (
-    OpenAIGPTAudioConfig,
-)
-
-openAIGPTAudioConfig = OpenAIGPTAudioConfig()
-openAIGPT5Config = OpenAIGPT5Config()
-
-from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig
-from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
-
-nvidiaNimConfig = NvidiaNimConfig()
-nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
-
-from .llms.featherless_ai.chat.transformation import FeatherlessAIConfig
-from .llms.cerebras.chat import CerebrasConfig
-from .llms.baseten.chat import BasetenConfig
-from .llms.sambanova.chat import SambanovaConfig
-from .llms.sambanova.embedding.transformation import SambaNovaEmbeddingConfig
-from .llms.fireworks_ai.chat.transformation import FireworksAIConfig
-from .llms.fireworks_ai.completion.transformation import FireworksAITextCompletionConfig
-from .llms.fireworks_ai.audio_transcription.transformation import (
-    FireworksAIAudioTranscriptionConfig,
-)
+# OpenAIGPTConfig, OpenAIGPT5Config, etc. are lazy loaded - instances will be created on first access
 from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
     FireworksAIEmbeddingConfig,
 )
@@ -1452,6 +1416,21 @@ if TYPE_CHECKING:
     from .llms.anthropic.skills.transformation import AnthropicSkillsConfig as AnthropicSkillsConfig
     from .llms.base_llm.skills.transformation import BaseSkillsAPIConfig as BaseSkillsAPIConfig
     from .llms.gradient_ai.chat.transformation import GradientAIConfig as GradientAIConfig
+    from .llms.openai.chat.gpt_transformation import OpenAIGPTConfig as OpenAIGPTConfig
+    from .llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config as OpenAIGPT5Config
+    from .llms.openai.transcriptions.whisper_transformation import OpenAIWhisperAudioTranscriptionConfig as OpenAIWhisperAudioTranscriptionConfig
+    from .llms.openai.transcriptions.gpt_transformation import OpenAIGPTAudioTranscriptionConfig as OpenAIGPTAudioTranscriptionConfig
+    from .llms.openai.chat.gpt_audio_transformation import OpenAIGPTAudioConfig as OpenAIGPTAudioConfig
+    from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig as NvidiaNimConfig
+    from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig as NvidiaNimEmbeddingConfig
+    from .llms.featherless_ai.chat.transformation import FeatherlessAIConfig as FeatherlessAIConfig
+    from .llms.cerebras.chat import CerebrasConfig as CerebrasConfig
+    from .llms.baseten.chat import BasetenConfig as BasetenConfig
+    from .llms.sambanova.chat import SambanovaConfig as SambanovaConfig
+    from .llms.sambanova.embedding.transformation import SambaNovaEmbeddingConfig as SambaNovaEmbeddingConfig
+    from .llms.fireworks_ai.chat.transformation import FireworksAIConfig as FireworksAIConfig
+    from .llms.fireworks_ai.completion.transformation import FireworksAITextCompletionConfig as FireworksAITextCompletionConfig
+    from .llms.fireworks_ai.audio_transcription.transformation import FireworksAIAudioTranscriptionConfig as FireworksAIAudioTranscriptionConfig
     from litellm.caching.llm_caching_handler import LLMClientCache
     from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
     from litellm.types.utils import (
@@ -1539,6 +1518,23 @@ def __getattr__(name: str) -> Any:
             config_class = __getattr__("OpenAIOSeriesConfig")
             _globals["openaiOSeriesConfig"] = config_class()
         return _globals["openaiOSeriesConfig"]
+    
+    # Lazy load other config instances
+    _config_instances = {
+        "openAIGPTConfig": "OpenAIGPTConfig",
+        "openAIGPTAudioConfig": "OpenAIGPTAudioConfig",
+        "openAIGPT5Config": "OpenAIGPT5Config",
+        "nvidiaNimConfig": "NvidiaNimConfig",
+        "nvidiaNimEmbeddingConfig": "NvidiaNimEmbeddingConfig",
+    }
+    if name in _config_instances:
+        from ._lazy_imports import _get_litellm_globals
+        _globals = _get_litellm_globals()
+        if name not in _globals:
+            # Import the config class and instantiate it
+            config_class = __getattr__(_config_instances[name])
+            _globals[name] = config_class()
+        return _globals[name]
     
     # Handle OpenAIO1Config alias
     if name == "OpenAIO1Config":

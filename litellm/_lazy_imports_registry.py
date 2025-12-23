@@ -203,6 +203,21 @@ LLM_CONFIG_NAMES = (
     "GradientAIConfig",
     # Alias for backwards compatibility
     "OpenAIO1Config",  # Alias for OpenAIOSeriesConfig
+    "OpenAIGPTConfig",
+    "OpenAIGPT5Config",
+    "OpenAIWhisperAudioTranscriptionConfig",
+    "OpenAIGPTAudioTranscriptionConfig",
+    "OpenAIGPTAudioConfig",
+    "NvidiaNimConfig",
+    "NvidiaNimEmbeddingConfig",
+    "FeatherlessAIConfig",
+    "CerebrasConfig",
+    "BasetenConfig",
+    "SambanovaConfig",
+    "SambaNovaEmbeddingConfig",
+    "FireworksAIConfig",
+    "FireworksAITextCompletionConfig",
+    "FireworksAIAudioTranscriptionConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -419,6 +434,21 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "GradientAIConfig": (".llms.gradient_ai.chat.transformation", "GradientAIConfig"),
     # Alias for backwards compatibility
     "OpenAIO1Config": (".llms.openai.chat.o_series_transformation", "OpenAIOSeriesConfig"),  # Alias
+    "OpenAIGPTConfig": (".llms.openai.chat.gpt_transformation", "OpenAIGPTConfig"),
+    "OpenAIGPT5Config": (".llms.openai.chat.gpt_5_transformation", "OpenAIGPT5Config"),
+    "OpenAIWhisperAudioTranscriptionConfig": (".llms.openai.transcriptions.whisper_transformation", "OpenAIWhisperAudioTranscriptionConfig"),
+    "OpenAIGPTAudioTranscriptionConfig": (".llms.openai.transcriptions.gpt_transformation", "OpenAIGPTAudioTranscriptionConfig"),
+    "OpenAIGPTAudioConfig": (".llms.openai.chat.gpt_audio_transformation", "OpenAIGPTAudioConfig"),
+    "NvidiaNimConfig": (".llms.nvidia_nim.chat.transformation", "NvidiaNimConfig"),
+    "NvidiaNimEmbeddingConfig": (".llms.nvidia_nim.embed", "NvidiaNimEmbeddingConfig"),
+    "FeatherlessAIConfig": (".llms.featherless_ai.chat.transformation", "FeatherlessAIConfig"),
+    "CerebrasConfig": (".llms.cerebras.chat", "CerebrasConfig"),
+    "BasetenConfig": (".llms.baseten.chat", "BasetenConfig"),
+    "SambanovaConfig": (".llms.sambanova.chat", "SambanovaConfig"),
+    "SambaNovaEmbeddingConfig": (".llms.sambanova.embedding.transformation", "SambaNovaEmbeddingConfig"),
+    "FireworksAIConfig": (".llms.fireworks_ai.chat.transformation", "FireworksAIConfig"),
+    "FireworksAITextCompletionConfig": (".llms.fireworks_ai.completion.transformation", "FireworksAITextCompletionConfig"),
+    "FireworksAIAudioTranscriptionConfig": (".llms.fireworks_ai.audio_transcription.transformation", "FireworksAIAudioTranscriptionConfig"),
 }
 
 # Export all name tuples and import maps for use in _lazy_imports.py
