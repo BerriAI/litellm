@@ -1573,81 +1573,11 @@ if TYPE_CHECKING:
     # Note: AmazonConverseConfig and OpenAILikeChatConfig are imported above in TYPE_CHECKING block
 
 
-# Cached registry for lazy imports - built once on first access
-# Maps attribute names to their handler function
-_LAZY_IMPORT_REGISTRY: Optional[dict[str, Callable[[str], Any]]] = None
-
-
-def _get_lazy_import_registry() -> dict[str, Callable[[str], Any]]:
-    """
-    Build and cache the lazy import registry (only once).
-    
-    Returns a dictionary mapping attribute names to their handler functions.
-    This avoids importing all name tuples on every __getattr__ call.
-    """
-    global _LAZY_IMPORT_REGISTRY
-    if _LAZY_IMPORT_REGISTRY is None:
-        # Import name tuples and handler functions only once (first time __getattr__ is called)
-        from ._lazy_imports import (
-            COST_CALCULATOR_NAMES,
-            LITELLM_LOGGING_NAMES,
-            UTILS_NAMES,
-            TOKEN_COUNTER_NAMES,
-            LLM_CLIENT_CACHE_NAMES,
-            BEDROCK_TYPES_NAMES,
-            TYPES_UTILS_NAMES,
-            CACHING_NAMES,
-            HTTP_HANDLER_NAMES,
-            DOTPROMPT_NAMES,
-            LLM_CONFIG_NAMES,
-            TYPES_NAMES,
-            _lazy_import_cost_calculator,
-            _lazy_import_litellm_logging,
-            _lazy_import_utils,
-            _lazy_import_token_counter,
-            _lazy_import_llm_client_cache,
-            _lazy_import_bedrock_types,
-            _lazy_import_types_utils,
-            _lazy_import_caching,
-            _lazy_import_http_handlers,
-            _lazy_import_dotprompt,
-            _lazy_import_llm_configs,
-            _lazy_import_types,
-        )
-        
-        # Build unified registry mapping names directly to handler functions
-        _LAZY_IMPORT_REGISTRY = {}
-        for name in COST_CALCULATOR_NAMES:
-            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_cost_calculator
-        for name in LITELLM_LOGGING_NAMES:
-            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_litellm_logging
-        for name in UTILS_NAMES:
-            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_utils
-        for name in TOKEN_COUNTER_NAMES:
-            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_token_counter
-        for name in LLM_CLIENT_CACHE_NAMES:
-            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_llm_client_cache
-        for name in BEDROCK_TYPES_NAMES:
-            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_bedrock_types
-        for name in TYPES_UTILS_NAMES:
-            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_types_utils
-        for name in CACHING_NAMES:
-            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_caching
-        for name in HTTP_HANDLER_NAMES:
-            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_http_handlers
-        for name in DOTPROMPT_NAMES:
-            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_dotprompt
-        for name in LLM_CONFIG_NAMES:
-            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_llm_configs
-        for name in TYPES_NAMES:
-            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_types
-    
-    return _LAZY_IMPORT_REGISTRY
-
-
 def __getattr__(name: str) -> Any:
     """Lazy import handler with cached registry for improved performance."""
-    # Use cached registry instead of importing tuples every time
+    # Use cached registry from _lazy_imports instead of importing tuples every time
+    from ._lazy_imports import _get_lazy_import_registry
+    
     registry = _get_lazy_import_registry()
     
     # Check if name is in registry and call the cached handler function

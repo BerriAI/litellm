@@ -1,5 +1,5 @@
 import sys
-from typing import Any, Optional, cast
+from typing import Any, Optional, cast, Callable
 
 
 def _get_litellm_globals() -> dict:
@@ -205,6 +205,51 @@ LLM_CONFIG_NAMES = (
 TYPES_NAMES = (
     "GuardrailItem",
 )
+
+# Cached registry for lazy imports - built once on first access
+# Maps attribute names to their handler function
+_LAZY_IMPORT_REGISTRY: Optional[dict[str, Callable[[str], Any]]] = None
+
+
+def _get_lazy_import_registry() -> dict[str, Callable[[str], Any]]:
+    """
+    Build and cache the lazy import registry (only once).
+    
+    Returns a dictionary mapping attribute names to their handler functions.
+    This avoids importing all name tuples on every __getattr__ call.
+    """
+    global _LAZY_IMPORT_REGISTRY
+    if _LAZY_IMPORT_REGISTRY is None:
+        # Build unified registry mapping names directly to handler functions
+        # All name tuples and handler functions are already in this module
+        _LAZY_IMPORT_REGISTRY = {}
+        for name in COST_CALCULATOR_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_cost_calculator
+        for name in LITELLM_LOGGING_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_litellm_logging
+        for name in UTILS_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_utils
+        for name in TOKEN_COUNTER_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_token_counter
+        for name in LLM_CLIENT_CACHE_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_llm_client_cache
+        for name in BEDROCK_TYPES_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_bedrock_types
+        for name in TYPES_UTILS_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_types_utils
+        for name in CACHING_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_caching
+        for name in HTTP_HANDLER_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_http_handlers
+        for name in DOTPROMPT_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_dotprompt
+        for name in LLM_CONFIG_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_llm_configs
+        for name in TYPES_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_types
+    
+    return _LAZY_IMPORT_REGISTRY
+
 
 # Lazy import for utils module - imports only the requested item by name.
 # Note: PLR0915 (too many statements) is suppressed because the many if statements
