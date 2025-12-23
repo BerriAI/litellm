@@ -1,6 +1,8 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
+# MiniMax  
+
 # MiniMax - v1/messages
 
 ## Overview
