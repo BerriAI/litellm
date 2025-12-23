@@ -9,7 +9,17 @@ For simple OpenAI-compatible providers (like Hyperbolic, Nscale, etc.), you can 
 2. Add your provider configuration
 3. Test with: `litellm.completion(model="your_provider/model-name", ...)`
 
-### Option 2: Load from Custom URL
+### Option 2: Load from Environment Variable (JSON String)
+1. Set the `LITELLM_CUSTOM_PROVIDERS` environment variable with your JSON configuration
+2. Start LiteLLM - it will automatically load and merge your custom providers
+
+```bash
+export LITELLM_CUSTOM_PROVIDERS='{"my_provider": {"base_url": "https://api.myprovider.com/v1", "api_key_env": "MY_PROVIDER_KEY"}}'
+```
+
+This is useful for containerized deployments, CI/CD, or when you want inline configuration.
+
+### Option 3: Load from Custom URL
 1. Create a custom JSON file with your provider configurations
 2. Host it at a URL (can be a local file server, cloud storage, or any HTTP endpoint)
 3. Set the environment variable: `LITELLM_CUSTOM_PROVIDERS_URL=https://example.com/my-providers.json`
@@ -91,6 +101,34 @@ That's it! The provider is now available.
 
 ## Usage
 
+### Using Custom Providers from JSON String
+
+```python
+import litellm
+import os
+import json
+
+# Define providers inline
+custom_providers = {
+    "my_provider": {
+        "base_url": "https://api.myprovider.com/v1",
+        "api_key_env": "MY_PROVIDER_API_KEY"
+    }
+}
+
+# Set as environment variable
+os.environ["LITELLM_CUSTOM_PROVIDERS"] = json.dumps(custom_providers)
+
+# Set your API key
+os.environ["MY_PROVIDER_API_KEY"] = "your-key-here"
+
+# Use the provider
+response = litellm.completion(
+    model="my_provider/model-name",
+    messages=[{"role": "user", "content": "Hello"}],
+)
+```
+
 ### Using Custom Providers from URL
 
 ```python
@@ -126,14 +164,19 @@ response = litellm.completion(
 )
 ```
 
-## Custom Provider URL Behavior
+## Custom Provider Loading Behavior
 
-When `LITELLM_CUSTOM_PROVIDERS_URL` is set:
-- LiteLLM loads local providers from `providers.json` first
-- Then fetches and merges providers from the specified URL
-- Custom providers from the URL can overwrite local providers with the same name
-- If the URL is unreachable or returns invalid JSON, LiteLLM logs a warning and continues with local providers only
-- The fetch happens once at startup (providers are cached)
+**Loading order:**
+1. Local providers from `providers.json` are loaded first
+2. If `LITELLM_CUSTOM_PROVIDERS` is set, providers from the JSON string are merged
+3. If `LITELLM_CUSTOM_PROVIDERS_URL` is set, providers from the URL are merged
+
+**Key behaviors:**
+- Custom providers can overwrite local providers with the same name
+- Both environment variables can be used together
+- If JSON string is invalid, LiteLLM logs a warning and continues
+- If URL is unreachable or returns invalid JSON, LiteLLM logs a warning and continues with local providers only
+- The fetch/parse happens once at startup (providers are cached)
 
 ## When to Use Python Instead
 

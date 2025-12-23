@@ -30,7 +30,36 @@ Edit `providers.json` and add your provider:
 
 That's it! The provider will be automatically loaded and available.
 
-### Option 2: Load from Custom URL (For Users)
+### Option 2: Load from Environment Variable (For Users)
+
+Set the `LITELLM_CUSTOM_PROVIDERS` environment variable with JSON string:
+
+```bash
+export LITELLM_CUSTOM_PROVIDERS='{"my_provider": {"base_url": "https://api.myprovider.com/v1", "api_key_env": "MY_PROVIDER_KEY"}}'
+```
+
+Or in Python:
+
+```python
+import os
+import json
+
+custom_providers = {
+    "my_provider": {
+        "base_url": "https://api.myprovider.com/v1",
+        "api_key_env": "MY_PROVIDER_KEY"
+    }
+}
+os.environ["LITELLM_CUSTOM_PROVIDERS"] = json.dumps(custom_providers)
+```
+
+This is useful for:
+- Containerized deployments (Docker, Kubernetes)
+- CI/CD pipelines
+- Inline configuration without external files
+- Quick testing and development
+
+### Option 3: Load from Custom URL (For Users)
 
 Create a custom JSON file with your provider configurations and set the environment variable:
 
@@ -108,6 +137,29 @@ The first JSON-configured provider:
 
 ## Usage
 
+### Using Custom Providers from JSON String
+
+```python
+import litellm
+import os
+import json
+
+# Define provider inline
+custom_providers = {
+    "my_provider": {
+        "base_url": "https://api.myprovider.com/v1",
+        "api_key_env": "MY_PROVIDER_KEY"
+    }
+}
+os.environ["LITELLM_CUSTOM_PROVIDERS"] = json.dumps(custom_providers)
+
+# Use your custom provider
+response = litellm.completion(
+    model="my_provider/model-name",
+    messages=[{"role": "user", "content": "Hello"}],
+)
+```
+
 ### Using Custom Providers from URL
 
 ```python
@@ -135,15 +187,20 @@ response = litellm.completion(
 )
 ```
 
-## Custom Provider URL Behavior
+## Custom Provider Loading Behavior
 
-When `LITELLM_CUSTOM_PROVIDERS_URL` is set:
-- LiteLLM loads local providers from `providers.json` first
-- Then fetches and merges providers from the specified URL
-- Custom providers from the URL can overwrite local providers with the same name
-- If the URL is unreachable or returns invalid JSON, LiteLLM logs a warning and continues with local providers only
-- The fetch happens once at startup (providers are cached)
-- Timeout is set to 10 seconds for the HTTP request
+**Loading order:**
+1. Local providers from `providers.json` are loaded first
+2. If `LITELLM_CUSTOM_PROVIDERS` is set, providers from the JSON string are merged
+3. If `LITELLM_CUSTOM_PROVIDERS_URL` is set, providers from the URL are merged
+
+**Key behaviors:**
+- Custom providers can overwrite local providers with the same name
+- Both environment variables can be used together
+- If JSON string is invalid, LiteLLM logs a warning and continues
+- If URL is unreachable or returns invalid JSON, LiteLLM logs a warning and continues
+- The fetch/parse happens once at startup (providers are cached)
+- URL timeout is set to 10 seconds for the HTTP request
 
 ## Benefits
 
@@ -166,10 +223,11 @@ Use a Python config class if you need:
 ### How It Works
 
 1. `json_loader.py` loads `providers.json` on import
-2. If `LITELLM_CUSTOM_PROVIDERS_URL` is set, fetches and merges providers from that URL
-3. `dynamic_config.py` generates config classes on-demand
-4. Provider resolution checks JSON registry first
-5. ProviderConfigManager returns JSON-based configs
+2. If `LITELLM_CUSTOM_PROVIDERS` is set, parses and merges providers from the JSON string
+3. If `LITELLM_CUSTOM_PROVIDERS_URL` is set, fetches and merges providers from that URL
+4. `dynamic_config.py` generates config classes on-demand
+5. Provider resolution checks JSON registry first
+6. ProviderConfigManager returns JSON-based configs
 
 ### Integration Points
 
@@ -178,10 +236,11 @@ The JSON system is integrated at:
 - `litellm/utils.py` - ProviderConfigManager
 - `litellm/constants.py` - openai_compatible_providers list
 
-### URL Loading
+### Custom Provider Loading
 
-The URL loading feature uses:
-- `httpx.Client` with 10-second timeout
+The custom provider loading features:
+- **JSON string**: Parses inline JSON from `LITELLM_CUSTOM_PROVIDERS` env var
+- **URL loading**: Uses `httpx.Client` with 10-second timeout for `LITELLM_CUSTOM_PROVIDERS_URL`
 - Graceful error handling (logs warnings, doesn't crash)
 - Merge behavior: custom providers can overwrite built-in ones
-- Single fetch at startup (no repeated requests)
+- Single fetch/parse at startup (no repeated operations)

@@ -43,6 +43,25 @@ class JSONProviderRegistry:
             cls._providers[slug] = SimpleProviderConfig(slug, config)
 
     @classmethod
+    def _load_from_json_string(cls, json_string: str):
+        """Load providers from a JSON string"""
+        try:
+            verbose_logger.debug("Attempting to load custom providers from JSON string")
+            data = json.loads(json_string)
+            cls._load_from_dict(data, source="LITELLM_CUSTOM_PROVIDERS env var")
+            verbose_logger.info(
+                f"Successfully loaded {len(data)} custom provider(s) from JSON string"
+            )
+        except json.JSONDecodeError as e:
+            verbose_logger.warning(
+                f"Failed to parse custom providers JSON string: {e}"
+            )
+        except Exception as e:
+            verbose_logger.warning(
+                f"Failed to load custom providers from JSON string: {e}"
+            )
+
+    @classmethod
     def _load_from_url(cls, url: str):
         """Load providers from a URL"""
         try:
@@ -81,7 +100,7 @@ class JSONProviderRegistry:
 
     @classmethod
     def load(cls):
-        """Load providers from JSON configuration file and optionally from URL"""
+        """Load providers from JSON configuration file and optionally from environment variables"""
         if cls._loaded:
             return
 
@@ -97,6 +116,11 @@ class JSONProviderRegistry:
                 verbose_logger.warning(
                     f"Warning: Failed to load local JSON provider configs: {e}"
                 )
+
+        # Load custom providers from JSON string if specified
+        custom_providers_json = os.environ.get("LITELLM_CUSTOM_PROVIDERS")
+        if custom_providers_json:
+            cls._load_from_json_string(custom_providers_json)
 
         # Load custom providers from URL if specified
         custom_providers_url = os.environ.get("LITELLM_CUSTOM_PROVIDERS_URL")

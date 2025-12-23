@@ -18,6 +18,54 @@ sys.path.insert(0, workspace_path)
 class TestJSONProviderURLLoader:
     """Test URL-based provider loading"""
 
+    def test_load_from_json_string_success(self):
+        """Test successfully loading providers from JSON string"""
+        # Mock custom provider data
+        custom_providers = {
+            "custom_provider": {
+                "base_url": "https://api.custom.com/v1",
+                "api_key_env": "CUSTOM_API_KEY",
+                "api_base_env": "CUSTOM_API_BASE",
+                "base_class": "openai_gpt",
+                "param_mappings": {
+                    "max_completion_tokens": "max_tokens"
+                }
+            }
+        }
+
+        # Reset the registry
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+        JSONProviderRegistry._loaded = False
+        JSONProviderRegistry._providers = {}
+
+        # Set environment variable with JSON string
+        json_string = json.dumps(custom_providers)
+        with patch.dict(os.environ, {"LITELLM_CUSTOM_PROVIDERS": json_string}):
+            JSONProviderRegistry.load()
+
+            # Verify provider was loaded
+            assert JSONProviderRegistry.exists("custom_provider")
+            provider = JSONProviderRegistry.get("custom_provider")
+            assert provider is not None
+            assert provider.base_url == "https://api.custom.com/v1"
+            assert provider.api_key_env == "CUSTOM_API_KEY"
+
+    def test_load_from_json_string_invalid(self):
+        """Test handling invalid JSON string"""
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+        
+        # Reset the registry
+        JSONProviderRegistry._loaded = False
+        JSONProviderRegistry._providers = {}
+
+        # Set environment variable with invalid JSON
+        with patch.dict(os.environ, {"LITELLM_CUSTOM_PROVIDERS": "not valid json {"}):
+            # Should not raise, just log warning
+            JSONProviderRegistry.load()
+            
+            # Should still be loaded
+            assert JSONProviderRegistry._loaded
+
     def test_load_from_url_success(self):
         """Test successfully loading providers from URL"""
         # Mock custom provider data
