@@ -8261,6 +8261,12 @@ class ProviderConfigManager:
             )
 
             return VertexAITextToSpeechConfig()
+        elif litellm.LlmProviders.MINIMAX == provider:
+            from litellm.llms.minimax.text_to_speech.transformation import (
+                MinimaxTextToSpeechConfig,
+            )
+
+            return MinimaxTextToSpeechConfig()
         elif litellm.LlmProviders.AWS_POLLY == provider:
             from litellm.llms.aws_polly.text_to_speech.transformation import (
                 AWSPollyTextToSpeechConfig,
