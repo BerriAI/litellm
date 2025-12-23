@@ -235,6 +235,21 @@ LLM_CONFIG_NAMES = (
     "HostedVLLMChatConfig",
     # Alias for backwards compatibility
     "VolcEngineConfig",  # Alias for VolcEngineChatConfig
+    "LlamafileChatConfig",
+    "LiteLLMProxyChatConfig",
+    "VLLMConfig",
+    "DeepSeekChatConfig",
+    "LMStudioChatConfig",
+    "LmStudioEmbeddingConfig",
+    "NscaleConfig",
+    "PerplexityChatConfig",
+    "AzureOpenAIO1Config",
+    "IBMWatsonXAIConfig",
+    "IBMWatsonXChatConfig",
+    "IBMWatsonXEmbeddingConfig",
+    "GenAIHubEmbeddingConfig",
+    "IBMWatsonXAudioTranscriptionConfig",
+    "GithubCopilotConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -483,6 +498,21 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "HostedVLLMChatConfig": (".llms.hosted_vllm.chat.transformation", "HostedVLLMChatConfig"),
     # Alias for backwards compatibility
     "VolcEngineConfig": (".llms.volcengine.chat.transformation", "VolcEngineChatConfig"),  # Alias
+    "LlamafileChatConfig": (".llms.llamafile.chat.transformation", "LlamafileChatConfig"),
+    "LiteLLMProxyChatConfig": (".llms.litellm_proxy.chat.transformation", "LiteLLMProxyChatConfig"),
+    "VLLMConfig": (".llms.vllm.completion.transformation", "VLLMConfig"),
+    "DeepSeekChatConfig": (".llms.deepseek.chat.transformation", "DeepSeekChatConfig"),
+    "LMStudioChatConfig": (".llms.lm_studio.chat.transformation", "LMStudioChatConfig"),
+    "LmStudioEmbeddingConfig": (".llms.lm_studio.embed.transformation", "LmStudioEmbeddingConfig"),
+    "NscaleConfig": (".llms.nscale.chat.transformation", "NscaleConfig"),
+    "PerplexityChatConfig": (".llms.perplexity.chat.transformation", "PerplexityChatConfig"),
+    "AzureOpenAIO1Config": (".llms.azure.chat.o_series_transformation", "AzureOpenAIO1Config"),
+    "IBMWatsonXAIConfig": (".llms.watsonx.completion.transformation", "IBMWatsonXAIConfig"),
+    "IBMWatsonXChatConfig": (".llms.watsonx.chat.transformation", "IBMWatsonXChatConfig"),
+    "IBMWatsonXEmbeddingConfig": (".llms.watsonx.embed.transformation", "IBMWatsonXEmbeddingConfig"),
+    "GenAIHubEmbeddingConfig": (".llms.sap.embed.transformation", "GenAIHubEmbeddingConfig"),
+    "IBMWatsonXAudioTranscriptionConfig": (".llms.watsonx.audio_transcription.transformation", "IBMWatsonXAudioTranscriptionConfig"),
+    "GithubCopilotConfig": (".llms.github_copilot.chat.transformation", "GithubCopilotConfig"),
 }
 
 # Export all name tuples and import maps for use in _lazy_imports.py
