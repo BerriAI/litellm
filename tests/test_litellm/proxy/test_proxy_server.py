@@ -525,7 +525,7 @@ mock_prisma = MockPrisma()
 @pytest.mark.asyncio
 async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
     """
-    Test that master_key is correctly loaded from either config.yaml or environment variables
+    Test that master_key is correctly loaded from either config.yaml or environment variables.
     """
     import yaml
     from fastapi import FastAPI
