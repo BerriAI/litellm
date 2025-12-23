@@ -165,6 +165,7 @@ LLM_CONFIG_NAMES = (
     "BytezChatConfig",
     "CompactifAIChatConfig",
     "EmpowerChatConfig",
+    "MinimaxChatConfig",
     "AiohttpOpenAIChatConfig",
     "HuggingFaceChatConfig",
     "HuggingFaceEmbeddingConfig",
@@ -749,6 +750,14 @@ def _lazy_import_llm_configs(name: str) -> Any:  # noqa: PLR0915
 
         _globals["EmpowerChatConfig"] = _EmpowerChatConfig
         return _EmpowerChatConfig
+
+    if name == "MinimaxChatConfig":
+        from .llms.minimax.chat.transformation import (
+            MinimaxChatConfig as _MinimaxChatConfig,
+        )
+
+        _globals["MinimaxChatConfig"] = _MinimaxChatConfig
+        return _MinimaxChatConfig
 
     if name == "AiohttpOpenAIChatConfig":
         from .llms.aiohttp_openai.chat.transformation import (
