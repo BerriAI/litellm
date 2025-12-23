@@ -7224,6 +7224,8 @@ class ProviderConfigManager:
             return litellm.IBMWatsonXAIConfig()
         elif litellm.LlmProviders.EMPOWER == provider:
             return litellm.EmpowerChatConfig()
+        elif litellm.LlmProviders.MINIMAX == provider:            
+            return litellm.MinimaxChatConfig()
         elif litellm.LlmProviders.GITHUB == provider:
             return litellm.GithubChatConfig()
         elif litellm.LlmProviders.COMPACTIFAI == provider:
