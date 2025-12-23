@@ -1338,12 +1338,10 @@ if TYPE_CHECKING:
     from .llms.bedrock.embed.amazon_nova_transformation import AmazonNovaEmbeddingConfig as AmazonNovaEmbeddingConfig
     from .llms.openai.openai import OpenAIConfig as OpenAIConfig, MistralEmbeddingConfig as MistralEmbeddingConfig
     from .llms.openai.image_variations.transformation import OpenAIImageVariationConfig as OpenAIImageVariationConfig
-    from .llms.deepinfra.chat.transformation import DeepInfraConfig as DeepInfraConfig
     from .llms.deepgram.audio_transcription.transformation import DeepgramAudioTranscriptionConfig as DeepgramAudioTranscriptionConfig
     from .llms.topaz.image_variations.transformation import TopazImageVariationConfig as TopazImageVariationConfig
     from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig as OpenAITextCompletionConfig
     from .llms.groq.chat.transformation import GroqChatConfig as GroqChatConfig
-    from .llms.sap.chat.transformation import GenAIHubOrchestrationConfig as GenAIHubOrchestrationConfig
     from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig as VoyageEmbeddingConfig
     from .llms.voyage.embedding.transformation_contextual import VoyageContextualEmbeddingConfig as VoyageContextualEmbeddingConfig
     from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig as InfinityEmbeddingConfig
@@ -1389,6 +1387,9 @@ if TYPE_CHECKING:
     from .llms.deepinfra.chat.transformation import DeepInfraConfig as _DeepInfraConfig
     from .llms.llamafile.chat.transformation import LlamafileChatConfig as _LlamafileChatConfig
     from .llms.lm_studio.chat.transformation import LMStudioChatConfig as _LMStudioChatConfig
+    from .llms.lm_studio.embed.transformation import LmStudioEmbeddingConfig as _LmStudioEmbeddingConfig
+    from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig as _IBMWatsonXEmbeddingConfig
+    from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig as _VertexGeminiConfig
     
     # Type stubs for lazy-loaded config classes (to help mypy understand types)
     VLLMConfig: Type[_VLLMConfig]
@@ -1404,6 +1405,9 @@ if TYPE_CHECKING:
     DeepInfraConfig: Type[_DeepInfraConfig]
     LlamafileChatConfig: Type[_LlamafileChatConfig]
     LMStudioChatConfig: Type[_LMStudioChatConfig]
+    LmStudioEmbeddingConfig: Type[_LmStudioEmbeddingConfig]
+    IBMWatsonXEmbeddingConfig: Type[_IBMWatsonXEmbeddingConfig]
+    VertexAIConfig: Type[_VertexGeminiConfig]  # Alias for VertexGeminiConfig
     
     from .llms.featherless_ai.chat.transformation import FeatherlessAIConfig as FeatherlessAIConfig
     from .llms.cerebras.chat import CerebrasConfig as CerebrasConfig
