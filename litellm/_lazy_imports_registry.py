@@ -188,6 +188,21 @@ LLM_CONFIG_NAMES = (
     "GenAIHubOrchestrationConfig",
     "VoyageEmbeddingConfig",
     "VoyageContextualEmbeddingConfig",
+    "InfinityEmbeddingConfig",
+    "AzureAIStudioConfig",
+    "MistralConfig",
+    "OpenAIResponsesAPIConfig",
+    "AzureOpenAIResponsesAPIConfig",
+    "AzureOpenAIOSeriesResponsesAPIConfig",
+    "XAIResponsesAPIConfig",
+    "LiteLLMProxyResponsesAPIConfig",
+    "GoogleAIStudioInteractionsConfig",
+    "OpenAIOSeriesConfig",
+    "AnthropicSkillsConfig",
+    "BaseSkillsAPIConfig",
+    "GradientAIConfig",
+    # Alias for backwards compatibility
+    "OpenAIO1Config",  # Alias for OpenAIOSeriesConfig
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -389,6 +404,21 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "GenAIHubOrchestrationConfig": (".llms.sap.chat.transformation", "GenAIHubOrchestrationConfig"),
     "VoyageEmbeddingConfig": (".llms.voyage.embedding.transformation", "VoyageEmbeddingConfig"),
     "VoyageContextualEmbeddingConfig": (".llms.voyage.embedding.transformation_contextual", "VoyageContextualEmbeddingConfig"),
+    "InfinityEmbeddingConfig": (".llms.infinity.embedding.transformation", "InfinityEmbeddingConfig"),
+    "AzureAIStudioConfig": (".llms.azure_ai.chat.transformation", "AzureAIStudioConfig"),
+    "MistralConfig": (".llms.mistral.chat.transformation", "MistralConfig"),
+    "OpenAIResponsesAPIConfig": (".llms.openai.responses.transformation", "OpenAIResponsesAPIConfig"),
+    "AzureOpenAIResponsesAPIConfig": (".llms.azure.responses.transformation", "AzureOpenAIResponsesAPIConfig"),
+    "AzureOpenAIOSeriesResponsesAPIConfig": (".llms.azure.responses.o_series_transformation", "AzureOpenAIOSeriesResponsesAPIConfig"),
+    "XAIResponsesAPIConfig": (".llms.xai.responses.transformation", "XAIResponsesAPIConfig"),
+    "LiteLLMProxyResponsesAPIConfig": (".llms.litellm_proxy.responses.transformation", "LiteLLMProxyResponsesAPIConfig"),
+    "GoogleAIStudioInteractionsConfig": (".llms.gemini.interactions.transformation", "GoogleAIStudioInteractionsConfig"),
+    "OpenAIOSeriesConfig": (".llms.openai.chat.o_series_transformation", "OpenAIOSeriesConfig"),
+    "AnthropicSkillsConfig": (".llms.anthropic.skills.transformation", "AnthropicSkillsConfig"),
+    "BaseSkillsAPIConfig": (".llms.base_llm.skills.transformation", "BaseSkillsAPIConfig"),
+    "GradientAIConfig": (".llms.gradient_ai.chat.transformation", "GradientAIConfig"),
+    # Alias for backwards compatibility
+    "OpenAIO1Config": (".llms.openai.chat.o_series_transformation", "OpenAIOSeriesConfig"),  # Alias
 }
 
 # Export all name tuples and import maps for use in _lazy_imports.py

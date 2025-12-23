@@ -1087,29 +1087,8 @@ from .llms.bedrock.embed.amazon_titan_v2_transformation import (
     AmazonTitanV2Config,
 )
 from .llms.topaz.common_utils import TopazModelInfo
-from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig
-from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
-from .llms.mistral.chat.transformation import MistralConfig
-from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-from .llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
-from .llms.azure.responses.o_series_transformation import (
-    AzureOpenAIOSeriesResponsesAPIConfig,
-)
-from .llms.xai.responses.transformation import XAIResponsesAPIConfig
-from .llms.litellm_proxy.responses.transformation import (
-    LiteLLMProxyResponsesAPIConfig,
-)
-from .llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig
-from .llms.openai.chat.o_series_transformation import (
-    OpenAIOSeriesConfig as OpenAIO1Config,  # maintain backwards compatibility
-    OpenAIOSeriesConfig,
-)
-from .llms.anthropic.skills.transformation import AnthropicSkillsConfig
-from .llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 
-from .llms.gradient_ai.chat.transformation import GradientAIConfig
-
-openaiOSeriesConfig = OpenAIOSeriesConfig()
+# OpenAIOSeriesConfig is lazy loaded - openaiOSeriesConfig will be created on first access
 from .llms.openai.chat.gpt_transformation import (
     OpenAIGPTConfig,
 )
@@ -1460,6 +1439,19 @@ if TYPE_CHECKING:
     from .llms.sap.chat.transformation import GenAIHubOrchestrationConfig as GenAIHubOrchestrationConfig
     from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig as VoyageEmbeddingConfig
     from .llms.voyage.embedding.transformation_contextual import VoyageContextualEmbeddingConfig as VoyageContextualEmbeddingConfig
+    from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig as InfinityEmbeddingConfig
+    from .llms.azure_ai.chat.transformation import AzureAIStudioConfig as AzureAIStudioConfig
+    from .llms.mistral.chat.transformation import MistralConfig as MistralConfig
+    from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig as OpenAIResponsesAPIConfig
+    from .llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig as AzureOpenAIResponsesAPIConfig
+    from .llms.azure.responses.o_series_transformation import AzureOpenAIOSeriesResponsesAPIConfig as AzureOpenAIOSeriesResponsesAPIConfig
+    from .llms.xai.responses.transformation import XAIResponsesAPIConfig as XAIResponsesAPIConfig
+    from .llms.litellm_proxy.responses.transformation import LiteLLMProxyResponsesAPIConfig as LiteLLMProxyResponsesAPIConfig
+    from .llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig as GoogleAIStudioInteractionsConfig
+    from .llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig as OpenAIOSeriesConfig, OpenAIOSeriesConfig as OpenAIO1Config
+    from .llms.anthropic.skills.transformation import AnthropicSkillsConfig as AnthropicSkillsConfig
+    from .llms.base_llm.skills.transformation import BaseSkillsAPIConfig as BaseSkillsAPIConfig
+    from .llms.gradient_ai.chat.transformation import GradientAIConfig as GradientAIConfig
     from litellm.caching.llm_caching_handler import LLMClientCache
     from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
     from litellm.types.utils import (
@@ -1537,6 +1529,20 @@ def __getattr__(name: str) -> Any:
             from .main import encoding as _encoding
             _globals["encoding"] = _encoding
         return _globals["encoding"]
+    
+    # Lazy load openaiOSeriesConfig instance
+    if name == "openaiOSeriesConfig":
+        from ._lazy_imports import _get_litellm_globals
+        _globals = _get_litellm_globals()
+        if "openaiOSeriesConfig" not in _globals:
+            # Import the config class and instantiate it
+            config_class = __getattr__("OpenAIOSeriesConfig")
+            _globals["openaiOSeriesConfig"] = config_class()
+        return _globals["openaiOSeriesConfig"]
+    
+    # Handle OpenAIO1Config alias
+    if name == "OpenAIO1Config":
+        return __getattr__("OpenAIOSeriesConfig")
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
