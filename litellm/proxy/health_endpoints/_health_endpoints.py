@@ -30,8 +30,80 @@ from litellm.proxy.health_check import (
     perform_health_check,
     run_with_timeout,
 )
+from litellm.secret_managers.main import get_secret
 
 #### Health ENDPOINTS ####
+
+
+def _resolve_os_environ_variables(params: dict) -> dict:
+    """
+    Resolve ``os.environ/`` environment variables in ``litellm_params``.
+
+    This walks the input dict/list structure iteratively (no Python recursion) to
+    avoid unbounded recursion / stack overflows on deeply nested inputs.
+    """
+    if not isinstance(params, dict):
+        return params
+
+    # Use an explicit stack to avoid recursion and handle nested dicts/lists.
+    # We also keep a `seen` set to guard against accidental cycles.
+    resolved_root: dict = {}
+    stack: list[tuple[object, object]] = [(params, resolved_root)]
+    seen: set[int] = {id(params)}
+
+    while stack:
+        src, dst = stack.pop()
+
+        if isinstance(src, dict) and isinstance(dst, dict):
+            for key, value in src.items():
+                # Direct string replacement for os.environ/ references
+                if isinstance(value, str) and value.startswith("os.environ/"):
+                    dst[key] = get_secret(value)
+                elif isinstance(value, dict):
+                    if id(value) in seen:
+                        # Cycle detected – keep a shallow copy reference to prevent infinite loops
+                        dst[key] = {}
+                        continue
+                    seen.add(id(value))
+                    new_dict: dict = {}
+                    dst[key] = new_dict
+                    stack.append((value, new_dict))
+                elif isinstance(value, list):
+                    if id(value) in seen:
+                        dst[key] = []
+                        continue
+                    seen.add(id(value))
+                    new_list: list = []
+                    dst[key] = new_list
+                    stack.append((value, new_list))
+                else:
+                    dst[key] = value
+
+        elif isinstance(src, list) and isinstance(dst, list):
+            for item in src:
+                if isinstance(item, str) and item.startswith("os.environ/"):
+                    dst.append(get_secret(item))
+                elif isinstance(item, dict):
+                    if id(item) in seen:
+                        dst.append({})
+                        continue
+                    seen.add(id(item))
+                    new_dict = {}
+                    dst.append(new_dict)
+                    stack.append((item, new_dict))
+                elif isinstance(item, list):
+                    if id(item) in seen:
+                        dst.append([])
+                        continue
+                    seen.add(id(item))
+                    new_list = []
+                    dst.append(new_list)
+                    stack.append((item, new_list))
+                else:
+                    dst.append(item)
+
+    return resolved_root
+
 
 router = APIRouter()
 services = Union[
@@ -1166,20 +1238,40 @@ async def test_model_connection(
     
     Example:
     ```bash
+    # If model is configured in proxy_config.yaml, you only need to specify the model name:
     curl -X POST 'http://localhost:4000/health/test_connection' \\
       -H 'Authorization: Bearer sk-1234' \\
       -H 'Content-Type: application/json' \\
       -d '{
         "litellm_params": {
-            "model": "gpt-4",
-            "custom_llm_provider": "azure_ai",
-            "litellm_credential_name": null,
-            "api_key": "6xxxxxxx",
-            "api_base": "https://litellm8397336933.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-10-21",
+            "model": "gpt-4o"
+        },
+        "mode": "chat"
+      }'
+    
+    # The endpoint will automatically use api_key, api_base, etc. from proxy_config.yaml
+    
+    # You can also override specific params or test with custom credentials:
+    curl -X POST 'http://localhost:4000/health/test_connection' \\
+      -H 'Authorization: Bearer sk-1234' \\
+      -H 'Content-Type: application/json' \\
+      -d '{
+        "litellm_params": {
+            "model": "azure/gpt-4o",
+            "api_key": "os.environ/AZURE_OPENAI_API_KEY",
+            "api_base": "os.environ/AZURE_OPENAI_ENDPOINT",
+            "api_version": "2024-10-21"
         },
         "mode": "chat"
       }'
     ```
+    
+    Note: 
+    - If the model is configured in proxy_config.yaml, credentials (api_key, api_base, etc.) 
+      will be automatically loaded from the config (with resolved environment variables).
+    - You can override specific params by including them in the request.
+    - You can use `os.environ/VARIABLE_NAME` syntax to reference environment variables,
+      which will be resolved automatically (same as in proxy_config.yaml).
     
     Returns:
         dict: A dictionary containing the health check result with either success information or error details.
@@ -1188,7 +1280,7 @@ async def test_model_connection(
     from litellm.proxy.management_endpoints.model_management_endpoints import (
         ModelManagementAuthChecks,
     )
-    from litellm.proxy.proxy_server import premium_user, prisma_client
+    from litellm.proxy.proxy_server import llm_router, premium_user, prisma_client
     from litellm.types.router import Deployment, LiteLLM_Params
 
     try:
@@ -1197,6 +1289,46 @@ async def test_model_connection(
                 status_code=500,
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
+        
+        # Get model name from litellm_params
+        request_litellm_params = litellm_params or {}
+        model_name = request_litellm_params.get("model")
+        
+        # Look up model configuration from router if model name is provided
+        # This gets the litellm_params from proxy config (with resolved env vars)
+        config_litellm_params: dict = {}
+        if model_name and llm_router is not None:
+            try:
+                # First try to find by proxy model_name (e.g., "gpt-4o")
+                deployments = llm_router.get_model_list(model_name=model_name)
+                
+                # If not found, try to find by litellm model name (e.g., "azure/gpt-4o")
+                if not deployments or len(deployments) == 0:
+                    all_deployments = llm_router.get_model_list(model_name=None)
+                    if all_deployments:
+                        for deployment in all_deployments:
+                            if deployment.get("litellm_params", {}).get("model") == model_name:
+                                deployments = [deployment]
+                                break
+                
+                if deployments and len(deployments) > 0:
+                    # Use the first deployment's litellm_params as base config
+                    # These already have resolved environment variables from proxy config
+                    config_litellm_params = dict(deployments[0].get("litellm_params", {}))
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    f"Could not find model {model_name} in router: {e}. "
+                    "Proceeding with request params only."
+                )
+        
+        # Merge: config params (from proxy config) as base, request params override
+        # This allows users to override specific params while using config for credentials
+        merged_litellm_params = {**config_litellm_params, **request_litellm_params}
+        
+        # Resolve os.environ/ environment variables in any remaining request params
+        # This handles cases where user explicitly passes os.environ/ values to override config
+        litellm_params = _resolve_os_environ_variables(merged_litellm_params)
+        
         ## Auth check
         await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=Deployment(

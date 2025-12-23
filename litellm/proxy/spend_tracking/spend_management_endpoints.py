@@ -14,15 +14,15 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management_endpoints.common_utils import (
+    _is_user_team_admin,
+    _user_has_admin_view,
+)
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team_and_customer,
 )
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
-from litellm.proxy.management_endpoints.common_utils import (
-    _is_user_team_admin,
-    _user_has_admin_view,
-)
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import PrismaClient
@@ -1678,6 +1678,9 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     end_user: Optional[str] = fastapi.Query(
         default=None, description="Filter logs by end user"
     ),
+    error_code: Optional[str] = fastapi.Query(
+        default=None, description="Filter logs by error code (e.g., '404', '500')"
+    ),
 ):
     """
     View spend logs with pagination support.
@@ -1757,12 +1760,27 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         if model is not None:
             where_conditions["model"] = model
 
+        # Build metadata filters
+        metadata_filters = []
         if key_alias is not None:
-            where_conditions["metadata"] = {
+            metadata_filters.append({
                 "path": ["user_api_key_alias"],
                 "string_contains": key_alias,
-            }
+            })
 
+        if error_code is not None:
+            metadata_filters.append({
+                "path": ["error_information", "error_code"],
+                "equals": f'"{error_code}"',
+            })
+
+        if metadata_filters:
+            if len(metadata_filters) == 1:
+                where_conditions["metadata"] = metadata_filters[0]
+            else:
+                where_conditions["AND"] = where_conditions.get("AND", []) + [
+                    {"metadata": filter_cond} for filter_cond in metadata_filters
+                ]
         if end_user is not None:
             where_conditions["end_user"] = end_user
 
@@ -1938,7 +1956,7 @@ async def view_spend_logs(  # noqa: PLR0915
 
     Example Request for specific api_key
     ```
-    curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=sk-Fn8Ej39NkBQmUagFEoUWPQ" \
+    curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=sk-test-example-key-123" \
 -H "Authorization: Bearer sk-1234"
     ```
 
