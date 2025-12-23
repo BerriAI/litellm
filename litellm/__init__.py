@@ -74,7 +74,6 @@ from litellm.constants import (
     DEFAULT_SOFT_BUDGET,
     DEFAULT_ALLOWED_FAILS,
 )
-from litellm.types.utils import PriorityReservationSettings
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
 import httpx
@@ -379,9 +378,7 @@ public_model_groups_links: Dict[str, Union[str, Dict[str, Any]]] = {}
 priority_reservation: Optional[
     Dict[str, Union[float, "PriorityReservationDict"]]
 ] = None
-priority_reservation_settings: "PriorityReservationSettings" = (
-    PriorityReservationSettings()
-)
+# priority_reservation_settings is lazy-loaded via __getattr__
 
 
 ######## Networking Settings ########
@@ -1607,6 +1604,17 @@ def __getattr__(name: str) -> Any:
             from litellm.types.utils import LlmProviders
             _globals["provider_list"] = list(LlmProviders)
         return _globals["provider_list"]
+    
+    # Lazy load priority_reservation_settings instance
+    if name == "priority_reservation_settings":
+        from ._lazy_imports import _get_litellm_globals
+        _globals = _get_litellm_globals()
+        # Check if already cached
+        if "priority_reservation_settings" not in _globals:
+            # Import the class and instantiate it
+            PriorityReservationSettings = __getattr__("PriorityReservationSettings")
+            _globals["priority_reservation_settings"] = PriorityReservationSettings()
+        return _globals["priority_reservation_settings"]
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

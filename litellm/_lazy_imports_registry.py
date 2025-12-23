@@ -278,6 +278,7 @@ TYPES_NAMES = (
     "DefaultTeamSSOParams",
     "LiteLLM_UpperboundKeyGenerateParams",
     "KeyManagementSystem",
+    "PriorityReservationSettings",
     # Note: LlmProviders is NOT lazy-loaded because it's imported during import time
     # in multiple places including openai.py (via main import)
     # Note: KeyManagementSettings is NOT lazy-loaded because _key_management_settings
@@ -377,6 +378,7 @@ _TYPES_IMPORT_MAP = {
     "DefaultTeamSSOParams": ("litellm.types.proxy.management_endpoints.ui_sso", "DefaultTeamSSOParams"),
     "LiteLLM_UpperboundKeyGenerateParams": ("litellm.types.proxy.management_endpoints.ui_sso", "LiteLLM_UpperboundKeyGenerateParams"),
     "KeyManagementSystem": ("litellm.types.secret_managers.main", "KeyManagementSystem"),
+    "PriorityReservationSettings": ("litellm.types.utils", "PriorityReservationSettings"),
 }
 
 _LLM_CONFIGS_IMPORT_MAP = {
