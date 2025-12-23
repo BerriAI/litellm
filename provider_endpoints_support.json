@@ -47,7 +47,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "ai21": {
@@ -64,7 +65,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "ai21_chat": {
@@ -81,7 +83,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "amazon_nova": {
@@ -98,7 +101,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "anthropic": {
@@ -116,7 +120,8 @@
         "batches": true,
         "rerank": false,
         "skills": true,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "anthropic_text": {
@@ -134,7 +139,8 @@
         "batches": true,
         "rerank": false,
         "skills": true,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "apertis": {
@@ -167,7 +173,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "auto_router": {
@@ -184,7 +191,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "bedrock": {
@@ -201,7 +209,8 @@
         "moderations": false,
         "batches": false,
         "rerank": true,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "sagemaker": {
@@ -218,7 +227,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "aws_polly": {
@@ -251,7 +261,8 @@
         "moderations": true,
         "batches": true,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "azure_ai": {
@@ -269,7 +280,8 @@
         "batches": true,
         "rerank": false,
         "ocr": true,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "azure_ai/doc-intelligence": {
@@ -303,7 +315,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "azure_text": {
@@ -320,7 +333,8 @@
         "moderations": true,
         "batches": true,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "baseten": {
@@ -337,7 +351,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "bytez": {
@@ -354,7 +369,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "cerebras": {
@@ -371,7 +387,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "chutes": {
@@ -404,7 +421,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "cloudflare": {
@@ -421,7 +439,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "codestral": {
@@ -438,7 +457,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "cohere": {
@@ -455,7 +475,8 @@
         "moderations": false,
         "batches": false,
         "rerank": true,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "cohere_chat": {
@@ -472,7 +493,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "cometapi": {
@@ -489,7 +511,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "compactifai": {
@@ -506,7 +529,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "custom": {
@@ -523,7 +547,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "custom_openai": {
@@ -540,7 +565,8 @@
         "moderations": true,
         "batches": true,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "dashscope": {
@@ -557,7 +583,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "databricks": {
@@ -574,7 +601,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "dataforseo": {
@@ -608,7 +636,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "deepgram": {
@@ -625,7 +654,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "deepinfra": {
@@ -642,7 +672,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "deepseek": {
@@ -659,7 +690,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "elevenlabs": {
@@ -676,7 +708,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "exa_ai": {
@@ -710,7 +743,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "fal_ai": {
@@ -727,7 +761,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "featherless_ai": {
@@ -744,7 +779,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "fireworks_ai": {
@@ -761,7 +797,8 @@
         "moderations": false,
         "batches": false,
         "rerank": true,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "firecrawl": {
@@ -812,7 +849,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "galadriel": {
@@ -829,7 +867,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "github_copilot": {
@@ -846,7 +885,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "github": {
@@ -863,7 +903,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "vertex_ai": {
@@ -881,7 +922,8 @@
         "batches": false,
         "rerank": false,
         "ocr": true,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "vertex_ai/chirp": {
@@ -932,7 +974,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "groq": {
@@ -949,7 +992,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "heroku": {
@@ -966,7 +1010,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "hosted_vllm": {
@@ -984,7 +1029,8 @@
         "batches": true,
         "files": true,
         "rerank": true,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "huggingface": {
@@ -1001,7 +1047,8 @@
         "moderations": false,
         "batches": false,
         "rerank": true,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "hyperbolic": {
@@ -1018,7 +1065,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "watsonx": {
@@ -1035,7 +1083,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "infinity": {
@@ -1084,7 +1133,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "lemonade": {
@@ -1101,7 +1151,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "litellm_proxy": {
@@ -1118,7 +1169,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "llamafile": {
@@ -1135,7 +1187,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "lm_studio": {
@@ -1152,7 +1205,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "maritalk": {
@@ -1169,7 +1223,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "meta_llama": {
@@ -1186,7 +1241,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "mistral": {
@@ -1204,7 +1260,8 @@
         "batches": false,
         "rerank": false,
         "ocr": true,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "moonshot": {
@@ -1221,7 +1278,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "docker_model_runner": {
@@ -1238,7 +1296,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "morph": {
@@ -1255,7 +1314,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "nanogpt": {
@@ -1288,7 +1348,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "nlp_cloud": {
@@ -1305,7 +1366,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "novita": {
@@ -1322,7 +1384,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "nscale": {
@@ -1339,7 +1402,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "nvidia_nim": {
@@ -1356,7 +1420,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "oci": {
@@ -1373,7 +1438,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "ollama": {
@@ -1390,7 +1456,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "ollama_chat": {
@@ -1407,7 +1474,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "oobabooga": {
@@ -1424,7 +1492,8 @@
         "moderations": true,
         "batches": true,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "openai": {
@@ -1450,7 +1519,8 @@
         "retrieve_container_file": true,
         "retrieve_container_file_content": true,
         "delete_container_file": true,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "openai_like": {
@@ -1483,7 +1553,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "ovhcloud": {
@@ -1500,7 +1571,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "parallel_ai": {
@@ -1535,7 +1607,8 @@
         "batches": false,
         "rerank": false,
         "search": true,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "petals": {
@@ -1552,7 +1625,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "poe": {
@@ -1585,7 +1659,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "predibase": {
@@ -1602,7 +1677,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "recraft": {
@@ -1635,7 +1711,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "runwayml": {
@@ -1669,7 +1746,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "searxng": {
@@ -1703,7 +1781,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "sap": {
@@ -1720,7 +1799,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "snowflake": {
@@ -1737,7 +1817,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "synthetic": {
@@ -1770,7 +1851,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "text-completion-openai": {
@@ -1787,7 +1869,8 @@
         "moderations": true,
         "batches": true,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "together_ai": {
@@ -1804,7 +1887,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "topaz": {
@@ -1821,7 +1905,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "tavily": {
@@ -1855,7 +1940,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "v0": {
@@ -1872,7 +1958,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "vercel_ai_gateway": {
@@ -1889,7 +1976,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "vllm": {
@@ -1907,7 +1995,8 @@
         "batches": true,
         "files": true,
         "rerank": true,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "volcengine": {
@@ -1924,7 +2013,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "voyage": {
@@ -1957,7 +2047,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "watsonx_text": {
@@ -1974,7 +2065,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "xai": {
@@ -1991,7 +2083,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "xinference": {
@@ -2024,7 +2117,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "ragflow": {
@@ -2042,7 +2136,8 @@
         "batches": false,
         "rerank": false,
         "vector_stores": true,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "cursor": {
@@ -2059,7 +2154,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "langgraph": {
@@ -2076,7 +2172,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "vertex_ai/agent_engine": {
@@ -2093,7 +2190,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     },
     "pydantic_ai_agents": {
@@ -2144,7 +2242,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true
+        "a2a": true,
+        "interactions": true
       }
     }
   }
