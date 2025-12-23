@@ -158,6 +158,21 @@ LLM_CONFIG_NAMES = (
     # Aliases for backwards compatibility
     "VertexAIConfig",  # Alias for VertexGeminiConfig
     "GeminiConfig",  # Alias for GoogleAIStudioGeminiConfig
+    "AmazonAnthropicConfig",
+    "AmazonAnthropicClaudeConfig",
+    "AmazonCohereConfig",
+    "AmazonLlamaConfig",
+    "AmazonDeepSeekR1Config",
+    "AmazonMistralConfig",
+    "AmazonTitanConfig",
+    "AmazonTwelveLabsPegasusConfig",
+    "AmazonInvokeConfig",
+    "AmazonBedrockOpenAIConfig",
+    "AmazonStabilityConfig",
+    "AmazonStability3Config",
+    "AmazonNovaCanvasConfig",
+    "AmazonTitanG1Config",
+    "AmazonTitanMultimodalEmbeddingG1Config",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -329,6 +344,21 @@ _LLM_CONFIGS_IMPORT_MAP = {
     # Aliases for backwards compatibility
     "VertexAIConfig": (".llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini", "VertexGeminiConfig"),  # Alias
     "GeminiConfig": (".llms.gemini.chat.transformation", "GoogleAIStudioGeminiConfig"),  # Alias
+    "AmazonAnthropicConfig": (".llms.bedrock.chat.invoke_transformations.anthropic_claude2_transformation", "AmazonAnthropicConfig"),
+    "AmazonAnthropicClaudeConfig": (".llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation", "AmazonAnthropicClaudeConfig"),
+    "AmazonCohereConfig": (".llms.bedrock.chat.invoke_transformations.amazon_cohere_transformation", "AmazonCohereConfig"),
+    "AmazonLlamaConfig": (".llms.bedrock.chat.invoke_transformations.amazon_llama_transformation", "AmazonLlamaConfig"),
+    "AmazonDeepSeekR1Config": (".llms.bedrock.chat.invoke_transformations.amazon_deepseek_transformation", "AmazonDeepSeekR1Config"),
+    "AmazonMistralConfig": (".llms.bedrock.chat.invoke_transformations.amazon_mistral_transformation", "AmazonMistralConfig"),
+    "AmazonTitanConfig": (".llms.bedrock.chat.invoke_transformations.amazon_titan_transformation", "AmazonTitanConfig"),
+    "AmazonTwelveLabsPegasusConfig": (".llms.bedrock.chat.invoke_transformations.amazon_twelvelabs_pegasus_transformation", "AmazonTwelveLabsPegasusConfig"),
+    "AmazonInvokeConfig": (".llms.bedrock.chat.invoke_transformations.base_invoke_transformation", "AmazonInvokeConfig"),
+    "AmazonBedrockOpenAIConfig": (".llms.bedrock.chat.invoke_transformations.amazon_openai_transformation", "AmazonBedrockOpenAIConfig"),
+    "AmazonStabilityConfig": (".llms.bedrock.image_generation.amazon_stability1_transformation", "AmazonStabilityConfig"),
+    "AmazonStability3Config": (".llms.bedrock.image_generation.amazon_stability3_transformation", "AmazonStability3Config"),
+    "AmazonNovaCanvasConfig": (".llms.bedrock.image_generation.amazon_nova_canvas_transformation", "AmazonNovaCanvasConfig"),
+    "AmazonTitanG1Config": (".llms.bedrock.embed.amazon_titan_g1_transformation", "AmazonTitanG1Config"),
+    "AmazonTitanMultimodalEmbeddingG1Config": (".llms.bedrock.embed.amazon_titan_multimodal_transformation", "AmazonTitanMultimodalEmbeddingG1Config"),
 }
 
 # Export all name tuples and import maps for use in _lazy_imports.py
