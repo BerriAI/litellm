@@ -78,10 +78,6 @@ from litellm.types.secret_managers.main import (
     KeyManagementSystem,
     KeyManagementSettings,
 )
-from litellm.types.proxy.management_endpoints.ui_sso import (
-    DefaultTeamSSOParams,
-    LiteLLM_UpperboundKeyGenerateParams,
-)
 from litellm.types.utils import LlmProviders
 from litellm.types.utils import PriorityReservationSettings
 from litellm.integrations.custom_logger import CustomLogger
@@ -1462,6 +1458,10 @@ if TYPE_CHECKING:
         StandardKeyGenerationConfig,
     )
     from litellm.types.guardrails import GuardrailItem
+    from litellm.types.proxy.management_endpoints.ui_sso import (
+        DefaultTeamSSOParams,
+        LiteLLM_UpperboundKeyGenerateParams,
+    )
 
     # Cost calculator functions
     cost_per_token: Callable[..., Tuple[float, float]]

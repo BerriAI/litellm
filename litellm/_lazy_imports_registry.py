@@ -275,6 +275,8 @@ LLM_CONFIG_NAMES = (
 # Types that support lazy loading via _lazy_import_types
 TYPES_NAMES = (
     "GuardrailItem",
+    "DefaultTeamSSOParams",
+    "LiteLLM_UpperboundKeyGenerateParams",
 )
 
 # Import maps for registry pattern - reduces repetition
@@ -367,6 +369,8 @@ _DOTPROMPT_IMPORT_MAP = {
 
 _TYPES_IMPORT_MAP = {
     "GuardrailItem": ("litellm.types.guardrails", "GuardrailItem"),
+    "DefaultTeamSSOParams": ("litellm.types.proxy.management_endpoints.ui_sso", "DefaultTeamSSOParams"),
+    "LiteLLM_UpperboundKeyGenerateParams": ("litellm.types.proxy.management_endpoints.ui_sso", "LiteLLM_UpperboundKeyGenerateParams"),
 }
 
 _LLM_CONFIGS_IMPORT_MAP = {
