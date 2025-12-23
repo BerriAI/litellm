@@ -1,0 +1,28 @@
+{
+  "_comment": "JSON-based endpoint configurations for LiteLLM pass-through endpoints",
+  "_version": "1.0.0",
+  "_schema_url": "https://docs.litellm.ai/docs/pass_through/json_config_schema",
+  
+  "example_provider": {
+    "route_prefix": "/example/{endpoint:path}",
+    "target_base_url": "https://api.example.com",
+    "target_base_url_env": "EXAMPLE_API_BASE",
+    "auth": {
+      "type": "bearer_token",
+      "env_var": "EXAMPLE_API_KEY",
+      "header_format": "Bearer {api_key}"
+    },
+    "streaming": {
+      "detection_method": "request_body_field",
+      "field_name": "stream"
+    },
+    "features": {
+      "forward_headers": false,
+      "merge_query_params": false,
+      "require_litellm_auth": true,
+      "subpath_routing": true
+    },
+    "tags": ["Example Provider Pass-through", "pass-through"],
+    "docs_url": "https://docs.litellm.ai/docs/pass_through/example"
+  }
+}
