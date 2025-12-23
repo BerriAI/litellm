@@ -74,7 +74,6 @@ from litellm.constants import (
     DEFAULT_SOFT_BUDGET,
     DEFAULT_ALLOWED_FAILS,
 )
-from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
 import httpx
 import dotenv
@@ -91,7 +90,7 @@ if set_verbose:
     _turn_on_debug()
 ####################################################
 ### Callbacks /Logging / Success / Failure Handlers #####
-CALLBACK_TYPES = Union[str, Callable, CustomLogger]
+CALLBACK_TYPES = Union[str, Callable, "CustomLogger"]  # CustomLogger is lazy-loaded
 input_callback: List[CALLBACK_TYPES] = []
 success_callback: List[CALLBACK_TYPES] = []
 failure_callback: List[CALLBACK_TYPES] = []
@@ -148,7 +147,7 @@ _known_custom_logger_compatible_callbacks: List = list(
     get_args(_custom_logger_compatible_callbacks_literal)
 )
 callbacks: List[
-    Union[Callable, _custom_logger_compatible_callbacks_literal, CustomLogger]
+    Union[Callable, _custom_logger_compatible_callbacks_literal, "CustomLogger"]  # CustomLogger is lazy-loaded
 ] = []
 callback_settings: Dict[str, Dict[str, Any]] = {}
 initialized_langfuse_clients: int = 0
@@ -165,13 +164,13 @@ generic_api_use_v1: Optional[bool] = (
     False  # if you want to use v1 generic api logged payload
 )
 argilla_transformation_object: Optional[Dict[str, Any]] = None
-_async_input_callback: List[Union[str, Callable, CustomLogger]] = (
+_async_input_callback: List[Union[str, Callable, "CustomLogger"]] = (  # CustomLogger is lazy-loaded
     []
 )  # internal variable - async custom callbacks are routed here.
-_async_success_callback: List[Union[str, Callable, CustomLogger]] = (
+_async_success_callback: List[Union[str, Callable, "CustomLogger"]] = (  # CustomLogger is lazy-loaded
     []
 )  # internal variable - async custom callbacks are routed here.
-_async_failure_callback: List[Union[str, Callable, CustomLogger]] = (
+_async_failure_callback: List[Union[str, Callable, "CustomLogger"]] = (  # CustomLogger is lazy-loaded
     []
 )  # internal variable - async custom callbacks are routed here.
 pre_call_rules: List[Callable] = []
@@ -1517,6 +1516,9 @@ if TYPE_CHECKING:
         KeyManagementSystem,
         KeyManagementSettings,  # Not lazy-loaded - needed for _key_management_settings initialization
     )
+
+    # Custom logger class (lazy-loaded)
+    from litellm.integrations.custom_logger import CustomLogger
 
     # Note: AmazonConverseConfig and OpenAILikeChatConfig are imported above in TYPE_CHECKING block
 
