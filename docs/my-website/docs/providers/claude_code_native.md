@@ -79,6 +79,50 @@ The provider automatically converts the API key to a Bearer token by setting the
 2. The `CLAUDE_CODE_API_KEY` environment variable is required if no explicit api_key is provided
 :::
 
+## Getting a Long-Lived Token
+
+The `claude_code_native` provider is designed to work seamlessly with **Claude Code**, Anthropic's official CLI. Using Claude Code eliminates the need for separate API keys - the long-lived token approach is both cache and token efficient, with improved implementation that speaks directly to the Claude API.
+
+### Preparing to Configure
+
+1. **Install Claude Code** using your preferred method:
+
+- **macOS or Linux** (curl): `curl -fsSL https://claude.ai/install.sh | bash`
+- **macOS** (Homebrew): `brew install --cask claude-code`
+- **Windows** (PowerShell): `irm https://claude.ai/install.ps1 | iex`
+
+2. **Login and get a long-lived token** (valid for one year):
+
+```bash
+claude setup-token
+```
+
+3. **Record the token value** - it will not be shown again.
+
+4. **Set the environment variable**:
+
+```bash
+export CLAUDE_CODE_API_KEY="your-long-lived-token-from-claude-setup-token"
+```
+
+It can also be entered in the UI in the normal fashion.
+
+:::tip
+The long-lived token obtained from `claude setup-token` is the recommended way to authenticate with the `claude_code_native` provider. It's valid for one year and provides a secure, cache-efficient way to interact with Claude models.
+:::
+
+### Supported Models
+
+The `claude_code_native` provider supports the following Claude models:
+
+- **Claude Sonnet 4.5** (`claude-sonnet-4-5`) - Latest, recommended for most use cases
+- **Claude Opus 4.5** (`claude-opus-4-5`) - Most capable model
+- **Claude 4.5 Haiku** (`claude-haiku-4-5`) - Fast responses for quick tasks
+
+:::info
+The implementation uses an updated technique that speaks directly to the Claude API, eliminating many downsides of previous implementations with better cache and token efficiency.
+:::
+
 ## Usage
 
 ### Basic Usage
