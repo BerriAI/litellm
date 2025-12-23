@@ -4,9 +4,18 @@ For simple OpenAI-compatible providers (like Hyperbolic, Nscale, etc.), you can 
 
 ## Quick Start
 
+### Option 1: Edit Local JSON File
 1. Edit `litellm/llms/openai_like/providers.json`
 2. Add your provider configuration
 3. Test with: `litellm.completion(model="your_provider/model-name", ...)`
+
+### Option 2: Load from Custom URL
+1. Create a custom JSON file with your provider configurations
+2. Host it at a URL (can be a local file server, cloud storage, or any HTTP endpoint)
+3. Set the environment variable: `LITELLM_CUSTOM_PROVIDERS_URL=https://example.com/my-providers.json`
+4. Start LiteLLM - it will automatically load and merge your custom providers
+
+This is useful when you want to define custom providers without modifying LiteLLM's source code or waiting for PR approval.
 
 ## Basic Configuration
 
@@ -82,6 +91,27 @@ That's it! The provider is now available.
 
 ## Usage
 
+### Using Custom Providers from URL
+
+```python
+import litellm
+import os
+
+# Set the URL to your custom providers JSON
+os.environ["LITELLM_CUSTOM_PROVIDERS_URL"] = "https://example.com/my-providers.json"
+
+# Set your API key
+os.environ["YOUR_PROVIDER_API_KEY"] = "your-key-here"
+
+# Use the provider
+response = litellm.completion(
+    model="your_provider/model-name",
+    messages=[{"role": "user", "content": "Hello"}],
+)
+```
+
+### Using Built-in Providers
+
 ```python
 import litellm
 import os
@@ -95,6 +125,15 @@ response = litellm.completion(
     messages=[{"role": "user", "content": "Hello"}],
 )
 ```
+
+## Custom Provider URL Behavior
+
+When `LITELLM_CUSTOM_PROVIDERS_URL` is set:
+- LiteLLM loads local providers from `providers.json` first
+- Then fetches and merges providers from the specified URL
+- Custom providers from the URL can overwrite local providers with the same name
+- If the URL is unreachable or returns invalid JSON, LiteLLM logs a warning and continues with local providers only
+- The fetch happens once at startup (providers are cached)
 
 ## When to Use Python Instead
 

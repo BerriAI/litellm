@@ -4,18 +4,18 @@ This directory contains the new JSON-based configuration system for OpenAI-compa
 
 ## Overview
 
-Instead of creating a full Python module for simple OpenAI-compatible providers, you can now define them in a single JSON file.
+Instead of creating a full Python module for simple OpenAI-compatible providers, you can now define them in a single JSON file. You can also load custom providers from a URL without modifying LiteLLM's source code.
 
 ## Files
 
 - `providers.json` - Configuration file for all JSON-based providers
-- `json_loader.py` - Loads and parses the JSON configuration
+- `json_loader.py` - Loads and parses the JSON configuration (local and from URL)
 - `dynamic_config.py` - Generates Python config classes from JSON
 - `chat/` - Existing OpenAI-like chat completion handlers
 
 ## Adding a New Provider
 
-### For Simple OpenAI-Compatible Providers
+### Option 1: Edit Local JSON File (For Contributors)
 
 Edit `providers.json` and add your provider:
 
@@ -29,6 +29,27 @@ Edit `providers.json` and add your provider:
 ```
 
 That's it! The provider will be automatically loaded and available.
+
+### Option 2: Load from Custom URL (For Users)
+
+Create a custom JSON file with your provider configurations and set the environment variable:
+
+```bash
+export LITELLM_CUSTOM_PROVIDERS_URL=https://example.com/my-providers.json
+```
+
+Or in Python:
+
+```python
+import os
+os.environ["LITELLM_CUSTOM_PROVIDERS_URL"] = "https://example.com/my-providers.json"
+```
+
+Your custom providers will be automatically loaded and merged with the built-in providers. This is useful when:
+- You want to define custom providers without modifying LiteLLM's source code
+- You're waiting for a PR to be merged
+- You want to keep your provider configurations separate
+- You need different provider configurations for different environments
 
 ### Optional Configuration Fields
 
@@ -87,6 +108,24 @@ The first JSON-configured provider:
 
 ## Usage
 
+### Using Custom Providers from URL
+
+```python
+import litellm
+import os
+
+# Set the URL to your custom providers JSON
+os.environ["LITELLM_CUSTOM_PROVIDERS_URL"] = "https://example.com/my-providers.json"
+
+# Use your custom provider
+response = litellm.completion(
+    model="your_provider/model-name",
+    messages=[{"role": "user", "content": "Hello"}],
+)
+```
+
+### Using Built-in Providers
+
 ```python
 import litellm
 
@@ -95,6 +134,16 @@ response = litellm.completion(
     messages=[{"role": "user", "content": "Hello"}],
 )
 ```
+
+## Custom Provider URL Behavior
+
+When `LITELLM_CUSTOM_PROVIDERS_URL` is set:
+- LiteLLM loads local providers from `providers.json` first
+- Then fetches and merges providers from the specified URL
+- Custom providers from the URL can overwrite local providers with the same name
+- If the URL is unreachable or returns invalid JSON, LiteLLM logs a warning and continues with local providers only
+- The fetch happens once at startup (providers are cached)
+- Timeout is set to 10 seconds for the HTTP request
 
 ## Benefits
 
@@ -117,9 +166,10 @@ Use a Python config class if you need:
 ### How It Works
 
 1. `json_loader.py` loads `providers.json` on import
-2. `dynamic_config.py` generates config classes on-demand
-3. Provider resolution checks JSON registry first
-4. ProviderConfigManager returns JSON-based configs
+2. If `LITELLM_CUSTOM_PROVIDERS_URL` is set, fetches and merges providers from that URL
+3. `dynamic_config.py` generates config classes on-demand
+4. Provider resolution checks JSON registry first
+5. ProviderConfigManager returns JSON-based configs
 
 ### Integration Points
 
@@ -127,3 +177,11 @@ The JSON system is integrated at:
 - `litellm/litellm_core_utils/get_llm_provider_logic.py` - Provider resolution
 - `litellm/utils.py` - ProviderConfigManager
 - `litellm/constants.py` - openai_compatible_providers list
+
+### URL Loading
+
+The URL loading feature uses:
+- `httpx.Client` with 10-second timeout
+- Graceful error handling (logs warnings, doesn't crash)
+- Merge behavior: custom providers can overwrite built-in ones
+- Single fetch at startup (no repeated requests)
