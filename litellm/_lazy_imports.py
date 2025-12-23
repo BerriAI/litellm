@@ -313,6 +313,81 @@ _TYPES_UTILS_IMPORT_MAP = {
     "GenericStreamingChunk": (".types.utils", "GenericStreamingChunk"),
 }
 
+_TOKEN_COUNTER_IMPORT_MAP = {
+    "get_modified_max_tokens": ("litellm.litellm_core_utils.token_counter", "get_modified_max_tokens"),
+}
+
+_BEDROCK_TYPES_IMPORT_MAP = {
+    "COHERE_EMBEDDING_INPUT_TYPES": ("litellm.types.llms.bedrock", "COHERE_EMBEDDING_INPUT_TYPES"),
+}
+
+_CACHING_IMPORT_MAP = {
+    "Cache": ("litellm.caching.caching", "Cache"),
+    "DualCache": ("litellm.caching.caching", "DualCache"),
+    "RedisCache": ("litellm.caching.caching", "RedisCache"),
+    "InMemoryCache": ("litellm.caching.caching", "InMemoryCache"),
+}
+
+_LITELLM_LOGGING_IMPORT_MAP = {
+    "Logging": ("litellm.litellm_core_utils.litellm_logging", "Logging"),
+    "modify_integration": ("litellm.litellm_core_utils.litellm_logging", "modify_integration"),
+}
+
+_DOTPROMPT_IMPORT_MAP = {
+    "global_prompt_manager": ("litellm.integrations.dotprompt", "global_prompt_manager"),
+    "global_prompt_directory": ("litellm.integrations.dotprompt", "global_prompt_directory"),
+    "set_global_prompt_directory": ("litellm.integrations.dotprompt", "set_global_prompt_directory"),
+}
+
+_TYPES_IMPORT_MAP = {
+    "GuardrailItem": ("litellm.types.guardrails", "GuardrailItem"),
+}
+
+_LLM_CONFIGS_IMPORT_MAP = {
+    "AmazonConverseConfig": (".llms.bedrock.chat.converse_transformation", "AmazonConverseConfig"),
+    "OpenAILikeChatConfig": (".llms.openai_like.chat.handler", "OpenAILikeChatConfig"),
+    "GaladrielChatConfig": (".llms.galadriel.chat.transformation", "GaladrielChatConfig"),
+    "GithubChatConfig": (".llms.github.chat.transformation", "GithubChatConfig"),
+    "AzureAnthropicConfig": (".llms.azure_ai.anthropic.transformation", "AzureAnthropicConfig"),
+    "BytezChatConfig": (".llms.bytez.chat.transformation", "BytezChatConfig"),
+    "CompactifAIChatConfig": (".llms.compactifai.chat.transformation", "CompactifAIChatConfig"),
+    "EmpowerChatConfig": (".llms.empower.chat.transformation", "EmpowerChatConfig"),
+    "MinimaxChatConfig": (".llms.minimax.chat.transformation", "MinimaxChatConfig"),
+    "AiohttpOpenAIChatConfig": (".llms.aiohttp_openai.chat.transformation", "AiohttpOpenAIChatConfig"),
+    "HuggingFaceChatConfig": (".llms.huggingface.chat.transformation", "HuggingFaceChatConfig"),
+    "HuggingFaceEmbeddingConfig": (".llms.huggingface.embedding.transformation", "HuggingFaceEmbeddingConfig"),
+    "OobaboogaConfig": (".llms.oobabooga.chat.transformation", "OobaboogaConfig"),
+    "MaritalkConfig": (".llms.maritalk", "MaritalkConfig"),
+    "OpenrouterConfig": (".llms.openrouter.chat.transformation", "OpenrouterConfig"),
+    "DataRobotConfig": (".llms.datarobot.chat.transformation", "DataRobotConfig"),
+    "AnthropicConfig": (".llms.anthropic.chat.transformation", "AnthropicConfig"),
+    "AnthropicTextConfig": (".llms.anthropic.completion.transformation", "AnthropicTextConfig"),
+    "GroqSTTConfig": (".llms.groq.stt.transformation", "GroqSTTConfig"),
+    "TritonConfig": (".llms.triton.completion.transformation", "TritonConfig"),
+    "TritonGenerateConfig": (".llms.triton.completion.transformation", "TritonGenerateConfig"),
+    "TritonInferConfig": (".llms.triton.completion.transformation", "TritonInferConfig"),
+    "TritonEmbeddingConfig": (".llms.triton.embedding.transformation", "TritonEmbeddingConfig"),
+    "HuggingFaceRerankConfig": (".llms.huggingface.rerank.transformation", "HuggingFaceRerankConfig"),
+    "DatabricksConfig": (".llms.databricks.chat.transformation", "DatabricksConfig"),
+    "DatabricksEmbeddingConfig": (".llms.databricks.embed.transformation", "DatabricksEmbeddingConfig"),
+    "PredibaseConfig": (".llms.predibase.chat.transformation", "PredibaseConfig"),
+    "ReplicateConfig": (".llms.replicate.chat.transformation", "ReplicateConfig"),
+    "SnowflakeConfig": (".llms.snowflake.chat.transformation", "SnowflakeConfig"),
+    "CohereRerankConfig": (".llms.cohere.rerank.transformation", "CohereRerankConfig"),
+    "CohereRerankV2Config": (".llms.cohere.rerank_v2.transformation", "CohereRerankV2Config"),
+    "AzureAIRerankConfig": (".llms.azure_ai.rerank.transformation", "AzureAIRerankConfig"),
+    "InfinityRerankConfig": (".llms.infinity.rerank.transformation", "InfinityRerankConfig"),
+    "JinaAIRerankConfig": (".llms.jina_ai.rerank.transformation", "JinaAIRerankConfig"),
+    "DeepinfraRerankConfig": (".llms.deepinfra.rerank.transformation", "DeepinfraRerankConfig"),
+    "HostedVLLMRerankConfig": (".llms.hosted_vllm.rerank.transformation", "HostedVLLMRerankConfig"),
+    "NvidiaNimRerankConfig": (".llms.nvidia_nim.rerank.transformation", "NvidiaNimRerankConfig"),
+    "NvidiaNimRankingConfig": (".llms.nvidia_nim.rerank.ranking_transformation", "NvidiaNimRankingConfig"),
+    "VertexAIRerankConfig": (".llms.vertex_ai.rerank.transformation", "VertexAIRerankConfig"),
+    "FireworksAIRerankConfig": (".llms.fireworks_ai.rerank.transformation", "FireworksAIRerankConfig"),
+    "VoyageRerankConfig": (".llms.voyage.rerank.transformation", "VoyageRerankConfig"),
+    "ClarifaiConfig": (".llms.clarifai.chat.transformation", "ClarifaiConfig"),
+}
+
 # Lazy import for utils module - imports only the requested item by name.
 def _lazy_import_utils(name: str) -> Any:
     """Lazy import for utils module - imports only the requested item by name."""
@@ -368,32 +443,54 @@ def _lazy_import_cost_calculator(name: str) -> Any:
 
 def _lazy_import_token_counter(name: str) -> Any:
     """Lazy import for token_counter utilities."""
+    if name not in _TOKEN_COUNTER_IMPORT_MAP:
+        raise AttributeError(f"Token counter lazy import: unknown attribute {name!r}")
+    
     _globals = _get_litellm_globals()
-
-    if name == "get_modified_max_tokens":
-        from litellm.litellm_core_utils.token_counter import (
-            get_modified_max_tokens as _get_modified_max_tokens,
-        )
-
-        _globals["get_modified_max_tokens"] = _get_modified_max_tokens
-        return _get_modified_max_tokens
-
-    raise AttributeError(f"Token counter lazy import: unknown attribute {name!r}")
+    
+    # Check if already cached
+    if name in _globals:
+        return _globals[name]
+    
+    module_path, attr_name = _TOKEN_COUNTER_IMPORT_MAP[name]
+    
+    # Cache module reference to avoid repeated importlib calls
+    _module_cache_key = f"_cached_module_{module_path}"
+    if _module_cache_key not in _globals:
+        import importlib
+        _globals[_module_cache_key] = importlib.import_module(module_path)
+    
+    module = _globals[_module_cache_key]
+    value = getattr(module, attr_name)
+    
+    _globals[name] = value
+    return value
 
 
 def _lazy_import_bedrock_types(name: str) -> Any:
     """Lazy import for Bedrock type aliases."""
+    if name not in _BEDROCK_TYPES_IMPORT_MAP:
+        raise AttributeError(f"Bedrock types lazy import: unknown attribute {name!r}")
+    
     _globals = _get_litellm_globals()
-
-    if name == "COHERE_EMBEDDING_INPUT_TYPES":
-        from litellm.types.llms.bedrock import (
-            COHERE_EMBEDDING_INPUT_TYPES as _COHERE_EMBEDDING_INPUT_TYPES,
-        )
-
-        _globals["COHERE_EMBEDDING_INPUT_TYPES"] = _COHERE_EMBEDDING_INPUT_TYPES
-        return _COHERE_EMBEDDING_INPUT_TYPES
-
-    raise AttributeError(f"Bedrock types lazy import: unknown attribute {name!r}")
+    
+    # Check if already cached
+    if name in _globals:
+        return _globals[name]
+    
+    module_path, attr_name = _BEDROCK_TYPES_IMPORT_MAP[name]
+    
+    # Cache module reference to avoid repeated importlib calls
+    _module_cache_key = f"_cached_module_{module_path}"
+    if _module_cache_key not in _globals:
+        import importlib
+        _globals[_module_cache_key] = importlib.import_module(module_path)
+    
+    module = _globals[_module_cache_key]
+    value = getattr(module, attr_name)
+    
+    _globals[name] = value
+    return value
 
 
 def _lazy_import_types_utils(name: str) -> Any:
@@ -424,77 +521,86 @@ def _lazy_import_types_utils(name: str) -> Any:
 
 def _lazy_import_caching(name: str) -> Any:
     """Lazy import for caching module classes."""
+    if name not in _CACHING_IMPORT_MAP:
+        raise AttributeError(f"Caching lazy import: unknown attribute {name!r}")
+    
     _globals = _get_litellm_globals()
-
-    if name == "Cache":
-        from litellm.caching.caching import Cache as _Cache
-
-        _globals["Cache"] = _Cache
-        return _Cache
-
-    if name == "DualCache":
-        from litellm.caching.caching import DualCache as _DualCache
-
-        _globals["DualCache"] = _DualCache
-        return _DualCache
-
-    if name == "RedisCache":
-        from litellm.caching.caching import RedisCache as _RedisCache
-
-        _globals["RedisCache"] = _RedisCache
-        return _RedisCache
-
-    if name == "InMemoryCache":
-        from litellm.caching.caching import InMemoryCache as _InMemoryCache
-
-        _globals["InMemoryCache"] = _InMemoryCache
-        return _InMemoryCache
-
-    raise AttributeError(f"Caching lazy import: unknown attribute {name!r}")
+    
+    # Check if already cached
+    if name in _globals:
+        return _globals[name]
+    
+    module_path, attr_name = _CACHING_IMPORT_MAP[name]
+    
+    # Cache module reference to avoid repeated importlib calls
+    _module_cache_key = f"_cached_module_{module_path}"
+    if _module_cache_key not in _globals:
+        import importlib
+        _globals[_module_cache_key] = importlib.import_module(module_path)
+    
+    module = _globals[_module_cache_key]
+    value = getattr(module, attr_name)
+    
+    _globals[name] = value
+    return value
 
 
 def _lazy_import_llm_client_cache(name: str) -> Any:
     """Lazy import for LLM client cache class and singleton."""
     _globals = _get_litellm_globals()
-
+    
+    # Check if already cached
+    if name in _globals:
+        return _globals[name]
+    
+    # Import the class
+    module_path = "litellm.caching.llm_caching_handler"
+    _module_cache_key = f"_cached_module_{module_path}"
+    if _module_cache_key not in _globals:
+        import importlib
+        _globals[_module_cache_key] = importlib.import_module(module_path)
+    
+    module = _globals[_module_cache_key]
+    LLMClientCache = getattr(module, "LLMClientCache")
+    
     if name == "LLMClientCache":
-        from litellm.caching.llm_caching_handler import (
-            LLMClientCache as _LLMClientCache,
-        )
-
-        _globals["LLMClientCache"] = _LLMClientCache
-        return _LLMClientCache
-
+        _globals["LLMClientCache"] = LLMClientCache
+        return LLMClientCache
+    
     if name == "in_memory_llm_clients_cache":
-        from litellm.caching.llm_caching_handler import (
-            LLMClientCache as _LLMClientCache,
-        )
-
-        instance = _LLMClientCache()
+        instance = LLMClientCache()
         # Only populate the requested singleton name to keep lazy-import
         # semantics consistent with other helpers (no extra symbols).
         _globals["in_memory_llm_clients_cache"] = instance
         return instance
-
+    
     raise AttributeError(f"LLM client cache lazy import: unknown attribute {name!r}")
 
 
 def _lazy_import_litellm_logging(name: str) -> Any:
     """Lazy import for litellm_logging module."""
+    if name not in _LITELLM_LOGGING_IMPORT_MAP:
+        raise AttributeError(f"Litellm logging lazy import: unknown attribute {name!r}")
+    
     _globals = _get_litellm_globals()
-    if name == "Logging":
-        from litellm.litellm_core_utils.litellm_logging import Logging as _Logging
-        _globals["Logging"] = _Logging
-        return _Logging
     
-    if name == "modify_integration":
-        from litellm.litellm_core_utils.litellm_logging import (
-            modify_integration as _modify_integration,
-        )
-        _globals["modify_integration"] = _modify_integration
-        return _modify_integration
+    # Check if already cached
+    if name in _globals:
+        return _globals[name]
     
-    raise AttributeError(f"Litellm logging lazy import: unknown attribute {name!r}")
+    module_path, attr_name = _LITELLM_LOGGING_IMPORT_MAP[name]
+    
+    # Cache module reference to avoid repeated importlib calls
+    _module_cache_key = f"_cached_module_{module_path}"
+    if _module_cache_key not in _globals:
+        import importlib
+        _globals[_module_cache_key] = importlib.import_module(module_path)
+    
+    module = _globals[_module_cache_key]
+    value = getattr(module, attr_name)
+    
+    _globals[name] = value
+    return value
 
 
 def _lazy_import_http_handlers(name: str) -> Any:
@@ -531,376 +637,77 @@ def _lazy_import_http_handlers(name: str) -> Any:
 
 def _lazy_import_dotprompt(name: str) -> Any:
     """Lazy import for dotprompt integration globals."""
+    if name not in _DOTPROMPT_IMPORT_MAP:
+        raise AttributeError(f"Dotprompt lazy import: unknown attribute {name!r}")
+    
     _globals = _get_litellm_globals()
-
-    if name == "global_prompt_manager":
-        from litellm.integrations.dotprompt import (
-            global_prompt_manager as _global_prompt_manager,
-        )
-
-        _globals["global_prompt_manager"] = _global_prompt_manager
-        return _global_prompt_manager
-
-    if name == "global_prompt_directory":
-        from litellm.integrations.dotprompt import (
-            global_prompt_directory as _global_prompt_directory,
-        )
-
-        _globals["global_prompt_directory"] = _global_prompt_directory
-        return _global_prompt_directory
-
-    if name == "set_global_prompt_directory":
-        from litellm.integrations.dotprompt import (
-            set_global_prompt_directory as _set_global_prompt_directory,
-        )
-
-        _globals["set_global_prompt_directory"] = _set_global_prompt_directory
-        return _set_global_prompt_directory
-
-    raise AttributeError(f"Dotprompt lazy import: unknown attribute {name!r}")
+    
+    # Check if already cached
+    if name in _globals:
+        return _globals[name]
+    
+    module_path, attr_name = _DOTPROMPT_IMPORT_MAP[name]
+    
+    # Cache module reference to avoid repeated importlib calls
+    _module_cache_key = f"_cached_module_{module_path}"
+    if _module_cache_key not in _globals:
+        import importlib
+        _globals[_module_cache_key] = importlib.import_module(module_path)
+    
+    module = _globals[_module_cache_key]
+    value = getattr(module, attr_name)
+    
+    _globals[name] = value
+    return value
 
 
 def _lazy_import_types(name: str) -> Any:
     """Lazy import for type classes."""
+    if name not in _TYPES_IMPORT_MAP:
+        raise AttributeError(f"Types lazy import: unknown attribute {name!r}")
+    
     _globals = _get_litellm_globals()
+    
+    # Check if already cached
+    if name in _globals:
+        return _globals[name]
+    
+    module_path, attr_name = _TYPES_IMPORT_MAP[name]
+    
+    # Cache module reference to avoid repeated importlib calls
+    _module_cache_key = f"_cached_module_{module_path}"
+    if _module_cache_key not in _globals:
+        import importlib
+        _globals[_module_cache_key] = importlib.import_module(module_path)
+    
+    module = _globals[_module_cache_key]
+    value = getattr(module, attr_name)
+    
+    _globals[name] = value
+    return value
 
-    if name == "GuardrailItem":
-        from litellm.types.guardrails import GuardrailItem as _GuardrailItem
 
-        _globals["GuardrailItem"] = _GuardrailItem
-        return _GuardrailItem
-
-    raise AttributeError(f"Types lazy import: unknown attribute {name!r}")
-
-
-def _lazy_import_llm_configs(name: str) -> Any:  # noqa: PLR0915
+def _lazy_import_llm_configs(name: str) -> Any:
     """Lazy import for LLM config classes."""
+    if name not in _LLM_CONFIGS_IMPORT_MAP:
+        raise AttributeError(f"LLM config lazy import: unknown attribute {name!r}")
+    
     _globals = _get_litellm_globals()
-
-    if name == "AmazonConverseConfig":
-        from .llms.bedrock.chat.converse_transformation import (
-            AmazonConverseConfig as _AmazonConverseConfig,
-        )
-
-        _globals["AmazonConverseConfig"] = _AmazonConverseConfig
-        return _AmazonConverseConfig
-
-    if name == "OpenAILikeChatConfig":
-        from .llms.openai_like.chat.handler import (
-            OpenAILikeChatConfig as _OpenAILikeChatConfig,
-        )
-
-        _globals["OpenAILikeChatConfig"] = _OpenAILikeChatConfig
-        return _OpenAILikeChatConfig
-
-    if name == "GaladrielChatConfig":
-        from .llms.galadriel.chat.transformation import (
-            GaladrielChatConfig as _GaladrielChatConfig,
-        )
-
-        _globals["GaladrielChatConfig"] = _GaladrielChatConfig
-        return _GaladrielChatConfig
-
-    if name == "GithubChatConfig":
-        from .llms.github.chat.transformation import (
-            GithubChatConfig as _GithubChatConfig,
-        )
-
-        _globals["GithubChatConfig"] = _GithubChatConfig
-        return _GithubChatConfig
-
-    if name == "AzureAnthropicConfig":
-        from .llms.azure_ai.anthropic.transformation import (
-            AzureAnthropicConfig as _AzureAnthropicConfig,
-        )
-
-        _globals["AzureAnthropicConfig"] = _AzureAnthropicConfig
-        return _AzureAnthropicConfig
-
-    if name == "BytezChatConfig":
-        from .llms.bytez.chat.transformation import BytezChatConfig as _BytezChatConfig
-
-        _globals["BytezChatConfig"] = _BytezChatConfig
-        return _BytezChatConfig
-
-    if name == "CompactifAIChatConfig":
-        from .llms.compactifai.chat.transformation import (
-            CompactifAIChatConfig as _CompactifAIChatConfig,
-        )
-
-        _globals["CompactifAIChatConfig"] = _CompactifAIChatConfig
-        return _CompactifAIChatConfig
-
-    if name == "EmpowerChatConfig":
-        from .llms.empower.chat.transformation import (
-            EmpowerChatConfig as _EmpowerChatConfig,
-        )
-
-        _globals["EmpowerChatConfig"] = _EmpowerChatConfig
-        return _EmpowerChatConfig
-
-    if name == "MinimaxChatConfig":
-        from .llms.minimax.chat.transformation import (
-            MinimaxChatConfig as _MinimaxChatConfig,
-        )
-
-        _globals["MinimaxChatConfig"] = _MinimaxChatConfig
-        return _MinimaxChatConfig
-
-    if name == "AiohttpOpenAIChatConfig":
-        from .llms.aiohttp_openai.chat.transformation import (
-            AiohttpOpenAIChatConfig as _AiohttpOpenAIChatConfig,
-        )
-
-        _globals["AiohttpOpenAIChatConfig"] = _AiohttpOpenAIChatConfig
-        return _AiohttpOpenAIChatConfig
-
-    if name == "HuggingFaceChatConfig":
-        from .llms.huggingface.chat.transformation import (
-            HuggingFaceChatConfig as _HuggingFaceChatConfig,
-        )
-
-        _globals["HuggingFaceChatConfig"] = _HuggingFaceChatConfig
-        return _HuggingFaceChatConfig
-
-    if name == "HuggingFaceEmbeddingConfig":
-        from .llms.huggingface.embedding.transformation import (
-            HuggingFaceEmbeddingConfig as _HuggingFaceEmbeddingConfig,
-        )
-
-        _globals["HuggingFaceEmbeddingConfig"] = _HuggingFaceEmbeddingConfig
-        return _HuggingFaceEmbeddingConfig
-
-    if name == "OobaboogaConfig":
-        from .llms.oobabooga.chat.transformation import (
-            OobaboogaConfig as _OobaboogaConfig,
-        )
-
-        _globals["OobaboogaConfig"] = _OobaboogaConfig
-        return _OobaboogaConfig
-
-    if name == "MaritalkConfig":
-        from .llms.maritalk import MaritalkConfig as _MaritalkConfig
-
-        _globals["MaritalkConfig"] = _MaritalkConfig
-        return _MaritalkConfig
-
-    if name == "OpenrouterConfig":
-        from .llms.openrouter.chat.transformation import (
-            OpenrouterConfig as _OpenrouterConfig,
-        )
-
-        _globals["OpenrouterConfig"] = _OpenrouterConfig
-        return _OpenrouterConfig
-
-    if name == "DataRobotConfig":
-        from .llms.datarobot.chat.transformation import (
-            DataRobotConfig as _DataRobotConfig,
-        )
-
-        _globals["DataRobotConfig"] = _DataRobotConfig
-        return _DataRobotConfig
-
-    if name == "AnthropicConfig":
-        from .llms.anthropic.chat.transformation import (
-            AnthropicConfig as _AnthropicConfig,
-        )
-
-        _globals["AnthropicConfig"] = _AnthropicConfig
-        return _AnthropicConfig
-
-    if name == "AnthropicTextConfig":
-        from .llms.anthropic.completion.transformation import (
-            AnthropicTextConfig as _AnthropicTextConfig,
-        )
-
-        _globals["AnthropicTextConfig"] = _AnthropicTextConfig
-        return _AnthropicTextConfig
-
-    if name == "GroqSTTConfig":
-        from .llms.groq.stt.transformation import GroqSTTConfig as _GroqSTTConfig
-
-        _globals["GroqSTTConfig"] = _GroqSTTConfig
-        return _GroqSTTConfig
-
-    if name == "TritonConfig":
-        from .llms.triton.completion.transformation import TritonConfig as _TritonConfig
-
-        _globals["TritonConfig"] = _TritonConfig
-        return _TritonConfig
-
-    if name == "TritonGenerateConfig":
-        from .llms.triton.completion.transformation import (
-            TritonGenerateConfig as _TritonGenerateConfig,
-        )
-
-        _globals["TritonGenerateConfig"] = _TritonGenerateConfig
-        return _TritonGenerateConfig
-
-    if name == "TritonInferConfig":
-        from .llms.triton.completion.transformation import (
-            TritonInferConfig as _TritonInferConfig,
-        )
-
-        _globals["TritonInferConfig"] = _TritonInferConfig
-        return _TritonInferConfig
-
-    if name == "TritonEmbeddingConfig":
-        from .llms.triton.embedding.transformation import (
-            TritonEmbeddingConfig as _TritonEmbeddingConfig,
-        )
-
-        _globals["TritonEmbeddingConfig"] = _TritonEmbeddingConfig
-        return _TritonEmbeddingConfig
-
-    if name == "HuggingFaceRerankConfig":
-        from .llms.huggingface.rerank.transformation import (
-            HuggingFaceRerankConfig as _HuggingFaceRerankConfig,
-        )
-
-        _globals["HuggingFaceRerankConfig"] = _HuggingFaceRerankConfig
-        return _HuggingFaceRerankConfig
-
-    if name == "DatabricksConfig":
-        from .llms.databricks.chat.transformation import (
-            DatabricksConfig as _DatabricksConfig,
-        )
-
-        _globals["DatabricksConfig"] = _DatabricksConfig
-        return _DatabricksConfig
-
-    if name == "DatabricksEmbeddingConfig":
-        from .llms.databricks.embed.transformation import (
-            DatabricksEmbeddingConfig as _DatabricksEmbeddingConfig,
-        )
-
-        _globals["DatabricksEmbeddingConfig"] = _DatabricksEmbeddingConfig
-        return _DatabricksEmbeddingConfig
-
-    if name == "PredibaseConfig":
-        from .llms.predibase.chat.transformation import (
-            PredibaseConfig as _PredibaseConfig,
-        )
-
-        _globals["PredibaseConfig"] = _PredibaseConfig
-        return _PredibaseConfig
-
-    if name == "ReplicateConfig":
-        from .llms.replicate.chat.transformation import (
-            ReplicateConfig as _ReplicateConfig,
-        )
-
-        _globals["ReplicateConfig"] = _ReplicateConfig
-        return _ReplicateConfig
-
-    if name == "SnowflakeConfig":
-        from .llms.snowflake.chat.transformation import (
-            SnowflakeConfig as _SnowflakeConfig,
-        )
-
-        _globals["SnowflakeConfig"] = _SnowflakeConfig
-        return _SnowflakeConfig
-
-    if name == "CohereRerankConfig":
-        from .llms.cohere.rerank.transformation import (
-            CohereRerankConfig as _CohereRerankConfig,
-        )
-
-        _globals["CohereRerankConfig"] = _CohereRerankConfig
-        return _CohereRerankConfig
-
-    if name == "CohereRerankV2Config":
-        from .llms.cohere.rerank_v2.transformation import (
-            CohereRerankV2Config as _CohereRerankV2Config,
-        )
-
-        _globals["CohereRerankV2Config"] = _CohereRerankV2Config
-        return _CohereRerankV2Config
-
-    if name == "AzureAIRerankConfig":
-        from .llms.azure_ai.rerank.transformation import (
-            AzureAIRerankConfig as _AzureAIRerankConfig,
-        )
-
-        _globals["AzureAIRerankConfig"] = _AzureAIRerankConfig
-        return _AzureAIRerankConfig
-
-    if name == "InfinityRerankConfig":
-        from .llms.infinity.rerank.transformation import (
-            InfinityRerankConfig as _InfinityRerankConfig,
-        )
-
-        _globals["InfinityRerankConfig"] = _InfinityRerankConfig
-        return _InfinityRerankConfig
-
-    if name == "JinaAIRerankConfig":
-        from .llms.jina_ai.rerank.transformation import (
-            JinaAIRerankConfig as _JinaAIRerankConfig,
-        )
-
-        _globals["JinaAIRerankConfig"] = _JinaAIRerankConfig
-        return _JinaAIRerankConfig
-
-    if name == "DeepinfraRerankConfig":
-        from .llms.deepinfra.rerank.transformation import (
-            DeepinfraRerankConfig as _DeepinfraRerankConfig,
-        )
-
-        _globals["DeepinfraRerankConfig"] = _DeepinfraRerankConfig
-        return _DeepinfraRerankConfig
-
-    if name == "HostedVLLMRerankConfig":
-        from .llms.hosted_vllm.rerank.transformation import (
-            HostedVLLMRerankConfig as _HostedVLLMRerankConfig,
-        )
-
-        _globals["HostedVLLMRerankConfig"] = _HostedVLLMRerankConfig
-        return _HostedVLLMRerankConfig
-
-    if name == "NvidiaNimRerankConfig":
-        from .llms.nvidia_nim.rerank.transformation import (
-            NvidiaNimRerankConfig as _NvidiaNimRerankConfig,
-        )
-
-        _globals["NvidiaNimRerankConfig"] = _NvidiaNimRerankConfig
-        return _NvidiaNimRerankConfig
-
-    if name == "NvidiaNimRankingConfig":
-        from .llms.nvidia_nim.rerank.ranking_transformation import (
-            NvidiaNimRankingConfig as _NvidiaNimRankingConfig,
-        )
-
-        _globals["NvidiaNimRankingConfig"] = _NvidiaNimRankingConfig
-        return _NvidiaNimRankingConfig
-
-    if name == "VertexAIRerankConfig":
-        from .llms.vertex_ai.rerank.transformation import (
-            VertexAIRerankConfig as _VertexAIRerankConfig,
-        )
-
-        _globals["VertexAIRerankConfig"] = _VertexAIRerankConfig
-        return _VertexAIRerankConfig
-
-    if name == "FireworksAIRerankConfig":
-        from .llms.fireworks_ai.rerank.transformation import (
-            FireworksAIRerankConfig as _FireworksAIRerankConfig,
-        )
-
-        _globals["FireworksAIRerankConfig"] = _FireworksAIRerankConfig
-        return _FireworksAIRerankConfig
-
-    if name == "VoyageRerankConfig":
-        from .llms.voyage.rerank.transformation import (
-            VoyageRerankConfig as _VoyageRerankConfig,
-        )
-
-        _globals["VoyageRerankConfig"] = _VoyageRerankConfig
-        return _VoyageRerankConfig
-
-    if name == "ClarifaiConfig":
-        from .llms.clarifai.chat.transformation import ClarifaiConfig as _ClarifaiConfig
-
-        _globals["ClarifaiConfig"] = _ClarifaiConfig
-        return _ClarifaiConfig
-
-    raise AttributeError(f"LLM config lazy import: unknown attribute {name!r}")
+    
+    # Check if already cached
+    if name in _globals:
+        return _globals[name]
+    
+    module_path, attr_name = _LLM_CONFIGS_IMPORT_MAP[name]
+    
+    # Cache module reference to avoid repeated importlib calls
+    _module_cache_key = f"_cached_module_{module_path}"
+    if _module_cache_key not in _globals:
+        import importlib
+        _globals[_module_cache_key] = importlib.import_module(module_path, package="litellm")
+    
+    module = _globals[_module_cache_key]
+    value = getattr(module, attr_name)
+    
+    _globals[name] = value
+    return value
