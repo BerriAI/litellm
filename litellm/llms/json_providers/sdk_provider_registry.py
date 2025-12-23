@@ -79,9 +79,10 @@ class SDKProviderConfig(BaseModel):
     
     This defines everything needed to integrate a provider with LiteLLM SDK:
     - API endpoints and authentication
-    - Request/response transformations
+    - Response transformations (native format -> LiteLLM format)
     - Cost tracking
-    - Provider capabilities
+    
+    Note: Accepts native provider format as input (no request transformation)
     """
 
     provider_name: str = Field(..., description="Unique provider identifier")
@@ -97,13 +98,10 @@ class SDKProviderConfig(BaseModel):
         ..., description="API endpoints (generate, chat, embed, etc.)"
     )
     transformations: Dict[str, TransformationConfig] = Field(
-        ..., description="Request/response transformations"
+        ..., description="Response transformations only (provider -> LiteLLM)"
     )
     cost_tracking: CostTrackingConfig = Field(
         default_factory=CostTrackingConfig, description="Cost tracking configuration"
-    )
-    capabilities: Dict[str, Any] = Field(
-        default_factory=dict, description="Provider capabilities and limits"
     )
 
 

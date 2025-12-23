@@ -34,24 +34,34 @@ class JSONProviderImageGeneration:
 
     @staticmethod
     async def aimage_generation(
-        prompt: str,
         model: str,
         provider_config_name: str,
-        optional_params: Optional[Dict] = None,
+        request_body: Dict[str, Any],
         **kwargs
     ) -> ImageResponse:
         """
         Generate images using JSON-configured provider (async).
         
+        Accepts NATIVE provider format (e.g., Google Imagen format), sends to API,
+        then transforms response to LiteLLM format.
+        
         Args:
-            prompt: Text prompt for image generation
             model: Model name (e.g., 'imagen-3.0-fast-generate-001')
             provider_config_name: Name of provider in sdk_providers.json
-            optional_params: Additional parameters (n, size, aspect_ratio, etc.)
-            **kwargs: Additional keyword arguments
+            request_body: Native provider request format (e.g., {instances: [...], parameters: {...}})
+            **kwargs: Additional keyword arguments (timeout, etc.)
         
         Returns:
             ImageResponse with generated images and cost tracking
+        
+        Example (Google Imagen):
+            request_body = {
+                "instances": [{"prompt": "A cute otter"}],
+                "parameters": {
+                    "sampleCount": 2,
+                    "aspectRatio": "16:9"
+                }
+            }
         """
         # Load provider configuration
         config = SDKProviderRegistry.get(provider_config_name)
@@ -62,30 +72,7 @@ class JSONProviderImageGeneration:
             )
 
         verbose_logger.debug(f"Using JSON-configured provider: {provider_config_name}")
-
-        # Prepare LiteLLM parameters
-        litellm_params = {
-            "prompt": prompt,
-            "model": model,
-            "n": optional_params.get("n", 1) if optional_params else 1,
-            "size": optional_params.get("size", "1024x1024") if optional_params else "1024x1024",
-        }
-        
-        # Add all optional params
-        if optional_params:
-            litellm_params.update(optional_params)
-
-        verbose_logger.debug(f"LiteLLM parameters: {litellm_params}")
-
-        # Transform request to provider format
-        try:
-            request_body = TransformationEngine.transform_request(
-                litellm_params, config.transformations["request"]
-            )
-            verbose_logger.debug(f"Transformed request body: {request_body}")
-        except Exception as e:
-            verbose_logger.error(f"Request transformation failed: {e}")
-            raise
+        verbose_logger.debug(f"Native request body: {request_body}")
 
         # Build API URL
         api_base = (
@@ -153,14 +140,14 @@ class JSONProviderImageGeneration:
             verbose_logger.error(f"Request to provider failed: {e}")
             raise
 
-        # Transform response to LiteLLM format
+        # Transform response from provider format to LiteLLM format
         try:
             transformed = TransformationEngine.transform_response(
                 provider_response, config.transformations["response"]
             )
-            verbose_logger.debug(f"Transformed response: {list(transformed.keys())}")
+            verbose_logger.debug(f"Transformed response (Provider -> LiteLLM): {list(transformed.keys())}")
         except Exception as e:
-            verbose_logger.error(f"Response transformation failed: {e}")
+            verbose_logger.error(f"Response transformation (Provider -> LiteLLM) failed: {e}")
             raise
 
         # Build ImageResponse
@@ -202,22 +189,20 @@ class JSONProviderImageGeneration:
 
     @staticmethod
     def image_generation(
-        prompt: str,
         model: str,
         provider_config_name: str,
-        optional_params: Optional[Dict] = None,
+        request_body: Dict[str, Any],
         **kwargs
     ) -> ImageResponse:
         """
         Generate images using JSON-configured provider (sync).
         
-        This is a synchronous wrapper around aimage_generation.
+        Accepts NATIVE provider format.
         
         Args:
-            prompt: Text prompt for image generation
             model: Model name
             provider_config_name: Name of provider in sdk_providers.json
-            optional_params: Additional parameters
+            request_body: Native provider request format
             **kwargs: Additional keyword arguments
         
         Returns:
@@ -234,6 +219,6 @@ class JSONProviderImageGeneration:
 
         return loop.run_until_complete(
             JSONProviderImageGeneration.aimage_generation(
-                prompt, model, provider_config_name, optional_params, **kwargs
+                model, provider_config_name, request_body, **kwargs
             )
         )

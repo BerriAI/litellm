@@ -1,7 +1,7 @@
 {
-  "_comment": "SDK-level provider configurations with transformations and cost tracking",
-  "_version": "1.0.0",
-  "_schema": "See SDK_LEVEL_JSON_CONFIGURATION_PROPOSAL.md for full documentation",
+  "_comment": "SDK-level provider configurations - Native format first, transform response only",
+  "_version": "2.0.0",
+  "_schema": "Accepts native provider format, transforms response to LiteLLM format",
   
   "google_imagen": {
     "provider_name": "google_imagen",
@@ -29,21 +29,6 @@
     },
     
     "transformations": {
-      "request": {
-        "type": "jinja",
-        "template": {
-          "instances": [
-            {
-              "prompt": "{{ prompt }}"
-            }
-          ],
-          "parameters": {
-            "sampleCount": "{{ n }}",
-            "aspectRatio": "{{ aspect_ratio if aspect_ratio else '1:1' }}",
-            "negativePrompt": "{{ negative_prompt if negative_prompt else none }}"
-          }
-        }
-      },
       "response": {
         "type": "jsonpath",
         "mappings": {
@@ -62,14 +47,6 @@
         "imagen-2.0-generate-001": 0.02
       },
       "unit": "per_image"
-    },
-    
-    "capabilities": {
-      "max_images": 4,
-      "supported_sizes": ["256x256", "512x512", "1024x1024"],
-      "supports_negative_prompt": true,
-      "supports_aspect_ratio": true,
-      "aspect_ratios": ["1:1", "9:16", "16:9", "3:4", "4:3"]
     }
   }
 }
