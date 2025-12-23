@@ -507,7 +507,11 @@ async def _common_key_generation_helper(  # noqa: PLR0915
                         upperbound_duration = duration_in_seconds(
                             duration=upperbound_value
                         )
-                        user_duration = duration_in_seconds(duration=value)
+                        # Handle special case where duration is "-1" (never expires)
+                        if value == "-1":
+                            user_duration = float('inf')  # Infinite duration
+                        else:
+                            user_duration = duration_in_seconds(duration=value)
                         if user_duration > upperbound_duration:
                             raise HTTPException(
                                 status_code=400,
@@ -1023,7 +1027,7 @@ async def generate_key_fn(
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
     - allowed_passthrough_routes: Optional[list] - List of allowed pass through endpoints for the key. Store the actual endpoint or store a wildcard pattern for a set of endpoints. Example - ["/my-custom-endpoint"]. Use this instead of allowed_routes, if you just want to specify which pass through endpoints the key can access, without specifying the routes. If allowed_routes is specified, allowed_pass_through_endpoints is ignored.
-    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "mcp_tool_permissions": {"server_id_1": ["tool1", "tool2"]}}. IF null or {} then no object permission.
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - key_type: Optional[str] - Type of key that determines default allowed routes. Options: "llm_api" (can call LLM API routes), "management" (can call management routes), "read_only" (can only call info/read routes), "default" (uses default allowed routes). Defaults to "default".
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated (regenerated)
@@ -1175,7 +1179,7 @@ async def generate_service_account_key_fn(
     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
-    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "mcp_tool_permissions": {"server_id_1": ["tool1", "tool2"]}}. IF null or {} then no object permission.
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     Examples:
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
 
@@ -1339,7 +1343,10 @@ async def prepare_key_update_data(
 
     if "duration" in non_default_values:
         duration = non_default_values.pop("duration")
-        if duration and (isinstance(duration, str)) and len(duration) > 0:
+        if duration == "-1":
+            # Set expires to None to indicate the key never expires
+            non_default_values["expires"] = None
+        elif duration and (isinstance(duration, str)) and len(duration) > 0:
             duration_s = duration_in_seconds(duration=duration)
             expires = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
             non_default_values["expires"] = expires
@@ -1452,7 +1459,7 @@ async def update_key_fn(
     - tpm_limit_type: Optional[str] - TPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
     - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
     - allowed_cache_controls: Optional[list] - List of allowed cache control values
-    - duration: Optional[str] - Key validity duration ("30d", "1h", etc.)
+    - duration: Optional[str] - Key validity duration ("30d", "1h", etc.) or "-1" to never expire
     - permissions: Optional[dict] - Key-specific permissions
     - send_invite_email: Optional[bool] - Send invite email to user_id
     - guardrails: Optional[List[str]] - List of active guardrails for the key
@@ -1466,7 +1473,7 @@ async def update_key_fn(
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
     - allowed_passthrough_routes: Optional[list] - List of allowed pass through routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/my-custom-endpoint"]. Use this instead of allowed_routes, if you just want to specify which pass through routes the key can access, without specifying the routes. If allowed_routes is specified, allowed_passthrough_routes is ignored.
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
-    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "mcp_tool_permissions": {"server_id_1": ["tool1", "tool2"]}}. IF null or {} then no object permission.
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated
     - rotation_interval: Optional[str] - How often to rotate this key (e.g., '30d', '90d'). Required if auto_rotate=True
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
@@ -1910,14 +1917,14 @@ async def info_key_fn(
 
     Example Curl:
     ```
-    curl -X GET "http://0.0.0.0:4000/key/info?key=sk-02Wr4IAlN3NvPXvL5JVvDA" \
+    curl -X GET "http://0.0.0.0:4000/key/info?key=sk-test-example-key-123" \
 -H "Authorization: Bearer sk-1234"
     ```
 
     Example Curl - if no key is passed, it will use the Key Passed in Authorization Header
     ```
     curl -X GET "http://0.0.0.0:4000/key/info" \
--H "Authorization: Bearer sk-02Wr4IAlN3NvPXvL5JVvDA"
+-H "Authorization: Bearer sk-test-example-key-123"
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
@@ -2310,31 +2317,70 @@ async def _team_key_deletion_check(
     return False
 
 
-async def can_delete_verification_token(
+async def can_modify_verification_token(
     key_info: LiteLLM_VerificationToken,
     user_api_key_cache: DualCache,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
 ) -> bool:
     """
-    - check if user is proxy admin
-    - check if user is team admin and key is a team key
-    - check if key is personal key
+    Check if user has permission to modify (delete/regenerate) a verification token.
+    
+    Rules:
+    - Proxy admin can modify any key
+    - For team keys: only team admin or key owner can modify
+    - For personal keys: only key owner can modify
+    
+    Args:
+        key_info: The verification token to check
+        user_api_key_cache: Cache for user API keys
+        user_api_key_dict: The user making the request
+        prisma_client: Prisma client for database access
+        
+    Returns:
+        True if user can modify the key, False otherwise
     """
     is_team_key = _is_team_key(data=key_info)
+    
+    # 1. Proxy admin can modify any key
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return True
-    elif is_team_key and key_info.team_id is not None:
-        return await _team_key_deletion_check(
-            user_api_key_dict=user_api_key_dict,
-            key_info=key_info,
+    
+    # 2. For team keys: only team admin or key owner can modify
+    if is_team_key and key_info.team_id is not None:
+        # Get team object to check if user is team admin
+        team_table = await get_team_object(
+            team_id=key_info.team_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
+            check_db_only=True,
         )
-    elif key_info.user_id is not None and key_info.user_id == user_api_key_dict.user_id:
-        return True
-    else:
+        
+        if team_table is None:
+            return False
+        
+        # Check if user is team admin
+        if _is_user_team_admin(
+            user_api_key_dict=user_api_key_dict,
+            team_obj=team_table,
+        ):
+            return True
+        
+        # Check if the key belongs to the user (they own it)
+        if key_info.user_id is not None and key_info.user_id == user_api_key_dict.user_id:
+            return True
+        
+        # Not team admin and doesn't own the key
         return False
+    
+    # 3. For personal keys: only key owner can modify
+    if key_info.user_id is not None and key_info.user_id == user_api_key_dict.user_id:
+        return True
+    
+    # Default: deny
+    return False
+
+
 
 
 async def delete_verification_tokens(
@@ -2388,7 +2434,7 @@ async def delete_verification_tokens(
                 for key in _keys_being_deleted:
 
                     async def _delete_key(key: LiteLLM_VerificationToken):
-                        if await can_delete_verification_token(
+                        if await can_modify_verification_token(
                             key_info=key,
                             user_api_key_cache=user_api_key_cache,
                             user_api_key_dict=user_api_key_dict,
@@ -2538,6 +2584,40 @@ async def _rotate_master_key(
         touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
         new_master_key=new_master_key,
     )
+
+    # 5. process credentials table
+    try:
+        credentials = await prisma_client.db.litellm_credentialstable.find_many()
+    except Exception:
+        credentials = None
+    if credentials:
+        from litellm.proxy.credential_endpoints.endpoints import update_db_credential
+
+        for cred in credentials:
+            try:
+                decrypted_cred = proxy_config.decrypt_credentials(cred)
+                encrypted_cred = update_db_credential(
+                    db_credential=cred,
+                    updated_patch=decrypted_cred,
+                    new_encryption_key=new_master_key,
+                )
+                credential_object_jsonified = jsonify_object(encrypted_cred.model_dump())
+                await prisma_client.db.litellm_credentialstable.update(
+                    where={"credential_name": cred.credential_name},
+                    data={
+                        **credential_object_jsonified,
+                        "updated_by": user_api_key_dict.user_id,
+                    },
+                )
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    f"Failed to re-encrypt credential {cred.credential_name}: {str(e)}"
+                )
+                # Continue with next credential instead of failing entire rotation
+                continue
+        verbose_proxy_logger.debug(
+            f"Successfully re-encrypted {len(credentials)} credentials with new master key"
+        )
 
 
 def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
@@ -2705,6 +2785,18 @@ async def regenerate_key_fn(
             user_api_key_cache=user_api_key_cache,
         )
 
+        # check if user has ownership permission to regenerate key
+        if not await can_modify_verification_token(
+            key_info=_key_in_db,
+            user_api_key_cache=user_api_key_cache,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "You are not authorized to regenerate this key"},
+            )
+
         verbose_proxy_logger.debug("key_in_db: %s", _key_in_db)
 
         new_token = get_new_token(data=data)
@@ -2743,14 +2835,8 @@ async def regenerate_key_fn(
 
         ### 3. remove existing key entry from cache
         ######################################################################
-        if key:
-            await _delete_cache_key_object(
-                hashed_token=hash_token(key),
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-            )
 
-        if hashed_api_key:
+        if hashed_api_key or key:
             await _delete_cache_key_object(
                 hashed_token=hash_token(key),
                 user_api_key_cache=user_api_key_cache,

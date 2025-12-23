@@ -7,7 +7,7 @@ Based on: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/model-refer
 
 import base64
 import time
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union, cast
 
 import httpx
 from httpx._types import RequestFiles
@@ -163,7 +163,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
-        litellm_params: Optional[GenericLiteLLMParams] = None,
+        litellm_params: Optional[Union[GenericLiteLLMParams, dict]] = None,
     ) -> dict:
         """
         Validate environment and return headers for Vertex AI OCR.
@@ -172,16 +172,11 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         """
         # Extract Vertex AI parameters using safe helpers from VertexBase
         # Use safe_get_* methods that don't mutate litellm_params dict
-        litellm_params_dict: Dict[str, Any] = (
-            litellm_params.model_dump() if litellm_params else {}
-        )
+        # Ensure litellm_params is a dict for type checking
+        params_dict: Dict[str, Any] = cast(Dict[str, Any], litellm_params) if litellm_params is not None else {}
         
-        vertex_project = VertexBase.safe_get_vertex_ai_project(
-            litellm_params=litellm_params_dict
-        )
-        vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(
-            litellm_params=litellm_params_dict
-        )
+        vertex_project = VertexBase.safe_get_vertex_ai_project(litellm_params=params_dict)
+        vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(litellm_params=params_dict)
         
         # Get access token from Vertex credentials
         access_token, project_id = self.get_access_token(
@@ -227,6 +222,8 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         # Construct the URL
         if api_base:
             base_url = api_base.rstrip("/")
+        elif vertex_location == "global":
+            base_url = "https://aiplatform.googleapis.com"
         else:
             base_url = f"https://{vertex_location}-aiplatform.googleapis.com"
 

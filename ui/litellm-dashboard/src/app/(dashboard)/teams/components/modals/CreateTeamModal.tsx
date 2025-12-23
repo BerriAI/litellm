@@ -9,6 +9,7 @@ import {
 import NumericalInput from "@/components/shared/numerical_input";
 import VectorStoreSelector from "@/components/vector_store_management/VectorStoreSelector";
 import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelector";
+import AgentSelector from "@/components/agent_management/AgentSelector";
 import PremiumLoggingSettings from "@/components/common_components/PremiumLoggingSettings";
 import ModelAliasManager from "@/components/common_components/ModelAliasManager";
 import React, { useEffect, useState } from "react";
@@ -178,6 +179,20 @@ const CreateTeamModal = ({
           formValues.metadata = JSON.stringify(metadata);
         }
 
+        if (formValues.secret_manager_settings) {
+          if (typeof formValues.secret_manager_settings === "string") {
+            if (formValues.secret_manager_settings.trim() === "") {
+              delete formValues.secret_manager_settings;
+            } else {
+              try {
+                formValues.secret_manager_settings = JSON.parse(formValues.secret_manager_settings);
+              } catch (e) {
+                throw new Error("Failed to parse secret manager settings: " + e);
+              }
+            }
+          }
+        }
+
         // Transform allowed_vector_store_ids and allowed_mcp_servers_and_groups into object_permission
         if (
           (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) ||
@@ -209,6 +224,21 @@ const CreateTeamModal = ({
             }
             formValues.object_permission.mcp_tool_permissions = formValues.mcp_tool_permissions;
             delete formValues.mcp_tool_permissions;
+          }
+
+          // Handle agent permissions
+          if (formValues.allowed_agents_and_groups) {
+            const { agents, accessGroups } = formValues.allowed_agents_and_groups;
+            if (!formValues.object_permission) {
+              formValues.object_permission = {};
+            }
+            if (agents && agents.length > 0) {
+              formValues.object_permission.agents = agents;
+            }
+            if (accessGroups && accessGroups.length > 0) {
+              formValues.object_permission.agent_access_groups = accessGroups;
+            }
+            delete formValues.allowed_agents_and_groups;
           }
         }
 
@@ -423,6 +453,36 @@ const CreateTeamModal = ({
                 <Input.TextArea rows={4} />
               </Form.Item>
               <Form.Item
+                label="Secret Manager Settings"
+                name="secret_manager_settings"
+                help={
+                  premiumUser
+                    ? "Enter secret manager configuration as a JSON object."
+                    : "Premium feature - Upgrade to manage secret manager settings."
+                }
+                rules={[
+                  {
+                    validator: async (_, value) => {
+                      if (!value) {
+                        return Promise.resolve();
+                      }
+                      try {
+                        JSON.parse(value);
+                        return Promise.resolve();
+                      } catch (error) {
+                        return Promise.reject(new Error("Please enter valid JSON"));
+                      }
+                    },
+                  },
+                ]}
+              >
+                <Input.TextArea
+                  rows={4}
+                  placeholder='{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}'
+                  disabled={!premiumUser}
+                />
+              </Form.Item>
+              <Form.Item
                 label={
                   <span>
                     Guardrails{" "}
@@ -542,6 +602,34 @@ const CreateTeamModal = ({
                     />
                   </div>
                 )}
+              </Form.Item>
+            </AccordionBody>
+          </Accordion>
+
+          <Accordion className="mt-8 mb-8">
+            <AccordionHeader>
+              <b>Agent Settings</b>
+            </AccordionHeader>
+            <AccordionBody>
+              <Form.Item
+                label={
+                  <span>
+                    Allowed Agents{" "}
+                    <Tooltip title="Select which agents or access groups this team can access">
+                      <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                    </Tooltip>
+                  </span>
+                }
+                name="allowed_agents_and_groups"
+                className="mt-4"
+                help="Select agents or access groups this team can access"
+              >
+                <AgentSelector
+                  onChange={(val: any) => form.setFieldValue("allowed_agents_and_groups", val)}
+                  value={form.getFieldValue("allowed_agents_and_groups")}
+                  accessToken={accessToken || ""}
+                  placeholder="Select agents or access groups (optional)"
+                />
               </Form.Item>
             </AccordionBody>
           </Accordion>

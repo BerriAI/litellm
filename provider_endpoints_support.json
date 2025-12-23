@@ -17,7 +17,18 @@
         "rerank": "Supports /rerank endpoint",
         "ocr": "Supports /ocr endpoint",
         "search": "Supports /search endpoint",
-        "skills": "Supports /skills endpoint"
+        "skills": "Supports /skills endpoint",
+        "interactions": "Supports /interactions endpoint (Google AI Interactions API)",
+        "a2a_(Agent Gateway)": "Supports /a2a/{agent}/message/send endpoint (A2A Protocol)",
+        "create_container": "Supports POST /containers endpoint",
+        "list_containers": "Supports GET /containers endpoint",
+        "retrieve_container": "Supports GET /containers/{id} endpoint",
+        "delete_container": "Supports DELETE /containers/{id} endpoint",
+        "create_container_file": "Supports POST /containers/{id}/files endpoint",
+        "list_container_files": "Supports GET /containers/{id}/files endpoint",
+        "retrieve_container_file": "Supports GET /containers/{id}/files/{file_id} endpoint",
+        "retrieve_container_file_content": "Supports GET /containers/{id}/files/{file_id}/content endpoint",
+        "delete_container_file": "Supports DELETE /containers/{id}/files/{file_id} endpoint"
       }
     }
   },
@@ -35,7 +46,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "ai21": {
@@ -51,7 +64,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "ai21_chat": {
@@ -67,7 +82,27 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
+    "amazon_nova": {
+      "display_name": "Amazon Nova (`amazon_nova`)",
+      "url": "https://docs.litellm.ai/docs/providers/amazon_nova",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "anthropic": {
@@ -84,7 +119,9 @@
         "moderations": false,
         "batches": true,
         "rerank": false,
-        "skills": true
+        "skills": true,
+        "a2a": true,
+        "interactions": true
       }
     },
     "anthropic_text": {
@@ -101,7 +138,25 @@
         "moderations": false,
         "batches": true,
         "rerank": false,
-        "skills": true
+        "skills": true,
+        "a2a": true,
+        "interactions": true
+      }
+    },
+    "apertis": {
+      "display_name": "Apertis (`apertis`)",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": true,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
       }
     },
     "assemblyai": {
@@ -117,7 +172,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "auto_router": {
@@ -133,7 +190,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "bedrock": {
@@ -149,7 +208,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": true
+        "rerank": true,
+        "a2a": true,
+        "interactions": true
       }
     },
     "sagemaker": {
@@ -163,6 +224,24 @@
         "image_generations": false,
         "audio_transcriptions": false,
         "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
+    "aws_polly": {
+      "display_name": "AWS - Polly (`aws_polly`)",
+      "url": "https://docs.litellm.ai/docs/providers/aws_polly",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": true,
         "moderations": false,
         "batches": false,
         "rerank": false
@@ -181,7 +260,9 @@
         "audio_speech": true,
         "moderations": true,
         "batches": true,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "azure_ai": {
@@ -198,7 +279,9 @@
         "moderations": true,
         "batches": true,
         "rerank": false,
-        "ocr": true
+        "ocr": true,
+        "a2a": true,
+        "interactions": true
       }
     },
     "azure_ai/doc-intelligence": {
@@ -218,6 +301,24 @@
         "ocr": true
       }
     },
+    "azure_ai/agents": {
+      "display_name": "Azure AI Foundry Agents (`azure_ai/agents`)",
+      "url": "https://docs.litellm.ai/docs/providers/azure_ai_agents",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
     "azure_text": {
       "display_name": "Azure Text (`azure_text`)",
       "url": "https://docs.litellm.ai/docs/providers/azure",
@@ -231,7 +332,9 @@
         "audio_speech": true,
         "moderations": true,
         "batches": true,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "baseten": {
@@ -247,7 +350,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "bytez": {
@@ -263,7 +368,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "cerebras": {
@@ -279,7 +386,25 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
+    "chutes": {
+      "display_name": "Chutes (`chutes`)",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": true,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
       }
     },
     "clarifai": {
@@ -295,7 +420,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "cloudflare": {
@@ -311,7 +438,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "codestral": {
@@ -327,7 +456,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "cohere": {
@@ -343,7 +474,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": true
+        "rerank": true,
+        "a2a": true,
+        "interactions": true
       }
     },
     "cohere_chat": {
@@ -359,7 +492,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "cometapi": {
@@ -375,7 +510,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "compactifai": {
@@ -391,7 +528,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "custom": {
@@ -407,7 +546,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "custom_openai": {
@@ -423,7 +564,9 @@
         "audio_speech": true,
         "moderations": true,
         "batches": true,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "dashscope": {
@@ -439,7 +582,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "databricks": {
@@ -455,7 +600,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "dataforseo": {
@@ -488,7 +635,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "deepgram": {
@@ -504,7 +653,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "deepinfra": {
@@ -520,7 +671,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "deepseek": {
@@ -536,7 +689,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "elevenlabs": {
@@ -552,7 +707,9 @@
         "audio_speech": true,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "exa_ai": {
@@ -585,7 +742,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "fal_ai": {
@@ -601,7 +760,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "featherless_ai": {
@@ -617,7 +778,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "fireworks_ai": {
@@ -633,12 +796,31 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": true,
+        "a2a": true,
+        "interactions": true
       }
     },
     "firecrawl": {
       "display_name": "Firecrawl (`firecrawl`)",
       "url": "https://docs.litellm.ai/docs/search/firecrawl",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "search": true
+      }
+    },
+    "linkup": {
+      "display_name": "Linkup (`linkup`)",
+      "url": "https://docs.litellm.ai/docs/search/linkup",
       "endpoints": {
         "chat_completions": false,
         "messages": false,
@@ -666,7 +848,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "galadriel": {
@@ -682,7 +866,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "github_copilot": {
@@ -698,7 +884,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "github": {
@@ -714,7 +902,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "vertex_ai": {
@@ -731,7 +921,25 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "ocr": true
+        "ocr": true,
+        "a2a": true,
+        "interactions": true
+      }
+    },
+    "vertex_ai/chirp": {
+      "display_name": "Google - Vertex AI Chirp3 HD (`vertex_ai/chirp`)",
+      "url": "https://docs.litellm.ai/docs/providers/vertex_speech",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": true,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
       }
     },
     "gemini": {
@@ -747,7 +955,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "interactions": true,
+        "a2a": true
       }
     },
     "gradient_ai": {
@@ -763,7 +973,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "groq": {
@@ -779,7 +991,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "heroku": {
@@ -795,7 +1009,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "hosted_vllm": {
@@ -805,13 +1021,16 @@
         "chat_completions": true,
         "messages": true,
         "responses": true,
-        "embeddings": false,
+        "embeddings": true,
         "image_generations": false,
         "audio_transcriptions": false,
         "audio_speech": false,
         "moderations": false,
-        "batches": false,
-        "rerank": false
+        "batches": true,
+        "files": true,
+        "rerank": true,
+        "a2a": true,
+        "interactions": true
       }
     },
     "huggingface": {
@@ -827,7 +1046,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": true
+        "rerank": true,
+        "a2a": true,
+        "interactions": true
       }
     },
     "hyperbolic": {
@@ -843,7 +1064,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "watsonx": {
@@ -855,11 +1078,13 @@
         "responses": true,
         "embeddings": true,
         "image_generations": false,
-        "audio_transcriptions": false,
+        "audio_transcriptions": true,
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "infinity": {
@@ -907,7 +1132,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "lemonade": {
@@ -923,7 +1150,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "litellm_proxy": {
@@ -939,7 +1168,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "llamafile": {
@@ -955,7 +1186,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "lm_studio": {
@@ -971,7 +1204,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "maritalk": {
@@ -987,7 +1222,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "meta_llama": {
@@ -1003,7 +1240,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "mistral": {
@@ -1020,7 +1259,9 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "ocr": true
+        "ocr": true,
+        "a2a": true,
+        "interactions": true
       }
     },
     "moonshot": {
@@ -1036,7 +1277,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "docker_model_runner": {
@@ -1052,7 +1295,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "morph": {
@@ -1068,7 +1313,25 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
+    "nanogpt": {
+      "display_name": "NanoGPT (`nanogpt`)",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": true,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
       }
     },
     "nebius": {
@@ -1084,7 +1347,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "nlp_cloud": {
@@ -1100,7 +1365,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "novita": {
@@ -1116,7 +1383,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "nscale": {
@@ -1132,7 +1401,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "nvidia_nim": {
@@ -1148,7 +1419,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "oci": {
@@ -1164,7 +1437,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "ollama": {
@@ -1180,7 +1455,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "ollama_chat": {
@@ -1196,7 +1473,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "oobabooga": {
@@ -1212,7 +1491,9 @@
         "audio_speech": true,
         "moderations": true,
         "batches": true,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "openai": {
@@ -1228,7 +1509,18 @@
         "audio_speech": true,
         "moderations": true,
         "batches": true,
-        "rerank": false
+        "rerank": false,
+        "create_container": true,
+        "list_containers": true,
+        "retrieve_container": true,
+        "delete_container": true,
+        "create_container_file": false,
+        "list_container_files": true,
+        "retrieve_container_file": true,
+        "retrieve_container_file_content": true,
+        "delete_container_file": true,
+        "a2a": true,
+        "interactions": true
       }
     },
     "openai_like": {
@@ -1260,7 +1552,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "ovhcloud": {
@@ -1272,11 +1566,13 @@
         "responses": true,
         "embeddings": false,
         "image_generations": false,
-        "audio_transcriptions": false,
+        "audio_transcriptions": true,
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "parallel_ai": {
@@ -1310,7 +1606,9 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "search": true
+        "search": true,
+        "a2a": true,
+        "interactions": true
       }
     },
     "petals": {
@@ -1326,7 +1624,43 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
+    "poe": {
+      "display_name": "Poe (`poe`)",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": true,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
+    "publicai": {
+      "display_name": "PublicAI (`publicai`)",
+      "url": "https://docs.litellm.ai/docs/providers/publicai",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "predibase": {
@@ -1342,7 +1676,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "recraft": {
@@ -1374,7 +1710,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "runwayml": {
@@ -1407,7 +1745,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "searxng": {
@@ -1440,7 +1780,27 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
+    "sap": {
+      "display_name": "SAP Generative AI Hub (`sap`)",
+      "url": "https://docs.litellm.ai/docs/providers/sap",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "snowflake": {
@@ -1456,7 +1816,25 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
+    "synthetic": {
+      "display_name": "Synthetic (`synthetic`)",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": true,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
       }
     },
     "text-completion-codestral": {
@@ -1472,7 +1850,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "text-completion-openai": {
@@ -1488,7 +1868,9 @@
         "audio_speech": true,
         "moderations": true,
         "batches": true,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "together_ai": {
@@ -1504,7 +1886,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "topaz": {
@@ -1520,7 +1904,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "tavily": {
@@ -1553,7 +1939,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "v0": {
@@ -1569,7 +1957,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "vercel_ai_gateway": {
@@ -1585,7 +1975,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "vllm": {
@@ -1595,13 +1987,16 @@
         "chat_completions": true,
         "messages": true,
         "responses": true,
-        "embeddings": false,
+        "embeddings": true,
         "image_generations": false,
         "audio_transcriptions": false,
         "audio_speech": false,
         "moderations": false,
-        "batches": false,
-        "rerank": false
+        "batches": true,
+        "files": true,
+        "rerank": true,
+        "a2a": true,
+        "interactions": true
       }
     },
     "volcengine": {
@@ -1617,7 +2012,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "voyage": {
@@ -1633,7 +2030,7 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": true
       }
     },
     "wandb": {
@@ -1649,7 +2046,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "watsonx_text": {
@@ -1665,7 +2064,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "xai": {
@@ -1681,7 +2082,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     },
     "xinference": {
@@ -1698,6 +2101,149 @@
         "moderations": false,
         "batches": false,
         "rerank": false
+      }
+    },
+    "zai": {
+      "display_name": "Z.AI (Zhipu AI) (`zai`)",
+      "url": "https://docs.litellm.ai/docs/providers/zai",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
+    "ragflow": {
+      "display_name": "RAGFlow (`ragflow`)",
+      "url": "https://docs.litellm.ai/docs/providers/ragflow",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "vector_stores": true,
+        "a2a": true,
+        "interactions": true
+      }
+    },
+    "cursor": {
+      "display_name": "Cursor BYOK (`cursor`)",
+      "url": "https://docs.litellm.ai/docs/providers/cursor",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
+    "langgraph": {
+      "display_name": "LangGraph (`langgraph`)",
+      "url": "https://docs.litellm.ai/docs/providers/langgraph",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
+    "vertex_ai/agent_engine": {
+      "display_name": "Vertex AI Agent Engine (`vertex_ai/agent_engine`)",
+      "url": "https://docs.litellm.ai/docs/providers/vertex_ai_agent_engine",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
+    "pydantic_ai_agents": {
+      "display_name": "Pydantic AI Agents (`pydantic_ai_agents`)",
+      "url": "https://docs.litellm.ai/docs/providers/pydantic_ai_agent",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true
+      }
+    },
+    "stability": {
+      "display_name": "Stability AI (`stability`)",
+      "url": "https://docs.litellm.ai/docs/providers/stability",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": true,
+        "image_edits": true,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
+      }
+    },
+    "venice": {
+      "display_name": "Venice.ai (`venice`)",
+      "url": "https://docs.litellm.ai/docs/providers/venice",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     }
   }

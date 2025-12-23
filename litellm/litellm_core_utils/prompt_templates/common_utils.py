@@ -689,7 +689,14 @@ def _get_image_mime_type_from_url(url: str) -> Optional[str]:
     video/mpegps
     video/flv
     """
+    from urllib.parse import urlparse
+    
     url = url.lower()
+    
+    # Parse URL to extract path without query parameters
+    # This handles URLs like: https://example.com/image.jpg?signature=...
+    parsed = urlparse(url)
+    path = parsed.path
 
     # Map file extensions to mime types
     mime_types = {
@@ -717,7 +724,7 @@ def _get_image_mime_type_from_url(url: str) -> Optional[str]:
 
     # Check each extension group against the URL
     for extensions, mime_type in mime_types.items():
-        if any(url.endswith(ext) for ext in extensions):
+        if any(path.endswith(ext) for ext in extensions):
             return mime_type
 
     return None
@@ -1071,7 +1078,7 @@ def _parse_content_for_reasoning(
         return None, message_text
 
     reasoning_match = re.match(
-        r"<(?:think|thinking)>(.*?)</(?:think|thinking)>(.*)", message_text, re.DOTALL
+        r"<(?:think|thinking|budget:thinking)>(.*?)</(?:think|thinking|budget:thinking)>(.*)", message_text, re.DOTALL
     )
 
     if reasoning_match:

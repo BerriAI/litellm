@@ -69,6 +69,23 @@ litellm_settings:
 ```
 
   </TabItem>
+  <TabItem value="sendgrid" label="SendGrid API">
+
+Add `sendgrid_email` to your proxy config.yaml under `litellm_settings`
+
+set the following env variables
+
+```shell showLineNumbers
+SENDGRID_API_KEY="SG.1234"
+SENDGRID_SENDER_EMAIL="notifications@your-domain.com"
+```
+
+```yaml showLineNumbers title="proxy_config.yaml"
+litellm_settings:
+  callbacks: ["sendgrid_email"]
+```
+
+  </TabItem>
 </Tabs>
 
 ### 2. Create a new user
@@ -76,6 +93,35 @@ litellm_settings:
 On the LiteLLM Proxy UI, go to users > create a new user. 
 
 After creating a new user, they will receive an email invite a the email you specified when creating the user. 
+
+### 3. Configure Budget Alerts (Optional)
+
+Enable budget alert emails by adding "email" to the `alerts` list in your proxy configuration:
+
+```yaml showLineNumbers title="proxy_config.yaml"
+general_settings:
+  alerts: ["email"]
+```
+
+#### Budget Alert Types
+
+**Soft Budget Alerts**: Automatically triggered when a key exceeds its soft budget limit. These alerts help you monitor spending before reaching critical thresholds.
+
+**Max Budget Alerts**: Automatically triggered when a key reaches a specified percentage of its maximum budget (default: 80%). These alerts warn you when you're approaching budget exhaustion.
+
+Both alert types send a maximum of one email per 24-hour period to prevent spam.
+
+#### Configuration Options
+
+Customize budget alert behavior using these environment variables:
+
+```yaml showLineNumbers title=".env"
+# Percentage of max budget that triggers alerts (as decimal: 0.8 = 80%)
+EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE=0.8
+
+# Time-to-live for alert deduplication in seconds (default: 24 hours)
+EMAIL_BUDGET_ALERT_TTL=86400
+```
 
 ## Email Templates 
 

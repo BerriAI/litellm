@@ -55,6 +55,7 @@ def _get_spend_logs_metadata(
     usage_object: Optional[dict] = None,
     model_map_information: Optional[StandardLoggingModelInformation] = None,
     cold_storage_object_key: Optional[str] = None,
+    litellm_overhead_time_ms: Optional[float] = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -78,6 +79,7 @@ def _get_spend_logs_metadata(
             usage_object=None,
             guardrail_information=None,
             cold_storage_object_key=cold_storage_object_key,
+            litellm_overhead_time_ms=None,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "
@@ -102,6 +104,7 @@ def _get_spend_logs_metadata(
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
+    clean_metadata["litellm_overhead_time_ms"] = litellm_overhead_time_ms
 
     return clean_metadata
 
@@ -225,13 +228,16 @@ def get_logging_payload(  # noqa: PLR0915
         response_obj_dict = {}
 
     # Handle OCR responses which use usage_info instead of usage
+    usage: dict = {}
     if call_type in ["ocr", "aocr"]:
         usage = _extract_usage_for_ocr_call(response_obj, response_obj_dict)
     else:
         # Use response_obj_dict instead of response_obj to avoid calling .get() on Pydantic models
-        usage = response_obj_dict.get("usage", None) or {}
-        if isinstance(usage, litellm.Usage):
-            usage = dict(usage)
+        _usage = response_obj_dict.get("usage", None) or {}
+        if isinstance(_usage, litellm.Usage):
+            usage = dict(_usage)
+        elif isinstance(_usage, dict):
+            usage = _usage
 
     id = get_spend_logs_id(call_type or "acompletion", response_obj_dict, kwargs)
     standard_logging_payload = cast(
@@ -295,6 +301,12 @@ def get_logging_payload(  # noqa: PLR0915
     _model_id = metadata.get("model_info", {}).get("id", "")
     _model_group = metadata.get("model_group", "")
 
+    # Extract overhead from hidden_params if available
+    litellm_overhead_time_ms = None
+    if standard_logging_payload is not None:
+        hidden_params = standard_logging_payload.get("hidden_params", {})
+        litellm_overhead_time_ms = hidden_params.get("litellm_overhead_time_ms")
+
     # clean up litellm metadata
     clean_metadata = _get_spend_logs_metadata(
         metadata,
@@ -340,6 +352,7 @@ def get_logging_payload(  # noqa: PLR0915
             if standard_logging_payload is not None
             else None
         ),
+        litellm_overhead_time_ms=litellm_overhead_time_ms,
     )
 
     special_usage_fields = ["completion_tokens", "prompt_tokens", "total_tokens"]
@@ -369,6 +382,9 @@ def get_logging_payload(  # noqa: PLR0915
             "namespaced_tool_name", None
         )
 
+    # Extract agent_id for A2A requests (set directly on model_call_details)
+    agent_id: Optional[str] = kwargs.get("agent_id")
+
     try:
         payload: SpendLogsPayload = SpendLogsPayload(
             request_id=str(id),
@@ -381,6 +397,7 @@ def get_logging_payload(  # noqa: PLR0915
             model=kwargs.get("model", "") or "",
             user=metadata.get("user_api_key_user_id", "") or "",
             team_id=metadata.get("user_api_key_team_id", "") or "",
+            organization_id=metadata.get("user_api_key_org_id") or "",
             metadata=safe_dumps(clean_metadata),
             cache_key=cache_key,
             spend=kwargs.get("response_cost", 0),
@@ -395,6 +412,7 @@ def get_logging_payload(  # noqa: PLR0915
             model_group=_model_group,
             model_id=_model_id,
             mcp_namespaced_tool_name=mcp_namespaced_tool_name,
+            agent_id=agent_id,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             custom_llm_provider=kwargs.get("custom_llm_provider", ""),
             messages=_get_messages_for_spend_logs_payload(
@@ -414,10 +432,15 @@ def get_logging_payload(  # noqa: PLR0915
         )
 
         verbose_proxy_logger.debug(
-            "SpendTable: created payload - payload: %s\n\n",
-            json.dumps(payload, indent=4, default=str),
+            "SpendTable: created payload - request_id: %s, model: %s, spend: %s",
+            payload.get("request_id"),
+            payload.get("model"),
+            payload.get("spend"),
         )
 
+        # Explicitly clear large intermediate objects to reduce memory pressure
+        del response_obj_dict, usage, clean_metadata, additional_usage_values
+        
         return payload
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -482,7 +505,7 @@ async def get_spend_by_team_and_customer(
         ON 
             sl.team_id = tt.team_id
         WHERE
-            sl."startTime" BETWEEN $1::date AND $2::date
+            sl."startTime" >= $1::timestamptz AND sl."startTime" < ($2::timestamptz + INTERVAL '1 day')
             AND sl.team_id = $3
             AND sl.end_user = $4
         GROUP BY

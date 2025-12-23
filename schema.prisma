@@ -61,6 +61,7 @@ model LiteLLM_AgentsTable {
   agent_name String @unique
   litellm_params Json?
   agent_card_params Json
+  agent_access_groups String[]       @default([])
   created_at    DateTime               @default(now()) @map("created_at")
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
@@ -172,6 +173,8 @@ model LiteLLM_ObjectPermissionTable {
   mcp_access_groups     String[]       @default([])
   mcp_tool_permissions  Json?          // Tool-level permissions for MCP servers. Format: {"server_id": ["tool_name_1", "tool_name_2"]}
   vector_stores         String[]       @default([])
+  agents                String[]       @default([])
+  agent_access_groups   String[]       @default([])
   teams                 LiteLLM_TeamTable[]
   verification_tokens   LiteLLM_VerificationToken[]
   organizations         LiteLLM_OrganizationTable[]
@@ -304,6 +307,7 @@ model LiteLLM_SpendLogs {
   cache_key           String?   @default("")
   request_tags        Json?     @default("[]")
   team_id             String? 
+  organization_id     String?
   end_user            String?
   requester_ip_address String?
   messages            Json?     @default("{}")
@@ -311,6 +315,7 @@ model LiteLLM_SpendLogs {
   session_id          String?
   status              String?
   mcp_namespaced_tool_name String? 
+  agent_id            String?
   proxy_server_request Json?     @default("{}")
   @@index([startTime])
   @@index([end_user])
@@ -432,6 +437,91 @@ model LiteLLM_DailyUserSpend {
   @@index([mcp_namespaced_tool_name])
 }
 
+// Track daily organization spend metrics per model and key
+model LiteLLM_DailyOrganizationSpend {
+  id                  String   @id @default(uuid())
+  organization_id     String?
+  date                String
+  api_key             String   
+  model               String?
+  model_group         String?  
+  custom_llm_provider String?
+  mcp_namespaced_tool_name String?
+  prompt_tokens       BigInt      @default(0)
+  completion_tokens   BigInt      @default(0)
+  cache_read_input_tokens     BigInt      @default(0)
+  cache_creation_input_tokens BigInt      @default(0)
+  spend               Float    @default(0.0)
+  api_requests        BigInt      @default(0)
+  successful_requests BigInt      @default(0)
+  failed_requests     BigInt      @default(0)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  @@unique([organization_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name])
+  @@index([date])
+  @@index([organization_id])
+  @@index([api_key])
+  @@index([model])
+  @@index([mcp_namespaced_tool_name])
+}
+
+// Track daily end user (customer) spend metrics per model and key
+model LiteLLM_DailyEndUserSpend {
+  id                  String   @id @default(uuid())
+  end_user_id         String?
+  date                String
+  api_key             String   
+  model               String?
+  model_group         String?  
+  custom_llm_provider String?
+  mcp_namespaced_tool_name String?
+  prompt_tokens       BigInt      @default(0)
+  completion_tokens   BigInt      @default(0)
+  cache_read_input_tokens     BigInt      @default(0)
+  cache_creation_input_tokens BigInt      @default(0)
+  spend               Float    @default(0.0)
+  api_requests        BigInt      @default(0)
+  successful_requests BigInt      @default(0)
+  failed_requests     BigInt      @default(0)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+  @@unique([end_user_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name])
+  @@index([date])
+  @@index([end_user_id])
+  @@index([api_key])
+  @@index([model])
+  @@index([mcp_namespaced_tool_name])
+}
+
+// Track daily agent spend metrics per model and key
+model LiteLLM_DailyAgentSpend {
+  id                  String   @id @default(uuid())
+  agent_id            String?
+  date                String
+  api_key             String   
+  model               String?
+  model_group         String?  
+  custom_llm_provider String?
+  mcp_namespaced_tool_name String?
+  prompt_tokens       BigInt      @default(0)
+  completion_tokens   BigInt      @default(0)
+  cache_read_input_tokens     BigInt      @default(0)
+  cache_creation_input_tokens BigInt      @default(0)
+  spend               Float    @default(0.0)
+  api_requests        BigInt      @default(0)
+  successful_requests BigInt      @default(0)
+  failed_requests     BigInt      @default(0)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+  @@unique([agent_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name])
+  @@index([date])
+  @@index([agent_id])
+  @@index([api_key])
+  @@index([model])
+  @@index([mcp_namespaced_tool_name])
+}
+
 // Track daily team spend metrics per model and key
 model LiteLLM_DailyTeamSpend {
   id                  String   @id @default(uuid())
@@ -512,6 +602,8 @@ model LiteLLM_ManagedFileTable {
   file_object Json? // Stores the OpenAIFileObject
   model_mappings Json
   flat_model_file_ids String[]  @default([]) // Flat list of model file id's - for faster querying of model id -> unified file id
+  storage_backend String? // Storage backend name (e.g., "azure_storage", "gcs", "default")
+  storage_url String? // The actual storage URL where the file is stored
   created_at DateTime @default(now())
   created_by String? 
   updated_at DateTime @updatedAt
@@ -627,4 +719,30 @@ model LiteLLM_CacheConfig {
   cache_settings Json
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
+}
+
+// UI Settings configuration table
+model LiteLLM_UISettings {
+  id String @id @default("ui_settings")
+  ui_settings Json
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}
+
+// Skills table for storing LiteLLM-managed skills
+model LiteLLM_SkillsTable {
+  skill_id       String   @id @default(uuid())
+  display_title  String?
+  description    String?
+  instructions   String?  // The skill instructions/prompt (from SKILL.md)
+  source         String   @default("custom")  // "custom" or "anthropic"
+  latest_version String?
+  file_content   Bytes?   // Binary content of the skill files (zip)
+  file_name      String?  // Original filename
+  file_type      String?  // MIME type (e.g., "application/zip")
+  metadata       Json?    @default("{}")
+  created_at     DateTime @default(now())
+  created_by     String?
+  updated_at     DateTime @default(now()) @updatedAt
+  updated_by     String?
 }

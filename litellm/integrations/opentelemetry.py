@@ -248,6 +248,9 @@ class OpenTelemetry(CustomLogger):
             self._operation_duration_histogram = None
             self._token_usage_histogram = None
             self._cost_histogram = None
+            self._time_to_first_token_histogram = None
+            self._time_per_output_token_histogram = None
+            self._response_duration_histogram = None
             return
 
         from opentelemetry import metrics
@@ -299,6 +302,21 @@ class OpenTelemetry(CustomLogger):
             name="gen_ai.client.token.cost",
             description="GenAI request cost",
             unit="USD",
+        )
+        self._time_to_first_token_histogram = meter.create_histogram(
+            name="gen_ai.client.response.time_to_first_token",
+            description="Time to first token for streaming requests",
+            unit="s",
+        )
+        self._time_per_output_token_histogram = meter.create_histogram(
+            name="gen_ai.client.response.time_per_output_token",
+            description="Average time per output token (generation time / completion tokens)",
+            unit="s",
+        )
+        self._response_duration_histogram = meter.create_histogram(
+            name="gen_ai.client.response.duration",
+            description="Total LLM API generation time (excludes LiteLLM overhead)",
+            unit="s",
         )
 
     def _init_logs(self, logger_provider):
@@ -612,8 +630,9 @@ class OpenTelemetry(CustomLogger):
         if self.config.enable_events:
             self._emit_semantic_logs(kwargs, response_obj, span)
 
-        # 6. End parent span
-        if parent_span is not None:
+        # 6. End parent span (only if it wasn't reused as the primary span)
+        # If parent_span was reused as the primary span, it was already ended in _start_primary_span
+        if parent_span is not None and parent_span is not span:
             parent_span.end(end_time=self._to_ns(datetime.now()))
 
     def _start_primary_span(
@@ -726,6 +745,168 @@ class OpenTelemetry(CustomLogger):
         cost = kwargs.get("response_cost")
         if self._cost_histogram and cost:
             self._cost_histogram.record(cost, attributes=common_attrs)
+
+        # Record latency metrics (TTFT, TPOT, and Total Generation Time)
+        self._record_time_to_first_token_metric(kwargs, common_attrs)
+        self._record_time_per_output_token_metric(
+            kwargs, response_obj, end_time, duration_s, common_attrs
+        )
+        self._record_response_duration_metric(kwargs, end_time, common_attrs)
+
+    @staticmethod
+    def _to_timestamp(val: Optional[Union[datetime, float, str]]) -> Optional[float]:
+        """Convert datetime/float/string to timestamp."""
+        if val is None:
+            return None
+        if isinstance(val, datetime):
+            return val.timestamp()
+        if isinstance(val, (int, float)):
+            return float(val)
+        # isinstance(val, str) - parse datetime string (with or without microseconds)
+        try:
+            return datetime.strptime(val, '%Y-%m-%d %H:%M:%S.%f').timestamp()
+        except ValueError:
+            try:
+                return datetime.strptime(val, '%Y-%m-%d %H:%M:%S').timestamp()
+            except ValueError:
+                return None
+
+    def _record_time_to_first_token_metric(self, kwargs: dict, common_attrs: dict):
+        """Record Time to First Token (TTFT) metric for streaming requests."""
+        optional_params = kwargs.get("optional_params", {})
+        is_streaming = optional_params.get("stream", False)
+        
+        if not (self._time_to_first_token_histogram and is_streaming):
+            return
+        
+        # Use api_call_start_time for precision (matches Prometheus implementation)
+        # This excludes LiteLLM overhead and measures pure LLM API latency
+        api_call_start_time = kwargs.get("api_call_start_time", None)
+        completion_start_time = kwargs.get("completion_start_time", None)
+        
+        if api_call_start_time is not None and completion_start_time is not None:
+            # Convert to timestamps if needed (handles datetime, float, and string)
+            api_call_start_ts = self._to_timestamp(api_call_start_time)
+            completion_start_ts = self._to_timestamp(completion_start_time)
+            
+            if api_call_start_ts is None or completion_start_ts is None:
+                return  # Skip recording if conversion failed
+            
+            time_to_first_token_seconds = completion_start_ts - api_call_start_ts
+            self._time_to_first_token_histogram.record(
+                time_to_first_token_seconds, attributes=common_attrs
+            )
+
+    def _record_time_per_output_token_metric(
+        self,
+        kwargs: dict,
+        response_obj: Optional[Any],
+        end_time: datetime,
+        duration_s: float,
+        common_attrs: dict,
+    ):
+        """Record Time Per Output Token (TPOT) metric.
+        
+        Calculated as: generation_time / completion_tokens
+        - For streaming: uses end_time - completion_start_time (time to generate all tokens after first)
+        - For non-streaming: uses end_time - api_call_start_time (total generation time)
+        """
+        if not self._time_per_output_token_histogram:
+            return
+        
+        # Get completion tokens from response_obj
+        completion_tokens = None
+        if response_obj and (usage := response_obj.get("usage")):
+            completion_tokens = usage.get("completion_tokens")
+        
+        if completion_tokens is None or completion_tokens <= 0:
+            return
+        
+        # Calculate generation time
+        completion_start_time = kwargs.get("completion_start_time", None)
+        api_call_start_time = kwargs.get("api_call_start_time", None)
+        
+        # Convert end_time to timestamp (handles datetime, float, and string)
+        end_time_ts = self._to_timestamp(end_time)
+        if end_time_ts is None:
+            # Fallback to duration_s if conversion failed
+            generation_time_seconds = duration_s
+            if generation_time_seconds > 0:
+                time_per_output_token_seconds = generation_time_seconds / completion_tokens
+                self._time_per_output_token_histogram.record(
+                    time_per_output_token_seconds, attributes=common_attrs
+                )
+            return
+        
+        if completion_start_time is not None:
+            # Streaming: use completion_start_time (when first token arrived)
+            # This measures time to generate all tokens after the first one
+            completion_start_ts = self._to_timestamp(completion_start_time)
+            if completion_start_ts is None:
+                # Fallback to duration_s if conversion failed
+                generation_time_seconds = duration_s
+            else:
+                generation_time_seconds = end_time_ts - completion_start_ts
+        elif api_call_start_time is not None:
+            # Non-streaming: use api_call_start_time (total generation time)
+            api_call_start_ts = self._to_timestamp(api_call_start_time)
+            if api_call_start_ts is None:
+                # Fallback to duration_s if conversion failed
+                generation_time_seconds = duration_s
+            else:
+                generation_time_seconds = end_time_ts - api_call_start_ts
+        else:
+            # Fallback: use duration_s (already calculated as (end_time - start_time).total_seconds())
+            generation_time_seconds = duration_s
+        
+        if generation_time_seconds > 0:
+            time_per_output_token_seconds = generation_time_seconds / completion_tokens
+            self._time_per_output_token_histogram.record(
+                time_per_output_token_seconds, attributes=common_attrs
+            )
+
+    def _record_response_duration_metric(
+        self,
+        kwargs: dict,
+        end_time: Union[datetime, float],
+        common_attrs: dict,
+    ):
+        """Record Total Generation Time (response duration) metric.
+        
+        Measures pure LLM API generation time: end_time - api_call_start_time
+        This excludes LiteLLM overhead and measures only the LLM provider's response time.
+        Works for both streaming and non-streaming requests.
+        
+        Mirrors Prometheus's litellm_llm_api_latency_metric.
+        Uses kwargs.get("end_time") with fallback to parameter for consistency with Prometheus.
+        """
+        if not self._response_duration_histogram:
+            return
+        
+        api_call_start_time = kwargs.get("api_call_start_time", None)
+        if api_call_start_time is None:
+            return
+        
+        # Use end_time from kwargs if available (matches Prometheus), otherwise use parameter
+        # For streaming: end_time is when the stream completes (final chunk received)
+        # For non-streaming: end_time is when the response is received
+        _end_time = kwargs.get("end_time") or end_time
+        if _end_time is None:
+            _end_time = datetime.now()
+        
+        # Convert to timestamps if needed (handles datetime, float, and string)
+        api_call_start_ts = self._to_timestamp(api_call_start_time)
+        end_time_ts = self._to_timestamp(_end_time)
+        
+        if api_call_start_ts is None or end_time_ts is None:
+            return  # Skip recording if conversion failed
+        
+        response_duration_seconds = end_time_ts - api_call_start_ts
+        
+        if response_duration_seconds > 0:
+            self._response_duration_histogram.record(
+                response_duration_seconds, attributes=common_attrs
+            )
 
     def _emit_semantic_logs(self, kwargs, response_obj, span: Span):
         if not self.config.enable_events:
@@ -1065,14 +1246,7 @@ class OpenTelemetry(CustomLogger):
         self, span: Span, kwargs, response_obj: Optional[Any]
     ):
         try:
-            if self.callback_name == "arize_phoenix":
-                from litellm.integrations.arize.arize_phoenix import ArizePhoenixLogger
-
-                ArizePhoenixLogger.set_arize_phoenix_attributes(
-                    span, kwargs, response_obj
-                )
-                return
-            elif self.callback_name == "langtrace":
+            if self.callback_name == "langtrace":
                 from litellm.integrations.langtrace import LangtraceAttributes
 
                 LangtraceAttributes().set_langtrace_attributes(
@@ -1087,6 +1261,11 @@ class OpenTelemetry(CustomLogger):
                 LangfuseOtelLogger.set_langfuse_otel_attributes(
                     span, kwargs, response_obj
                 )
+                return
+            elif self.callback_name == "weave_otel":
+                from litellm.integrations.weave.weave_otel import set_weave_otel_attributes
+
+                set_weave_otel_attributes(span, kwargs, response_obj)
                 return
             from litellm.proxy._types import SpanAttributes
 
@@ -1228,7 +1407,7 @@ class OpenTelemetry(CustomLogger):
                     value=usage.get("prompt_tokens"),
                 )
 
-            ########################################################################
+                ########################################################################
             ########## LLM Request Medssages / tools / content Attributes ###########
             #########################################################################
 
@@ -1815,10 +1994,7 @@ class OpenTelemetry(CustomLogger):
         """
         Create a span for the received proxy server request.
         """
-        # don't create proxy parent spans for arize phoenix - [TODO]: figure out a better way to handle this
-        if self.callback_name == "arize_phoenix":
-            return None
-
+        
         return self.tracer.start_span(
             name="Received Proxy Server Request",
             start_time=self._to_ns(start_time),

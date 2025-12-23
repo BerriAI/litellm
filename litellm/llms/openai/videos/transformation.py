@@ -1,18 +1,21 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from io import BufferedReader
-from typing import cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+
 import httpx
 from httpx._types import RequestFiles
 
+import litellm
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
-from litellm.types.videos.main import VideoCreateOptionalRequestParams
+from litellm.llms.openai.image_edit.transformation import ImageEditRequestUtils
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import CreateVideoRequest
 from litellm.types.router import GenericLiteLLMParams
-from litellm.secret_managers.main import get_secret_str
-from litellm.types.videos.main import VideoObject
-from litellm.types.videos.utils import encode_video_id_with_provider, extract_original_video_id
-import litellm
-from litellm.llms.openai.image_edit.transformation import ImageEditRequestUtils
+from litellm.types.videos.main import VideoCreateOptionalRequestParams, VideoObject
+from litellm.types.videos.utils import (
+    encode_video_id_with_provider,
+    extract_original_video_id,
+)
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 

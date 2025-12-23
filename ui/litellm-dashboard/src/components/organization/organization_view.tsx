@@ -39,7 +39,7 @@ import {
 } from "../networking";
 import ObjectPermissionsView from "../object_permissions_view";
 import NumericalInput from "../shared/numerical_input";
-import MemberModal from "../team/edit_membership";
+import MemberModal from "../team/EditMembership";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 
 interface OrganizationInfoProps {
@@ -69,6 +69,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
   const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
+  const [isOrgSaving, setIsOrgSaving] = useState(false);
   const canEditOrg = is_org_admin || is_proxy_admin;
 
   const fetchOrgInfo = async () => {
@@ -151,6 +152,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   const handleOrgUpdate = async (values: any) => {
     try {
       if (!accessToken) return;
+      setIsOrgSaving(true);
 
       const updateData: any = {
         organization_id: organizationId,
@@ -194,6 +196,8 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
     } catch (error) {
       NotificationsManager.fromBackend("Failed to update organization settings");
       console.error("Error updating organization:", error);
+    } finally {
+      setIsOrgSaving(false);
     }
   };
 
@@ -320,7 +324,6 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
             </Grid>
           </TabPanel>
 
-          {/* Budget Panel */}
           <TabPanel>
             <div className="space-y-4">
               <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[75vh]">
@@ -336,47 +339,55 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                   </TableHead>
 
                   <TableBody>
-                    {orgData.members?.map((member, index) => (
-                      <TableRow key={index}>
-                        <TableCell>
-                          <Text className="font-mono">{member.user_id}</Text>
-                        </TableCell>
-                        <TableCell>
-                          <Text className="font-mono">{member.user_role}</Text>
-                        </TableCell>
-                        <TableCell>
-                          <Text>${formatNumberWithCommas(member.spend, 4)}</Text>
-                        </TableCell>
-                        <TableCell>
-                          <Text>{new Date(member.created_at).toLocaleString()}</Text>
-                        </TableCell>
-                        <TableCell>
-                          {canEditOrg && (
-                            <>
-                              <Icon
-                                icon={PencilAltIcon}
-                                size="sm"
-                                onClick={() => {
-                                  setSelectedEditMember({
-                                    role: member.user_role,
-                                    user_email: member.user_email,
-                                    user_id: member.user_id,
-                                  });
-                                  setIsEditMemberModalVisible(true);
-                                }}
-                              />
-                              <Icon
-                                icon={TrashIcon}
-                                size="sm"
-                                onClick={() => {
-                                  handleMemberDelete(member);
-                                }}
-                              />
-                            </>
-                          )}
+                    {orgData.members && orgData.members.length > 0 ? (
+                      orgData.members.map((member, index) => (
+                        <TableRow key={index}>
+                          <TableCell>
+                            <Text className="font-mono">{member.user_id}</Text>
+                          </TableCell>
+                          <TableCell>
+                            <Text className="font-mono">{member.user_role}</Text>
+                          </TableCell>
+                          <TableCell>
+                            <Text>${formatNumberWithCommas(member.spend, 4)}</Text>
+                          </TableCell>
+                          <TableCell>
+                            <Text>{new Date(member.created_at).toLocaleString()}</Text>
+                          </TableCell>
+                          <TableCell>
+                            {canEditOrg && (
+                              <>
+                                <Icon
+                                  icon={PencilAltIcon}
+                                  size="sm"
+                                  onClick={() => {
+                                    setSelectedEditMember({
+                                      role: member.user_role,
+                                      user_email: member.user_email,
+                                      user_id: member.user_id,
+                                    });
+                                    setIsEditMemberModalVisible(true);
+                                  }}
+                                />
+                                <Icon
+                                  icon={TrashIcon}
+                                  size="sm"
+                                  onClick={() => {
+                                    handleMemberDelete(member);
+                                  }}
+                                />
+                              </>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    ) : (
+                      <TableRow>
+                        <TableCell colSpan={5} className="text-center py-8">
+                          <Text className="text-gray-500">No members found</Text>
                         </TableCell>
                       </TableRow>
-                    ))}
+                    )}
                   </TableBody>
                 </Table>
               </Card>
@@ -492,10 +503,12 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
 
                   <div className="sticky z-10 bg-white p-4 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
                     <div className="flex justify-end items-center gap-2">
-                      <TremorButton variant="secondary" onClick={() => setIsEditing(false)}>
+                      <TremorButton variant="secondary" onClick={() => setIsEditing(false)} disabled={isOrgSaving}>
                         Cancel
                       </TremorButton>
-                      <TremorButton type="submit">Save Changes</TremorButton>
+                      <TremorButton type="submit" loading={isOrgSaving}>
+                        Save Changes
+                      </TremorButton>
                     </div>
                   </div>
                 </Form>

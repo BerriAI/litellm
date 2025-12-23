@@ -85,6 +85,58 @@ else:
 router = APIRouter()
 
 
+def determine_role_from_groups(
+    user_groups: List[str],
+    role_mappings: "RoleMappings",
+) -> Optional[LitellmUserRoles]:
+    """
+    Determine the highest privilege role for a user based on their groups.
+    
+    Role hierarchy (highest to lowest):
+    - proxy_admin
+    - proxy_admin_viewer
+    - internal_user
+    - internal_user_viewer
+    
+    Args:
+        user_groups: List of group names from the SSO token
+        role_mappings: RoleMappings configuration object
+        
+    Returns:
+        The highest privilege role found, or default_role if no matches, or None
+    """
+    if not role_mappings.roles:
+        # No role mappings configured, return default_role
+        return role_mappings.default_role
+    
+    # Role hierarchy (highest to lowest)
+    role_hierarchy = [
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+    ]
+    
+    # Convert user_groups to a set for efficient lookup
+    user_groups_set = set(user_groups) if isinstance(user_groups, list) else set()
+    
+    # Find the highest privilege role the user belongs to
+    for role in role_hierarchy:
+        if role in role_mappings.roles:
+            role_groups = role_mappings.roles[role]
+            if isinstance(role_groups, list) and user_groups_set.intersection(set(role_groups)):
+                verbose_proxy_logger.debug(
+                    f"User groups {user_groups} matched role '{role.value}' via groups: {role_groups}"
+                )
+                return role
+    
+    # No matching groups found, return default_role
+    verbose_proxy_logger.debug(
+        f"User groups {user_groups} did not match any role mappings, using default_role: {role_mappings.default_role}"
+    )
+    return role_mappings.default_role
+
+
 def process_sso_jwt_access_token(
     access_token_str: Optional[str],
     sso_jwt_handler: Optional[JWTHandler],
@@ -243,6 +295,7 @@ def generic_response_convertor(
     response,
     jwt_handler: JWTHandler,
     sso_jwt_handler: Optional[JWTHandler] = None,
+    role_mappings: Optional["RoleMappings"] = None,
 ) -> CustomOpenID:
     generic_user_id_attribute_name = os.getenv(
         "GENERIC_USER_ID_ATTRIBUTE", "preferred_username"
@@ -265,6 +318,10 @@ def generic_response_convertor(
         "GENERIC_USER_PROVIDER_ATTRIBUTE", "provider"
     )
 
+    generic_user_role_attribute_name = os.getenv(
+        "GENERIC_USER_ROLE_ATTRIBUTE", "role"
+    )
+
     verbose_proxy_logger.debug(
         f" generic_user_id_attribute_name: {generic_user_id_attribute_name}\n generic_user_email_attribute_name: {generic_user_email_attribute_name}"
     )
@@ -277,6 +334,49 @@ def generic_response_convertor(
     team_ids = jwt_handler.get_team_ids_from_jwt(cast(dict, response))
     all_teams.extend(team_ids)
 
+    # Determine user role based on role_mappings if available
+    # Only apply role_mappings for GENERIC SSO provider
+    user_role: Optional[LitellmUserRoles] = None
+    
+    if role_mappings is not None and role_mappings.provider.lower() in ["generic", "okta"]:
+        # Use role_mappings to determine role from groups
+        group_claim = role_mappings.group_claim
+        user_groups_raw = get_nested_value(response, group_claim)
+        
+        # Handle different formats: could be a list, string (comma-separated), or single value
+        user_groups: List[str] = []
+        if isinstance(user_groups_raw, list):
+            user_groups = [str(g) for g in user_groups_raw]
+        elif isinstance(user_groups_raw, str):
+            # Handle comma-separated string
+            user_groups = [g.strip() for g in user_groups_raw.split(",") if g.strip()]
+        elif user_groups_raw is not None:
+            # Single value
+            user_groups = [str(user_groups_raw)]
+        
+        if user_groups:
+            user_role = determine_role_from_groups(user_groups, role_mappings)
+            verbose_proxy_logger.debug(
+                f"Determined role '{user_role.value if user_role else None}' from groups '{user_groups}' using role_mappings"
+            )
+        else:
+            # No groups found, use default_role
+            user_role = role_mappings.default_role
+            verbose_proxy_logger.debug(
+                f"No groups found in '{group_claim}', using default_role: {role_mappings.default_role}"
+            )
+    
+    # Fallback to existing logic if role_mappings not used
+    if user_role is None:
+        user_role_from_sso = get_nested_value(response, generic_user_role_attribute_name)
+        if user_role_from_sso is not None:
+            role = get_litellm_user_role(user_role_from_sso)
+            if role is not None:
+                user_role = role
+                verbose_proxy_logger.debug(
+                    f"Found valid LitellmUserRoles '{role.value}' from SSO attribute '{generic_user_role_attribute_name}'"
+                )
+
     return CustomOpenID(
         id=get_nested_value(response, generic_user_id_attribute_name),
         display_name=get_nested_value(
@@ -287,24 +387,12 @@ def generic_response_convertor(
         last_name=get_nested_value(response, generic_user_last_name_attribute_name),
         provider=get_nested_value(response, generic_provider_attribute_name),
         team_ids=all_teams,
-        user_role=None,
+        user_role=user_role,
     )
 
 
-async def get_generic_sso_response(
-    request: Request,
-    jwt_handler: JWTHandler,
-    sso_jwt_handler: Optional[
-        JWTHandler
-    ],  # sso specific jwt handler - used for restricted sso group access control
-    generic_client_id: str,
-    redirect_url: str,
-) -> Tuple[Union[OpenID, dict], Optional[dict]]:  # return received response
-    # make generic sso provider
-    from fastapi_sso.sso.base import DiscoveryDocument
-    from fastapi_sso.sso.generic import create_provider
-
-    received_response: Optional[dict] = None
+def _setup_generic_sso_env_vars(generic_client_id: str, redirect_url: str) -> Tuple[str, List[str], str, str, str, bool]:
+    """Setup and validate Generic SSO environment variables."""
     generic_client_secret = os.getenv("GENERIC_CLIENT_SECRET", None)
     generic_scope = os.getenv("GENERIC_SCOPE", "openid email profile").split(" ")
     generic_authorization_endpoint = os.getenv("GENERIC_AUTHORIZATION_ENDPOINT", None)
@@ -313,6 +401,8 @@ async def get_generic_sso_response(
     generic_include_client_id = (
         os.getenv("GENERIC_INCLUDE_CLIENT_ID", "false").lower() == "true"
     )
+
+    # Validate required environment variables
     if generic_client_secret is None:
         raise ProxyException(
             message="GENERIC_CLIENT_SECRET not set. Set it in .env file",
@@ -341,6 +431,7 @@ async def get_generic_sso_response(
             param="GENERIC_USERINFO_ENDPOINT",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
     verbose_proxy_logger.debug(
         f"authorization_endpoint: {generic_authorization_endpoint}\ntoken_endpoint: {generic_token_endpoint}\nuserinfo_endpoint: {generic_userinfo_endpoint}"
     )
@@ -348,12 +439,89 @@ async def get_generic_sso_response(
         f"GENERIC_REDIRECT_URI: {redirect_url}\nGENERIC_CLIENT_ID: {generic_client_id}\n"
     )
 
+    return (
+        generic_client_secret,
+        generic_scope,
+        generic_authorization_endpoint,
+        generic_token_endpoint,
+        generic_userinfo_endpoint,
+        generic_include_client_id,
+    )
+
+
+async def _setup_role_mappings() -> Optional["RoleMappings"]:
+    """Setup role mappings from SSO database settings."""
+    role_mappings: Optional["RoleMappings"] = None
+    try:
+        from litellm.proxy.utils import get_prisma_client_or_throw
+
+        prisma_client = get_prisma_client_or_throw(
+            "Prisma client is None, connect a database to your proxy"
+        )
+
+        # Get SSO config from dedicated table
+        sso_db_record = await prisma_client.db.litellm_ssoconfig.find_unique(
+            where={"id": "sso_config"}
+        )
+
+        if sso_db_record and sso_db_record.sso_settings:
+            sso_settings_dict = dict(sso_db_record.sso_settings)
+            role_mappings_data = sso_settings_dict.get("role_mappings")
+
+            if role_mappings_data:
+                from litellm.types.proxy.management_endpoints.ui_sso import RoleMappings
+                if isinstance(role_mappings_data, dict):
+                    role_mappings = RoleMappings(**role_mappings_data)
+                elif isinstance(role_mappings_data, RoleMappings):
+                    role_mappings = role_mappings_data
+
+                if role_mappings:
+                    verbose_proxy_logger.debug(
+                        f"Loaded role_mappings for provider '{role_mappings.provider}'"
+                    )
+    except Exception as e:
+        # If we can't load role_mappings, continue with existing logic
+        verbose_proxy_logger.debug(
+            f"Could not load role_mappings from database: {e}. Continuing with existing role logic."
+        )
+
+    return role_mappings
+
+
+async def get_generic_sso_response(
+    request: Request,
+    jwt_handler: JWTHandler,
+    sso_jwt_handler: Optional[
+        JWTHandler
+    ],  # sso specific jwt handler - used for restricted sso group access control
+    generic_client_id: str,
+    redirect_url: str,
+) -> Tuple[Union[OpenID, dict], Optional[dict]]:  # return received response
+    # make generic sso provider
+    from fastapi_sso.sso.base import DiscoveryDocument
+    from fastapi_sso.sso.generic import create_provider
+
+    received_response: Optional[dict] = None
+
+    # Setup environment variables
+    (
+        generic_client_secret,
+        generic_scope,
+        generic_authorization_endpoint,
+        generic_token_endpoint,
+        generic_userinfo_endpoint,
+        generic_include_client_id,
+    ) = _setup_generic_sso_env_vars(generic_client_id, redirect_url)
+
     discovery = DiscoveryDocument(
         authorization_endpoint=generic_authorization_endpoint,
         token_endpoint=generic_token_endpoint,
         userinfo_endpoint=generic_userinfo_endpoint,
     )
 
+    # Get role_mappings from SSO settings if available
+    role_mappings = await _setup_role_mappings()
+    
     def response_convertor(response, client):
         nonlocal received_response  # return for user debugging
         received_response = response
@@ -361,6 +529,7 @@ async def get_generic_sso_response(
             response=response,
             jwt_handler=jwt_handler,
             sso_jwt_handler=sso_jwt_handler,
+            role_mappings=role_mappings,
         )
 
     SSOProvider = create_provider(
@@ -435,9 +604,9 @@ async def add_missing_team_member(
     - Get missing teams (diff b/w user_info.team_ids and sso_teams)
     - Add missing user to missing teams
     """
-    if user_info.teams is None:
-        return
-    missing_teams = set(sso_teams) - set(user_info.teams)
+    # Handle None as empty list for new users
+    user_teams = user_info.teams if user_info.teams is not None else []
+    missing_teams = set(sso_teams) - set(user_teams)
     missing_teams_list = list(missing_teams)
     tasks = []
     tasks = [
@@ -558,11 +727,12 @@ async def get_user_info_from_db(
 
     return None
 
+
 def _should_use_role_from_sso_response(sso_role: Optional[str]) -> bool:
     """returns true if SSO upsert should use the 'role' defined on the SSO response"""
     if sso_role is None:
         return False
-    
+
     if not is_valid_litellm_user_role(sso_role):
         verbose_proxy_logger.debug(
             f"SSO role '{sso_role}' is not a valid LiteLLM user role. "
@@ -571,6 +741,41 @@ def _should_use_role_from_sso_response(sso_role: Optional[str]) -> bool:
         return False
     return True
 
+
+def _build_sso_user_update_data(
+    result: Optional[Union["CustomOpenID", OpenID, dict]],
+    user_email: Optional[str],
+    user_id: Optional[str],
+) -> dict:
+    """
+    Build the update data dictionary for SSO user upsert.
+
+    Args:
+        result: The SSO response containing user information
+        user_email: The user's email from SSO
+        user_id: The user's ID for logging purposes
+
+    Returns:
+        dict: Update data containing user_email and optionally user_role if valid
+    """
+    update_data: dict = {"user_email": user_email}
+
+    # Get SSO role from result and include if valid
+    sso_role = getattr(result, "user_role", None)
+    if sso_role is not None:
+        # Convert enum to string if needed
+        sso_role_str = (
+            sso_role.value if isinstance(sso_role, LitellmUserRoles) else sso_role
+        )
+
+        # Only include if it's a valid LiteLLM role
+        if _should_use_role_from_sso_response(sso_role_str):
+            update_data["user_role"] = sso_role_str
+            verbose_proxy_logger.info(
+                f"Updating user {user_id} role from SSO: {sso_role_str}"
+            )
+
+    return update_data
 
 
 def apply_user_info_values_to_sso_user_defined_values(
@@ -586,15 +791,21 @@ def apply_user_info_values_to_sso_user_defined_values(
     # This ensures SSO is the authoritative source for user roles
     sso_role = user_defined_values.get("user_role")
     db_role = user_info.user_role if user_info else None
-    
+
     if _should_use_role_from_sso_response(sso_role):
         # SSO provided a valid role, keep it and log that we're using it
-        verbose_proxy_logger.info(f"Using SSO role: {sso_role} (DB role was: {db_role})")
+        verbose_proxy_logger.info(
+            f"Using SSO role: {sso_role} (DB role was: {db_role})"
+        )
     else:
         # SSO didn't provide a valid role, fall back to DB role or default
         if user_info is None or user_info.user_role is None:
-            user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
-            verbose_proxy_logger.debug("No SSO or DB role found, using default: INTERNAL_USER_VIEW_ONLY")
+            user_defined_values[
+                "user_role"
+            ] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
+            verbose_proxy_logger.debug(
+                "No SSO or DB role found, using default: INTERNAL_USER_VIEW_ONLY"
+            )
         else:
             user_defined_values["user_role"] = user_info.user_role
             verbose_proxy_logger.debug(f"Using DB role: {user_info.user_role}")
@@ -802,12 +1013,39 @@ async def cli_sso_callback(
         if hasattr(user_info, "teams") and user_info.teams:
             teams = user_info.teams if isinstance(user_info.teams, list) else []
 
+        # Also fetch team aliases for a better CLI UX. We keep the original
+        # "teams" list of IDs for backwards compatibility and add an
+        # optional "team_details" field containing objects with both
+        # team_id and team_alias.
+        team_details: List[Dict[str, Any]] = []
+        try:
+            if teams:
+                prisma_teams = await prisma_client.db.litellm_teamtable.find_many(
+                    where={"team_id": {"in": teams}}
+                )
+                for team_row in prisma_teams:
+                    team_dict = team_row.model_dump()
+                    team_details.append(
+                        {
+                            "team_id": team_dict.get("team_id"),
+                            "team_alias": team_dict.get("team_alias"),
+                        }
+                    )
+        except Exception as e:
+            # If anything goes wrong here, fall back gracefully without
+            # impacting the SSO flow.
+            verbose_proxy_logger.error(
+                f"Error fetching team details for CLI SSO session: {e}"
+            )
+
         session_data = {
             "user_id": user_info.user_id,
             "user_role": user_info.user_role,
             "models": user_info.models if hasattr(user_info, "models") else [],
             "user_email": parsed_openid_result.get("user_email"),
             "teams": teams,
+            # Optional rich metadata for clients that want nicer display
+            "team_details": team_details,
         }
 
         cache_key = f"{CLI_SSO_SESSION_CACHE_KEY_PREFIX}:{key}"
@@ -838,11 +1076,11 @@ async def cli_sso_callback(
 async def cli_poll_key(key_id: str, team_id: Optional[str] = None):
     """
     CLI polling endpoint - retrieves session from cache and generates JWT.
-    
+
     Flow:
     1. First poll (no team_id): Returns teams list without generating JWT
     2. Second poll (with team_id): Generates JWT with selected team and deletes session
-    
+
     Args:
         key_id: The session key ID
         team_id: Optional team ID to assign to the JWT. If provided, must be one of user's teams.
@@ -861,25 +1099,38 @@ async def cli_poll_key(key_id: str, team_id: Optional[str] = None):
 
         if session_data:
             user_teams = session_data.get("teams", [])
+            user_team_details = session_data.get("team_details")
             user_id = session_data["user_id"]
-            
+
             verbose_proxy_logger.info(
                 f"CLI poll: user={user_id}, team_id={team_id}, user_teams={user_teams}, num_teams={len(user_teams)}"
             )
-            
+
             # If no team_id provided and user has teams, return teams list for selection
-            # Don't generate JWT yet - let CLI select a team first
+            # Don't generate JWT yet - let CLI select a team first. For newer
+            # clients we return rich team details (id + alias); older clients
+            # can continue to rely on the simple "teams" list.
             if team_id is None and len(user_teams) > 1:
                 verbose_proxy_logger.info(
                     f"Returning teams list for user {user_id} to select from: {user_teams}"
                 )
+                # Best-effort construction of team_details if it wasn't
+                # already cached for some reason.
+                team_details_response: Optional[List[Dict[str, Any]]] = None
+                if isinstance(user_team_details, list) and user_team_details:
+                    team_details_response = user_team_details
+                elif user_teams:
+                    team_details_response = [
+                        {"team_id": t, "team_alias": None} for t in user_teams
+                    ]
                 return {
                     "status": "ready",
                     "user_id": user_id,
                     "teams": user_teams,
+                    "team_details": team_details_response,
                     "requires_team_selection": True,
                 }
-            
+
             # Validate team_id if provided
             if team_id is not None:
                 if team_id not in user_teams:
@@ -917,6 +1168,9 @@ async def cli_poll_key(key_id: str, team_id: Optional[str] = None):
                 "user_id": user_id,
                 "team_id": team_id,
                 "teams": user_teams,
+                # Echo back any team details we have so clients can
+                # present nicer information if needed.
+                "team_details": user_team_details,
             }
         else:
             return {"status": "pending"}
@@ -953,17 +1207,53 @@ async def insert_sso_user(
     if user_defined_values is None:
         raise ValueError("user_defined_values is None")
 
+    # Check if role_mappings is configured in SSO settings
+    role_mappings_configured = False
+    try:
+        from litellm.proxy.utils import get_prisma_client_or_throw
+        
+        prisma_client = get_prisma_client_or_throw(
+            "Prisma client is None, connect a database to your proxy"
+        )
+        
+        # Get SSO config from dedicated table
+        sso_db_record = await prisma_client.db.litellm_ssoconfig.find_unique(
+            where={"id": "sso_config"}
+        )
+        
+        if sso_db_record and sso_db_record.sso_settings:
+            sso_settings_dict = dict(sso_db_record.sso_settings)
+            role_mappings_data = sso_settings_dict.get("role_mappings")
+            role_mappings_configured = role_mappings_data is not None
+    except Exception as e:
+        # If we can't check role_mappings, continue with existing logic
+        verbose_proxy_logger.debug(
+            f"Could not check role_mappings configuration: {e}. Using default behavior."
+        )
+
+    # Apply default_internal_user_params
     if litellm.default_internal_user_params:
-        user_defined_values.update(litellm.default_internal_user_params)  # type: ignore
+        # If role_mappings is configured and user_role is already set from SSO, preserve it
+        if role_mappings_configured and user_defined_values.get("user_role") is not None:
+            # Preserve the SSO-extracted role, but apply other defaults
+            preserved_role = user_defined_values.get("user_role")
+            user_defined_values.update(litellm.default_internal_user_params)  # type: ignore
+            user_defined_values["user_role"] = preserved_role  # Restore preserved role
+            verbose_proxy_logger.debug(
+                f"Preserved SSO-extracted role '{preserved_role}' (role_mappings configured)"
+            )
+        else:
+            # Default behavior: update all values including role
+            user_defined_values.update(litellm.default_internal_user_params)  # type: ignore
 
     # Set budget for internal users
     if user_defined_values.get("user_role") == LitellmUserRoles.INTERNAL_USER.value:
         if user_defined_values.get("max_budget") is None:
             user_defined_values["max_budget"] = litellm.max_internal_user_budget
         if user_defined_values.get("budget_duration") is None:
-            user_defined_values["budget_duration"] = (
-                litellm.internal_user_budget_duration
-            )
+            user_defined_values[
+                "budget_duration"
+            ] = litellm.internal_user_budget_duration
 
     if user_defined_values["user_role"] is None:
         user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
@@ -1026,6 +1316,91 @@ async def get_ui_settings(request: Request):
     }
 
 
+@router.get(
+    "/sso/readiness",
+    tags=["experimental"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def sso_readiness():
+    """
+    Health endpoint for checking SSO readiness.
+    Checks if the configured SSO provider has all required environment variables set in memory.
+    """
+    microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
+    google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
+    generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
+
+    # Determine which SSO provider is configured
+    configured_provider = None
+    if google_client_id is not None:
+        configured_provider = "google"
+    elif microsoft_client_id is not None:
+        configured_provider = "microsoft"
+    elif generic_client_id is not None:
+        configured_provider = "generic"
+
+    # If no SSO is configured, return healthy (SSO is optional)
+    if configured_provider is None:
+        return {
+            "status": "healthy",
+            "sso_configured": False,
+            "message": "No SSO provider configured",
+        }
+
+    # Check required environment variables for the configured provider
+    missing_vars = []
+
+    if configured_provider == "google":
+        google_client_secret = os.getenv("GOOGLE_CLIENT_SECRET", None)
+        if google_client_secret is None:
+            missing_vars.append("GOOGLE_CLIENT_SECRET")
+
+    elif configured_provider == "microsoft":
+        microsoft_client_secret = os.getenv("MICROSOFT_CLIENT_SECRET", None)
+        microsoft_tenant = os.getenv("MICROSOFT_TENANT", None)
+        if microsoft_client_secret is None:
+            missing_vars.append("MICROSOFT_CLIENT_SECRET")
+        if microsoft_tenant is None:
+            missing_vars.append("MICROSOFT_TENANT")
+
+    elif configured_provider == "generic":
+        generic_client_secret = os.getenv("GENERIC_CLIENT_SECRET", None)
+        generic_authorization_endpoint = os.getenv(
+            "GENERIC_AUTHORIZATION_ENDPOINT", None
+        )
+        generic_token_endpoint = os.getenv("GENERIC_TOKEN_ENDPOINT", None)
+        generic_userinfo_endpoint = os.getenv("GENERIC_USERINFO_ENDPOINT", None)
+        if generic_client_secret is None:
+            missing_vars.append("GENERIC_CLIENT_SECRET")
+        if generic_authorization_endpoint is None:
+            missing_vars.append("GENERIC_AUTHORIZATION_ENDPOINT")
+        if generic_token_endpoint is None:
+            missing_vars.append("GENERIC_TOKEN_ENDPOINT")
+        if generic_userinfo_endpoint is None:
+            missing_vars.append("GENERIC_USERINFO_ENDPOINT")
+
+    # If all required variables are present, return healthy
+    if len(missing_vars) == 0:
+        return {
+            "status": "healthy",
+            "sso_configured": True,
+            "provider": configured_provider,
+            "message": f"{configured_provider.capitalize()} SSO is properly configured",
+        }
+
+    # If some variables are missing, return unhealthy
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "status": "unhealthy",
+            "sso_configured": True,
+            "provider": configured_provider,
+            "missing_environment_variables": missing_vars,
+            "message": f"{configured_provider.capitalize()} SSO is configured but missing required environment variables: {', '.join(missing_vars)}",
+        },
+    )
+
+
 class SSOAuthenticationHandler:
     """
     Handler for SSO Authentication across all SSO providers
@@ -1049,7 +1424,7 @@ class SSOAuthenticationHandler:
             generic_client_id (Optional[str], optional): The Generic Client ID. Defaults to None.
 
         Returns:
-            RedirectResponse: The redirect response from the SSO provider
+            RedirectResponse: The redirect response from the SSO provider.
         """
         # Google SSO Auth
         if google_client_id is not None:
@@ -1182,11 +1557,12 @@ class SSOAuthenticationHandler:
             # or a cryptographicly signed state that we can verify stateless
             # For simplification we are using a static state, this is not perfect but some
             # SSO providers do not allow stateless verification
-            redirect_params, code_verifier = (
-                SSOAuthenticationHandler._get_generic_sso_redirect_params(
-                    state=state,
-                    generic_authorization_endpoint=generic_authorization_endpoint,
-                )
+            (
+                redirect_params,
+                code_verifier,
+            ) = SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                state=state,
+                generic_authorization_endpoint=generic_authorization_endpoint,
             )
 
             # Separate PKCE params from state params (fastapi-sso doesn't accept code_challenge)
@@ -1203,7 +1579,6 @@ class SSOAuthenticationHandler:
 
             # If PKCE is enabled, add PKCE parameters to the redirect URL
             if code_verifier and "state" in redirect_params:
-
                 # Store code_verifier in cache (10 min TTL)
                 cache_key = f"pkce_verifier:{redirect_params['state']}"
                 user_api_key_cache.set_cache(
@@ -1253,7 +1628,8 @@ class SSOAuthenticationHandler:
         Priority order:
         1. CLI state (if provided)
         2. GENERIC_CLIENT_STATE environment variable
-        3. Generated UUID for Okta (if Okta endpoint detected)
+        3. Generated UUID (required by Okta and most OAuth providers)
+
 
         Args:
             state: Optional state parameter (e.g., CLI state)
@@ -1275,21 +1651,17 @@ class SSOAuthenticationHandler:
             generic_client_state = os.getenv("GENERIC_CLIENT_STATE", None)
             if generic_client_state:
                 redirect_params["state"] = generic_client_state
-            elif (
-                generic_authorization_endpoint
-                and "okta" in generic_authorization_endpoint
-            ):
-                redirect_params["state"] = (
-                    uuid.uuid4().hex
-                )  # set state param for okta - required
+            else:
+                redirect_params["state"] = uuid.uuid4().hex
 
         # Handle PKCE (Proof Key for Code Exchange) if enabled
         # Set GENERIC_CLIENT_USE_PKCE=true to enable PKCE for enhanced OAuth security
         use_pkce = os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true"
         if use_pkce:
-            code_verifier, code_challenge = (
-                SSOAuthenticationHandler.generate_pkce_params()
-            )
+            (
+                code_verifier,
+                code_challenge,
+            ) = SSOAuthenticationHandler.generate_pkce_params()
             redirect_params["code_challenge"] = code_challenge
             redirect_params["code_challenge_method"] = "S256"
             verbose_proxy_logger.debug(
@@ -1345,14 +1717,20 @@ class SSOAuthenticationHandler:
         """
         Connects the SSO Users to the User Table in LiteLLM DB
 
-        - If user on LiteLLM DB, update the user_email with the SSO user_email
+        - If user on LiteLLM DB, update the user_email and user_role (if SSO provides valid role) with the SSO values
         - If user not on LiteLLM DB, insert the user into LiteLLM DB
         """
         try:
             if user_info is not None:
                 user_id = user_info.user_id
+                update_data = _build_sso_user_update_data(
+                    result=result,
+                    user_email=user_email,
+                    user_id=user_id,
+                )
+
                 await prisma_client.db.litellm_usertable.update_many(
-                    where={"user_id": user_id}, data={"user_email": user_email}
+                    where={"user_id": user_id}, data=update_data
                 )
             else:
                 verbose_proxy_logger.info(
@@ -1573,8 +1951,14 @@ class SSOAuthenticationHandler:
             _user_role = getattr(result, "user_role", None)
             if _user_role is not None:
                 # Convert enum to string if needed
-                user_role = _user_role.value if isinstance(_user_role, LitellmUserRoles) else _user_role
-                verbose_proxy_logger.debug(f"Extracted user_role from SSO result: {user_role}")
+                user_role = (
+                    _user_role.value
+                    if isinstance(_user_role, LitellmUserRoles)
+                    else _user_role
+                )
+                verbose_proxy_logger.debug(
+                    f"Extracted user_role from SSO result: {user_role}"
+                )
 
         # generic client id - override with custom attribute name if specified
         if generic_client_id is not None and result is not None:
@@ -1583,7 +1967,15 @@ class SSOAuthenticationHandler:
             )
             user_id = getattr(result, "id", None)
             user_email = getattr(result, "email", None)
-            user_role = getattr(result, generic_user_role_attribute_name, None)  # type: ignore
+            if user_role is None:
+                _role_from_attr = getattr(result, generic_user_role_attribute_name, None)  # type: ignore
+                if _role_from_attr is not None:
+                    # Convert enum to string if needed
+                    user_role = (
+                        _role_from_attr.value
+                        if isinstance(_role_from_attr, LitellmUserRoles)
+                        else _role_from_attr
+                    )
 
         if user_id is None and result is not None:
             _first_name = getattr(result, "first_name", "") or ""
@@ -1947,9 +2339,9 @@ class MicrosoftSSOHandler:
 
         # if user is trying to get the raw sso response for debugging, return the raw sso response
         if return_raw_sso_response:
-            original_msft_result[MicrosoftSSOHandler.GRAPH_API_RESPONSE_KEY] = (
-                user_team_ids
-            )
+            original_msft_result[
+                MicrosoftSSOHandler.GRAPH_API_RESPONSE_KEY
+            ] = user_team_ids
             original_msft_result["app_roles"] = app_roles
             return original_msft_result or {}
 
@@ -2066,9 +2458,9 @@ class MicrosoftSSOHandler:
 
             # Fetch user membership from Microsoft Graph API
             all_group_ids = []
-            next_link: Optional[str] = (
-                MicrosoftSSOHandler.graph_api_user_groups_endpoint
-            )
+            next_link: Optional[
+                str
+            ] = MicrosoftSSOHandler.graph_api_user_groups_endpoint
             auth_headers = {"Authorization": f"Bearer {access_token}"}
             page_count = 0
 

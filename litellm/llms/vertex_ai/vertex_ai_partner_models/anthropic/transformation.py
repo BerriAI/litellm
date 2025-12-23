@@ -68,6 +68,25 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         )
 
         data.pop("model", None)  # vertex anthropic doesn't accept 'model' parameter
+        
+        tools = optional_params.get("tools")
+        tool_search_used = self.is_tool_search_used(tools)
+        auto_betas = self.get_anthropic_beta_list(
+            model=model,
+            optional_params=optional_params,
+            computer_tool_used=self.is_computer_tool_used(tools),
+            prompt_caching_set=self.is_cache_control_set(messages),
+            file_id_used=self.is_file_id_used(messages),
+            mcp_server_used=self.is_mcp_server_used(optional_params.get("mcp_servers")),
+        )
+
+        beta_set = set(auto_betas)
+        if tool_search_used:
+            beta_set.add("tool-search-tool-2025-10-19")  # Vertex requires this header for tool search
+
+        if beta_set:
+            data["anthropic_beta"] = list(beta_set)
+        
         return data
 
     def transform_response(

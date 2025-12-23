@@ -58,7 +58,6 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.mlflow import MlflowLogger
-from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.sqs import SQSLogger
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
@@ -72,6 +71,7 @@ from litellm.litellm_core_utils.redact_messages import (
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils
+from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.containers.main import ContainerObject
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -85,6 +85,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.mcp import MCPPostCallResponseObject
+from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
     CachingDetails,
@@ -126,6 +127,7 @@ from litellm.utils import _get_base_model_from_metadata, executor, print_verbose
 from ..integrations.argilla import ArgillaLogger
 from ..integrations.arize.arize_phoenix import ArizePhoenixLogger
 from ..integrations.athina import AthinaLogger
+from ..integrations.azure_sentinel.azure_sentinel import AzureSentinelLogger
 from ..integrations.azure_storage.azure_storage import AzureBlobStorageLogger
 from ..integrations.custom_prompt_management import CustomPromptManagement
 from ..integrations.datadog.datadog import DataDogLogger
@@ -166,14 +168,14 @@ try:
     from litellm_enterprise.enterprise_callbacks.callback_controls import (
         EnterpriseCallbackControls,
     )
-    from litellm_enterprise.enterprise_callbacks.generic_api_callback import (
-        GenericAPILogger,
-    )
     from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import (
         PagerDutyAlerting,
     )
     from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
         ResendEmailLogger,
+    )
+    from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import (
+        SendGridEmailLogger,
     )
     from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (
         SMTPEmailLogger,
@@ -181,6 +183,8 @@ try:
     from litellm_enterprise.litellm_core_utils.litellm_logging import (
         StandardLoggingPayloadSetup as EnterpriseStandardLoggingPayloadSetup,
     )
+
+    from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
 
     EnterpriseStandardLoggingPayloadSetupVAR: Optional[
         Type[EnterpriseStandardLoggingPayloadSetup]
@@ -191,6 +195,7 @@ except Exception as e:
     )
     GenericAPILogger = CustomLogger  # type: ignore
     ResendEmailLogger = CustomLogger  # type: ignore
+    SendGridEmailLogger = CustomLogger  # type: ignore
     SMTPEmailLogger = CustomLogger  # type: ignore
     PagerDutyAlerting = CustomLogger  # type: ignore
     EnterpriseCallbackControls = None  # type: ignore
@@ -248,6 +253,24 @@ class ServiceTraceIDCache:
 in_memory_trace_id_cache = ServiceTraceIDCache()
 in_memory_dynamic_logger_cache = DynamicLoggingCache()
 
+# Cached lazy import for PrometheusLogger
+# Module-level cache to avoid repeated imports while preserving memory benefits
+_PrometheusLogger = None
+
+
+def _get_cached_prometheus_logger():
+    """
+    Get cached PrometheusLogger class.
+    Lazy imports on first call to avoid loading prometheus.py and utils.py at import time (60MB saved).
+    Subsequent calls use cached class for better performance.
+    """
+    global _PrometheusLogger
+    if _PrometheusLogger is None:
+        from litellm.integrations.prometheus import PrometheusLogger
+
+        _PrometheusLogger = PrometheusLogger
+    return _PrometheusLogger
+
 
 class Logging(LiteLLMLoggingBaseClass):
     global supabaseClient, promptLayerLogger, weightsBiasesLogger, logfireLogger, capture_exception, add_breadcrumb, lunaryLogger, logfireLogger, prometheusLogger, slack_app
@@ -299,6 +322,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 for m in messages:
                     new_messages.append({"role": "user", "content": m})
                 messages = new_messages
+
         self.model = model
         self.messages = copy.deepcopy(messages)
         self.stream = stream
@@ -357,6 +381,9 @@ class Logging(LiteLLMLoggingBaseClass):
 
         # Init Caching related details
         self.caching_details: Optional[CachingDetails] = None
+
+        # Passthrough endpoint guardrails config for field targeting
+        self.passthrough_guardrails_config: Optional[Dict[str, Any]] = None
 
         self.model_call_details: Dict[str, Any] = {
             "litellm_trace_id": litellm_trace_id,
@@ -577,8 +604,9 @@ class Logging(LiteLLMLoggingBaseClass):
         model: str,
         messages: List[AllMessageValues],
         non_default_params: Dict,
-        prompt_id: Optional[str],
         prompt_variables: Optional[dict],
+        prompt_id: Optional[str] = None,
+        prompt_spec: Optional[PromptSpec] = None,
         prompt_management_logger: Optional[CustomLogger] = None,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
@@ -589,6 +617,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 model=model,
                 non_default_params=non_default_params,
                 prompt_id=prompt_id,
+                prompt_spec=prompt_spec,
                 dynamic_callback_params=self.standard_callback_dynamic_params,
             )
         )
@@ -603,6 +632,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 messages=messages,
                 non_default_params=non_default_params or {},
                 prompt_id=prompt_id,
+                prompt_spec=prompt_spec,
                 prompt_variables=prompt_variables,
                 dynamic_callback_params=self.standard_callback_dynamic_params,
                 prompt_label=prompt_label,
@@ -616,8 +646,9 @@ class Logging(LiteLLMLoggingBaseClass):
         model: str,
         messages: List[AllMessageValues],
         non_default_params: Dict,
-        prompt_id: Optional[str],
         prompt_variables: Optional[dict],
+        prompt_id: Optional[str] = None,
+        prompt_spec: Optional[PromptSpec] = None,
         prompt_management_logger: Optional[CustomLogger] = None,
         tools: Optional[List[Dict]] = None,
         prompt_label: Optional[str] = None,
@@ -630,6 +661,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 tools=tools,
                 non_default_params=non_default_params,
                 prompt_id=prompt_id,
+                prompt_spec=prompt_spec,
                 dynamic_callback_params=self.standard_callback_dynamic_params,
             )
         )
@@ -644,6 +676,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 messages=messages,
                 non_default_params=non_default_params or {},
                 prompt_id=prompt_id,
+                prompt_spec=prompt_spec,
                 prompt_variables=prompt_variables,
                 dynamic_callback_params=self.standard_callback_dynamic_params,
                 litellm_logging_obj=self,
@@ -657,6 +690,7 @@ class Logging(LiteLLMLoggingBaseClass):
     def _auto_detect_prompt_management_logger(
         self,
         prompt_id: str,
+        prompt_spec: Optional[PromptSpec],
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> Optional[CustomLogger]:
         """
@@ -682,6 +716,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 try:
                     if logger.should_run_prompt_management(
                         prompt_id=prompt_id,
+                        prompt_spec=prompt_spec,
                         dynamic_callback_params=dynamic_callback_params,
                     ):
                         self.model_call_details["prompt_integration"] = (
@@ -700,6 +735,7 @@ class Logging(LiteLLMLoggingBaseClass):
         non_default_params: Dict,
         tools: Optional[List[Dict]] = None,
         prompt_id: Optional[str] = None,
+        prompt_spec: Optional[PromptSpec] = None,
         dynamic_callback_params: Optional[StandardCallbackDynamicParams] = None,
     ) -> Optional[CustomLogger]:
         """
@@ -732,6 +768,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if prompt_id and dynamic_callback_params is not None:
             auto_detected_logger = self._auto_detect_prompt_management_logger(
                 prompt_id=prompt_id,
+                prompt_spec=prompt_spec,
                 dynamic_callback_params=dynamic_callback_params,
             )
             if auto_detected_logger is not None:
@@ -881,9 +918,11 @@ class Logging(LiteLLMLoggingBaseClass):
                                 raw_request_body=self._get_raw_request_body(
                                     additional_args.get("complete_input_dict", {})
                                 ),
+                                # NOTE: setting ignore_sensitive_headers to True will cause
+                                # the Authorization header to be leaked when calls to the health
+                                # endpoint are made and fail.
                                 raw_request_headers=self._get_masked_headers(
                                     additional_args.get("headers", {}) or {},
-                                    ignore_sensitive_headers=True,
                                 ),
                                 error=None,
                             )
@@ -1631,6 +1670,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 result = self._handle_non_streaming_google_genai_generate_content_response_logging(
                     result=result
                 )
+            elif (
+                self.call_type == CallTypes.asend_message.value
+                or self.call_type == CallTypes.send_message.value
+            ):
+                result = self._handle_a2a_response_logging(result=result)
 
             logging_result = self.normalize_logging_result(result=result)
 
@@ -1719,6 +1763,7 @@ class Logging(LiteLLMLoggingBaseClass):
             and logging_result.get("object") == "search"  # Search API (dict format)
             or isinstance(logging_result, VideoObject)
             or isinstance(logging_result, ContainerObject)
+            or isinstance(logging_result, LiteLLMSendMessageResponse)  # A2A
             or (self.call_type == CallTypes.call_mcp_tool.value)
         ):
             return True
@@ -3222,6 +3267,29 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         return result
 
+    def _handle_a2a_response_logging(self, result: Any) -> Any:
+        """
+        Handles logging for A2A (Agent-to-Agent) responses.
+
+        Adds usage from model_call_details to the result if available.
+        Uses Pydantic's model_copy to avoid modifying the original response.
+
+        Args:
+            result: The LiteLLMSendMessageResponse from the A2A call
+
+        Returns:
+            The response object with usage added if available
+        """
+        # Get usage from model_call_details (set by asend_message)
+        usage = self.model_call_details.get("usage")
+        if usage is None:
+            return result
+
+        # Deep copy result and add usage
+        result_copy = result.model_copy(deep=True)
+        result_copy.usage = usage.model_dump() if hasattr(usage, "model_dump") else dict(usage)
+        return result_copy
+
 
 def _get_masked_values(
     sensitive_object: dict,
@@ -3462,6 +3530,8 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _in_memory_loggers.append(_literalai_logger)
             return _literalai_logger  # type: ignore
         elif logging_integration == "prometheus":
+            PrometheusLogger = _get_cached_prometheus_logger()
+
             for callback in _in_memory_loggers:
                 if isinstance(callback, PrometheusLogger):
                     return callback  # type: ignore
@@ -3481,6 +3551,14 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _datadog_llm_obs_logger = DataDogLLMObsLogger()
             _in_memory_loggers.append(_datadog_llm_obs_logger)
             return _datadog_llm_obs_logger  # type: ignore
+        elif logging_integration == "azure_sentinel":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, AzureSentinelLogger):
+                    return callback  # type: ignore
+
+            _azure_sentinel_logger = AzureSentinelLogger()
+            _in_memory_loggers.append(_azure_sentinel_logger)
+            return _azure_sentinel_logger  # type: ignore
         elif logging_integration == "gcs_bucket":
             for callback in _in_memory_loggers:
                 if isinstance(callback, GCSBucketLogger):
@@ -3596,15 +3674,15 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
 
             for callback in _in_memory_loggers:
                 if (
-                    isinstance(callback, OpenTelemetry)
+                    isinstance(callback, ArizePhoenixLogger)
                     and callback.callback_name == "arize_phoenix"
                 ):
                     return callback  # type: ignore
-            _otel_logger = OpenTelemetry(
+            _arize_phoenix_otel_logger = ArizePhoenixLogger(
                 config=otel_config, callback_name="arize_phoenix"
             )
-            _in_memory_loggers.append(_otel_logger)
-            return _otel_logger  # type: ignore
+            _in_memory_loggers.append(_arize_phoenix_otel_logger)
+            return _arize_phoenix_otel_logger  # type: ignore
         elif logging_integration == "otel":
             from litellm.integrations.opentelemetry import OpenTelemetry
 
@@ -3779,6 +3857,32 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             )
             _in_memory_loggers.append(_otel_logger)
             return _otel_logger  # type: ignore
+        elif logging_integration == "weave_otel":
+            from litellm.integrations.opentelemetry import OpenTelemetryConfig
+            from litellm.integrations.weave.weave_otel import (
+                WeaveOtelLogger,
+                get_weave_otel_config,
+            )
+
+            weave_otel_config = get_weave_otel_config()
+
+            otel_config = OpenTelemetryConfig(
+                exporter=weave_otel_config.protocol,
+                endpoint=weave_otel_config.endpoint,
+                headers=weave_otel_config.otlp_auth_headers,
+            )
+
+            for callback in _in_memory_loggers:
+                if (
+                    isinstance(callback, WeaveOtelLogger)
+                    and callback.callback_name == "weave_otel"
+                ):
+                    return callback  # type: ignore
+            _otel_logger = WeaveOtelLogger(
+                config=otel_config, callback_name="weave_otel"
+            )
+            _in_memory_loggers.append(_otel_logger)
+            return _otel_logger  # type: ignore
         elif logging_integration == "pagerduty":
             for callback in _in_memory_loggers:
                 if isinstance(callback, PagerDutyAlerting):
@@ -3825,6 +3929,13 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             resend_email_logger = ResendEmailLogger()
             _in_memory_loggers.append(resend_email_logger)
             return resend_email_logger  # type: ignore
+        elif logging_integration == "sendgrid_email":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, SendGridEmailLogger):
+                    return callback
+            sendgrid_email_logger = SendGridEmailLogger()
+            _in_memory_loggers.append(sendgrid_email_logger)
+            return sendgrid_email_logger  # type: ignore
         elif logging_integration == "smtp_email":
             for callback in _in_memory_loggers:
                 if isinstance(callback, SMTPEmailLogger):
@@ -3939,7 +4050,8 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
             for callback in _in_memory_loggers:
                 if isinstance(callback, LiteralAILogger):
                     return callback
-        elif logging_integration == "prometheus" and PrometheusLogger is not None:
+        elif logging_integration == "prometheus":
+            PrometheusLogger = _get_cached_prometheus_logger()
             for callback in _in_memory_loggers:
                 if isinstance(callback, PrometheusLogger):
                     return callback
@@ -3950,6 +4062,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "datadog_llm_observability":
             for callback in _in_memory_loggers:
                 if isinstance(callback, DataDogLLMObsLogger):
+                    return callback
+        elif logging_integration == "azure_sentinel":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, AzureSentinelLogger):
                     return callback
         elif logging_integration == "gcs_bucket":
             for callback in _in_memory_loggers:
@@ -4064,6 +4180,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
             for callback in _in_memory_loggers:
                 if isinstance(callback, ResendEmailLogger):
                     return callback
+        elif logging_integration == "sendgrid_email":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, SendGridEmailLogger):
+                    return callback
         elif logging_integration == "smtp_email":
             for callback in _in_memory_loggers:
                 if isinstance(callback, SMTPEmailLogger):
@@ -4087,10 +4207,8 @@ def _get_custom_logger_settings_from_proxy_server(callback_name: str) -> Dict:
         otel:
             message_logging: False
     """
-    from litellm.proxy.proxy_server import callback_settings
-
-    if callback_settings:
-        return dict(callback_settings.get(callback_name, {}))
+    if litellm.callback_settings:
+        return dict(litellm.callback_settings.get(callback_name, {}))
     return {}
 
 
@@ -4166,6 +4284,39 @@ class StandardLoggingPayloadSetup:
             completion_start_time_float = end_time_float
 
         return start_time_float, end_time_float, completion_start_time_float
+
+    @staticmethod
+    def append_system_prompt_messages(
+        kwargs: Optional[Dict] = None, messages: Optional[Any] = None
+    ):
+        """
+        Append system prompt messages to the messages
+        """
+        if kwargs is not None:
+            if kwargs.get("system") is not None and isinstance(
+                kwargs.get("system"), str
+            ):
+                if messages is None:
+                    return [{"role": "system", "content": kwargs.get("system")}]
+                elif isinstance(messages, list):
+                    if len(messages) == 0:
+                        return [{"role": "system", "content": kwargs.get("system")}]
+                    # check for duplicates
+                    if messages[0].get("role") == "system" and messages[0].get(
+                        "content"
+                    ) == kwargs.get("system"):
+                        return messages
+                    messages = [
+                        {"role": "system", "content": kwargs.get("system")}
+                    ] + messages
+                elif isinstance(messages, str):
+                    messages = [
+                        {"role": "system", "content": kwargs.get("system")},
+                        {"role": "user", "content": messages},
+                    ]
+                return messages
+
+        return messages
 
     @staticmethod
     def get_standard_logging_metadata(
@@ -4695,6 +4846,63 @@ def _get_status_fields(
     )
 
 
+def _extract_response_obj_and_hidden_params(
+    init_response_obj: Union[Any, BaseModel, dict],
+    original_exception: Optional[Exception],
+) -> Tuple[dict, Optional[dict]]:
+    """Extract response_obj and hidden_params from init_response_obj."""
+    hidden_params: Optional[dict] = None
+    if init_response_obj is None:
+        response_obj = {}
+    elif isinstance(init_response_obj, BaseModel):
+        response_obj = init_response_obj.model_dump()
+        hidden_params = getattr(init_response_obj, "_hidden_params", None)
+    elif isinstance(init_response_obj, dict):
+        response_obj = init_response_obj
+    else:
+        response_obj = {}
+
+    if original_exception is not None and hidden_params is None:
+        response_headers = _get_response_headers(original_exception)
+        if response_headers is not None:
+            hidden_params = dict(
+                StandardLoggingHiddenParams(
+                    additional_headers=StandardLoggingPayloadSetup.get_additional_headers(
+                        dict(response_headers)
+                    ),
+                    model_id=None,
+                    cache_key=None,
+                    api_base=None,
+                    response_cost=None,
+                    litellm_overhead_time_ms=None,
+                    batch_models=None,
+                    litellm_model_name=None,
+                    usage_object=None,
+                )
+            )
+
+    return response_obj, hidden_params
+
+
+def _reconstruct_model_name(
+    model_name: str,
+    custom_llm_provider: Optional[str],
+    metadata: dict,
+) -> str:
+    """Reconstruct full model name with provider prefix for logging."""
+    # Check if deployment model name from router metadata is available (has original prefix)
+    deployment_model_name = metadata.get("deployment")
+    if deployment_model_name and "/" in deployment_model_name:
+        # Use the deployment model name which preserves the original provider prefix
+        return deployment_model_name
+    elif custom_llm_provider and model_name and "/" not in model_name:
+        # Only add prefix for Bedrock (not for direct Anthropic API)
+        # This ensures Bedrock models get the prefix while direct Anthropic models don't
+        if custom_llm_provider == "bedrock":
+            return f"{custom_llm_provider}/{model_name}"
+    return model_name
+
+
 def get_standard_logging_object_payload(
     kwargs: Optional[dict],
     init_response_obj: Union[Any, BaseModel, dict],
@@ -4709,35 +4917,9 @@ def get_standard_logging_object_payload(
     try:
         kwargs = kwargs or {}
 
-        hidden_params: Optional[dict] = None
-        if init_response_obj is None:
-            response_obj = {}
-        elif isinstance(init_response_obj, BaseModel):
-            response_obj = init_response_obj.model_dump()
-            hidden_params = getattr(init_response_obj, "_hidden_params", None)
-        elif isinstance(init_response_obj, dict):
-            response_obj = init_response_obj
-        else:
-            response_obj = {}
-
-        if original_exception is not None and hidden_params is None:
-            response_headers = _get_response_headers(original_exception)
-            if response_headers is not None:
-                hidden_params = dict(
-                    StandardLoggingHiddenParams(
-                        additional_headers=StandardLoggingPayloadSetup.get_additional_headers(
-                            dict(response_headers)
-                        ),
-                        model_id=None,
-                        cache_key=None,
-                        api_base=None,
-                        response_cost=None,
-                        litellm_overhead_time_ms=None,
-                        batch_models=None,
-                        litellm_model_name=None,
-                        usage_object=None,
-                    )
-                )
+        response_obj, hidden_params = _extract_response_obj_and_hidden_params(
+            init_response_obj, original_exception
+        )
 
         # standardize this function to be used across, s3, dynamoDB, langfuse logging
         litellm_params = kwargs.get("litellm_params", {}) or {}
@@ -4849,6 +5031,14 @@ def get_standard_logging_object_payload(
         ) and kwargs.get("stream") is True:
             stream = True
 
+        # Reconstruct full model name with provider prefix for logging
+        # This ensures Bedrock models like "us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+        # are logged as "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+        custom_llm_provider = cast(Optional[str], kwargs.get("custom_llm_provider"))
+        model_name = _reconstruct_model_name(
+            kwargs.get("model", "") or "", custom_llm_provider, metadata
+        )
+
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),
             trace_id=StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
@@ -4866,13 +5056,13 @@ def get_standard_logging_object_payload(
                 ),
                 error_str=error_str,
             ),
-            custom_llm_provider=cast(Optional[str], kwargs.get("custom_llm_provider")),
+            custom_llm_provider=custom_llm_provider,
             saved_cache_cost=saved_cache_cost,
             startTime=start_time_float,
             endTime=end_time_float,
             completionStartTime=completion_start_time_float,
             response_time=response_time,
-            model=kwargs.get("model", "") or "",
+            model=model_name,
             metadata=clean_metadata,
             cache_key=clean_hidden_params["cache_key"],
             response_cost=response_cost,
@@ -4889,7 +5079,9 @@ def get_standard_logging_object_payload(
             model_group=_model_group,
             model_id=_model_id,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
-            messages=kwargs.get("messages"),
+            messages=StandardLoggingPayloadSetup.append_system_prompt_messages(
+                kwargs=kwargs, messages=kwargs.get("messages")
+            ),
             response=final_response_obj,
             model_parameters=ModelParamHelper.get_standard_logging_model_parameters(
                 kwargs.get("optional_params", None) or {}
@@ -4982,6 +5174,15 @@ def scrub_sensitive_keys_in_metadata(litellm_params: Optional[dict]):
         litellm_params = {}
 
     metadata = litellm_params.get("metadata", {}) or {}
+
+    ## Extract provider-specific callable values (like langfuse_masking_function)
+    ## Store them separately so only the intended logger can access them
+    ## This prevents callables from leaking to other logging integrations
+    if "langfuse_masking_function" in metadata:
+        masking_fn = metadata.pop("langfuse_masking_function", None)
+        if callable(masking_fn):
+            litellm_params["_langfuse_masking_function"] = masking_fn
+        litellm_params["metadata"] = metadata
 
     ## check user_api_key_metadata for sensitive logging keys
     cleaned_user_api_key_metadata = {}

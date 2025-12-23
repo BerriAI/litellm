@@ -41,7 +41,8 @@ Check this in code, [here](../completion/input.md#translated-openai-params)
 "extra_headers",
 "parallel_tool_calls",
 "response_format",
-"user"
+"user",
+"reasoning_effort",
 ```
 
 :::info
@@ -49,6 +50,7 @@ Check this in code, [here](../completion/input.md#translated-openai-params)
 **Notes:**
 - Anthropic API fails requests when `max_tokens` are not passed. Due to this litellm passes `max_tokens=4096` when no `max_tokens` are passed.
 - `response_format` is fully supported for Claude Sonnet 4.5 and Opus 4.1 models (see [Structured Outputs](#structured-outputs) section)
+- `reasoning_effort` is automatically mapped to `output_config={"effort": ...}` for Claude Opus 4.5 models (see [Effort Parameter](./anthropic_effort.md))
 
 :::
 
@@ -198,6 +200,30 @@ Without `LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX`:
 
 With `LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX=true`:
 - Base URL `https://my-proxy.com/custom/path` → `https://my-proxy.com/custom/path` (unchanged)
+
+### Azure AI Foundry (Alternative Method)
+
+:::tip Recommended Method
+For full Azure support including Azure AD authentication, use the dedicated [Azure Anthropic provider](./azure/azure_anthropic) with `azure_ai/` prefix.
+:::
+
+As an alternative, you can use the `anthropic/` provider directly with your Azure endpoint since Azure exposes Claude using Anthropic's native API.
+
+```python
+from litellm import completion
+
+response = completion(
+    model="anthropic/claude-sonnet-4-5",
+    api_base="https://<your-resource>.services.ai.azure.com/anthropic",
+    api_key="<your-azure-api-key>",
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+print(response)
+```
+
+:::info
+**Finding your Azure endpoint:** Go to Azure AI Foundry → Your deployment → Overview. Your base URL will be `https://<resource-name>.services.ai.azure.com/anthropic`
+:::
 
 ## Usage
 
@@ -1910,3 +1936,87 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 </TabItem>
 </Tabs>
 
+
+## Usage - Agent Skills
+
+LiteLLM supports using Agent Skills with the API
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+response = completion(
+    model="claude-sonnet-4-5-20250929",
+    messages=messages,
+    tools= [
+        {
+            "type": "code_execution_20250825",
+            "name": "code_execution"
+        }
+    ],
+    container= {
+        "skills": [
+            {
+                "type": "anthropic",
+                "skill_id": "pptx",
+                "version": "latest"
+            }
+        ]
+    }
+)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: claude-sonnet-4-5-20250929
+        litellm_params:
+        model: anthropic/claude-sonnet-4-5-20250929
+        api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start Proxy
+
+```
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl --location 'http://localhost:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer <YOUR-LITELLM-KEY>' \
+--data '{
+    "model": "claude-sonnet-4-5-20250929",
+    "messages": [
+        {
+            "role": "user",
+            "content": "Hi"
+        }
+    ],
+    "tools": [
+        {
+            "type": "code_execution_20250825",
+            "name": "code_execution"
+        }
+    ],
+    "container": {
+        "skills": [
+            {
+                "type": "anthropic",
+                "skill_id": "pptx",
+                "version": "latest"
+            }
+        ]
+    }
+}'
+```
+
+</TabItem>
+</Tabs>
+
+The container and its "id" will be present in "provider_specific_fields" in streaming/non-streaming response

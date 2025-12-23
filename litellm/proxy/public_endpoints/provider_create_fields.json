@@ -127,6 +127,16 @@
         "default_value": null
       },
       {
+        "key": "api_key",
+        "label": "AWS Bedrock API Key",
+        "placeholder": null,
+        "tooltip": "You can provide the API Key for accessing the Bedrock API.",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
         "key": "aws_session_token",
         "label": "AWS Session Token",
         "placeholder": null,
@@ -802,9 +812,19 @@
   },
   {
     "provider": "Databricks",
-    "provider_display_name": "Databricks (Qwen API)",
+    "provider_display_name": "Databricks",
     "litellm_provider": "databricks",
     "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
       {
         "key": "api_key",
         "label": "API Key",
@@ -2114,17 +2134,67 @@
     "litellm_provider": "oci",
     "credential_fields": [
       {
-        "key": "api_key",
-        "label": "API Key",
-        "placeholder": null,
-        "tooltip": null,
+        "key": "oci_user",
+        "label": "OCI User OCID",
+        "placeholder": "ocid1.user.oc1..aaaaaaaaexample",
+        "tooltip": "The OCID of the user making the API call",
         "required": true,
-        "field_type": "password",
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "oci_fingerprint",
+        "label": "OCI Key Fingerprint",
+        "placeholder": "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99",
+        "tooltip": "The fingerprint of the API signing key",
+        "required": true,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "oci_tenancy",
+        "label": "OCI Tenancy OCID",
+        "placeholder": "ocid1.tenancy.oc1..aaaaaaaaexample",
+        "tooltip": "The OCID of your tenancy",
+        "required": true,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "oci_region",
+        "label": "OCI Region",
+        "placeholder": "us-ashburn-1",
+        "tooltip": "The OCI region identifier (e.g., us-ashburn-1, eu-frankfurt-1)",
+        "required": true,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "oci_compartment_id",
+        "label": "OCI Compartment OCID",
+        "placeholder": "ocid1.compartment.oc1..aaaaaaaaexample",
+        "tooltip": "The OCID of the compartment containing the GenAI resources",
+        "required": true,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "oci_key",
+        "label": "OCI Private Key (PEM)",
+        "placeholder": "-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----",
+        "tooltip": "The full PEM-encoded private key content for API signing. Paste the entire key including BEGIN/END markers.",
+        "required": true,
+        "field_type": "textarea",
         "options": null,
         "default_value": null
       }
     ],
-    "default_model_placeholder": "oci/xai.grok-4"
+    "default_model_placeholder": "oci/xai.grok-3"
   },
   {
     "provider": "OVHCLOUD",
@@ -2387,6 +2457,24 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "SAP",
+    "provider_display_name": "SAP Generative AI Hub",
+    "litellm_provider": "sap",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "SAP AI Core Service Key (JSON)",
+        "placeholder": null,
+        "tooltip": "Paste your SAP AI Core service key JSON. Contains clientid, clientsecret, and service URLs.",
+        "required": true,
+        "field_type": "textarea",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "sap/gpt-4"
+  },
+  {
     "provider": "Snowflake",
     "provider_display_name": "Snowflake",
     "litellm_provider": "snowflake",
@@ -2598,11 +2686,21 @@
         "default_value": null
       },
       {
+        "key": "api_base",
+        "label": "API Base (Optional)",
+        "placeholder": null,
+        "tooltip": "Supports custom API base for Google Private API endpoints.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
         "key": "vertex_credentials",
         "label": "Vertex Credentials",
         "placeholder": null,
-        "tooltip": null,
-        "required": true,
+        "tooltip": "Optional - Upload your GCP service account JSON file. If not provided, uses default GCP credentials (ADC).",
+        "required": false,
         "field_type": "upload",
         "options": null,
         "default_value": null

@@ -1241,7 +1241,7 @@ def test_process_gemini_image():
     base64_image = "data:image/jpeg;base64,/9j/4AAQSkZJRg..."
     base64_result = _process_gemini_image(base64_image)
     print("base64_result", base64_result)
-    assert base64_result["inline_data"]["mimeType"] == "image/jpeg"
+    assert base64_result["inline_data"]["mime_type"] == "image/jpeg"
     assert base64_result["inline_data"]["data"] == "/9j/4AAQSkZJRg..."
 
 

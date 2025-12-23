@@ -1,6 +1,5 @@
-import React from "react";
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // ---- Hoisted shared mocks (safe to use inside vi.mock factories) ----
 const { keyUpdateCallMock, keyDeleteCallMock } = vi.hoisted(() => {
@@ -30,10 +29,14 @@ vi.mock("../molecules/notifications_manager", () => {
   return { default: Notifications };
 });
 
-// Roles: ensure 'admin' has write access
-vi.mock("../../utils/roles", () => ({
-  rolesWithWriteAccess: ["admin"],
-}));
+// Roles: ensure 'admin' has write access and include all role helper functions
+vi.mock("../../utils/roles", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../utils/roles")>();
+  return {
+    ...actual,
+    rolesWithWriteAccess: ["admin"],
+  };
+});
 
 // Helpers used in rendering
 vi.mock("@/utils/dataUtils", () => ({
@@ -119,7 +122,9 @@ vi.mock("@tremor/react", async () => {
 });
 
 // antd bits -> async factory & local React
-vi.mock("antd", async () => {
+vi.mock("antd", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("antd")>();
+
   const React = await import("react");
 
   const Form = { useForm: () => [{}] };
@@ -150,7 +155,7 @@ vi.mock("antd", async () => {
   }
   (Button as any).displayName = "AntdButton";
 
-  return { Form, Input, InputNumber, Select, Tooltip, Button };
+  return { ...actual, Form, Input, InputNumber, Select, Tooltip, Button };
 });
 
 // Icons -> async factory & local React
@@ -218,6 +223,40 @@ vi.mock("../common_components/AutoRotationView", async () => {
   return { __esModule: true, default: AutoRotationView };
 });
 
+// Mock Next.js router to avoid "invariant expected app router to be mounted" error
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({
+    push: vi.fn(),
+    replace: vi.fn(),
+    refresh: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    prefetch: vi.fn(),
+  }),
+}));
+
+// Mock useTeams hook
+vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
+  default: vi.fn(() => ({
+    teams: [],
+    setTeams: vi.fn(),
+  })),
+}));
+
+// Mock useAuthorized hook to avoid Next.js router dependency
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: vi.fn(() => ({
+    accessToken: "access_abc",
+    userId: "user_1",
+    userRole: "admin",
+    premiumUser: true,
+    token: "token_123",
+    userEmail: "test@example.com",
+    disabledPersonalKeyCreation: false,
+    showSSOBanner: false,
+  })),
+}));
+
 // KeyEditView mock: triggers onSubmit with our injected form values
 vi.mock("./key_edit_view", async () => {
   const React = await import("react");
@@ -245,7 +284,7 @@ import KeyInfoView from "./key_info_view";
 const baseKeyData = {
   token_id: "tok_123",
   token: "tok_123",
-  key_alias: "My API Key",
+  key_alias: "My Virtual Key",
   key_name: "sk-xxxx",
   created_at: new Date().toISOString(),
   updated_at: new Date().toISOString(),

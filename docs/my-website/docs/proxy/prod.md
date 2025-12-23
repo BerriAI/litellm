@@ -33,7 +33,7 @@ litellm_settings:
 
 Set slack webhook url in your env
 ```shell
-export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/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"
+export SLACK_WEBHOOK_URL="example-slack-webhook-url"
 ```
 
 Turn off FASTAPI's default info logs
@@ -79,6 +79,13 @@ CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--num_workers"
 
 # or ENV (for deployment manifests / containers)
 export MAX_REQUESTS_BEFORE_RESTART=10000
+```
+
+> **Tip:** When using `--max_requests_before_restart`, the `--run_gunicorn` flag is more stable and mature as it uses Gunicorn's battle-tested worker recycling mechanism instead of Uvicorn's implementation.
+
+```shell
+# Use Gunicorn for more stable worker recycling
+CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--num_workers", "$(nproc)", "--run_gunicorn", "--max_requests_before_restart", "10000"]
 ```
 
 

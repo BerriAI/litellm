@@ -95,6 +95,7 @@ from litellm.utils import (
     EmbeddingResponse,
     ImageResponse,
     ModelResponse,
+    ModelResponseStream,
     ProviderConfigManager,
     TextCompletionResponse,
     TranscriptionResponse,
@@ -654,7 +655,9 @@ def _infer_call_type(
     if completion_response is None:
         return None
 
-    if isinstance(completion_response, ModelResponse):
+    if isinstance(completion_response, ModelResponse) or isinstance(
+        completion_response, ModelResponseStream
+    ):
         return "completion"
     elif isinstance(completion_response, EmbeddingResponse):
         return "embedding"
@@ -833,6 +836,22 @@ def completion_cost(  # noqa: PLR0915
         if service_tier is None and optional_params is not None:
             service_tier = optional_params.get("service_tier")
 
+        # Extract service_tier from completion_response if not provided
+        if service_tier is None and completion_response is not None:
+            if isinstance(completion_response, BaseModel):
+                service_tier = getattr(completion_response, "service_tier", None)
+            elif isinstance(completion_response, dict):
+                service_tier = completion_response.get("service_tier")
+
+        # Extract service_tier from usage object if not provided
+        if service_tier is None and cost_per_token_usage_object is not None:
+            if isinstance(cost_per_token_usage_object, BaseModel):
+                service_tier = getattr(
+                    cost_per_token_usage_object, "service_tier", None
+                )
+            elif isinstance(cost_per_token_usage_object, dict):
+                service_tier = cost_per_token_usage_object.get("service_tier")
+
         selected_model = _select_model_name_for_cost_calc(
             model=model,
             completion_response=completion_response,
@@ -857,9 +876,9 @@ def completion_cost(  # noqa: PLR0915
                     or isinstance(completion_response, dict)
                 ):  # tts returns a custom class
                     if isinstance(completion_response, dict):
-                        usage_obj: Optional[Union[dict, Usage]] = (
-                            completion_response.get("usage", {})
-                        )
+                        usage_obj: Optional[
+                            Union[dict, Usage]
+                        ] = completion_response.get("usage", {})
                     else:
                         usage_obj = getattr(completion_response, "usage", {})
                     if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
@@ -933,6 +952,17 @@ def completion_cost(  # noqa: PLR0915
                     elif len(prompt) > 0:
                         prompt_tokens = token_counter(model=model, text=prompt)
                     completion_tokens = token_counter(model=model, text=completion)
+
+                # Handle A2A calls before model check - A2A doesn't require a model
+                if call_type in (
+                    CallTypes.asend_message.value,
+                    CallTypes.send_message.value,
+                ):
+                    from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
+
+                    return A2ACostCalculator.calculate_a2a_cost(
+                        litellm_logging_obj=litellm_logging_obj
+                    )
 
                 if model is None:
                     raise ValueError(
@@ -1046,29 +1076,36 @@ def completion_cost(  # noqa: PLR0915
                             number_of_queries = len(query)
                         elif query is not None:
                             number_of_queries = 1
-                    
+
                     search_model = model or ""
                     if custom_llm_provider and "/" not in search_model:
                         # If model is like "tavily-search", construct "tavily/search" for cost lookup
                         search_model = f"{custom_llm_provider}/search"
-                    
-                    prompt_cost, completion_cost_result = search_provider_cost_per_query(
+
+                    (
+                        prompt_cost,
+                        completion_cost_result,
+                    ) = search_provider_cost_per_query(
                         model=search_model,
                         custom_llm_provider=custom_llm_provider,
                         number_of_queries=number_of_queries,
                         optional_params=optional_params,
                     )
-                    
+
                     # Return the total cost (prompt_cost + completion_cost, but for search it's just prompt_cost)
                     _final_cost = prompt_cost + completion_cost_result
-                    
+
                     # Apply discount
                     original_cost = _final_cost
-                    _final_cost, discount_percent, discount_amount = _apply_cost_discount(
+                    (
+                        _final_cost,
+                        discount_percent,
+                        discount_amount,
+                    ) = _apply_cost_discount(
                         base_cost=_final_cost,
                         custom_llm_provider=custom_llm_provider,
                     )
-                    
+
                     # Store cost breakdown in logging object if available
                     _store_cost_breakdown_in_logging_obj(
                         litellm_logging_obj=litellm_logging_obj,
@@ -1080,7 +1117,7 @@ def completion_cost(  # noqa: PLR0915
                         discount_percent=discount_percent,
                         discount_amount=discount_amount,
                     )
-                    
+
                     return _final_cost
                 elif call_type == CallTypes.arealtime.value and isinstance(
                     completion_response, LiteLLMRealtimeStreamLoggingObject
@@ -1311,9 +1348,8 @@ def response_cost_calculator(
             response_cost = 0.0
         else:
             if isinstance(response_object, BaseModel):
-                response_object._hidden_params["optional_params"] = optional_params
-
                 if hasattr(response_object, "_hidden_params"):
+                    response_object._hidden_params["optional_params"] = optional_params
                     provider_response_cost = get_response_cost_from_hidden_params(
                         response_object._hidden_params
                     )
@@ -1519,7 +1555,7 @@ def default_image_cost_calculator(
 
     # gpt-image-1 models use low, medium, high quality. If user did not specify quality, use medium fot gpt-image-1 model family
     model_name_with_v2_quality = (
-        f"{ImageGenerationRequestQuality.MEDIUM.value}/{base_model_name}"
+        f"{ImageGenerationRequestQuality.HIGH.value}/{base_model_name}"
     )
 
     verbose_logger.debug(
@@ -1551,7 +1587,16 @@ def default_image_cost_calculator(
             f"Model not found in cost map. Tried checking {models_to_check}"
         )
 
-    return cost_info["input_cost_per_pixel"] * height * width * n
+    # Priority 1: Use per-image pricing if available (for gpt-image-1 and similar models)
+    if "input_cost_per_image" in cost_info and cost_info["input_cost_per_image"] is not None:
+        return cost_info["input_cost_per_image"] * n
+    # Priority 2: Fall back to per-pixel pricing for backward compatibility
+    elif "input_cost_per_pixel" in cost_info and cost_info["input_cost_per_pixel"] is not None:
+        return cost_info["input_cost_per_pixel"] * height * width * n
+    else:
+        raise Exception(
+            f"No pricing information found for model {model}. Tried checking {models_to_check}"
+        )
 
 
 def default_video_cost_calculator(

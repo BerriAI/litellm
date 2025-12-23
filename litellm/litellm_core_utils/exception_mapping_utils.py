@@ -77,10 +77,20 @@ class ExceptionCheckers:
             "model's maximum context limit",
             "is longer than the model's context length",
             "input tokens exceed the configured limit",
+            "`inputs` tokens + `max_new_tokens` must be",
+            "exceeds the maximum number of tokens allowed",  # Gemini
         ]
         for substring in known_exception_substrings:
             if substring in _error_str_lowercase:
                 return True
+
+        # Cerebras pattern: "Current length is X while limit is Y"
+        if (
+            "current length is" in _error_str_lowercase
+            and "while limit is" in _error_str_lowercase
+        ):
+            return True
+
         return False
     
     @staticmethod
@@ -1249,6 +1259,14 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         message=f"{custom_llm_provider.capitalize()}Exception - {error_str}",
                         model=model,
                         llm_provider=custom_llm_provider,
+                    )
+                elif ExceptionCheckers.is_error_str_context_window_exceeded(error_str):
+                    exception_mapping_worked = True
+                    raise ContextWindowExceededError(
+                        message=f"ContextWindowExceededError: {custom_llm_provider.capitalize()}Exception - {error_str}",
+                        model=model,
+                        llm_provider=custom_llm_provider,
+                        litellm_debug_info=extra_information,
                     )
                 elif (
                     "None Unknown Error." in error_str

@@ -141,7 +141,22 @@ class TestVertexAIGeminiImageGenerationConfig:
                         ]
                     }
                 }
-            ]
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 93,
+                "promptTokensDetails": [
+                    {
+                        "modality": "TEXT",
+                        "tokenCount": 54,
+                    },
+                    {
+                        "modality": "IMAGE",
+                        "tokenCount": 39,
+                    }
+                ],
+                "candidatesTokenCount": 17,
+                "totalTokenCount": 110,
+            }
         }
         mock_response.headers = {}
 
@@ -162,6 +177,12 @@ class TestVertexAIGeminiImageGenerationConfig:
         assert len(result.data) == 1
         assert result.data[0].b64_json == "base64_encoded_image_data"
         assert result.data[0].url is None
+        assert result.usage.input_tokens == 93
+        assert result.usage.input_tokens_details.text_tokens == 54
+        assert result.usage.input_tokens_details.image_tokens == 39
+        assert result.usage.output_tokens == 17
+        assert result.usage.total_tokens == 110
+
 
     def test_transform_image_generation_response_multiple_images(self):
         """Test response transformation with multiple images"""
@@ -418,40 +439,36 @@ class TestVertexAIImageGenerationIntegration:
     def test_gemini_get_complete_url(self):
         """Test Gemini config URL generation"""
         config = VertexAIGeminiImageGenerationConfig()
-        with patch.object(
-            config, "_resolve_vertex_project", return_value="test-project"
-        ), patch.object(
-            config, "_resolve_vertex_location", return_value="us-central1"
-        ):
-            url = config.get_complete_url(
-                api_base=None,
-                api_key=None,
-                model="gemini-2.5-flash-image",
-                optional_params={},
-                litellm_params={},
-            )
-            assert "test-project" in url
-            assert "us-central1" in url
-            assert "gemini-2.5-flash-image" in url
-            assert "generateContent" in url
+        url = config.get_complete_url(
+            api_base=None,
+            api_key=None,
+            model="gemini-2.5-flash-image",
+            optional_params={},
+            litellm_params={
+                "vertex_project": "test-project",
+                "vertex_location": "us-central1",
+            },
+        )
+        assert "test-project" in url
+        assert "us-central1" in url
+        assert "gemini-2.5-flash-image" in url
+        assert "generateContent" in url
 
     def test_imagen_get_complete_url(self):
         """Test Imagen config URL generation"""
         config = VertexAIImagenImageGenerationConfig()
-        with patch.object(
-            config, "_resolve_vertex_project", return_value="test-project"
-        ), patch.object(
-            config, "_resolve_vertex_location", return_value="us-central1"
-        ):
-            url = config.get_complete_url(
-                api_base=None,
-                api_key=None,
-                model="imagegeneration@006",
-                optional_params={},
-                litellm_params={},
-            )
-            assert "test-project" in url
-            assert "us-central1" in url
-            assert "imagegeneration@006" in url
-            assert "predict" in url
+        url = config.get_complete_url(
+            api_base=None,
+            api_key=None,
+            model="imagegeneration@006",
+            optional_params={},
+            litellm_params={
+                "vertex_project": "test-project",
+                "vertex_location": "us-central1",
+            },
+        )
+        assert "test-project" in url
+        assert "us-central1" in url
+        assert "imagegeneration@006" in url
+        assert "predict" in url
 
