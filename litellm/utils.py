@@ -7186,6 +7186,8 @@ class ProviderConfigManager:
             return litellm.AnthropicConfig()
         elif litellm.LlmProviders.ANTHROPIC_TEXT == provider:
             return litellm.AnthropicTextConfig()
+        elif litellm.LlmProviders.CLAUDE_CODE_NATIVE == provider:
+            return litellm.ClaudeCodeNativeConfig()
         elif litellm.LlmProviders.VERTEX_AI_BETA == provider:
             return litellm.VertexGeminiConfig()
         elif litellm.LlmProviders.VERTEX_AI == provider:

@@ -1515,6 +1515,7 @@ if TYPE_CHECKING:
     from .llms.fireworks_ai.rerank.transformation import FireworksAIRerankConfig as FireworksAIRerankConfig
     from .llms.voyage.rerank.transformation import VoyageRerankConfig as VoyageRerankConfig
     from .llms.clarifai.chat.transformation import ClarifaiConfig as ClarifaiConfig
+    from .llms.claude_code_native.transformation import ClaudeCodeNativeConfig as ClaudeCodeNativeConfig
     from .llms.ai21.chat.transformation import AI21ChatConfig as AI21ChatConfig
     from litellm.caching.llm_caching_handler import LLMClientCache
     from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES

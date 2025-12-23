@@ -198,6 +198,7 @@ LLM_CONFIG_NAMES = (
     "FireworksAIRerankConfig",
     "VoyageRerankConfig",
     "ClarifaiConfig",
+    "ClaudeCodeNativeConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -1005,5 +1006,13 @@ def _lazy_import_llm_configs(name: str) -> Any:  # noqa: PLR0915
 
         _globals["ClarifaiConfig"] = _ClarifaiConfig
         return _ClarifaiConfig
+
+    if name == "ClaudeCodeNativeConfig":
+        from .llms.claude_code_native.transformation import (
+            ClaudeCodeNativeConfig as _ClaudeCodeNativeConfig,
+        )
+
+        _globals["ClaudeCodeNativeConfig"] = _ClaudeCodeNativeConfig
+        return _ClaudeCodeNativeConfig
 
     raise AttributeError(f"LLM config lazy import: unknown attribute {name!r}")

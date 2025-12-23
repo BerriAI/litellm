@@ -2912,6 +2912,7 @@ class LlmProviders(str, Enum):
     CLARIFAI = "clarifai"
     ANTHROPIC = "anthropic"
     ANTHROPIC_TEXT = "anthropic_text"
+    CLAUDE_CODE_NATIVE = "claude_code_native"
     BYTEZ = "bytez"
     REPLICATE = "replicate"
     RUNWAYML = "runwayml"

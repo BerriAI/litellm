@@ -319,14 +319,8 @@ class AnthropicChatCompletion(BaseLLM):
         is_vertex_request: bool = optional_params.pop("is_vertex_request", False)
         _is_function_call = False
         messages = copy.deepcopy(messages)
-        headers = AnthropicConfig().validate_environment(
-            api_key=api_key,
-            headers=headers,
-            model=model,
-            messages=messages,
-            optional_params={**optional_params, "is_vertex_request": is_vertex_request},
-            litellm_params=litellm_params,
-        )
+
+        from litellm.utils import ProviderConfigManager
 
         config = ProviderConfigManager.get_provider_chat_config(
             model=model,
@@ -336,6 +330,15 @@ class AnthropicChatCompletion(BaseLLM):
             raise ValueError(
                 f"Provider config not found for model: {model} and provider: {custom_llm_provider}"
             )
+
+        headers = config.validate_environment(
+            api_key=api_key,
+            headers=headers,
+            model=model,
+            messages=messages,
+            optional_params={**optional_params, "is_vertex_request": is_vertex_request},
+            litellm_params=litellm_params,
+        )
 
         data = config.transform_request(
             model=model,

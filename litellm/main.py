@@ -171,6 +171,7 @@ from .litellm_core_utils.prompt_templates.factory import (
 from .litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
+from .llms.claude_code_native.completion import ClaudeCodeNativeChatCompletion
 from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
 from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
 from .llms.azure.completion.handler import AzureTextCompletion
@@ -262,6 +263,7 @@ sap_gen_ai_hub_chat_completions = GenAIHubOrchestration()
 sap_gen_ai_hub_emb = GenAIHubOrchestration()
 azure_ai_embedding = AzureAIEmbedding()
 anthropic_chat_completions = AnthropicChatCompletion()
+claude_code_native_chat_completions = ClaudeCodeNativeChatCompletion()
 azure_anthropic_chat_completions = AzureAnthropicChatCompletion()
 azure_chat_completions = AzureChatCompletion()
 azure_o1_chat_completions = AzureOpenAIO1ChatCompletion()
@@ -2548,22 +2550,60 @@ def completion(  # type: ignore # noqa: PLR0915
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
-                encoding=_get_encoding(),  # for calculating input/output tokens
+                encoding=_get_encoding(),
                 api_key=api_key,
                 logging_obj=logging,
-                headers=headers,
                 timeout=timeout,
-                client=client,
                 custom_llm_provider=custom_llm_provider,
             )
-            if optional_params.get("stream", False) or acompletion is True:
-                ## LOGGING
-                logging.post_call(
-                    input=messages,
-                    api_key=api_key,
-                    original_response=response,
+        elif custom_llm_provider == "claude_code_native":
+            api_key = (
+                api_key
+                or litellm.anthropic_key
+                or litellm.api_key
+                or os.environ.get("ANTHROPIC_API_KEY")
+            )
+            custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
+            # call /messages
+            # default route for all anthropic models
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret("ANTHROPIC_API_BASE")
+                or get_secret("ANTHROPIC_BASE_URL")
+                or "https://api.anthropic.com/v1/messages"
+            )
+
+            # Check if we should disable automatic URL suffix appending
+            disable_url_suffix = get_secret_bool("LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX")
+            if (
+                api_base is not None
+                and not disable_url_suffix
+                and not api_base.endswith("/v1/messages")
+            ):
+                api_base += "/v1/messages"
+            elif disable_url_suffix:
+                verbose_logger.debug(
+                    "LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX is set, skipping /v1/messages suffix"
                 )
-            response = response
+
+            response = claude_code_native_chat_completions.completion(
+                model=model,
+                messages=messages,
+                api_base=api_base,
+                acompletion=acompletion,
+                custom_prompt_dict=litellm.custom_prompt_dict,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=_get_encoding(),
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                custom_llm_provider=custom_llm_provider,
+            )
         elif custom_llm_provider == "nlp_cloud":
             nlp_cloud_key = (
                 api_key

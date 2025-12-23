@@ -228,6 +228,24 @@
     "default_model_placeholder": "claude-3-opus"
   },
   {
+    "provider": "Claude_Code_Native",
+    "provider_display_name": "Claude Code Native",
+    "litellm_provider": "claude_code_native",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": "sk-",
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "claude-4-5-sonnet"
+  },
+  {
     "provider": "ANTHROPIC_TEXT",
     "provider_display_name": "Anthropic Text",
     "litellm_provider": "anthropic_text",
