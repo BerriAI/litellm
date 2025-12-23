@@ -4,8 +4,8 @@ import httpx
 
 import litellm
 from litellm.constants import REPLICATE_MODEL_NAME_WITH_ID_LENGTH
-from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+from litellm.secret_managers.main import get_secret, get_secret_str
 
 from ..types.router import LiteLLM_Params
 
@@ -267,6 +267,12 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "api.moonshot.ai/v1":
                         custom_llm_provider = "moonshot"
                         dynamic_api_key = get_secret_str("MOONSHOT_API_KEY")
+                    elif endpoint == "api.minimax.io/anthropic" or endpoint == "api.minimaxi.com/anthropic":
+                        custom_llm_provider = "minimax"
+                        dynamic_api_key = get_secret_str("MINIMAX_API_KEY")
+                    elif endpoint == "api.minimax.io/v1" or endpoint == "api.minimaxi.com/v1":
+                        custom_llm_provider = "minimax"
+                        dynamic_api_key = get_secret_str("MINIMAX_API_KEY")
                     elif endpoint == "platform.publicai.co/v1":
                         custom_llm_provider = "publicai"
                         dynamic_api_key = get_secret_str("PUBLICAI_API_KEY")

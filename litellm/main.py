@@ -68,7 +68,6 @@ from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
 )
 from litellm.exceptions import LiteLLMUnknownProvider
-from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.audio_utils.utils import (
@@ -98,6 +97,7 @@ from litellm.llms.base_llm.base_model_iterator import (
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.vertex_ai.common_utils import (
     VertexAIModelRoute,
     get_vertex_ai_model_route,
@@ -2244,6 +2244,42 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
             ## LOGGING
+            logging.post_call(
+                input=messages, api_key=api_key, original_response=response
+            )
+        elif custom_llm_provider == "minimax":
+            api_key = (
+                api_key
+                or get_secret_str("MINIMAX_API_KEY")
+                or litellm.api_key
+            )
+
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("MINIMAX_API_BASE")
+                or "https://api.minimax.io/v1"
+            )
+
+            response = base_llm_http_handler.completion(
+                model=model,
+                messages=messages,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                model_response=model_response,
+                encoding=_get_encoding(),
+                logging_obj=logging,
+                optional_params=optional_params,
+                timeout=timeout,
+                litellm_params=litellm_params,
+                shared_session=shared_session,
+                acompletion=acompletion,
+                stream=stream,
+                api_key=api_key,
+                headers=headers,
+                client=client,
+                provider_config=provider_config,
+            )
             logging.post_call(
                 input=messages, api_key=api_key, original_response=response
             )
