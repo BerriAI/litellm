@@ -150,132 +150,67 @@ def _get_lazy_import_registry() -> dict[str, Callable[[str], Any]]:
     return _LAZY_IMPORT_REGISTRY
 
 
+def _generic_lazy_import(name: str, import_map: dict[str, tuple[str, str]], category: str) -> Any:
+    """
+    Generic lazy import handler that works with any import map.
+    
+    Args:
+        name: Attribute name to import
+        import_map: Dictionary mapping attribute names to (module_path, attr_name) tuples
+        category: Category name for error messages (e.g., "Utils", "Cost calculator")
+    """
+    if name not in import_map:
+        raise AttributeError(f"{category} lazy import: unknown attribute {name!r}")
+    
+    _globals = _get_litellm_globals()
+    
+    # Check if already cached
+    if name in _globals:
+        return _globals[name]
+    
+    module_path, attr_name = import_map[name]
+    
+    # importlib.import_module() already caches in sys.modules, so no need for extra caching
+    # Use package="litellm" for relative imports (starting with "."), otherwise use absolute import
+    if module_path.startswith("."):
+        module = importlib.import_module(module_path, package="litellm")
+    else:
+        module = importlib.import_module(module_path)
+    
+    value = getattr(module, attr_name)
+    _globals[name] = value
+    return value
+
 
 # Lazy import for utils module - imports only the requested item by name.
 def _lazy_import_utils(name: str) -> Any:
     """Lazy import for utils module - imports only the requested item by name."""
-    if name not in _UTILS_IMPORT_MAP:
-        raise AttributeError(f"Utils lazy import: unknown attribute {name!r}")
-    
-    _globals = _get_litellm_globals()
-    
-    # Check if already cached
-    if name in _globals:
-        return _globals[name]
-    
-    module_path, attr_name = _UTILS_IMPORT_MAP[name]
-    
-    # importlib.import_module() already caches in sys.modules, so no need for extra caching
-    module = importlib.import_module(module_path, package="litellm")
-    value = getattr(module, attr_name)
-    
-    _globals[name] = value
-    return value
+    return _generic_lazy_import(name, _UTILS_IMPORT_MAP, "Utils")
 
 
 def _lazy_import_cost_calculator(name: str) -> Any:
     """Lazy import for cost_calculator functions."""
-    if name not in _COST_CALCULATOR_IMPORT_MAP:
-        raise AttributeError(f"Cost calculator lazy import: unknown attribute {name!r}")
-    
-    _globals = _get_litellm_globals()
-    
-    # Check if already cached
-    if name in _globals:
-        return _globals[name]
-    
-    module_path, attr_name = _COST_CALCULATOR_IMPORT_MAP[name]
-    
-    # importlib.import_module() already caches in sys.modules, so no need for extra caching
-    module = importlib.import_module(module_path, package="litellm")
-    value = getattr(module, attr_name)
-    
-    _globals[name] = value
-    return value
+    return _generic_lazy_import(name, _COST_CALCULATOR_IMPORT_MAP, "Cost calculator")
 
 
 def _lazy_import_token_counter(name: str) -> Any:
     """Lazy import for token_counter utilities."""
-    if name not in _TOKEN_COUNTER_IMPORT_MAP:
-        raise AttributeError(f"Token counter lazy import: unknown attribute {name!r}")
-    
-    _globals = _get_litellm_globals()
-    
-    # Check if already cached
-    if name in _globals:
-        return _globals[name]
-    
-    module_path, attr_name = _TOKEN_COUNTER_IMPORT_MAP[name]
-    
-    # importlib.import_module() already caches in sys.modules, so no need for extra caching
-    module = importlib.import_module(module_path)
-    value = getattr(module, attr_name)
-    
-    _globals[name] = value
-    return value
+    return _generic_lazy_import(name, _TOKEN_COUNTER_IMPORT_MAP, "Token counter")
 
 
 def _lazy_import_bedrock_types(name: str) -> Any:
     """Lazy import for Bedrock type aliases."""
-    if name not in _BEDROCK_TYPES_IMPORT_MAP:
-        raise AttributeError(f"Bedrock types lazy import: unknown attribute {name!r}")
-    
-    _globals = _get_litellm_globals()
-    
-    # Check if already cached
-    if name in _globals:
-        return _globals[name]
-    
-    module_path, attr_name = _BEDROCK_TYPES_IMPORT_MAP[name]
-    
-    # importlib.import_module() already caches in sys.modules, so no need for extra caching
-    module = importlib.import_module(module_path)
-    value = getattr(module, attr_name)
-    
-    _globals[name] = value
-    return value
+    return _generic_lazy_import(name, _BEDROCK_TYPES_IMPORT_MAP, "Bedrock types")
 
 
 def _lazy_import_types_utils(name: str) -> Any:
     """Lazy import for common types and constants from litellm.types.utils."""
-    if name not in _TYPES_UTILS_IMPORT_MAP:
-        raise AttributeError(f"Types utils lazy import: unknown attribute {name!r}")
-    
-    _globals = _get_litellm_globals()
-    
-    # Check if already cached
-    if name in _globals:
-        return _globals[name]
-    
-    module_path, attr_name = _TYPES_UTILS_IMPORT_MAP[name]
-    
-    # importlib.import_module() already caches in sys.modules, so no need for extra caching
-    module = importlib.import_module(module_path, package="litellm")
-    value = getattr(module, attr_name)
-    
-    _globals[name] = value
-    return value
+    return _generic_lazy_import(name, _TYPES_UTILS_IMPORT_MAP, "Types utils")
 
 
 def _lazy_import_caching(name: str) -> Any:
     """Lazy import for caching module classes."""
-    if name not in _CACHING_IMPORT_MAP:
-        raise AttributeError(f"Caching lazy import: unknown attribute {name!r}")
-    
-    _globals = _get_litellm_globals()
-    
-    # Check if already cached
-    if name in _globals:
-        return _globals[name]
-    
-    module_path, attr_name = _CACHING_IMPORT_MAP[name]
-    
-    # importlib.import_module() already caches in sys.modules, so no need for extra caching
-    module = importlib.import_module(module_path)
-    value = getattr(module, attr_name)
-    
-    _globals[name] = value
-    return value
+    return _generic_lazy_import(name, _CACHING_IMPORT_MAP, "Caching")
 
 
 def _lazy_import_llm_client_cache(name: str) -> Any:
@@ -307,23 +242,7 @@ def _lazy_import_llm_client_cache(name: str) -> Any:
 
 def _lazy_import_litellm_logging(name: str) -> Any:
     """Lazy import for litellm_logging module."""
-    if name not in _LITELLM_LOGGING_IMPORT_MAP:
-        raise AttributeError(f"Litellm logging lazy import: unknown attribute {name!r}")
-    
-    _globals = _get_litellm_globals()
-    
-    # Check if already cached
-    if name in _globals:
-        return _globals[name]
-    
-    module_path, attr_name = _LITELLM_LOGGING_IMPORT_MAP[name]
-    
-    # importlib.import_module() already caches in sys.modules, so no need for extra caching
-    module = importlib.import_module(module_path)
-    value = getattr(module, attr_name)
-    
-    _globals[name] = value
-    return value
+    return _generic_lazy_import(name, _LITELLM_LOGGING_IMPORT_MAP, "Litellm logging")
 
 
 def _lazy_import_http_handlers(name: str) -> Any:
@@ -360,62 +279,14 @@ def _lazy_import_http_handlers(name: str) -> Any:
 
 def _lazy_import_dotprompt(name: str) -> Any:
     """Lazy import for dotprompt integration globals."""
-    if name not in _DOTPROMPT_IMPORT_MAP:
-        raise AttributeError(f"Dotprompt lazy import: unknown attribute {name!r}")
-    
-    _globals = _get_litellm_globals()
-    
-    # Check if already cached
-    if name in _globals:
-        return _globals[name]
-    
-    module_path, attr_name = _DOTPROMPT_IMPORT_MAP[name]
-    
-    # importlib.import_module() already caches in sys.modules, so no need for extra caching
-    module = importlib.import_module(module_path)
-    value = getattr(module, attr_name)
-    
-    _globals[name] = value
-    return value
+    return _generic_lazy_import(name, _DOTPROMPT_IMPORT_MAP, "Dotprompt")
 
 
 def _lazy_import_types(name: str) -> Any:
     """Lazy import for type classes."""
-    if name not in _TYPES_IMPORT_MAP:
-        raise AttributeError(f"Types lazy import: unknown attribute {name!r}")
-    
-    _globals = _get_litellm_globals()
-    
-    # Check if already cached
-    if name in _globals:
-        return _globals[name]
-    
-    module_path, attr_name = _TYPES_IMPORT_MAP[name]
-    
-    # importlib.import_module() already caches in sys.modules, so no need for extra caching
-    module = importlib.import_module(module_path)
-    value = getattr(module, attr_name)
-    
-    _globals[name] = value
-    return value
+    return _generic_lazy_import(name, _TYPES_IMPORT_MAP, "Types")
 
 
 def _lazy_import_llm_configs(name: str) -> Any:
     """Lazy import for LLM config classes."""
-    if name not in _LLM_CONFIGS_IMPORT_MAP:
-        raise AttributeError(f"LLM config lazy import: unknown attribute {name!r}")
-    
-    _globals = _get_litellm_globals()
-    
-    # Check if already cached
-    if name in _globals:
-        return _globals[name]
-    
-    module_path, attr_name = _LLM_CONFIGS_IMPORT_MAP[name]
-    
-    # importlib.import_module() already caches in sys.modules, so no need for extra caching
-    module = importlib.import_module(module_path, package="litellm")
-    value = getattr(module, attr_name)
-    
-    _globals[name] = value
-    return value
+    return _generic_lazy_import(name, _LLM_CONFIGS_IMPORT_MAP, "LLM config")
