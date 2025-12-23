@@ -17,7 +17,9 @@ Instead of creating a full Python module for simple OpenAI-compatible providers,
 
 ### For Simple OpenAI-Compatible Providers
 
-Edit `providers.json` and add your provider:
+Adding a new JSON-configured provider requires updates in multiple locations:
+
+#### 1. Add to `providers.json` (this directory)
 
 ```json
 {
@@ -28,7 +30,66 @@ Edit `providers.json` and add your provider:
 }
 ```
 
-That's it! The provider will be automatically loaded and available.
+#### 2. Add enum to `litellm/types/utils.py`
+
+Add your provider to the `LlmProviders` enum:
+
+```python
+class LlmProviders(str, Enum):
+    # ... existing providers ...
+    YOUR_PROVIDER = "your_provider"
+```
+
+#### 3. Add endpoint mapping to `litellm/litellm_core_utils/get_llm_provider_logic.py`
+
+In the `get_llm_provider()` function, add an endpoint recognition condition:
+
+```python
+elif endpoint == "https://api.yourprovider.com/v1":
+    custom_llm_provider = "your_provider"
+    dynamic_api_key = get_secret_str("YOUR_PROVIDER_API_KEY")
+```
+
+#### 4. Add to `litellm/constants.py` lists
+
+Add your provider to three lists in `constants.py`:
+
+- `openai_compatible_endpoints` - Add the base URL
+- `openai_compatible_providers` - Add the provider name
+- `openai_text_completion_compatible_providers` - Add the provider name (if it supports text completions)
+
+#### 5. Add to `provider_endpoints_support.json` (root directory)
+
+Add an entry documenting which endpoints your provider supports:
+
+```json
+{
+  "your_provider": {
+    "display_name": "Your Provider (`your_provider`)",
+    "endpoints": {
+      "chat_completions": true,
+      "messages": false,
+      "responses": false,
+      "embeddings": true,
+      "image_generations": false,
+      "audio_transcriptions": false,
+      "audio_speech": false,
+      "moderations": false,
+      "batches": false,
+      "rerank": false,
+      "a2a": false
+    }
+  }
+}
+```
+
+#### Summary Checklist
+
+- [ ] `providers.json` - Add provider configuration
+- [ ] `litellm/types/utils.py` - Add enum entry
+- [ ] `litellm/litellm_core_utils/get_llm_provider_logic.py` - Add endpoint mapping
+- [ ] `litellm/constants.py` - Add to all three lists
+- [ ] `provider_endpoints_support.json` - Add endpoint support documentation
 
 ### Optional Configuration Fields
 
