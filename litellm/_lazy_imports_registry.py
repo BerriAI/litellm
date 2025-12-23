@@ -31,7 +31,7 @@ UTILS_NAMES = (
     "get_supported_openai_params", "get_api_base", "get_first_chars_messages",
     "ModelResponse", "ModelResponseStream", "EmbeddingResponse", "ImageResponse",
     "TranscriptionResponse", "TextCompletionResponse", "get_provider_fields",
-    "ModelResponseListIterator", "get_valid_models",
+    "ModelResponseListIterator", "get_valid_models", "timeout",
 )
 
 # Token counter names that support lazy loading via _lazy_import_token_counter
@@ -329,6 +329,7 @@ _UTILS_IMPORT_MAP = {
     "get_provider_fields": (".utils", "get_provider_fields"),
     "ModelResponseListIterator": (".utils", "ModelResponseListIterator"),
     "get_valid_models": (".utils", "get_valid_models"),
+    "timeout": (".timeout", "timeout"),
 }
 
 _COST_CALCULATOR_IMPORT_MAP = {

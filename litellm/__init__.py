@@ -1041,7 +1041,7 @@ openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 ####### VIDEO GENERATION MODELS ###################
 openai_video_generation_models = ["sora-2"]
 
-from .timeout import timeout
+# timeout is lazy-loaded via __getattr__
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
 
