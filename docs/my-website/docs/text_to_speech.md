@@ -14,7 +14,7 @@ import TabItem from '@theme/TabItem';
 | Fallbacks | ✅ | Works between supported models |
 | Loadbalancing | ✅ | Works between supported models |
 | Guardrails | ✅ | Applies to input text (non-streaming only) |
-| Supported Providers | OpenAI, Azure OpenAI, Vertex AI, AWS Polly, ElevenLabs | |
+| Supported Providers | OpenAI, Azure OpenAI, Vertex AI, AWS Polly, ElevenLabs , MiniMax| |
 
 ## **LiteLLM Python SDK Usage**
 ### Quick Start 
@@ -105,6 +105,7 @@ litellm --config /path/to/config.yaml
 | Vertex AI   |   [Usage](../docs/providers/vertex#text-to-speech-apis)                 |
 | Gemini      |   [Usage](#gemini-text-to-speech)                 |
 | ElevenLabs  |   [Usage](../docs/providers/elevenlabs#text-to-speech-tts)                 |
+| MiniMax     |   [Usage](../docs/providers/minimax_tts)                 |
 
 ## `/audio/speech` to `/chat/completions` Bridge
 

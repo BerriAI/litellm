@@ -43,6 +43,7 @@ export enum Providers {
   VolcEngine = "VolcEngine",
   Voyage = "Voyage AI",
   xAI = "xAI",
+  SAP = "SAP Generative AI Hub",
 }
 
 export const provider_map: Record<string, string> = {
@@ -89,6 +90,7 @@ export const provider_map: Record<string, string> = {
   DeepInfra: "deepinfra",
   Hosted_Vllm: "hosted_vllm",
   Infinity: "infinity",
+    SAP: "sap",
 };
 
 const asset_logos_folder = "../ui/assets/logos/";
@@ -137,6 +139,7 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.JinaAI]: `${asset_logos_folder}jina.png`,
   [Providers.VolcEngine]: `${asset_logos_folder}volcengine.png`,
   [Providers.DeepInfra]: `${asset_logos_folder}deepinfra.png`,
+    [Providers.SAP]: `${asset_logos_folder}sap.png`,
 };
 
 export const getProviderLogoAndName = (providerValue: string): { logo: string; displayName: string } => {

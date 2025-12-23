@@ -150,15 +150,15 @@ We support ALL Groq models, just set `groq/` as a prefix when sending completion
 
 | Model Name         | Usage                                           |
 |--------------------|---------------------------------------------------------|
-| llama-3.1-8b-instant     | `completion(model="groq/llama-3.1-8b-instant", messages)`     | 
-| llama-3.1-70b-versatile    | `completion(model="groq/llama-3.1-70b-versatile", messages)`    | 
-| llama3-8b-8192     | `completion(model="groq/llama3-8b-8192", messages)`     | 
-| llama3-70b-8192    | `completion(model="groq/llama3-70b-8192", messages)`    | 
-| llama2-70b-4096    | `completion(model="groq/llama2-70b-4096", messages)`    | 
-| mixtral-8x7b-32768 | `completion(model="groq/mixtral-8x7b-32768", messages)` |
-| gemma-7b-it        | `completion(model="groq/gemma-7b-it", messages)`        |
-| moonshotai/kimi-k2-instruct | `completion(model="groq/moonshotai/kimi-k2-instruct", messages)` |
-| qwen3-32b       | `completion(model="groq/qwen/qwen3-32b", messages)`       |
+| llama-3.3-70b-versatile     | `completion(model="groq/llama-3.3-70b-versatile", messages)`     |
+| llama-3.1-8b-instant     | `completion(model="groq/llama-3.1-8b-instant", messages)`     |
+| meta-llama/llama-4-scout-17b-16e-instruct | `completion(model="groq/meta-llama/llama-4-scout-17b-16e-instruct", messages)` |
+| meta-llama/llama-4-maverick-17b-128e-instruct | `completion(model="groq/meta-llama/llama-4-maverick-17b-128e-instruct", messages)` |
+| meta-llama/llama-guard-4-12b | `completion(model="groq/meta-llama/llama-guard-4-12b", messages)` |
+| qwen/qwen3-32b       | `completion(model="groq/qwen/qwen3-32b", messages)`       |
+| moonshotai/kimi-k2-instruct-0905 | `completion(model="groq/moonshotai/kimi-k2-instruct-0905", messages)` |
+| openai/gpt-oss-120b | `completion(model="groq/openai/gpt-oss-120b", messages)` |
+| openai/gpt-oss-20b | `completion(model="groq/openai/gpt-oss-20b", messages)` |
 
 ## Groq - Tool / Function Calling Example
 
@@ -261,31 +261,28 @@ if tool_calls:
     print("second response\n", second_response)
 ```
 
-## Groq - Vision Example    
+## Groq - Vision Example
 
-Select Groq models support vision. Check out their [model list](https://console.groq.com/docs/vision) for more details.
+Groq's Llama 4 models support vision. Check out their [model list](https://console.groq.com/docs/vision) for more details.
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
 ```python
-from litellm import completion
-
-import os 
+import os
 from litellm import completion
 
 os.environ["GROQ_API_KEY"] = "your-api-key"
 
-# openai call
 response = completion(
-    model = "groq/llama-3.2-11b-vision-preview", 
+    model = "groq/meta-llama/llama-4-scout-17b-16e-instruct",
     messages=[
         {
             "role": "user",
             "content": [
                             {
                                 "type": "text",
-                                "text": "What’s in this image?"
+                                "text": "What's in this image?"
                             },
                             {
                                 "type": "image_url",

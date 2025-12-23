@@ -528,7 +528,14 @@ const sidebars = {
             "proxy/pass_through_guardrails"
           ]
         },
-        "rag_ingest",
+        {
+          type: "category",
+          label: "/rag",
+          items: [
+            "rag_ingest",
+            "rag_query",
+          ]
+        },
         "realtime",
         "rerank",
         "response_api",
@@ -729,6 +736,8 @@ const sidebars = {
         "providers/meta_llama",
         "providers/milvus_vector_stores",
         "providers/mistral",
+        "providers/minimax",
+        "providers/minimax_tts",
         "providers/moonshot",
         "providers/morph",
         "providers/nebius",
