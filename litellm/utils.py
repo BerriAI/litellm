@@ -7372,6 +7372,9 @@ class ProviderConfigManager:
             from litellm.llms.langgraph.chat.transformation import LangGraphConfig
 
             return LangGraphConfig()
+        elif litellm.LlmProviders.GIGACHAT == provider:
+            return litellm.GigaChatConfig()
+
         return None
 
     @staticmethod
@@ -7417,6 +7420,12 @@ class ProviderConfigManager:
             )
 
             return VolcEngineEmbeddingConfig()
+        elif litellm.LlmProviders.GIGACHAT == provider:
+            from litellm.llms.gigachat.embedding.transformation import (
+                GigaChatEmbeddingConfig
+            )
+
+            return GigaChatEmbeddingConfig()
         elif litellm.LlmProviders.OVHCLOUD == provider:
             return litellm.OVHCloudEmbeddingConfig()
         elif litellm.LlmProviders.SNOWFLAKE == provider:
