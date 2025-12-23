@@ -6538,10 +6538,18 @@ def speech(  # noqa: PLR0915
         if api_key is not None:
             litellm_params_dict["api_key"] = api_key
 
+        # Convert voice to string if it's a dict (minimax handler expects Optional[str])
+        voice_str: Optional[str] = None
+        if isinstance(voice, str):
+            voice_str = voice
+        elif isinstance(voice, dict):
+            # Extract voice_id from dict if needed
+            voice_str = voice.get("voice_id") or voice.get("id") or voice.get("name")
+
         response = base_llm_http_handler.text_to_speech_handler(
             model=model,
             input=input,
-            voice=voice,
+            voice=voice_str,
             text_to_speech_provider_config=minimax_config,
             text_to_speech_optional_params=optional_params,
             custom_llm_provider=custom_llm_provider,
