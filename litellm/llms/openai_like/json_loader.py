@@ -3,8 +3,11 @@ JSON-based provider configuration loader for OpenAI-compatible providers.
 """
 
 import json
+import os
 from pathlib import Path
 from typing import Dict, Optional
+
+import httpx
 
 from litellm._logging import verbose_logger
 
@@ -30,29 +33,69 @@ class JSONProviderRegistry:
     _loaded = False
 
     @classmethod
+    def _load_from_dict(cls, data: dict, source: str = "unknown"):
+        """Load providers from a dictionary"""
+        for slug, config in data.items():
+            if slug in cls._providers:
+                verbose_logger.debug(
+                    f"Provider '{slug}' from {source} overwrites existing definition"
+                )
+            cls._providers[slug] = SimpleProviderConfig(slug, config)
+
+    @classmethod
+    def _load_from_url(cls, url: str):
+        """Load providers from a URL"""
+        try:
+            verbose_logger.debug(f"Attempting to load custom providers from URL: {url}")
+            
+            # Use httpx to fetch the JSON from URL
+            with httpx.Client(timeout=10.0) as client:
+                response = client.get(url)
+                response.raise_for_status()
+                data = response.json()
+            
+            cls._load_from_dict(data, source=f"URL: {url}")
+            verbose_logger.info(
+                f"Successfully loaded {len(data)} custom provider(s) from {url}"
+            )
+        except httpx.HTTPError as e:
+            verbose_logger.warning(
+                f"Failed to load custom providers from URL {url}: HTTP error - {e}"
+            )
+        except json.JSONDecodeError as e:
+            verbose_logger.warning(
+                f"Failed to parse custom providers JSON from URL {url}: {e}"
+            )
+        except Exception as e:
+            verbose_logger.warning(
+                f"Failed to load custom providers from URL {url}: {e}"
+            )
+
+    @classmethod
     def load(cls):
-        """Load providers from JSON configuration file"""
+        """Load providers from JSON configuration file and optionally from URL"""
         if cls._loaded:
             return
 
+        # Load local providers.json file first
         json_path = Path(__file__).parent / "providers.json"
         
-        if not json_path.exists():
-            # No JSON file yet, that's okay
-            cls._loaded = True
-            return
+        if json_path.exists():
+            try:
+                with open(json_path) as f:
+                    data = json.load(f)
+                cls._load_from_dict(data, source="local providers.json")
+            except Exception as e:
+                verbose_logger.warning(
+                    f"Warning: Failed to load local JSON provider configs: {e}"
+                )
 
-        try:
-            with open(json_path) as f:
-                data = json.load(f)
+        # Load custom providers from URL if specified
+        custom_providers_url = os.environ.get("LITELLM_CUSTOM_PROVIDERS_URL")
+        if custom_providers_url:
+            cls._load_from_url(custom_providers_url)
 
-            for slug, config in data.items():
-                cls._providers[slug] = SimpleProviderConfig(slug, config)
-
-            cls._loaded = True
-        except Exception as e:
-            verbose_logger.warning(f"Warning: Failed to load JSON provider configs: {e}")
-            cls._loaded = True
+        cls._loaded = True
 
     @classmethod
     def get(cls, slug: str) -> Optional[SimpleProviderConfig]:
