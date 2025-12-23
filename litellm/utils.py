@@ -7501,6 +7501,12 @@ class ProviderConfigManager:
                 )
 
                 return AzureAnthropicMessagesConfig()
+        elif litellm.LlmProviders.MINIMAX == provider:
+            from litellm.llms.minimax.messages.transformation import (
+                MinimaxMessagesConfig,
+            )
+
+            return MinimaxMessagesConfig()
         return None
 
     @staticmethod
