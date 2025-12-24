@@ -1467,7 +1467,7 @@ async def get_users(
     ),
 ):
     """
-    Get a paginated list of users with filtering and sorting options
+    Get a paginated list of users with filtering and sorting options.
 
     Parameters:
         role: Optional[str]
