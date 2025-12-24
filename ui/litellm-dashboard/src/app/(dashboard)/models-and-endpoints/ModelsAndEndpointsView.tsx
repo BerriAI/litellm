@@ -152,12 +152,8 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
   const [selectedTabIndex, setSelectedTabIndex] = useState(0);
 
   const queryClient = useQueryClient();
-  const {
-    data: modelDataResponse,
-    isLoading: isLoadingModels,
-    refetch: refetchModels,
-  } = useModelsInfo(accessToken, userID, userRole);
-  const { data: credentialsResponse } = useCredentials(accessToken);
+  const { data: modelDataResponse, isLoading: isLoadingModels, refetch: refetchModels } = useModelsInfo();
+  const { data: credentialsResponse } = useCredentials();
   const credentialsList = credentialsResponse?.credentials || [];
   const { data: uiSettings } = useUISettings(accessToken || "");
 
