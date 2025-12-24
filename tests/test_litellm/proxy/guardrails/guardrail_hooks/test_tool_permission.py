@@ -27,6 +27,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Choices,
+    GenericGuardrailAPIInputs,
     ModelResponse,
 )
 
@@ -90,13 +91,14 @@ class TestToolPermissionGuardrail:
             on_disallowed_action="block",
         )
 
-        is_allowed, rule_id, _ = guardrail._check_tool_permission("AnyTool", "function")
+        is_allowed, error = guardrail._check_tool_permission("AnyTool", "function")
         assert is_allowed is True
-        assert rule_id == "allow_functions"
+        assert error is None
 
-        is_allowed, rule_id, _ = guardrail._check_tool_permission("AnyTool", "custom")
+        is_allowed, error = guardrail._check_tool_permission("AnyTool", "custom")
         assert is_allowed is False
-        assert rule_id is None
+        assert error
+        assert error.rule_id is None
 
     def test_rule_matches_tool_with_name_and_type(self):
         guardrail = ToolPermissionGuardrail(
@@ -113,13 +115,14 @@ class TestToolPermissionGuardrail:
             on_disallowed_action="block",
         )
 
-        is_allowed, rule_id, _ = guardrail._check_tool_permission("Bash", "function")
+        is_allowed, error = guardrail._check_tool_permission("Bash", "function")
         assert is_allowed is True
-        assert rule_id == "allow_specific"
+        assert error is None
 
-        is_allowed, rule_id, _ = guardrail._check_tool_permission("Bash", "custom")
+        is_allowed, error = guardrail._check_tool_permission("Bash", "custom")
         assert is_allowed is False
-        assert rule_id is None
+        assert error
+        assert error.rule_id is None
 
     def test_rule_requires_name_or_type(self):
         with pytest.raises(ValueError):
@@ -150,32 +153,33 @@ class TestToolPermissionGuardrail:
             type="function",
         )
 
-        is_allowed, rule_id, _ = guardrail._get_permission_for_tool_call(tool_call)
+        is_allowed, error = guardrail._get_permission_for_tool_call(tool_call)
         assert is_allowed is True
-        assert rule_id == "allow_type_only"
+        assert error is None
 
     def test_check_tool_permission_allow(self):
-        is_allowed, rule_id, msg = self.guardrail._check_tool_permission("Bash")
+        is_allowed, error = self.guardrail._check_tool_permission("Bash")
         assert is_allowed is True
-        assert rule_id == "allow_bash"
-        assert "allowed" in (msg or "")
+        assert error is None
 
-        is_allowed, rule_id, _ = self.guardrail._check_tool_permission(
+        is_allowed, error = self.guardrail._check_tool_permission(
             "mcp__github_add_issue_comment"
         )
         assert is_allowed is True
-        assert rule_id == "allow_github"
+        assert error is None
 
     def test_check_tool_permission_deny(self):
-        is_allowed, rule_id, msg = self.guardrail._check_tool_permission("Read")
+        is_allowed, error = self.guardrail._check_tool_permission("Read")
         assert is_allowed is False
-        assert rule_id == "deny_read"
-        assert "denied" in (msg or "")
+        assert error
+        assert error.rule_id == "deny_read"
+        assert "denied" in error.message
 
-        is_allowed, rule_id, msg = self.guardrail._check_tool_permission("UnknownTool")
+        is_allowed, error = self.guardrail._check_tool_permission("UnknownTool")
         assert is_allowed is False
-        assert rule_id is None
-        assert "default" in (msg or "")
+        assert error
+        assert error.rule_id is None
+        assert "default" in error.message
 
     def test_check_tool_permission_custom_template(self):
         guardrail = ToolPermissionGuardrail(
@@ -185,15 +189,19 @@ class TestToolPermissionGuardrail:
             violation_message_template="custom {tool_name} {rule_id} :: {default_message}",
         )
 
-        _, rule_id, message = guardrail._check_tool_permission("Read")
-        assert rule_id == "deny_read"
-        assert message.startswith("custom Read deny_read")
-        assert "Tool 'Read' denied" in message
+        is_allowed, error = guardrail._check_tool_permission("Read")
+        assert is_allowed is False
+        assert error
+        assert error.rule_id == "deny_read"
+        assert error.message.startswith("custom Read")
+        assert "Tool 'Read' denied by rule 'deny_read'" in error.message
 
-        _, rule_id, message = guardrail._check_tool_permission("UnknownTool")
-        assert rule_id is None
-        assert message.startswith("custom UnknownTool None")
-        assert "Tool 'UnknownTool' denied by default action" in message
+        is_allowed, error = guardrail._check_tool_permission("UnknownTool")
+        assert is_allowed is False
+        assert error
+        assert error.rule_id is None
+        assert error.message.startswith("custom UnknownTool")
+        assert "Tool 'UnknownTool' denied by default action" in error.message
 
     def test_extract_tool_calls_openai_format(self):
         tool_call = {
@@ -525,6 +533,89 @@ class TestToolPermissionGuardrail:
         assert isinstance(choice.message.content, str)
         assert "Permission denied" in choice.message.content
 
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_request_rewrite_filters_tools(self):
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="rewrite-permissions",
+            rules=self.test_rules,
+            default_action="deny",
+            on_disallowed_action="rewrite",
+        )
+        inputs = GenericGuardrailAPIInputs(
+            tools=[
+                {"type": "function", "function": {"name": "Bash"}},
+                {"type": "function", "function": {"name": "Read"}},
+            ]
+        )
+
+        updated_inputs = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={},
+            input_type="request",
+        )
+
+        assert "tools" in updated_inputs
+        tool_names = [tool["function"]["name"] for tool in updated_inputs["tools"]]
+        assert tool_names == ["Bash"]
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_request_block_raises(self):
+        inputs = GenericGuardrailAPIInputs(
+            tools=[
+                {"type": "function", "function": {"name": "Read"}},
+            ]
+        )
+        with pytest.raises(HTTPException):
+            await self.guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={},
+                input_type="request",
+            )
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_response_rewrite_mutates_tool_calls(self):
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="rewrite-response",
+            rules=self.test_rules,
+            default_action="deny",
+            on_disallowed_action="rewrite",
+        )
+        tool_call = {
+            "id": "call_123",
+            "type": "function",
+            "function": {"name": "Read", "arguments": "{}"},
+        }
+        inputs = GenericGuardrailAPIInputs(tool_calls=[tool_call])
+
+        updated_inputs = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={},
+            input_type="response",
+        )
+
+        assert updated_inputs.get("tool_calls") == []
+        assert updated_inputs.get("texts")
+        assert "Permission denied" in updated_inputs["texts"][0]
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_response_block_raises(self):
+        inputs = GenericGuardrailAPIInputs(
+            tool_calls=[
+                {
+                    "id": "call_234",
+                    "type": "function",
+                    "function": {"name": "Read", "arguments": "{}"},
+                }
+            ]
+        )
+
+        with pytest.raises(GuardrailRaisedException):
+            await self.guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={},
+                input_type="response",
+            )
+
 
 class TestToolPermissionGuardrailIntegration:
     """Integration tests for Tool Permission Guardrail"""
@@ -538,14 +629,14 @@ class TestToolPermissionGuardrailIntegration:
             default_action="allow",
         )
 
-        is_allowed, rule_id, message = guardrail._check_tool_permission("UnknownTool")
+        is_allowed, error = guardrail._check_tool_permission("UnknownTool")
         assert is_allowed is True
-        assert rule_id is None
-        assert "default" in (message or "")
+        assert error is None
 
-        is_allowed, rule_id, _ = guardrail._check_tool_permission("Read")
+        is_allowed, error = guardrail._check_tool_permission("Read")
         assert is_allowed is False
-        assert rule_id == "deny_read"
+        assert error
+        assert error.rule_id == "deny_read"
 
     def test_empty_rules(self):
         guardrail = ToolPermissionGuardrail(
@@ -554,7 +645,6 @@ class TestToolPermissionGuardrailIntegration:
             default_action="allow",
         )
 
-        is_allowed, rule_id, message = guardrail._check_tool_permission("AnyTool")
+        is_allowed, error = guardrail._check_tool_permission("AnyTool")
         assert is_allowed is True
-        assert rule_id is None
-        assert "default" in (message or "")
+        assert error is None
