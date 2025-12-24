@@ -217,8 +217,14 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
         error_info = self._assemble_error_info(standard_logging_payload)
 
+        metadata_parent_id: Optional[str] = None
+        if isinstance(metadata, dict):
+            metadata_parent_id = metadata.get("parent_id")
+
         meta = Meta(
-            kind=self._get_datadog_span_kind(standard_logging_payload.get("call_type")),
+            kind=self._get_datadog_span_kind(
+                standard_logging_payload.get("call_type"), metadata_parent_id
+            ),
             input=input_meta,
             output=output_meta,
             metadata=self._get_dd_llm_obs_payload_metadata(standard_logging_payload),
@@ -237,7 +243,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         )
 
         payload: LLMObsPayload = LLMObsPayload(
-            parent_id=metadata.get("parent_id", "undefined"),
+            parent_id=metadata_parent_id if metadata_parent_id else "undefined",
             trace_id=standard_logging_payload.get("trace_id", str(uuid.uuid4())),
             span_id=metadata.get("span_id", str(uuid.uuid4())),
             name=metadata.get("name", "litellm_llm_call"),
@@ -367,14 +373,16 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         return []
 
     def _get_datadog_span_kind(
-        self, call_type: Optional[str]
+        self, call_type: Optional[str], parent_id: Optional[str] = None
     ) -> Literal["llm", "tool", "task", "embedding", "retrieval"]:
         """
         Map liteLLM call_type to appropriate DataDog LLM Observability span kind.
 
         Available DataDog span kinds: "llm", "tool", "task", "embedding", "retrieval"
+        see: https://docs.datadoghq.com/ja/llm_observability/terms/
         """
-        if call_type is None:
+        # Non llm/workflow/agent kinds cannot be root spans, so fallback to "llm" when parent metadata is missing
+        if call_type is None or parent_id is None:
             return "llm"
 
         # Embedding operations
@@ -392,6 +400,8 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             CallTypes.generate_content_stream.value,
             CallTypes.agenerate_content_stream.value,
             CallTypes.anthropic_messages.value,
+            CallTypes.responses.value,
+            CallTypes.aresponses.value,
         ]:
             return "llm"
 
@@ -417,8 +427,6 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             CallTypes.aretrieve_batch.value,
             CallTypes.retrieve_fine_tuning_job.value,
             CallTypes.aretrieve_fine_tuning_job.value,
-            CallTypes.responses.value,
-            CallTypes.aresponses.value,
             CallTypes.alist_input_items.value,
         ]:
             return "retrieval"
