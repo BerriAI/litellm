@@ -730,7 +730,6 @@ const sidebars = {
         "providers/milvus_vector_stores",
         "providers/mistral",
         "providers/minimax",
-        "providers/minimax_tts",
         "providers/moonshot",
         "providers/morph",
         "providers/nebius",
