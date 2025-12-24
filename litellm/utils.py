@@ -218,10 +218,6 @@ from litellm.types.utils import (
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 
-
-
-
-
 try:
     # Python 3.9+
     with resources.files("litellm.litellm_core_utils.tokenizers").joinpath(
@@ -589,9 +585,9 @@ def function_setup(  # noqa: PLR0915
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
         ## DYNAMIC CALLBACKS ##
-        dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]] = (
-            kwargs.pop("callbacks", None)
-        )
+        dynamic_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = kwargs.pop("callbacks", None)
         all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
 
         if len(all_callbacks) > 0:
@@ -768,7 +764,6 @@ def function_setup(  # noqa: PLR0915
                 and isinstance(messages[0], dict)
                 and "content" in messages[0]
             ):
-
                 buffer = StringIO()
                 for m in messages:
                     content = m.get("content", "")
@@ -1355,14 +1350,15 @@ def client(original_function):  # noqa: PLR0915
                 num_retries = (
                     kwargs.get("num_retries", None) or litellm.num_retries or None
                 )
-                if kwargs.get("retry_policy", None):
+                _retry_policy_provided = kwargs.get("retry_policy", None) is not None
+                if _retry_policy_provided:
                     num_retries = get_num_retries_from_retry_policy(
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
                     )
-                    kwargs["retry_policy"] = (
-                        reset_retry_policy()
-                    )  # prevent infinite loops
+                    kwargs[
+                        "retry_policy"
+                    ] = reset_retry_policy()  # prevent infinite loops
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -1376,11 +1372,32 @@ def client(original_function):  # noqa: PLR0915
                 if (
                     num_retries and not _is_litellm_router_call
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
-                    if (
-                        isinstance(e, openai.APIError)
-                        or isinstance(e, openai.Timeout)
-                        or isinstance(e, openai.APIConnectionError)
-                    ):
+                    # Check if this error should be retried based on status code
+                    # AuthenticationError (401), BadRequestError (400), etc. should NOT be retried by default
+                    # Only retry: 408, 409, 429, 500+ errors
+                    # However, if explicit retry_policy is provided, respect the policy decision
+                    _status_code = getattr(e, "status_code", 0)
+                    if _retry_policy_provided:
+                        # Retry policy explicitly provided - trust it (it already determined num_retries)
+                        _should_retry_error = (
+                            isinstance(e, openai.APIError)
+                            or isinstance(e, openai.Timeout)
+                            or isinstance(e, openai.APIConnectionError)
+                        )
+                    else:
+                        # No retry policy - use _should_retry to exclude non-retryable errors like AuthenticationError
+                        _should_retry_error = (
+                            (
+                                isinstance(e, openai.APIError)
+                                and litellm._should_retry(_status_code)
+                            )
+                            or isinstance(e, openai.Timeout)
+                            or isinstance(e, openai.APIConnectionError)
+                        )
+                    if _should_retry_error:
+                        verbose_logger.debug(
+                            f"Retrying request after {type(e).__name__} (status_code={_status_code})"
+                        )
                         kwargs["num_retries"] = num_retries
                         return litellm.completion_with_retries(*args, **kwargs)
                 elif (
@@ -1451,16 +1468,16 @@ def client(original_function):  # noqa: PLR0915
             print_verbose(
                 f"ASYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache'): {kwargs.get('cache', None)}"
             )
-            _caching_handler_response: Optional[CachingHandlerResponse] = (
-                await _llm_caching_handler._async_get_cache(
-                    model=model or "",
-                    original_function=original_function,
-                    logging_obj=logging_obj,
-                    start_time=start_time,
-                    call_type=call_type,
-                    kwargs=kwargs,
-                    args=args,
-                )
+            _caching_handler_response: Optional[
+                CachingHandlerResponse
+            ] = await _llm_caching_handler._async_get_cache(
+                model=model or "",
+                original_function=original_function,
+                logging_obj=logging_obj,
+                start_time=start_time,
+                call_type=call_type,
+                kwargs=kwargs,
+                args=args,
             )
 
             if _caching_handler_response is not None:
@@ -1618,6 +1635,7 @@ def client(original_function):  # noqa: PLR0915
                     raise e
 
             call_type = original_function.__name__
+            _retry_policy_provided = kwargs.get("retry_policy", None) is not None
             num_retries, kwargs = _get_wrapper_num_retries(kwargs=kwargs, exception=e)
             if call_type == CallTypes.acompletion.value:
                 context_window_fallback_dict = kwargs.get(
@@ -1631,21 +1649,49 @@ def client(original_function):  # noqa: PLR0915
                 if (
                     num_retries and not _is_litellm_router_call
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
-                    try:
-                        litellm.num_retries = (
-                            None  # set retries to None to prevent infinite loops
+                    # Check if this error should be retried based on status code
+                    # AuthenticationError (401), BadRequestError (400), etc. should NOT be retried by default
+                    # Only retry: 408, 409, 429, 500+ errors
+                    # However, if explicit retry_policy is provided, respect the policy decision
+                    _status_code = getattr(e, "status_code", 0)
+                    if _retry_policy_provided:
+                        # Retry policy explicitly provided - trust it (it already determined num_retries)
+                        _should_retry_error = (
+                            isinstance(e, openai.APIError)
+                            or isinstance(e, openai.Timeout)
+                            or isinstance(e, openai.APIConnectionError)
                         )
-                        kwargs["num_retries"] = num_retries
-                        kwargs["original_function"] = original_function
-                        if isinstance(
-                            e, openai.RateLimitError
-                        ):  # rate limiting specific error
-                            kwargs["retry_strategy"] = "exponential_backoff_retry"
-                        elif isinstance(e, openai.APIError):  # generic api error
-                            kwargs["retry_strategy"] = "constant_retry"
-                        return await litellm.acompletion_with_retries(*args, **kwargs)
-                    except Exception:
-                        pass
+                    else:
+                        # No retry policy - use _should_retry to exclude non-retryable errors like AuthenticationError
+                        _should_retry_error = (
+                            (
+                                isinstance(e, openai.APIError)
+                                and litellm._should_retry(_status_code)
+                            )
+                            or isinstance(e, openai.Timeout)
+                            or isinstance(e, openai.APIConnectionError)
+                        )
+                    if _should_retry_error:
+                        try:
+                            verbose_logger.debug(
+                                f"Retrying async request after {type(e).__name__} (status_code={_status_code})"
+                            )
+                            litellm.num_retries = (
+                                None  # set retries to None to prevent infinite loops
+                            )
+                            kwargs["num_retries"] = num_retries
+                            kwargs["original_function"] = original_function
+                            if isinstance(
+                                e, openai.RateLimitError
+                            ):  # rate limiting specific error
+                                kwargs["retry_strategy"] = "exponential_backoff_retry"
+                            else:
+                                kwargs["retry_strategy"] = "constant_retry"
+                            return await litellm.acompletion_with_retries(
+                                *args, **kwargs
+                            )
+                        except Exception:
+                            pass
                 elif (
                     isinstance(e, litellm.exceptions.ContextWindowExceededError)
                     and context_window_fallback_dict
@@ -3231,10 +3277,10 @@ def pre_process_non_default_params(
 
     if "response_format" in non_default_params:
         if provider_config is not None:
-            non_default_params["response_format"] = (
-                provider_config.get_json_schema_from_pydantic_object(
-                    response_format=non_default_params["response_format"]
-                )
+            non_default_params[
+                "response_format"
+            ] = provider_config.get_json_schema_from_pydantic_object(
+                response_format=non_default_params["response_format"]
             )
         else:
             non_default_params["response_format"] = type_to_response_format_param(
@@ -3363,16 +3409,16 @@ def pre_process_optional_params(
                     True  # so that main.py adds the function call to the prompt
                 )
                 if "tools" in non_default_params:
-                    optional_params["functions_unsupported_model"] = (
-                        non_default_params.pop("tools")
-                    )
+                    optional_params[
+                        "functions_unsupported_model"
+                    ] = non_default_params.pop("tools")
                     non_default_params.pop(
                         "tool_choice", None
                     )  # causes ollama requests to hang
                 elif "functions" in non_default_params:
-                    optional_params["functions_unsupported_model"] = (
-                        non_default_params.pop("functions")
-                    )
+                    optional_params[
+                        "functions_unsupported_model"
+                    ] = non_default_params.pop("functions")
             elif (
                 litellm.add_function_to_prompt
             ):  # if user opts to add it to prompt instead
@@ -4513,9 +4559,9 @@ def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream])
             return delta if isinstance(delta, str) else ""
 
     # Handle standard ModelResponse and ModelResponseStream
-    _choices: Union[List[Union[Choices, StreamingChoices]], List[StreamingChoices]] = (
-        response_obj.choices
-    )
+    _choices: Union[
+        List[Union[Choices, StreamingChoices]], List[StreamingChoices]
+    ] = response_obj.choices
 
     # Use list accumulation to avoid O(n^2) string concatenation across choices
     response_parts: List[str] = []
@@ -7163,7 +7209,6 @@ class ProviderConfigManager:
             if route == "v2":
                 return litellm.CohereV2ChatConfig()
             else:
-
                 return litellm.CohereChatConfig()
         elif litellm.LlmProviders.SNOWFLAKE == provider:
             return litellm.SnowflakeConfig()
@@ -8000,7 +8045,7 @@ class ProviderConfigManager:
             from litellm.llms.vertex_ai.ocr.common_utils import get_vertex_ai_ocr_config
 
             return get_vertex_ai_ocr_config(model=model)
-        
+
         PROVIDER_TO_CONFIG_MAP = {
             litellm.LlmProviders.MISTRAL: MistralOCRConfig,
         }
@@ -8430,6 +8475,7 @@ def __getattr__(name: str) -> Any:
         import sys
 
         from litellm.main import encoding as _encoding
+
         sys.modules[__name__].__dict__["encoding"] = _encoding
         return _encoding
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
