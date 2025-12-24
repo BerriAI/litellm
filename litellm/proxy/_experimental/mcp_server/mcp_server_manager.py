@@ -350,6 +350,17 @@ class MCPServerManager:
                         verbose_logger.warning(
                             f"Ziniao Open API auth_type specified but app_id or private_key missing for server {server.name}"
                         )
+                elif server.auth_type == MCPAuth.zixun_api_gateway:
+                    from litellm.proxy.zx.auth.zixun_api_gateway import zixun_api_gateway_auth
+                    if server.client_id and server.client_secret:
+                        verbose_logger.debug(
+                            f"Using ZiXun API Gateway authentication for server {server.name}"
+                        )
+                        return zixun_api_gateway_auth.request_sign(server.client_id, server.client_secret, server.url, method, path, url, params, json_body, headers)
+                    else:
+                        verbose_logger.warning(
+                            f"ZiXun API Gateway auth_type specified but app_id or private_key missing for server {server.name}"
+                        )
                 return url, params, json_body, headers
 
             # Add any extra headers from server config

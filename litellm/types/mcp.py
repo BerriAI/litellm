@@ -36,6 +36,7 @@ class MCPAuth(str, enum.Enum):
     authorization = "authorization"
     oauth2 = "oauth2"
     ziniao_open = "ziniao_open"
+    zixun_api_gateway = "zixun_api_gateway"
 
 
 # MCP Literals
@@ -51,6 +52,8 @@ MCPAuthType = Optional[
         MCPAuth.basic,
         MCPAuth.authorization,
         MCPAuth.oauth2,
+        MCPAuth.ziniao_open,
+        MCPAuth.zixun_api_gateway,
     ]
 ]
 
