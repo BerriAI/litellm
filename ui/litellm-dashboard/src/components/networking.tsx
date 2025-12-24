@@ -2037,8 +2037,10 @@ export const modelInfoV1Call = async (accessToken: string, modelId: string) => {
   }
 };
 
-export const modelHubPublicModelsCall = async () => {
-  const url = proxyBaseUrl ? `${proxyBaseUrl}/public/model_hub` : `/public/model_hub`;
+export const modelHubPublicModelsCall = async (provider?: string) => {
+  const url = proxyBaseUrl 
+    ? `${proxyBaseUrl}/public/model_hub${provider ? `?provider=${provider}` : ''}` 
+    : `/public/model_hub${provider ? `?provider=${provider}` : ''}`;
   const response = await fetch(url, {
     method: "GET",
     headers: {
@@ -2046,6 +2048,50 @@ export const modelHubPublicModelsCall = async () => {
     },
   });
   return response.json();
+};
+
+export const getDatabricksServingEndpoints = async (accessToken: string, params?: {
+  api_key?: string;
+  api_base?: string;
+  client_id?: string;
+  client_secret?: string;
+}) => {
+  /**
+   * Fetch Databricks serving endpoints from the Databricks API
+   */
+  try {
+    const queryParams = new URLSearchParams();
+    if (params?.api_key) queryParams.append('api_key', params.api_key);
+    if (params?.api_base) queryParams.append('api_base', params.api_base);
+    if (params?.client_id) queryParams.append('client_id', params.client_id);
+    if (params?.client_secret) queryParams.append('client_secret', params.client_secret);
+    
+    const queryString = queryParams.toString();
+    const url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/public/databricks/serving_endpoints${queryString ? `?${queryString}` : ''}` 
+      : `/public/databricks/serving_endpoints${queryString ? `?${queryString}` : ''}`;
+    
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+    
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch Databricks endpoints:", error);
+    throw error;
+  }
 };
 
 export const agentHubPublicModelsCall = async () => {
