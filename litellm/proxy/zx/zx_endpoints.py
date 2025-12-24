@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from litellm._logging import verbose_proxy_logger
+from . import zx_user_endpoints
 
 logger = logging.getLogger()
 
@@ -51,7 +52,7 @@ for param_name in required_params:
         check = False
         logger.warning(f"缺少必要参数：{param_name}")
 
-routers = []
+routers = [zx_user_endpoints.router]
 if check:
     from . import zx_config_endpoints
     routers.append(zx_config_endpoints.router)
