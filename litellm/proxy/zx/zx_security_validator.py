@@ -69,3 +69,6 @@ class SecurityValidator:
         
         # 使用常时间比较防止时序攻击
         return hmac.compare_digest(signature, expected_signature)
+
+# 默认的鉴权
+security_validator = SecurityValidator('ZX_APP_CLIENT_CREDENTIALS_')

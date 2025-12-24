@@ -21,7 +21,7 @@ from litellm.proxy._types import (
 )
 from . import zixun_auth
 from . import zx_development_data
-from . import zx_security_validator
+from .zx_security_validator import security_validator
 
 auth = zixun_auth.ZixunAuth(
     os.environ.get('ZX_AUTH_HOST'),
@@ -36,7 +36,6 @@ router = APIRouter()
 
 continue_plugin_dev_data_enabled = 'true' == os.environ.get('ZX_CONTINUE_PLUGIN_DEV_DATA_ENABLED', 'false').strip()
 
-security_validator = zx_security_validator.SecurityValidator('ZX_APP_CLIENT_CREDENTIALS_')
 add_user_allow_email_domain = '@'+os.environ.get('ZX_ADD_USER_ALLOW_EMAIL_DOMAIN', 'fzzixun.com').strip()
 
 TokenType = Literal['cli', 'app', 'client_iframe', 'api']

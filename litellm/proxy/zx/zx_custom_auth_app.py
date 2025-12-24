@@ -12,7 +12,7 @@ from litellm.proxy.proxy_server import (
     proxy_logging_obj,
     user_api_key_cache,
 )
-from . import zx_config_endpoints
+from .zx_security_validator import security_validator
 
 user_key_hashed_token_cache = DualCache(
     default_in_memory_ttl = 24 * 60 * 60
@@ -45,7 +45,7 @@ async def user_api_key_auth(
                 if time.time() - int_num > 1800:
                     raise Exception(f"Invalid API key: timestamp[{timestamp}] expired")
 
-                if not zx_config_endpoints.security_validator.validate(client_id, signature, f"{data}:{timestamp}"):
+                if not security_validator.validate(client_id, signature, f"{data}:{timestamp}"):
                     raise Exception("Invalid API key: signature error")
             
                 global tmp_prisma_client
