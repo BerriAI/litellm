@@ -880,6 +880,8 @@ if MCP_AVAILABLE:
         for server in allowed_mcp_servers:
             if server is None:
                 continue
+            if server.spec_path:
+                continue
 
             server_auth_header, extra_headers = _prepare_mcp_server_headers(
                 server=server,

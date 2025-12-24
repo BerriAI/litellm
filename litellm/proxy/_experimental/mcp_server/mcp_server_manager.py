@@ -779,7 +779,10 @@ class MCPServerManager:
                 extra_headers=extra_headers,
             )
 
-            prompts = await client.list_prompts()
+            if server.spec_path:
+                prompts = []
+            else:
+                prompts = await client.list_prompts()
 
             prefixed_or_original_prompts = self._create_prefixed_prompts(
                 prompts, server, add_prefix=add_prefix
@@ -819,7 +822,10 @@ class MCPServerManager:
                 extra_headers=extra_headers,
             )
 
-            resources = await client.list_resources()
+            if server.spec_path:
+                resources = []
+            else:
+                resources = await client.list_resources()
 
             prefixed_resources = self._create_prefixed_resources(
                 resources, server, add_prefix=add_prefix
@@ -859,7 +865,10 @@ class MCPServerManager:
                 extra_headers=extra_headers,
             )
 
-            resource_templates = await client.list_resource_templates()
+            if server.spec_path:
+                resource_templates = await client.list_resource_templates()
+            else:
+                resource_templates = []
 
             prefixed_templates = self._create_prefixed_resource_templates(
                 resource_templates, server, add_prefix=add_prefix
