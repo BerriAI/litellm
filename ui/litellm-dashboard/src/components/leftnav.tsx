@@ -57,7 +57,7 @@ interface MenuGroup {
 
 const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapsed = false }) => {
   const { userId, accessToken, userRole } = useAuthorized();
-  const { data: organizations } = useOrganizations(accessToken);
+  const { data: organizations } = useOrganizations();
 
   // Check if user is an org_admin
   const isOrgAdmin = useMemo(() => {

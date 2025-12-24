@@ -7,11 +7,11 @@ import { createQueryKeys } from "@/app/(dashboard)/hooks/common/queryKeysFactory
 const teamKeys = createQueryKeys("teams");
 
 export const useTeams = (): UseQueryResult<Team[]> => {
-  const { accessToken, userId: userID, userRole } = useAuthorized();
+  const { accessToken, userId, userRole } = useAuthorized();
 
   return useQuery<Team[]>({
     queryKey: teamKeys.list({}),
-    queryFn: async () => await fetchTeams(accessToken!, userID, userRole, null),
+    queryFn: async () => await fetchTeams(accessToken!, userId, userRole, null),
     enabled: Boolean(accessToken),
   });
 };
