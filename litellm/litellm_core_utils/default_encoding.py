@@ -31,7 +31,7 @@ for attempt in range(_max_retries):
     try:
         encoding = tiktoken.get_encoding("cl100k_base")
         break
-    except (FileExistsError, OSError) as e:
+    except (FileExistsError, OSError):
         if attempt == _max_retries - 1:
             # Last attempt, re-raise the exception
             raise
