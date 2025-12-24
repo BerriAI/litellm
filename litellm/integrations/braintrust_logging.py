@@ -356,9 +356,31 @@ class BraintrustLogger(CustomLogger):
                 "input": prompt["messages"],
                 "output": output,
                 "metadata": standard_logging_object,
-                "tags": tags,
                 "span_attributes": {"name": span_name, "type": "llm"},
             }
+
+            # Braintrust cannot specify 'tags' for non-root spans 
+            if dynamic_metadata.get("root_span_id") is None:
+                request_data["tags"] = tags
+            # Span parents is a special case
+            span_parents = dynamic_metadata.get("span_parents")
+
+            # Convert comma-separated string to list if present
+            if span_parents:
+                span_parents = [s.strip() for s in span_parents.split(",") if s.strip()]
+
+            span_attributes = {
+                "span_id": dynamic_metadata.get("span_id"),
+                "root_span_id": dynamic_metadata.get("root_span_id"),
+                "span_parents": span_parents,
+            }
+
+            # Only add those that are not None (or falsy)
+            for key, value in span_attributes.items():
+                if value:
+                    request_data[key] = value
+
+
             if choices is not None:
                 request_data["output"] = [choice.dict() for choice in choices]
             else:
