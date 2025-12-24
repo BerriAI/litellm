@@ -174,7 +174,7 @@ const Teams: React.FC<TeamProps> = ({
   premiumUser = false,
 }) => {
   console.log(`organizations: ${JSON.stringify(organizations)}`);
-  const { data: organizationsData } = useOrganizations(accessToken);
+  const { data: organizationsData } = useOrganizations();
   const [lastRefreshed, setLastRefreshed] = useState("");
   const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
   const [currentOrgForCreateTeam, setCurrentOrgForCreateTeam] = useState<Organization | null>(null);

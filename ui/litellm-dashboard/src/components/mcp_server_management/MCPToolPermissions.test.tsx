@@ -71,7 +71,9 @@ describe("MCPToolPermissions", () => {
     });
 
     // Verify API calls
-    expect(networking.fetchMCPServers).toHaveBeenCalledWith(mockAccessToken);
+    // Note: useMCPServers uses useAuthorized() internally, which returns "123" from global mock
+    expect(networking.fetchMCPServers).toHaveBeenCalledWith("123");
+    // listMCPTools uses the accessToken prop directly
     expect(networking.listMCPTools).toHaveBeenCalledWith(mockAccessToken, mockServerId);
   });
 

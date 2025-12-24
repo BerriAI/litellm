@@ -5,6 +5,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import useAuthorized from "./useAuthorized";
 
+// Unmock useAuthorized to test the actual implementation
+vi.unmock("@/app/(dashboard)/hooks/useAuthorized");
+
 const { replaceMock, clearTokenCookiesMock, getProxyBaseUrlMock, getUiConfigMock } = vi.hoisted(() => ({
   replaceMock: vi.fn(),
   clearTokenCookiesMock: vi.fn(),
