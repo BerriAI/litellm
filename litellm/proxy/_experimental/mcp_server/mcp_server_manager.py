@@ -336,6 +336,22 @@ class MCPServerManager:
                 elif server.auth_type == MCPAuth.basic:
                     headers["Authorization"] = f"Basic {server.authentication_token}"
 
+            # Handle Open API specific authentication
+            def _request_editor(method, path, url, params, json_body, headers):
+                from litellm.types.mcp import MCPAuth
+                if server.auth_type == MCPAuth.ziniao_open:
+                    from litellm.proxy.zx.auth.ziniao_open import ziniao_open_auth
+                    if server.client_id and server.client_secret:
+                        verbose_logger.debug(
+                            f"Using Ziniao Open API authentication for server {server.name}"
+                        )
+                        return ziniao_open_auth.request_sign(server.client_id, server.client_secret, server.url, method, path, url, params, json_body, headers)
+                    else:
+                        verbose_logger.warning(
+                            f"Ziniao Open API auth_type specified but app_id or private_key missing for server {server.name}"
+                        )
+                return url, params, json_body, headers
+
             # Add any extra headers from server config
             # Note: extra_headers is a List[str] of header names to forward, not a dict
             # For OpenAPI tools, we'll just use the authentication headers
@@ -381,7 +397,7 @@ class MCPServerManager:
 
                     # Create tool function with headers using imported function
                     tool_func = create_tool_function(
-                        path, method, operation, base_url, headers=headers
+                        path, method, operation, base_url, headers=headers, request_editor=_request_editor,
                     )
                     tool_func.__name__ = prefixed_tool_name
                     tool_func.__doc__ = description

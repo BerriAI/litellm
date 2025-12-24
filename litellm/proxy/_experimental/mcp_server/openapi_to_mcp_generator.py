@@ -4,7 +4,7 @@ This module is used to generate MCP tools from OpenAPI specs.
 
 import json
 from prance import ResolvingParser
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Callable
 
 import httpx
 
@@ -110,6 +110,7 @@ def create_tool_function(
     operation: Dict[str, Any],
     base_url: str,
     headers: Optional[Dict[str, str]] = None,
+    request_editor: Optional[Callable[[Any, Any, Any, Any, Any, Any], tuple[Any, Any, Any, Any]]] = None,
 ):
     """Create a tool function for an OpenAPI operation.
 
@@ -119,6 +120,7 @@ def create_tool_function(
         operation: OpenAPI operation object
         base_url: Base URL for the API
         headers: Optional headers to include in requests (e.g., authentication)
+        request_editor: Optional function for authentication
     """
     if headers is None:
         headers = {}
@@ -167,7 +169,11 @@ async def tool_function(*args, **kwargs) -> str:
                 json_body = json_module.loads(body_value) if isinstance(body_value, str) else {{"data": body_value}}
             except:
                 json_body = {{"data": body_value}}
-    
+
+    if request_editor:
+        url, params, json_body, _headers = request_editor(method, path, url, params, json_body, headers)
+        headers.update(_headers)
+
     # Make HTTP request
     async with httpx.AsyncClient() as client:
         if "{method.lower()}" == "get":
@@ -193,6 +199,7 @@ async def tool_function(*args, **kwargs) -> str:
         "base_url": base_url,
         "path": path,
         "method": method,
+        "request_editor": request_editor,
     }
     exec(func_code, local_vars)
 
