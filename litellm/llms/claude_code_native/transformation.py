@@ -5,16 +5,14 @@ This module provides the configuration for the Claude Code Native provider,
 a variant of Anthropic that uses OAuth authentication and a specific system prompt.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import httpx
 
-import litellm
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.types.llms.anthropic import AnthropicSystemMessageContent
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import Message as LitellmMessage
-from litellm.types.utils import ModelResponse, Usage
+from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj

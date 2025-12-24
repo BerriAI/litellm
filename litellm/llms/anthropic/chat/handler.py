@@ -320,8 +320,6 @@ class AnthropicChatCompletion(BaseLLM):
         _is_function_call = False
         messages = copy.deepcopy(messages)
 
-        from litellm.utils import ProviderConfigManager
-
         config = ProviderConfigManager.get_provider_chat_config(
             model=model,
             provider=LlmProviders(custom_llm_provider),
