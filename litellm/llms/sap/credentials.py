@@ -210,7 +210,7 @@ def fetch_credentials(service_key: Optional[str] = None, profile: Optional[str] 
       > default
     """
     config = init_conf(profile)
-    env = os.environ  # snapshot for testability
+    env = dict(os.environ)  # snapshot for testability
 
 
     service_like = service_key or sap_service_key or _load_json_env(SERVICE_KEY_ENV_VAR)
@@ -218,8 +218,8 @@ def fetch_credentials(service_key: Optional[str] = None, profile: Optional[str] 
 
     out: Dict[str, str] = {}
     for cred in CREDENTIAL_VALUES:
-        value = _resolve_value(cred, kwargs=kwargs, env=env, config=config, service_like=service_like, # type: ignore
-                               vcap_service=vcap_service)   # type: ignore
+        value = _resolve_value(cred, kwargs=kwargs, env=env, config=config, service_like=service_like,
+                               vcap_service=vcap_service)
         if value is None:
             continue
         if cred.transform_fn:
