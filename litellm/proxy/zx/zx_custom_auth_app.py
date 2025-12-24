@@ -35,8 +35,12 @@ async def user_api_key_auth(
                 email = request.headers.get('zx_user_email')
                 data = email or client_app_id
                 timestamp  = request.headers.get('zx_timestamp')
-                if client_id is None or data is None or timestamp is None:
-                    raise Exception("Invalid API key: client_id or client_app_id or email or timestamp not found")
+                if client_id is None :
+                    raise Exception("Invalid API key: zx_client_id not found")
+                if data is None :
+                    raise Exception("Invalid API key: zx_client_app_id or zx_user_email not found")
+                if timestamp is None:
+                    raise Exception("Invalid API key: zx_timestamp not found")
                 try:
                     int_num = int(timestamp)
                 except ValueError as e:
