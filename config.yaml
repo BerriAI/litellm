@@ -1,0 +1,107 @@
+model_list:
+  # Claude models support web search
+  - model_name: claude-sonnet-4.5
+    litellm_params:
+      model: "claude-sonnet-4-5-20250929"
+      api_base: "https://api.ai.public.rakuten-it.com/anthropic"
+      extra_headers:
+        Authorization: "os.environ/RAKUTEN_AI_API_KEY"
+        anthropic-beta: "context-1m-2025-08-07"
+      web_search_options:
+        search_context_size: "medium"  # Options: "low", "medium", "high"
+    model_info:
+      supports_web_search: true
+
+  - model_name: claude-3-5-haiku
+    litellm_params:
+      model: "claude-3-5-haiku-20241022"
+      api_base: "https://api.ai.public.rakuten-it.com/anthropic"
+      extra_headers:
+        Authorization: "os.environ/RAKUTEN_AI_API_KEY"
+      web_search_options:
+        search_context_size: "medium"
+    model_info:
+      supports_web_search: true
+
+  # Gemini models support web search via Google Search
+  - model_name: gemini-3-pro-preview
+    litellm_params:
+      model: "openai/google/gemini-3-pro-preview"
+      api_base: "https://api.ai.public.rakuten-it.com/google-vertexai-us/oai-spec/v1/"
+      api_key: "os.environ/RAKUTEN_AI_API_KEY"
+      extra_headers:
+        Authorization: "os.environ/RAKUTEN_AI_API_KEY"
+      web_search_options:
+        search_context_size: "medium"
+    model_info:
+      supports_web_search: true
+
+  - model_name: gemini-3-pro-image-preview
+    litellm_params:
+      model: "openai/google/gemini-3-pro-image-preview"
+      api_base: "https://api.ai.public.rakuten-it.com/google-vertexai-us/oai-spec/v1/"
+      api_key: "os.environ/RAKUTEN_AI_API_KEY"
+      extra_headers:
+        Authorization: "os.environ/RAKUTEN_AI_API_KEY"
+      web_search_options:
+        search_context_size: "medium"
+    model_info:
+      supports_web_search: true
+
+  - model_name: gemini-2.5-flash-image
+    litellm_params:
+      model: "openai/google/gemini-2.5-flash-image"
+      api_base: "https://api.ai.public.rakuten-it.com/google-vertexai-us/oai-spec/v1/"
+      api_key: "os.environ/RAKUTEN_AI_API_KEY"
+      extra_headers:
+        Authorization: "os.environ/RAKUTEN_AI_API_KEY"
+      web_search_options:
+        search_context_size: "medium"
+    model_info:
+      supports_web_search: true
+
+  # GPT models - check if these support web search
+  - model_name: gpt-5.2
+    litellm_params:
+      model: "openai/gpt-5.2"
+      api_base: "https://api.ai.public.rakuten-it.com/openai/v1/"
+      api_key: "os.environ/RAKUTEN_AI_API_KEY"
+      extra_headers:
+        Authorization: "os.environ/RAKUTEN_AI_API_KEY"
+      # Uncomment if this model supports web search
+      # web_search_options:
+      #   search_context_size: "medium"
+    # model_info:
+    #   supports_web_search: true
+
+  - model_name: gpt-5.1
+    litellm_params:
+      model: "openai/gpt-5.1"
+      api_base: "https://api.ai.public.rakuten-it.com/openai/v1/"
+      api_key: "os.environ/RAKUTEN_AI_API_KEY"
+      extra_headers:
+        Authorization: "os.environ/RAKUTEN_AI_API_KEY"
+      # Uncomment if this model supports web search
+      # web_search_options:
+      #   search_context_size: "medium"
+    # model_info:
+    #   supports_web_search: true
+
+  - model_name: gpt-4o-mini-tts
+    litellm_params:
+      model: "openai/gpt-4o-mini-tts"
+      api_base: "https://api.ai.public.rakuten-it.com/openai/v1"
+      api_key: "os.environ/RAKUTEN_AI_API_KEY"
+      extra_headers:
+        Authorization: "Bearer os.environ/RAKUTEN_AI_API_KEY"
+
+  - model_name: gpt-4o-transcribe
+    litellm_params:
+      model: "openai/gpt-4o-transcribe"
+      api_base: "https://api.ai.public.rakuten-it.com/openai/v1"
+      api_key: "os.environ/RAKUTEN_AI_API_KEY"
+      extra_headers:
+        Authorization: "Bearer os.environ/RAKUTEN_AI_API_KEY"
+
+litellm_settings:
+  drop_params: true
