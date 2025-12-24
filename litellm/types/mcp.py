@@ -35,6 +35,7 @@ class MCPAuth(str, enum.Enum):
     basic = "basic"
     authorization = "authorization"
     oauth2 = "oauth2"
+    ziniao_open = "ziniao_open"
 
 
 # MCP Literals
