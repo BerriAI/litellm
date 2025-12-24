@@ -661,7 +661,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
                   setSelectedModelId={setSelectedModelId}
                   setSelectedTeamId={setSelectedTeamId}
                   setEditModel={setEditModel}
-                  modelData={modelData}
                 />
                 {!shouldHideAddModelTab && (
                   <TabPanel className="h-full">
