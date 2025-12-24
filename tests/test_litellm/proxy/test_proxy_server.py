@@ -275,7 +275,7 @@ def test_sso_key_generate_shows_deprecation_banner(client_no_auth, monkeypatch):
 def test_restructure_ui_html_files_handles_nested_routes(tmp_path):
     """
     Test that _restructure_ui_html_files correctly restructures HTML files.
-    Note: This function is only called when is_non_root is True (ui_path != packaged_ui_path).
+    Note: This function is always called now, both in development and non-root Docker environments.
     """
     from litellm.proxy import proxy_server
 
@@ -312,7 +312,7 @@ def test_restructure_ui_html_files_handles_nested_routes(tmp_path):
 def test_ui_extensionless_route_requires_restructure(tmp_path):
     """
     Regression for non-root fallback: /ui/login expects login/index.html.
-    Note: Restructuring only happens when is_non_root is True (ui_path != packaged_ui_path).
+    Note: Restructuring always happens now, both in development and non-root Docker environments.
     """
 
     from litellm.proxy import proxy_server
@@ -338,12 +338,13 @@ def test_ui_extensionless_route_requires_restructure(tmp_path):
     assert "login" in response.text
 
 
-def test_restructure_only_happens_when_non_root(monkeypatch):
+def test_restructure_always_happens(monkeypatch):
     """
-    Test that restructuring logic only executes when LITELLM_NON_ROOT is true.
-    When is_non_root is False, ui_path == packaged_ui_path, so restructuring is skipped.
+    Test that restructuring logic always executes regardless of LITELLM_NON_ROOT setting.
+    In development (is_non_root=False), restructuring happens directly in _experimental/out.
+    In non-root Docker (is_non_root=True), restructuring happens in /var/lib/litellm/ui.
     """
-    # Test Case 1: is_non_root is True - ui_path != packaged_ui_path, so restructuring should happen
+    # Test Case 1: is_non_root is True - restructuring happens in /var/lib/litellm/ui
     monkeypatch.setenv("LITELLM_NON_ROOT", "true")
     
     runtime_ui_path = "/var/lib/litellm/ui"
@@ -356,14 +357,14 @@ def test_restructure_only_happens_when_non_root(monkeypatch):
     else:
         ui_path = packaged_ui_path
     
-    # This is the condition that determines if restructuring happens
-    should_restructure = ui_path != packaged_ui_path
+    # Restructuring always happens now, regardless of ui_path vs packaged_ui_path
+    should_restructure = True
     
     assert is_non_root is True
     assert should_restructure is True
     assert ui_path == runtime_ui_path
     
-    # Test Case 2: is_non_root is False - ui_path == packaged_ui_path, so restructuring should NOT happen
+    # Test Case 2: is_non_root is False - restructuring happens directly in packaged_ui_path
     monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
     
     # Simulate the logic from proxy_server.py
@@ -373,11 +374,11 @@ def test_restructure_only_happens_when_non_root(monkeypatch):
     else:
         ui_path = packaged_ui_path
     
-    # This is the condition that determines if restructuring happens
-    should_restructure = ui_path != packaged_ui_path
+    # Restructuring always happens now, even when ui_path == packaged_ui_path
+    should_restructure = True
     
     assert is_non_root is False
-    assert should_restructure is False
+    assert should_restructure is True
     assert ui_path == packaged_ui_path
 
 

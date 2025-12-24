@@ -992,7 +992,6 @@ try:
             f"Using packaged UI directory for local development: {packaged_ui_path}"
         )
         ui_path = packaged_ui_path
-
     # Only modify files if a custom server root path is set
     if server_root_path and server_root_path != "/":
         # Iterate through files in the UI directory
@@ -1078,18 +1077,22 @@ try:
                     continue
 
     # Handle HTML file restructuring
-    # Always restructure the directory we actually serve, but avoid mutating the packaged UI.
+    # Always restructure the directory we actually serve.
     # This is critical for extensionless routes like /ui/login (expects login/index.html).
-    if ui_path != packaged_ui_path:
-        try:
-            _restructure_ui_html_files(ui_path)
-        except PermissionError as e:
-            verbose_proxy_logger.exception(
-                f"Permission error while restructuring UI directory {ui_path}: {e}"
-            )
-    else:
+    # In development, we restructure directly in _experimental/out.
+    # In non-root Docker, we restructure in /var/lib/litellm/ui.
+    try:
+        _restructure_ui_html_files(ui_path)
         verbose_proxy_logger.info(
-            f"Skipping runtime HTML restructuring for packaged UI directory: {ui_path}"
+            f"Restructured UI directory: {ui_path}"
+        )
+    except PermissionError as e:
+        verbose_proxy_logger.exception(
+            f"Permission error while restructuring UI directory {ui_path}: {e}"
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            f"Error while restructuring UI directory {ui_path}: {e}"
         )
 
 except Exception:
