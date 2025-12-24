@@ -571,7 +571,7 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "LemonadeChatConfig": (".llms.lemonade.chat.transformation", "LemonadeChatConfig"),
     "SnowflakeEmbeddingConfig": (".llms.snowflake.embedding.transformation", "SnowflakeEmbeddingConfig"),
     "AmazonNovaChatConfig": (".llms.amazon_nova.chat.transformation", "AmazonNovaChatConfig"),
-    "ClaudeCodeNativeConfig": (".llms.claude_code_native.chat.transformation", "ClaudeCodeNativeConfig"),
+    "ClaudeCodeNativeConfig": (".llms.claude_code_native.transformation", "ClaudeCodeNativeConfig"),
 }
 
 # Export all name tuples and import maps for use in _lazy_imports.py
