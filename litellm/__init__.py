@@ -420,6 +420,13 @@ model_cost = get_model_cost_map(url=model_cost_map_url)
 cost_discount_config: Dict[str, float] = (
     {}
 )  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
+cost_margin_config: Dict[str, Union[float, Dict[str, float]]] = (
+    {}
+)  # Provider-specific or global cost margins. Examples:
+# Percentage: {"openai": 0.10} = 10% margin
+# Fixed: {"openai": {"fixed_amount": 0.001}} = $0.001 per request
+# Global: {"global": 0.05} = 5% global margin on all providers
+# Combined: {"vertex_ai": {"percentage": 0.08, "fixed_amount": 0.0005}}
 custom_prompt_dict: Dict[str, dict] = {}
 check_provider_endpoint = False
 
