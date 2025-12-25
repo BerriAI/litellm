@@ -228,12 +228,15 @@ class LangFuseLogger:
 
             functions = optional_params.pop("functions", None)
             tools = optional_params.pop("tools", None)
+            system = optional_params.pop("system", None)
             # Remove secret_fields to prevent leaking sensitive data (e.g., authorization headers)
             optional_params.pop("secret_fields", None)
             if functions is not None:
                 prompt["functions"] = functions
             if tools is not None:
                 prompt["tools"] = tools
+            if system is not None:
+                prompt["system"] = system
 
             # langfuse only accepts str, int, bool, float for logging
             for param, value in optional_params.items():
