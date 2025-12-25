@@ -142,7 +142,7 @@ async def create_or_get_user_key(
         user_res = await internal_user_endpoints.new_user(user_data, user_api_key_dict=user_api_key_dict)
         uid = user_res.user_id
 
-    key_data = GenerateKeyRequest(user_id=uid, key_alias=org_email, key_type=LiteLLMKeyType.LLM_API, team_id=team_id, models=["all-team-models"])
+    key_data = GenerateKeyRequest(user_id=uid, key_alias=org_email, key_type=LiteLLMKeyType.LLM_API, models=["all-team-models"])
     key_res = await key_management_endpoints.generate_key_fn(key_data, user_api_key_dict=user_api_key_dict)
 
     return (True, key_res.key)
