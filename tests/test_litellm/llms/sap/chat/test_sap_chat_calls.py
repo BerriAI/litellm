@@ -140,3 +140,36 @@ async def test_sap_streaming(
             full += delta
 
         assert full == "Hello from SAP!"
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_sap_chat_with_thinking_config(
+    respx_mock,
+    sap_api_response,
+    fake_token_creator,
+    fake_deployment_url,
+    sync_mode,
+):
+    import litellm
+
+    litellm.disable_aiohttp_transport = True
+    with patch(
+        "litellm.llms.sap.chat.transformation.GenAIHubOrchestrationConfig.deployment_url",
+        new_callable=PropertyMock,
+        return_value=fake_deployment_url,
+    ), patch(
+        "litellm.llms.sap.chat.transformation.get_token_creator",
+        return_value=fake_token_creator,
+    ):
+        model = "sap/gemini-2.5-flash"
+        messages = [{"role": "user", "content": "Hello"}]
+        respx_mock.post(f"{fake_deployment_url}/v2/completion").respond(
+            json=sap_api_response
+        )
+
+        if sync_mode:
+            response = litellm.completion(model=model, messages=messages)
+        else:
+            response = await litellm.acompletion(model=model, messages=messages)
+
+        assert response.choices[0].message.content == "Hello from SAP!"

@@ -155,6 +155,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             "parallel_tool_calls",
             "response_format",
             "timeout",
+            "thinking_config"
         ]
         if (
             model.startswith('anthropic')
@@ -167,6 +168,11 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         if model.startswith("gemini") or model.startswith("amazon"):
             params.remove("tool_choice")
         return params
+
+    def params_should_raise_error_for_model(self, model):
+        return {
+            "thinking_config": any([model.startswith("gpt"), model.startswith("o"), model.startswith("amazon")])
+        }
 
     def validate_environment(
         self,
@@ -206,6 +212,18 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         model_params = {
             k: v for k, v in optional_params.items() if k in supported_params
         }
+
+        for param, flag in self.params_should_raise_error_for_model(model).items():
+            if (param in model_params
+                    and flag
+                    and litellm.drop_params is False
+            ):
+                raise litellm.utils.UnsupportedParamsError(
+                        message=f"sap does not support parameters: ['{param}'], for model={model}. "
+                                "To drop these, set `litellm.drop_params=True`.",
+                        status_code=400,
+                    )
+
         model_version = optional_params.pop("model_version", "latest")
         template = []
         for message in messages:
@@ -236,7 +254,6 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         model_params.pop("stream", False)
         stream_config = {}
         if "stream_options" in model_params:
-            # stream_config["enabled"] = True
             stream_options = model_params.pop("stream_options", {})
             stream_config["chunk_size"] = stream_options.get("chunk_size", 100)
             if "delimiters" in stream_options:
