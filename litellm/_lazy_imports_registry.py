@@ -62,6 +62,8 @@ TYPES_UTILS_NAMES = (
     "StandardKeyGenerationConfig",
     "SearchProviders",
     "GenericStreamingChunk",
+    "Message",
+    "Choices",
 )
 
 # Caching / cache classes that support lazy loading via _lazy_import_caching
@@ -349,6 +351,8 @@ _TYPES_UTILS_IMPORT_MAP = {
     "StandardKeyGenerationConfig": (".types.utils", "StandardKeyGenerationConfig"),
     "SearchProviders": (".types.utils", "SearchProviders"),
     "GenericStreamingChunk": (".types.utils", "GenericStreamingChunk"),
+    "Message": (".types.utils", "Message"),
+    "Choices": (".types.utils", "Choices"),
 }
 
 _TOKEN_COUNTER_IMPORT_MAP = {
