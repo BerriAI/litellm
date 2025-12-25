@@ -39,12 +39,13 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
   }
 
   const hasDiscount =
-    costBreakdown.discount_percent !== undefined ||
-    costBreakdown.discount_amount !== undefined;
+    (costBreakdown.discount_percent !== undefined && costBreakdown.discount_percent !== 0) ||
+    (costBreakdown.discount_amount !== undefined && costBreakdown.discount_amount !== 0);
+  
   const hasMargin =
-    costBreakdown.margin_percent !== undefined ||
-    costBreakdown.margin_fixed_amount !== undefined ||
-    costBreakdown.margin_total_amount !== undefined;
+    (costBreakdown.margin_percent !== undefined && costBreakdown.margin_percent !== 0) ||
+    (costBreakdown.margin_fixed_amount !== undefined && costBreakdown.margin_fixed_amount !== 0) ||
+    (costBreakdown.margin_total_amount !== undefined && costBreakdown.margin_total_amount !== 0);
 
   // Don't show if there's no meaningful breakdown data
   const hasMeaningfulData =
@@ -60,7 +61,7 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
   return (
     <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden">
       <Accordion>
-        <AccordionHeader className="p-4 border-b hover:bg-gray-50 transition-colors">
+        <AccordionHeader className="p-4 border-b hover:bg-gray-50 transition-colors text-left">
           <div className="flex items-center justify-between w-full">
             <h3 className="text-lg font-medium text-gray-900">Cost Breakdown</h3>
             <div className="flex items-center space-x-2 mr-4">
@@ -70,91 +71,82 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
           </div>
         </AccordionHeader>
         <AccordionBody className="px-0">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 w-full max-w-full overflow-hidden">
-            {/* Left Column: Token Costs */}
-            <div className="space-y-2">
-              <div className="flex">
-                <span className="font-medium w-1/3 text-gray-700 text-sm">Input Cost:</span>
-                <span className="text-sm text-gray-900">{formatCost(costBreakdown.input_cost)}</span>
+          <div className="p-6 space-y-4">
+            {/* Step 1: Base Token Costs */}
+            <div className="space-y-2 max-w-2xl">
+              <div className="flex text-sm">
+                <span className="text-gray-600 font-medium w-1/3">Input Cost:</span>
+                <span className="text-gray-900">{formatCost(costBreakdown.input_cost)}</span>
               </div>
-              <div className="flex">
-                <span className="font-medium w-1/3 text-gray-700 text-sm">Output Cost:</span>
-                <span className="text-sm text-gray-900">{formatCost(costBreakdown.output_cost)}</span>
+              <div className="flex text-sm">
+                <span className="text-gray-600 font-medium w-1/3">Output Cost:</span>
+                <span className="text-gray-900">{formatCost(costBreakdown.output_cost)}</span>
               </div>
-              {costBreakdown.tool_usage_cost !== undefined &&
-                costBreakdown.tool_usage_cost > 0 && (
-                  <div className="flex">
-                    <span className="font-medium w-1/3 text-gray-700 text-sm">Tool Usage Cost:</span>
-                    <span className="text-sm text-gray-900">{formatCost(costBreakdown.tool_usage_cost)}</span>
-                  </div>
-                )}
-            </div>
-
-            {/* Right Column: Adjustments */}
-            <div className="space-y-2">
-              {hasDiscount && (
-                <>
-                  {costBreakdown.original_cost !== undefined && (
-                    <div className="flex">
-                      <span className="font-medium w-1/3 text-gray-700 text-sm">Original Cost:</span>
-                      <span className="text-sm text-gray-900 font-medium">{formatCost(costBreakdown.original_cost)}</span>
-                    </div>
-                  )}
-                  {costBreakdown.discount_percent !== undefined && (
-                    <div className="flex">
-                      <span className="font-medium w-1/3 text-gray-700 text-sm">Discount (%):</span>
-                      <span className="text-sm text-gray-900">-{formatPercent(costBreakdown.discount_percent)}</span>
-                    </div>
-                  )}
-                  {costBreakdown.discount_amount !== undefined && (
-                    <div className="flex">
-                      <span className="font-medium w-1/3 text-gray-700 text-sm">Discount Amount:</span>
-                      <span className="text-sm text-gray-900">-{formatCost(costBreakdown.discount_amount)}</span>
-                    </div>
-                  )}
-                </>
-              )}
-
-              {hasMargin && (
-                <>
-                  {costBreakdown.margin_percent !== undefined &&
-                    costBreakdown.margin_percent > 0 && (
-                      <div className="flex">
-                        <span className="font-medium w-1/3 text-gray-700 text-sm">Margin (%):</span>
-                        <span className="text-sm text-gray-900">+{formatPercent(costBreakdown.margin_percent)}</span>
-                      </div>
-                    )}
-                  {costBreakdown.margin_fixed_amount !== undefined &&
-                    costBreakdown.margin_fixed_amount > 0 && (
-                      <div className="flex">
-                        <span className="font-medium w-1/3 text-gray-700 text-sm">Fixed Margin:</span>
-                        <span className="text-sm text-gray-900">+{formatCost(costBreakdown.margin_fixed_amount)}</span>
-                      </div>
-                    )}
-                  {costBreakdown.margin_total_amount !== undefined &&
-                    costBreakdown.margin_total_amount > 0 && (
-                      <div className="flex">
-                        <span className="font-medium w-1/3 text-gray-700 text-sm">Total Margin Added:</span>
-                        <span className="text-sm text-gray-900 font-medium">+{formatCost(costBreakdown.margin_total_amount)}</span>
-                      </div>
-                    )}
-                </>
-              )}
-
-              {!hasDiscount && !hasMargin && (
-                <div className="flex italic text-gray-400 text-sm">
-                  <span>No adjustments applied</span>
+              {costBreakdown.tool_usage_cost !== undefined && costBreakdown.tool_usage_cost > 0 && (
+                <div className="flex text-sm">
+                  <span className="text-gray-600 font-medium w-1/3">Tool Usage Cost:</span>
+                  <span className="text-gray-900">{formatCost(costBreakdown.tool_usage_cost)}</span>
                 </div>
               )}
             </div>
-          </div>
-          
-          <div className="p-4 border-t">
-            <div className="flex items-center justify-between">
-              <span className="font-medium text-sm text-gray-900">Final Calculated Cost:</span>
-              <span className="text-lg font-bold text-gray-900">
-                {formatCost(costBreakdown.total_cost ?? totalSpend)}
-              </span>
+
+            {/* Subtotal / Original Cost */}
+            <div className="pt-2 border-t border-gray-100 max-w-2xl">
+              <div className="flex text-sm font-semibold">
+                <span className="text-gray-900 w-1/3">Original LLM Cost:</span>
+                <span className="text-gray-900">{formatCost(costBreakdown.original_cost)}</span>
+              </div>
+            </div>
+
+            {/* Step 2: Adjustments (Discount & Margin) */}
+            {(hasDiscount || hasMargin) && (
+              <div className="pt-2 space-y-2 max-w-2xl">
+                {/* Discounts */}
+                {hasDiscount && (
+                  <div className="space-y-2">
+                    {costBreakdown.discount_percent !== undefined && costBreakdown.discount_percent !== 0 && (
+                      <div className="flex text-sm text-gray-600">
+                        <span className="font-medium w-1/3">Discount ({formatPercent(costBreakdown.discount_percent)}):</span>
+                        <span className="text-gray-900">-{formatCost(costBreakdown.discount_amount)}</span>
+                      </div>
+                    )}
+                    {costBreakdown.discount_amount !== undefined && costBreakdown.discount_percent === undefined && (
+                      <div className="flex text-sm text-gray-600">
+                        <span className="font-medium w-1/3">Discount Amount:</span>
+                        <span className="text-gray-900">-{formatCost(costBreakdown.discount_amount)}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Margins */}
+                {hasMargin && (
+                  <div className="space-y-2">
+                    {costBreakdown.margin_percent !== undefined && costBreakdown.margin_percent !== 0 && (
+                      <div className="flex text-sm text-gray-600">
+                        <span className="font-medium w-1/3">Margin ({formatPercent(costBreakdown.margin_percent)}):</span>
+                        <span className="text-gray-900">+{formatCost((costBreakdown.margin_total_amount || 0) - (costBreakdown.margin_fixed_amount || 0))}</span>
+                      </div>
+                    )}
+                    {costBreakdown.margin_fixed_amount !== undefined && costBreakdown.margin_fixed_amount !== 0 && (
+                      <div className="flex text-sm text-gray-600">
+                        <span className="font-medium w-1/3">Margin:</span>
+                        <span className="text-gray-900">+{formatCost(costBreakdown.margin_fixed_amount)}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Final Summary */}
+            <div className="mt-4 pt-4 border-t border-gray-200 max-w-2xl">
+              <div className="flex items-center">
+                <span className="font-bold text-sm text-gray-900 w-1/3">Final Calculated Cost:</span>
+                <span className="text-sm font-bold text-gray-900">
+                  {formatCost(costBreakdown.total_cost ?? totalSpend)}
+                </span>
+              </div>
             </div>
           </div>
         </AccordionBody>
