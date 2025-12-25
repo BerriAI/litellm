@@ -14,7 +14,7 @@ router = APIRouter()
 add_user_allow_email_domain = '@'+os.environ.get('ZX_ADD_USER_ALLOW_EMAIL_DOMAIN', 'fzzixun.com').strip()
 
 @router.post(
-    "/zx/provider/user_add",
+    "/zx/api/provider/user_add",
     tags=["ZX"],
 )
 async def provider_user_add(client_id: str, signature: str, timestamp: str, request: Request,):
