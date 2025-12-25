@@ -13,6 +13,7 @@ from litellm.proxy._types import (
     NewUserRequest,
     GenerateKeyRequest,
     LiteLLM_UserTableWithKeyCount,
+    LiteLLMKeyType,
 )
 
 logger = logging.getLogger()
@@ -126,19 +127,23 @@ async def create_or_get_user_key(
     user_total_count = users.get('total', 0) or 0
     if user_total_count > 1:
         raise RuntimeError(f"user [{org_email}]在系统中重复: {user_total_count}")
+    uid = None
     if user_total_count == 1:
         user: LiteLLM_UserTableWithKeyCount = users.get('users', [None])[0]
         if user is None:
             raise RuntimeError(f"user [{org_email}]不存在")
-        key_data = GenerateKeyRequest(user_id=user.user_id, key_alias=org_email, team_id=team_id, models=["all-team-models"])
-        key_res = await key_management_endpoints.generate_key_fn(key_data, user_api_key_dict=user_api_key_dict)
+        uid = user.user_id
     else:
         metadata = {
             'provider': provider
         }
-        user_data = NewUserRequest(key_alias=org_email, auto_create_key=True, user_id=user_id, user_alias=user_name, user_email=org_email, user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, team_id=team_id, metadata=metadata)
+        user_data = NewUserRequest(auto_create_key=False, user_id=user_id, user_alias=user_name, user_email=org_email, user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, team_id=team_id, metadata=metadata)
         logger.info(f'user[{user_id}:{org_email}] create end...')
-        key_res = await internal_user_endpoints.new_user(user_data, user_api_key_dict=user_api_key_dict)
+        user_res = await internal_user_endpoints.new_user(user_data, user_api_key_dict=user_api_key_dict)
+        uid = user_res.user_id
+
+    key_data = GenerateKeyRequest(user_id=uid, key_alias=org_email, key_type=LiteLLMKeyType.LLM_API, team_id=team_id, models=["all-team-models"])
+    key_res = await key_management_endpoints.generate_key_fn(key_data, user_api_key_dict=user_api_key_dict)
 
     return (True, key_res.key)
 
