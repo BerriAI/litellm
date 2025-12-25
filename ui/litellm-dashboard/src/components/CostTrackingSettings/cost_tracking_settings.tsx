@@ -1,11 +1,7 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect } from "react";
 import { Title, Text, Button, Accordion, AccordionHeader, AccordionBody, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import { Modal, Form } from "antd";
-import { getProxyBaseUrl } from "@/components/networking";
-import NotificationsManager from "../molecules/notifications_manager";
-import { Providers } from "../provider_info_helpers";
-import { CostTrackingSettingsProps, DiscountConfig, MarginConfig } from "./types";
-import { getProviderBackendValue } from "./provider_display_helpers";
+import { CostTrackingSettingsProps } from "./types";
 import ProviderDiscountTable from "./provider_discount_table";
 import AddProviderForm from "./add_provider_form";
 import ProviderMarginTable from "./provider_margin_table";
@@ -13,6 +9,8 @@ import AddMarginForm from "./add_margin_form";
 import { ExclamationCircleOutlined } from "@ant-design/icons";
 import { DocsMenu } from "../HelpLink";
 import HowItWorks from "./how_it_works";
+import { useDiscountConfig } from "./use_discount_config";
+import { useMarginConfig } from "./use_margin_config";
 
 const DOCS_LINKS = [
   { label: "Custom pricing for models", href: "https://docs.litellm.ai/docs/proxy/custom_pricing" },
@@ -24,8 +22,6 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
   userRole, 
   accessToken 
 }) => {
-  const [discountConfig, setDiscountConfig] = useState<DiscountConfig>({});
-  const [marginConfig, setMarginConfig] = useState<MarginConfig>({});
   const [selectedProvider, setSelectedProvider] = useState<string | undefined>(undefined);
   const [newDiscount, setNewDiscount] = useState<string>("");
   const [isFetching, setIsFetching] = useState(true);
@@ -39,62 +35,22 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
   const [marginForm] = Form.useForm();
   const [modal, contextHolder] = Modal.useModal();
 
-  const fetchDiscountConfig = useCallback(async () => {
-    setIsFetching(true);
-    try {
-      const proxyBaseUrl = getProxyBaseUrl();
-      const url = proxyBaseUrl 
-        ? `${proxyBaseUrl}/config/cost_discount_config` 
-        : "/config/cost_discount_config";
-      
-      const response = await fetch(url, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-      });
+  // Use custom hooks for discount and margin config
+  const {
+    discountConfig,
+    fetchDiscountConfig,
+    handleAddProvider: addProvider,
+    handleRemoveProvider: removeProvider,
+    handleDiscountChange,
+  } = useDiscountConfig({ accessToken });
 
-      if (response.ok) {
-        const data = await response.json();
-        setDiscountConfig(data.values || {});
-      } else {
-        console.error("Failed to fetch discount config");
-      }
-    } catch (error) {
-      console.error("Error fetching discount config:", error);
-      NotificationsManager.fromBackend("Failed to fetch discount configuration");
-    } finally {
-      setIsFetching(false);
-    }
-  }, [accessToken]);
-
-  const fetchMarginConfig = useCallback(async () => {
-    try {
-      const proxyBaseUrl = getProxyBaseUrl();
-      const url = proxyBaseUrl 
-        ? `${proxyBaseUrl}/config/cost_margin_config` 
-        : "/config/cost_margin_config";
-      
-      const response = await fetch(url, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setMarginConfig(data.values || {});
-      } else {
-        console.error("Failed to fetch margin config");
-      }
-    } catch (error) {
-      console.error("Error fetching margin config:", error);
-      NotificationsManager.fromBackend("Failed to fetch margin configuration");
-    }
-  }, [accessToken]);
+  const {
+    marginConfig,
+    fetchMarginConfig,
+    handleAddMargin: addMargin,
+    handleRemoveMargin: removeMargin,
+    handleMarginChange,
+  } = useMarginConfig({ accessToken });
 
   useEffect(() => {
     if (accessToken) {
@@ -104,74 +60,13 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
     }
   }, [accessToken, fetchDiscountConfig, fetchMarginConfig]);
 
-  const saveDiscountConfig = async (config: DiscountConfig) => {
-    try {
-      const proxyBaseUrl = getProxyBaseUrl();
-      const url = proxyBaseUrl 
-        ? `${proxyBaseUrl}/config/cost_discount_config` 
-        : "/config/cost_discount_config";
-      
-      const response = await fetch(url, {
-        method: "PATCH",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(config),
-      });
-
-      if (response.ok) {
-        NotificationsManager.success("Discount configuration updated successfully");
-        await fetchDiscountConfig();
-      } else {
-        const errorData = await response.json();
-        const errorMessage = errorData.detail?.error || errorData.detail || "Failed to update settings";
-        NotificationsManager.fromBackend(errorMessage);
-      }
-    } catch (error) {
-      console.error("Error updating discount config:", error);
-      NotificationsManager.fromBackend("Failed to update discount configuration");
-    }
-  };
-
   const handleAddProvider = async () => {
-    if (!selectedProvider || !newDiscount) {
-      NotificationsManager.fromBackend("Please select a provider and enter discount percentage");
-      return;
+    const success = await addProvider(selectedProvider, newDiscount);
+    if (success) {
+      setSelectedProvider(undefined);
+      setNewDiscount("");
+      setIsModalVisible(false);
     }
-    
-    const percentageValue = parseFloat(newDiscount);
-    if (isNaN(percentageValue) || percentageValue < 0 || percentageValue > 100) {
-      NotificationsManager.fromBackend("Discount must be between 0% and 100%");
-      return;
-    }
-
-    const providerValue = getProviderBackendValue(selectedProvider);
-    
-    if (!providerValue) {
-      NotificationsManager.fromBackend("Invalid provider selected");
-      return;
-    }
-
-    if (discountConfig[providerValue]) {
-      NotificationsManager.fromBackend(
-        `Discount for ${Providers[selectedProvider as keyof typeof Providers]} already exists. Edit it in the table above.`
-      );
-      return;
-    }
-
-    // Convert percentage to decimal for storage
-    const discountValue = percentageValue / 100;
-    const updatedConfig = {
-      ...discountConfig,
-      [providerValue]: discountValue,
-    };
-    
-    setDiscountConfig(updatedConfig);
-    await saveDiscountConfig(updatedConfig);
-    setSelectedProvider(undefined);
-    setNewDiscount("");
-    setIsModalVisible(false);
   };
 
   const handleModalCancel = () => {
@@ -181,7 +76,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
     setNewDiscount("");
   };
 
-  const handleFormSubmit = (values: any) => {
+  const handleFormSubmit = () => {
     handleAddProvider();
   };
 
@@ -193,113 +88,24 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
       okText: 'Remove',
       okType: 'danger',
       cancelText: 'Cancel',
-      onOk: async () => {
-        const updatedConfig = { ...discountConfig };
-        delete updatedConfig[provider];
-        setDiscountConfig(updatedConfig);
-        await saveDiscountConfig(updatedConfig);
-      },
+      onOk: () => removeProvider(provider),
     });
   };
 
-  const handleDiscountChange = async (provider: string, value: string) => {
-    const discountValue = parseFloat(value);
-    if (!isNaN(discountValue) && discountValue >= 0 && discountValue <= 1) {
-      const updatedConfig = {
-        ...discountConfig,
-        [provider]: discountValue,
-      };
-      setDiscountConfig(updatedConfig);
-      await saveDiscountConfig(updatedConfig);
-    }
-  };
-
-  const saveMarginConfig = async (config: MarginConfig) => {
-    try {
-      const proxyBaseUrl = getProxyBaseUrl();
-      const url = proxyBaseUrl 
-        ? `${proxyBaseUrl}/config/cost_margin_config` 
-        : "/config/cost_margin_config";
-      
-      const response = await fetch(url, {
-        method: "PATCH",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(config),
-      });
-
-      if (response.ok) {
-        NotificationsManager.success("Margin configuration updated successfully");
-        await fetchMarginConfig();
-      } else {
-        const errorData = await response.json();
-        const errorMessage = errorData.detail?.error || errorData.detail || "Failed to update settings";
-        NotificationsManager.fromBackend(errorMessage);
-      }
-    } catch (error) {
-      console.error("Error updating margin config:", error);
-      NotificationsManager.fromBackend("Failed to update margin configuration");
-    }
-  };
-
   const handleAddMargin = async () => {
-    if (!selectedMarginProvider) {
-      NotificationsManager.fromBackend("Please select a provider");
-      return;
+    const success = await addMargin({
+      selectedProvider: selectedMarginProvider,
+      marginType,
+      percentageValue,
+      fixedAmountValue,
+    });
+    if (success) {
+      setSelectedMarginProvider(undefined);
+      setPercentageValue("");
+      setFixedAmountValue("");
+      setMarginType("percentage");
+      setIsMarginModalVisible(false);
     }
-
-    let providerValue: string;
-    if (selectedMarginProvider === "global") {
-      providerValue = "global";
-    } else {
-      const backendValue = getProviderBackendValue(selectedMarginProvider);
-      if (!backendValue) {
-        NotificationsManager.fromBackend("Invalid provider selected");
-        return;
-      }
-      providerValue = backendValue;
-    }
-
-    if (marginConfig[providerValue]) {
-      const displayName = providerValue === "global" ? "Global" : Providers[selectedMarginProvider as keyof typeof Providers];
-      NotificationsManager.fromBackend(
-        `Margin for ${displayName} already exists. Edit it in the table above.`
-      );
-      return;
-    }
-
-    let marginValue: number | { fixed_amount?: number };
-    if (marginType === "percentage") {
-      const percentValue = parseFloat(percentageValue);
-      if (isNaN(percentValue) || percentValue < 0 || percentValue > 1000) {
-        NotificationsManager.fromBackend("Percentage must be between 0% and 1000%");
-        return;
-      }
-      marginValue = percentValue / 100;
-    } else {
-      // fixed
-      const fixedValue = parseFloat(fixedAmountValue);
-      if (isNaN(fixedValue) || fixedValue < 0) {
-        NotificationsManager.fromBackend("Fixed amount must be non-negative");
-        return;
-      }
-      marginValue = { fixed_amount: fixedValue };
-    }
-
-    const updatedConfig = {
-      ...marginConfig,
-      [providerValue]: marginValue,
-    };
-    
-    setMarginConfig(updatedConfig);
-    await saveMarginConfig(updatedConfig);
-    setSelectedMarginProvider(undefined);
-    setPercentageValue("");
-    setFixedAmountValue("");
-    setMarginType("percentage");
-    setIsMarginModalVisible(false);
   };
 
   const handleMarginModalCancel = () => {
@@ -319,25 +125,8 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
       okText: 'Remove',
       okType: 'danger',
       cancelText: 'Cancel',
-      onOk: async () => {
-        const updatedConfig = { ...marginConfig };
-        delete updatedConfig[provider];
-        setMarginConfig(updatedConfig);
-        await saveMarginConfig(updatedConfig);
-      },
+      onOk: () => removeMargin(provider),
     });
-  };
-
-  const handleMarginChange = async (
-    provider: string,
-    value: number | { percentage?: number; fixed_amount?: number }
-  ) => {
-    const updatedConfig = {
-      ...marginConfig,
-      [provider]: value,
-    };
-    setMarginConfig(updatedConfig);
-    await saveMarginConfig(updatedConfig);
   };
 
   if (!accessToken) {
