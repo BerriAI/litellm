@@ -179,24 +179,26 @@ async def create_streaming_response(
 
 def _get_cost_breakdown_from_logging_obj(
     litellm_logging_obj: Optional[LiteLLMLoggingObj],
-) -> Tuple[Optional[float], Optional[float]]:
+) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
     """
-    Extract discount information from logging object's cost breakdown.
+    Extract discount and margin information from logging object's cost breakdown.
 
     Returns:
-        Tuple of (original_cost, discount_amount)
+        Tuple of (original_cost, discount_amount, margin_total_amount, margin_percent)
     """
     if not litellm_logging_obj or not hasattr(litellm_logging_obj, "cost_breakdown"):
-        return None, None
+        return None, None, None, None
 
     cost_breakdown = litellm_logging_obj.cost_breakdown
     if not cost_breakdown:
-        return None, None
+        return None, None, None, None
 
     original_cost = cost_breakdown.get("original_cost")
     discount_amount = cost_breakdown.get("discount_amount")
+    margin_total_amount = cost_breakdown.get("margin_total_amount")
+    margin_percent = cost_breakdown.get("margin_percent")
 
-    return original_cost, discount_amount
+    return original_cost, discount_amount, margin_total_amount, margin_percent
 
 
 class ProxyBaseLLMRequestProcessing:
@@ -224,8 +226,8 @@ class ProxyBaseLLMRequestProcessing:
         exclude_values = {"", None, "None"}
         hidden_params = hidden_params or {}
 
-        # Extract discount info from cost_breakdown if available
-        original_cost, discount_amount = _get_cost_breakdown_from_logging_obj(
+        # Extract discount and margin info from cost_breakdown if available
+        original_cost, discount_amount, margin_total_amount, margin_percent = _get_cost_breakdown_from_logging_obj(
             litellm_logging_obj=litellm_logging_obj
         )
 
@@ -257,6 +259,12 @@ class ProxyBaseLLMRequestProcessing:
             ),
             "x-litellm-response-cost-discount-amount": (
                 str(discount_amount) if discount_amount is not None else None
+            ),
+            "x-litellm-response-cost-margin-amount": (
+                str(margin_total_amount) if margin_total_amount is not None else None
+            ),
+            "x-litellm-response-cost-margin-percent": (
+                str(margin_percent) if margin_percent is not None else None
             ),
             "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
             "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
