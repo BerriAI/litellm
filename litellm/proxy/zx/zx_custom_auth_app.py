@@ -3,7 +3,7 @@ from typing import Union, Optional
 from fastapi import Request
 
 from litellm.caching.caching import DualCache
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 
 from litellm.proxy.auth.auth_checks import (
     get_key_object,
@@ -30,27 +30,57 @@ async def user_api_key_auth(
             key = f'user_key_hashed_token:{signature}'
             hashed_token: Optional[str] = await user_key_hashed_token_cache.async_get_cache(key=key)
             if hashed_token is None:
-                client_id = request.headers.get('zx_client_id')
-                client_app_id = request.headers.get('zx_client_app_id')
-                email = request.headers.get('zx_user_email')
+                client_id = request.headers.get('zx-client-id')
+                client_app_id = request.headers.get('zx-client-app-id')
+                email = request.headers.get('zx-user-email')
                 data = email or client_app_id
-                timestamp  = request.headers.get('zx_timestamp')
+                timestamp  = request.headers.get('zx-timestamp')
                 if client_id is None :
-                    raise Exception("Invalid API key: zx_client_id not found")
+                    raise ProxyException(
+                        message="Invalid API key: zx-client-id not found",
+                        type="invalid_request_error",
+                        param="api_key",
+                        code=401,
+                    )
                 if data is None :
-                    raise Exception("Invalid API key: zx_client_app_id or zx_user_email not found")
+                    raise ProxyException(
+                        message="Invalid API key: zx-client-app-id or zx_user_email not found",
+                        type="invalid_request_error",
+                        param="api_key",
+                        code=401,
+                    )
                 if timestamp is None:
-                    raise Exception("Invalid API key: zx_timestamp not found")
+                    raise ProxyException(
+                        message="Invalid API key: zx-timestamp not found",
+                        type="invalid_request_error",
+                        param="api_key",
+                        code=401,
+                    )
                 try:
                     int_num = int(timestamp)
                 except ValueError as e:
-                    raise Exception(f"Invalid API key: timestamp[{timestamp}] error")
+                    raise ProxyException(
+                        message=f"Invalid API key: timestamp[{timestamp}] error",
+                        type="invalid_request_error",
+                        param="api_key",
+                        code=401,
+                    )
                 # 半小时内有效
                 if time.time() - int_num > 1800:
-                    raise Exception(f"Invalid API key: timestamp[{timestamp}] expired")
+                    raise ProxyException(
+                        message=f"Invalid API key: timestamp[{timestamp}] expired",
+                        type="invalid_request_error",
+                        param="api_key",
+                        code=401,
+                    )
 
                 if not security_validator.validate(client_id, signature, f"{data}:{timestamp}"):
-                    raise Exception("Invalid API key: signature error")
+                    raise ProxyException(
+                        message="Invalid API key: signature error",
+                        type="invalid_request_error",
+                        param="api_key",
+                        code=401,
+                    )
             
                 global tmp_prisma_client
                 if tmp_prisma_client is None:
@@ -69,7 +99,12 @@ async def user_api_key_auth(
                         )
 
             if hashed_token is None:
-                raise Exception("Invalid API key: user not found")
+                raise ProxyException(
+                    message="Invalid API key: user not found",
+                    type="invalid_request_error",
+                    param="api_key",
+                    code=401,
+                )
 
             return await get_key_object(
                 hashed_token=hashed_token,
@@ -78,22 +113,9 @@ async def user_api_key_auth(
                 parent_otel_span=None,
                 proxy_logging_obj=proxy_logging_obj,
             )
-            # return UserAPIKeyAuth(
-            #     api_key=api_key,
-            #     user_id="team_user_456",
-            #     user_email="user@company.com",
-            #     user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-            #     team_id="dev_team",
-            #     team_alias="Development Team",
-            #     max_budget=100.0,
-            #     tpm_limit=1000,
-            #     rpm_limit=20,
-            #     models=["gpt-3.5-turbo", "claude-3-haiku"],
-            #     team_member_tpm_limit=500,  # Limit within team
-            #     end_user_tpm_limit=100,     # Per end-user limit
-            #     metadata={"project": "chatbot_v2"}
-            # )
         else:
             return api_key
-    except Exception:
+    except Exception as e:
+        if isinstance(e, ProxyException):
+            raise e
         raise Exception("Invalid API key")
