@@ -1,6 +1,6 @@
 "use client";
 import React, { useEffect, useState } from "react";
-import { ColumnDef } from "@tanstack/react-table";
+import { ColumnDef, ColumnResizeMode, ColumnResizeDirection } from "@tanstack/react-table";
 import { Select, SelectItem } from "@tremor/react";
 import { Button } from "@tremor/react";
 import KeyInfoView from "./templates/key_info_view";
@@ -125,6 +125,8 @@ export function AllKeysTable({
 }: AllKeysTableProps) {
   const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
   const [userList, setUserList] = useState<UserResponse[]>([]);
+  const [columnResizeMode, setColumnResizeMode] = React.useState<ColumnResizeMode>("onChange");
+  const [columnResizeDirection, setColumnResizeDirection] = React.useState<ColumnResizeDirection>("ltr");
   const [sorting, setSorting] = React.useState<SortingState>(() => {
     if (currentSort) {
       return [
@@ -184,6 +186,7 @@ export function AllKeysTable({
     {
       id: "expander",
       header: () => null,
+      size: 40,
       cell: ({ row }) =>
         row.getCanExpand() ? (
           <button onClick={row.getToggleExpandedHandler()} style={{ cursor: "pointer" }}>
@@ -195,6 +198,7 @@ export function AllKeysTable({
       id: "token",
       accessorKey: "token",
       header: "Key ID",
+      size: 150,
       cell: (info) => (
         <div className="overflow-hidden">
           <Tooltip title={info.getValue() as string}>
@@ -214,10 +218,16 @@ export function AllKeysTable({
       id: "key_alias",
       accessorKey: "key_alias",
       header: "Key Alias",
+      size: 150,
       cell: (info) => {
         const value = info.getValue() as string;
+        const width = info.cell.column.getSize();
         return (
-          <Tooltip title={value}>{value ? (value.length > 20 ? `${value.slice(0, 20)}...` : value) : "-"}</Tooltip>
+          <Tooltip title={value}>
+            <span className={`font-mono text-xs truncate block`} style={{ maxWidth: width, overflow: "hidden" }}>
+              {value ?? "-"}
+            </span>
+          </Tooltip>
         );
       },
     },
@@ -225,12 +235,14 @@ export function AllKeysTable({
       id: "key_name",
       accessorKey: "key_name",
       header: "Secret Key",
+      size: 120,
       cell: (info) => <span className="font-mono text-xs">{info.getValue() as string}</span>,
     },
     {
       id: "team_alias",
       accessorKey: "team_id",
       header: "Team Alias",
+      size: 120,
       cell: ({ row, getValue }) => {
         const teamId = getValue() as string;
         const team = teams?.find((t) => t.team_id === teamId);
@@ -241,6 +253,7 @@ export function AllKeysTable({
       id: "team_id",
       accessorKey: "team_id",
       header: "Team ID",
+      size: 120,
       cell: (info) => (
         <Tooltip title={info.getValue() as string}>
           {info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "-"}
@@ -251,12 +264,14 @@ export function AllKeysTable({
       id: "organization_id",
       accessorKey: "organization_id",
       header: "Organization ID",
+      size: 140,
       cell: (info) => (info.getValue() ? info.renderValue() : "-"),
     },
     {
       id: "user_email",
       accessorKey: "user_id",
       header: "User Email",
+      size: 160,
       cell: (info) => {
         const userId = info.getValue() as string;
         const user = userList.find((u) => u.user_id === userId);
@@ -273,6 +288,7 @@ export function AllKeysTable({
       id: "user_id",
       accessorKey: "user_id",
       header: "User ID",
+      size: 120,
       cell: (info) => {
         const userId = info.getValue() as string | null;
         if (userId && userId.length > 15) {
@@ -289,6 +305,7 @@ export function AllKeysTable({
       id: "created_at",
       accessorKey: "created_at",
       header: "Created At",
+      size: 120,
       cell: (info) => {
         const value = info.getValue();
         return value ? new Date(value as string).toLocaleDateString() : "-";
@@ -298,6 +315,7 @@ export function AllKeysTable({
       id: "created_by",
       accessorKey: "created_by",
       header: "Created By",
+      size: 120,
       cell: (info) => {
         const value = info.getValue() as string | null;
         if (value && value.length > 15) {
@@ -314,6 +332,7 @@ export function AllKeysTable({
       id: "updated_at",
       accessorKey: "updated_at",
       header: "Updated At",
+      size: 120,
       cell: (info) => {
         const value = info.getValue();
         return value ? new Date(value as string).toLocaleDateString() : "Never";
@@ -323,6 +342,7 @@ export function AllKeysTable({
       id: "expires",
       accessorKey: "expires",
       header: "Expires",
+      size: 120,
       cell: (info) => {
         const value = info.getValue();
         return value ? new Date(value as string).toLocaleDateString() : "Never";
@@ -332,12 +352,14 @@ export function AllKeysTable({
       id: "spend",
       accessorKey: "spend",
       header: "Spend (USD)",
+      size: 100,
       cell: (info) => formatNumberWithCommas(info.getValue() as number, 4),
     },
     {
       id: "max_budget",
       accessorKey: "max_budget",
       header: "Budget (USD)",
+      size: 110,
       cell: (info) => {
         const maxBudget = info.getValue() as number | null;
         if (maxBudget === null) {
@@ -350,6 +372,7 @@ export function AllKeysTable({
       id: "budget_reset_at",
       accessorKey: "budget_reset_at",
       header: "Budget Reset",
+      size: 130,
       cell: (info) => {
         const value = info.getValue();
         return value ? new Date(value as string).toLocaleString() : "Never";
@@ -359,6 +382,7 @@ export function AllKeysTable({
       id: "models",
       accessorKey: "models",
       header: "Models",
+      size: 200,
       cell: (info) => {
         const models = info.getValue() as string[];
         return (
@@ -442,6 +466,7 @@ export function AllKeysTable({
     {
       id: "rate_limits",
       header: "Rate Limits",
+      size: 140,
       cell: ({ row }) => {
         const key = row.original;
         return (
@@ -527,6 +552,8 @@ export function AllKeysTable({
   const table = useReactTable({
     data: filteredKeys,
     columns: columns.filter((col) => col.id !== "expander"),
+    columnResizeMode,
+    columnResizeDirection,
     state: {
       sorting,
     },
@@ -639,18 +666,35 @@ export function AllKeysTable({
           <div className="h-[75vh] overflow-auto">
             <div className="rounded-lg custom-border relative">
               <div className="overflow-x-auto">
-                <Table className="[&_td]:py-0.5 [&_th]:py-1">
+                <Table className="[&_td]:py-0.5 [&_th]:py-1" style={{ width: table.getCenterTotalSize() }}>
                   <TableHead>
                     {table.getHeaderGroups().map((headerGroup) => (
                       <TableRow key={headerGroup.id}>
                         {headerGroup.headers.map((header) => (
                           <TableHeaderCell
                             key={header.id}
-                            className={`py-1 h-8 ${
+                            data-header-id={header.id}
+                            className={`py-1 h-8 relative hover:bg-gray-50 ${
                               header.id === "actions"
                                 ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
                                 : ""
                             }`}
+                            style={{
+                              width: header.getSize(),
+                              position: "relative",
+                            }}
+                            onMouseEnter={() => {
+                              const resizer = document.querySelector(`[data-header-id="${header.id}"] .resizer`);
+                              if (resizer) {
+                                (resizer as HTMLElement).style.opacity = "0.5";
+                              }
+                            }}
+                            onMouseLeave={() => {
+                              const resizer = document.querySelector(`[data-header-id="${header.id}"] .resizer`);
+                              if (resizer && !header.column.getIsResizing()) {
+                                (resizer as HTMLElement).style.opacity = "0";
+                              }
+                            }}
                             onClick={header.column.getToggleSortingHandler()}
                           >
                             <div className="flex items-center justify-between gap-2">
@@ -671,6 +715,28 @@ export function AllKeysTable({
                                   )}
                                 </div>
                               )}
+                              <div
+                                onDoubleClick={() => header.column.resetSize()}
+                                onMouseDown={header.getResizeHandler()}
+                                onTouchStart={header.getResizeHandler()}
+                                className={`resizer ${table.options.columnResizeDirection} ${header.column.getIsResizing() ? "isResizing" : ""}`}
+                                style={{
+                                  position: "absolute",
+                                  right: 0,
+                                  top: 0,
+                                  height: "100%",
+                                  width: "5px",
+                                  background: header.column.getIsResizing() ? "#3b82f6" : "transparent",
+                                  cursor: "col-resize",
+                                  userSelect: "none",
+                                  touchAction: "none",
+                                  opacity: header.column.getIsResizing() ? 1 : 0,
+                                  transform:
+                                    columnResizeMode === "onEnd" && header.column.getIsResizing()
+                                      ? `translateX(${(table.options.columnResizeDirection === "rtl" ? -1 : 1) * (table.getState().columnSizingInfo.deltaOffset ?? 0)}px)`
+                                      : "",
+                                }}
+                              />
                             </div>
                           </TableHeaderCell>
                         ))}
@@ -693,6 +759,7 @@ export function AllKeysTable({
                             <TableCell
                               key={cell.id}
                               style={{
+                                width: cell.column.getSize(),
                                 maxWidth: "8-x",
                                 whiteSpace: "pre-wrap",
                                 overflow: "hidden",

@@ -297,9 +297,7 @@ from litellm.proxy.management_endpoints.customer_endpoints import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import (
-    user_update,
-)
+from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
     duration_in_seconds,
@@ -353,9 +351,7 @@ from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import (
-    set_files_config,
-)
+from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
 )
@@ -450,9 +446,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     LiteLLM_UpperboundKeyGenerateParams,
 )
 from litellm.types.realtime import RealtimeQueryParams
-from litellm.types.router import (
-    DeploymentTypedDict,
-)
+from litellm.types.router import DeploymentTypedDict
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import (
     RouterGeneralSettings,
@@ -565,9 +559,7 @@ else:
 ui_link = f"{server_root_path}/ui"
 fallback_login_link = f"{server_root_path}/fallback/login"
 model_hub_link = f"{server_root_path}/ui/model_hub_table"
-ui_message = (
-    f"👉 [```LiteLLM Admin Panel on /ui```]({ui_link}). Create, Edit Keys with SSO. Having issues? Try [```Fallback Login```]({fallback_login_link})"
-)
+ui_message = f"👉 [```LiteLLM Admin Panel on /ui```]({ui_link}). Create, Edit Keys with SSO. Having issues? Try [```Fallback Login```]({fallback_login_link})"
 ui_message += "\n\n💸 [```LiteLLM Model Cost Map```](https://models.litellm.ai/)."
 
 ui_message += f"\n\n🔎 [```LiteLLM Model Hub```]({model_hub_link}). See available models on the proxy. [**Docs**](https://docs.litellm.ai/docs/proxy/ai_hub)"
@@ -649,10 +641,10 @@ async def _initialize_shared_aiohttp_session():
             connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
         if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
             connector_kwargs["limit_per_host"] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
-        
+
         connector = TCPConnector(**connector_kwargs)
         session = ClientSession(connector=connector)
-        
+
         verbose_proxy_logger.info(
             f"SESSION REUSE: Created shared aiohttp session for connection pooling (ID: {id(session)}, "
             f"limit={AIOHTTP_CONNECTOR_LIMIT}, limit_per_host={AIOHTTP_CONNECTOR_LIMIT_PER_HOST})"
@@ -954,20 +946,19 @@ try:
     # This prevents mutating the packaged UI directory (e.g. site-packages or the repo checkout)
     # and ensures extensionless routes like /ui/login work via <route>/index.html.
     is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
-    runtime_ui_path = "/tmp/litellm_ui"
 
-    if _dir_has_content(runtime_ui_path):
-        if is_non_root:
+    # Only use runtime UI path in Docker/non-root environments
+    # In local development, use the packaged UI directly
+    if is_non_root:
+        # Use /var/lib/litellm/ui for Docker (more secure than /tmp)
+        runtime_ui_path = "/var/lib/litellm/ui"
+
+        if _dir_has_content(runtime_ui_path):
             verbose_proxy_logger.info(
                 f"Using pre-built UI for non-root Docker: {runtime_ui_path}"
             )
+            ui_path = runtime_ui_path
         else:
-            verbose_proxy_logger.info(
-                f"Using cached runtime UI directory: {runtime_ui_path}"
-            )
-        ui_path = runtime_ui_path
-    else:
-        if is_non_root:
             verbose_proxy_logger.error(
                 f"UI not found at {runtime_ui_path}. Attempting to populate it from packaged UI."
             )
@@ -975,33 +966,32 @@ try:
                 f"Path exists: {os.path.exists(runtime_ui_path)}, Has content: {_dir_has_content(runtime_ui_path)}"
             )
 
-        try:
-            os.makedirs(runtime_ui_path, exist_ok=True)
-            if not _dir_has_content(runtime_ui_path) and _dir_has_content(
-                packaged_ui_path
-            ):
-                shutil.copytree(
-                    packaged_ui_path,
-                    runtime_ui_path,
-                    dirs_exist_ok=True,
-                )
-        except Exception as e:
-            if is_non_root:
+            try:
+                os.makedirs(runtime_ui_path, exist_ok=True)
+                if not _dir_has_content(runtime_ui_path) and _dir_has_content(
+                    packaged_ui_path
+                ):
+                    shutil.copytree(
+                        packaged_ui_path,
+                        runtime_ui_path,
+                        dirs_exist_ok=True,
+                    )
+            except Exception as e:
                 verbose_proxy_logger.exception(
                     f"Failed to populate runtime UI directory {runtime_ui_path} from {packaged_ui_path}: {e}"
                 )
-        else:
-            if _dir_has_content(runtime_ui_path):
-                if is_non_root:
+            else:
+                if _dir_has_content(runtime_ui_path):
                     verbose_proxy_logger.info(
                         f"Using populated UI for non-root Docker: {runtime_ui_path}"
                     )
-                else:
-                    verbose_proxy_logger.info(
-                        f"Using populated runtime UI directory: {runtime_ui_path}"
-                    )
-                ui_path = runtime_ui_path
-
+                    ui_path = runtime_ui_path
+    else:
+        # Local development: use packaged UI directly, no runtime copy needed
+        verbose_proxy_logger.info(
+            f"Using packaged UI directory for local development: {packaged_ui_path}"
+        )
+        ui_path = packaged_ui_path
     # Only modify files if a custom server root path is set
     if server_root_path and server_root_path != "/":
         # Iterate through files in the UI directory
@@ -1087,18 +1077,22 @@ try:
                     continue
 
     # Handle HTML file restructuring
-    # Always restructure the directory we actually serve, but avoid mutating the packaged UI.
+    # Always restructure the directory we actually serve.
     # This is critical for extensionless routes like /ui/login (expects login/index.html).
-    if ui_path != packaged_ui_path:
-        try:
-            _restructure_ui_html_files(ui_path)
-        except PermissionError as e:
-            verbose_proxy_logger.exception(
-                f"Permission error while restructuring UI directory {ui_path}: {e}"
-            )
-    else:
+    # In development, we restructure directly in _experimental/out.
+    # In non-root Docker, we restructure in /var/lib/litellm/ui.
+    try:
+        _restructure_ui_html_files(ui_path)
         verbose_proxy_logger.info(
-            f"Skipping runtime HTML restructuring for packaged UI directory: {ui_path}"
+            f"Restructured UI directory: {ui_path}"
+        )
+    except PermissionError as e:
+        verbose_proxy_logger.exception(
+            f"Permission error while restructuring UI directory {ui_path}: {e}"
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            f"Error while restructuring UI directory {ui_path}: {e}"
         )
 
 except Exception:
@@ -1150,6 +1144,7 @@ if docs_url != "/" and root_redirect_url is not None:
     @app.get("/", include_in_schema=False)
     async def root_redirect():
         return RedirectResponse(url=root_redirect_url)  # type: ignore[arg-type]
+
 
 from typing import Dict
 
@@ -1734,7 +1729,7 @@ async def _run_background_health_check():
             else:
                 # Use a system identifier for background health checks
                 checked_by = "background_health_check"
-            
+
             start_time = time_module.time()
             asyncio.create_task(
                 _save_background_health_checks_to_db(
@@ -2425,7 +2420,9 @@ class ProxyConfig:
                     # Initialize global polling via cache settings
                     global polling_via_cache_enabled, polling_cache_ttl
                     background_mode = value.get("background_mode", {})
-                    polling_via_cache_enabled = background_mode.get("polling_via_cache", False)
+                    polling_via_cache_enabled = background_mode.get(
+                        "polling_via_cache", False
+                    )
                     polling_cache_ttl = background_mode.get("ttl", 3600)
                     verbose_proxy_logger.debug(
                         f"{blue_color_code} Initialized polling via cache: enabled={polling_via_cache_enabled}, ttl={polling_cache_ttl}{reset_color_code}"
@@ -2720,7 +2717,9 @@ class ProxyConfig:
             guardrails_v2 = config.get("guardrails", None)
         if guardrails_v2:
             init_guardrails_v2(
-                all_guardrails=guardrails_v2, config_file_path=config_file_path
+                all_guardrails=guardrails_v2,
+                config_file_path=config_file_path,
+                llm_router=router,
             )
 
         ## Prompt settings
@@ -2795,19 +2794,25 @@ class ProxyConfig:
         verbose_proxy_logger.debug(f"_alerting_callbacks: {general_settings}")
         if _alerting_callbacks is None:
             return
+        
+        # Ensure proxy_logging_obj.alerting is set for all alerting types
+        _alerting_value = general_settings.get("alerting", None)
+        verbose_proxy_logger.debug(f"_load_alerting_settings: Calling update_values with alerting={_alerting_value}")
+        proxy_logging_obj.update_values(
+            alerting=_alerting_value,
+            alerting_threshold=general_settings.get("alerting_threshold", 600),
+            alert_types=general_settings.get("alert_types", None),
+            alert_to_webhook_url=general_settings.get(
+                "alert_to_webhook_url", None
+            ),
+            alerting_args=general_settings.get("alerting_args", None),
+            redis_cache=redis_usage_cache,
+        )
+        
         for _alert in _alerting_callbacks:
             if _alert == "slack":
-                # [OLD] v0 implementation
-                proxy_logging_obj.update_values(
-                    alerting=general_settings.get("alerting", None),
-                    alerting_threshold=general_settings.get("alerting_threshold", 600),
-                    alert_types=general_settings.get("alert_types", None),
-                    alert_to_webhook_url=general_settings.get(
-                        "alert_to_webhook_url", None
-                    ),
-                    alerting_args=general_settings.get("alerting_args", None),
-                    redis_cache=redis_usage_cache,
-                )
+                # [OLD] v0 implementation - already handled by update_values above
+                pass
             else:
                 # [NEW] v1 implementation - init as a custom logger
                 if _alert in litellm._known_custom_logger_compatible_callbacks:
@@ -3274,6 +3279,7 @@ class ProxyConfig:
             proxy_logging_obj: ProxyLogging
         """
         _general_settings = config_data.get("general_settings", {})
+    
         if _general_settings is not None and "alerting" in _general_settings:
             if (
                 general_settings is not None
@@ -3282,29 +3288,36 @@ class ProxyConfig:
                 and _general_settings.get("alerting", None) is not None
                 and isinstance(_general_settings["alerting"], list)
             ):
-                verbose_proxy_logger.debug(
-                    "Overriding Default 'alerting' values with db 'alerting' values."
-                )
-                general_settings["alerting"] = _general_settings[
-                    "alerting"
-                ]  # override yaml values with db
-                proxy_logging_obj.alerting = general_settings["alerting"]
-                proxy_logging_obj.slack_alerting_instance.alerting = general_settings[
-                    "alerting"
+                # Merge DB and YAML/config alerting values instead of overriding
+                _yaml_alerting = set(general_settings["alerting"])
+                _db_alerting = set(_general_settings["alerting"])
+                _merged_alerting = list(_yaml_alerting.union(_db_alerting))
+                # Preserve order: YAML values first, then DB values
+                _merged_alerting = list(general_settings["alerting"]) + [
+                    item for item in _general_settings["alerting"] 
+                    if item not in general_settings["alerting"]
                 ]
+                verbose_proxy_logger.debug(
+                    f"Merging alerting values: YAML={general_settings['alerting']}, DB={_general_settings['alerting']}, Merged={_merged_alerting}"
+                )
+                general_settings["alerting"] = _merged_alerting
+                # Use update_values to properly set alerting for both slack and email
+                proxy_logging_obj.update_values(
+                    alerting=general_settings["alerting"],
+                )
             elif general_settings is None:
                 general_settings = {}
                 general_settings["alerting"] = _general_settings["alerting"]
-                proxy_logging_obj.alerting = general_settings["alerting"]
-                proxy_logging_obj.slack_alerting_instance.alerting = general_settings[
-                    "alerting"
-                ]
+                # Use update_values to properly set alerting for both slack and email
+                proxy_logging_obj.update_values(
+                    alerting=general_settings["alerting"],
+                )
             elif isinstance(general_settings, dict):
                 general_settings["alerting"] = _general_settings["alerting"]
-                proxy_logging_obj.alerting = general_settings["alerting"]
-                proxy_logging_obj.slack_alerting_instance.alerting = general_settings[
-                    "alerting"
-                ]
+                # Use update_values to properly set alerting for both slack and email
+                proxy_logging_obj.update_values(
+                    alerting=general_settings["alerting"],
+                )
 
         if _general_settings is not None and "alert_types" in _general_settings:
             general_settings["alert_types"] = _general_settings["alert_types"]
@@ -3408,8 +3421,17 @@ class ProxyConfig:
             decrypted_env_vars = self._decrypt_and_set_db_env_variables(
                 db_param_value, return_original_value=True
             )
+            # Normalize keys when loading from DB so services expecting uppercase
+            # (e.g. Datadog) can read them even if stored in lowercase.
+            merged_env_vars: dict = {}
+            for key, value in decrypted_env_vars.items():
+                merged_env_vars[key] = value
+                upper_key = key.upper()
+                merged_env_vars[upper_key] = value
+                os.environ[upper_key] = value
+
             current_config.setdefault("environment_variables", {}).update(
-                decrypted_env_vars
+                merged_env_vars
             )
             return current_config
         elif param_name == "litellm_settings" and isinstance(db_param_value, dict):
@@ -3625,6 +3647,7 @@ class ProxyConfig:
             )
             if sso_settings is not None:
                 # Capitalize all keys in sso_settings dictionary
+                sso_settings.sso_settings.pop("role_mappings", None)
                 uppercase_sso_settings = {
                     key.upper(): value
                     for key, value in sso_settings.sso_settings.items()
@@ -4414,7 +4437,7 @@ class ProxyStartupEvent:
             )
 
     @classmethod
-    async def initialize_scheduled_background_jobs(
+    async def initialize_scheduled_background_jobs(  # noqa: PLR0915
         cls,
         general_settings: dict,
         prisma_client: PrismaClient,
@@ -4499,7 +4522,7 @@ class ProxyStartupEvent:
         ### MONITOR SPEND LOGS QUEUE (queue-size-based job) ###
         if general_settings.get("disable_spend_logs", False) is False:
             from litellm.proxy.utils import _monitor_spend_logs_queue
-            
+
             # Start background task to monitor spend logs queue size
             asyncio.create_task(
                 _monitor_spend_logs_queue(
@@ -4606,6 +4629,37 @@ class ProxyStartupEvent:
                 verbose_proxy_logger.error(f"Failed to setup batch cost checking: {e}")
                 verbose_proxy_logger.debug(
                     "Checking batch cost for LiteLLM Managed Files is an Enterprise Feature. Skipping..."
+                )
+                pass
+
+        ### CHECK RESPONSES COST ###
+        if llm_router is not None:
+            try:
+                from litellm_enterprise.proxy.common_utils.check_responses_cost import (
+                    CheckResponsesCost,
+                )
+
+                check_responses_cost_job = CheckResponsesCost(
+                    proxy_logging_obj=proxy_logging_obj,
+                    prisma_client=prisma_client,
+                    llm_router=llm_router,
+                )
+                scheduler.add_job(
+                    check_responses_cost_job.check_responses_cost,
+                    "interval",
+                    seconds=proxy_batch_polling_interval
+                    + random.randint(0, 30),  # Add small random offset
+                    # REMOVED jitter parameter - major cause of memory leak
+                    id="check_responses_cost_job",
+                    replace_existing=True,
+                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+                )
+                verbose_proxy_logger.info("Responses cost check job scheduled successfully")
+
+            except Exception as e:
+                verbose_proxy_logger.error(f"Failed to setup responses cost checking: {e}")
+                verbose_proxy_logger.debug(
+                    "Checking responses cost for LiteLLM Managed Files is an Enterprise Feature. Skipping..."
                 )
                 pass
 
@@ -5360,7 +5414,9 @@ async def embeddings(  # noqa: PLR0915
             # check if provider accept list of tokens as input - e.g. for langchain integration
             if llm_router is not None and data.get("model") in router_model_names:
                 # Use router's O(1) lookup instead of O(N) iteration through llm_model_list
-                deployment = llm_router.get_deployment_by_model_group_name(model_group_name=data["model"])
+                deployment = llm_router.get_deployment_by_model_group_name(
+                    model_group_name=data["model"]
+                )
                 if deployment is not None:
                     litellm_params = deployment.get("litellm_params", {}) or {}
                     litellm_model = litellm_params.get("model", "")
@@ -5640,10 +5696,12 @@ async def audio_speech(
             if "gemini" in request_model_lower and (
                 "tts" in request_model_lower or "preview-tts" in request_model_lower
             ):
-                media_type = "audio/wav"  # Gemini TTS returns WAV format after conversion
+                media_type = (
+                    "audio/wav"  # Gemini TTS returns WAV format after conversion
+                )
 
         return StreamingResponse(
-            _audio_speech_chunk_generator(response), # type: ignore[arg-type]
+            _audio_speech_chunk_generator(response),  # type: ignore[arg-type]
             media_type=media_type,
             headers=custom_headers,  # type: ignore
         )
@@ -8359,7 +8417,7 @@ async def async_queue_request(
 ):
     global general_settings, user_debug, proxy_logging_obj
     """
-    v2 attempt at a background worker to handle queuing.
+    v2 attempt at a background worker to handle queuing
 
     Just supports /chat/completion calls currently.
 
@@ -8552,44 +8610,69 @@ async def login_v2(request: Request):  # noqa: PLR0915
     from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object
     from litellm.proxy.utils import get_custom_url
 
-    body = await request.json()
-    username = str(body.get("username"))
-    password = str(body.get("password"))
+    try:
+        body = await request.json()
+        username = str(body.get("username"))
+        password = str(body.get("password"))
 
-    login_result = await authenticate_user(
-        username=username,
-        password=password,
-        master_key=master_key,
-        prisma_client=prisma_client,
-    )
+        login_result = await authenticate_user(
+            username=username,
+            password=password,
+            master_key=master_key,
+            prisma_client=prisma_client,
+        )
 
-    returned_ui_token_object = create_ui_token_object(
-        login_result=login_result,
-        general_settings=general_settings,
-        premium_user=premium_user,
-    )
+        returned_ui_token_object = create_ui_token_object(
+            login_result=login_result,
+            general_settings=general_settings,
+            premium_user=premium_user,
+        )
 
-    import jwt
+        import jwt
 
-    jwt_token = jwt.encode(
-        cast(dict, returned_ui_token_object),
-        cast(str, master_key),
-        algorithm="HS256",
-    )
+        jwt_token = jwt.encode(
+            cast(dict, returned_ui_token_object),
+            cast(str, master_key),
+            algorithm="HS256",
+        )
 
-    litellm_dashboard_ui = get_custom_url(str(request.base_url))
-    if litellm_dashboard_ui.endswith("/"):
-        litellm_dashboard_ui += "ui/"
-    else:
-        litellm_dashboard_ui += "/ui/"
-    litellm_dashboard_ui += "?login=success"
+        litellm_dashboard_ui = get_custom_url(str(request.base_url))
+        if litellm_dashboard_ui.endswith("/"):
+            litellm_dashboard_ui += "ui/"
+        else:
+            litellm_dashboard_ui += "/ui/"
+        litellm_dashboard_ui += "?login=success"
 
-    json_response = JSONResponse(
-        content={"redirect_url": litellm_dashboard_ui},
-        status_code=status.HTTP_200_OK,
-    )
-    json_response.set_cookie(key="token", value=jwt_token)
-    return json_response
+        json_response = JSONResponse(
+            content={"redirect_url": litellm_dashboard_ui},
+            status_code=status.HTTP_200_OK,
+        )
+        json_response.set_cookie(key="token", value=jwt_token)
+        return json_response
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.login_v2(): Exception occurred - {}".format(
+                str(e)
+            )
+        )
+        if isinstance(e, ProxyException):
+            raise e
+        elif isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", str(e)),
+                type=ProxyErrorTypes.auth_error,
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            )
+        else:
+            error_msg = f"{str(e)}"
+            raise ProxyException(
+                message=error_msg,
+                type=ProxyErrorTypes.auth_error,
+                param="None",
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
 
 @app.get("/onboarding/get_token", include_in_schema=False)
 async def onboarding(invite_link: str, request: Request):
@@ -8804,7 +8887,7 @@ def get_image():
     default_site_logo = os.path.join(current_dir, "logo.jpg")
 
     is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
-    assets_dir = "/tmp/litellm_assets" if is_non_root else current_dir
+    assets_dir = "/var/lib/litellm/assets" if is_non_root else current_dir
 
     if is_non_root:
         os.makedirs(assets_dir, exist_ok=True)
@@ -9683,11 +9766,11 @@ async def get_config():  # noqa: PLR0915
         _litellm_settings = config_data.get("litellm_settings", {})
         _general_settings = config_data.get("general_settings", {})
         environment_variables = config_data.get("environment_variables", {})
-        
+
         _success_callbacks = _litellm_settings.get("success_callback", [])
         _failure_callbacks = _litellm_settings.get("failure_callback", [])
         _success_and_failure_callbacks = _litellm_settings.get("callbacks", [])
-        
+
         _data_to_return = []
         """
         [
@@ -9703,15 +9786,23 @@ async def get_config():  # noqa: PLR0915
         ]
 
         """
-        
+
         for _callback in _success_callbacks:
-            _data_to_return.append(process_callback(_callback, "success", environment_variables))
-        
+            _data_to_return.append(
+                process_callback(_callback, "success", environment_variables)
+            )
+
         for _callback in _failure_callbacks:
-            _data_to_return.append(process_callback(_callback, "failure", environment_variables))
-        
+            _data_to_return.append(
+                process_callback(_callback, "failure", environment_variables)
+            )
+
         for _callback in _success_and_failure_callbacks:
-            _data_to_return.append(process_callback(_callback, "success_and_failure", environment_variables))
+            _data_to_return.append(
+                process_callback(
+                    _callback, "success_and_failure", environment_variables
+                )
+            )
 
         # Check if slack alerting is on
         _alerting = _general_settings.get("alerting", [])

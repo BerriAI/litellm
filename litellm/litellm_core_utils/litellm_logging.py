@@ -127,6 +127,7 @@ from litellm.utils import _get_base_model_from_metadata, executor, print_verbose
 from ..integrations.argilla import ArgillaLogger
 from ..integrations.arize.arize_phoenix import ArizePhoenixLogger
 from ..integrations.athina import AthinaLogger
+from ..integrations.azure_sentinel.azure_sentinel import AzureSentinelLogger
 from ..integrations.azure_storage.azure_storage import AzureBlobStorageLogger
 from ..integrations.custom_prompt_management import CustomPromptManagement
 from ..integrations.datadog.datadog import DataDogLogger
@@ -917,9 +918,11 @@ class Logging(LiteLLMLoggingBaseClass):
                                 raw_request_body=self._get_raw_request_body(
                                     additional_args.get("complete_input_dict", {})
                                 ),
+                                # NOTE: setting ignore_sensitive_headers to True will cause
+                                # the Authorization header to be leaked when calls to the health
+                                # endpoint are made and fail.
                                 raw_request_headers=self._get_masked_headers(
                                     additional_args.get("headers", {}) or {},
-                                    ignore_sensitive_headers=True,
                                 ),
                                 error=None,
                             )
@@ -1288,6 +1291,9 @@ class Logging(LiteLLMLoggingBaseClass):
         original_cost: Optional[float] = None,
         discount_percent: Optional[float] = None,
         discount_amount: Optional[float] = None,
+        margin_percent: Optional[float] = None,
+        margin_fixed_amount: Optional[float] = None,
+        margin_total_amount: Optional[float] = None,
     ) -> None:
         """
         Helper method to store cost breakdown in the logging object.
@@ -1300,6 +1306,9 @@ class Logging(LiteLLMLoggingBaseClass):
             original_cost: Cost before discount
             discount_percent: Discount percentage (0.05 = 5%)
             discount_amount: Discount amount in USD
+            margin_percent: Margin percentage applied (0.10 = 10%)
+            margin_fixed_amount: Fixed margin amount in USD
+            margin_total_amount: Total margin added in USD
         """
 
         self.cost_breakdown = CostBreakdown(
@@ -1316,6 +1325,14 @@ class Logging(LiteLLMLoggingBaseClass):
             self.cost_breakdown["discount_percent"] = discount_percent
         if discount_amount is not None:
             self.cost_breakdown["discount_amount"] = discount_amount
+
+        # Store margin information if provided
+        if margin_percent is not None:
+            self.cost_breakdown["margin_percent"] = margin_percent
+        if margin_fixed_amount is not None:
+            self.cost_breakdown["margin_fixed_amount"] = margin_fixed_amount
+        if margin_total_amount is not None:
+            self.cost_breakdown["margin_total_amount"] = margin_total_amount
 
     def _response_cost_calculator(
         self,
@@ -3548,6 +3565,14 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _datadog_llm_obs_logger = DataDogLLMObsLogger()
             _in_memory_loggers.append(_datadog_llm_obs_logger)
             return _datadog_llm_obs_logger  # type: ignore
+        elif logging_integration == "azure_sentinel":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, AzureSentinelLogger):
+                    return callback  # type: ignore
+
+            _azure_sentinel_logger = AzureSentinelLogger()
+            _in_memory_loggers.append(_azure_sentinel_logger)
+            return _azure_sentinel_logger  # type: ignore
         elif logging_integration == "gcs_bucket":
             for callback in _in_memory_loggers:
                 if isinstance(callback, GCSBucketLogger):
@@ -4051,6 +4076,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "datadog_llm_observability":
             for callback in _in_memory_loggers:
                 if isinstance(callback, DataDogLLMObsLogger):
+                    return callback
+        elif logging_integration == "azure_sentinel":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, AzureSentinelLogger):
                     return callback
         elif logging_integration == "gcs_bucket":
             for callback in _in_memory_loggers:
