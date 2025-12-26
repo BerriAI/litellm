@@ -449,6 +449,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             prepared_request.headers,
         )
 
+        event_type = (
+            GuardrailEventHooks.pre_call
+            if source == "INPUT"
+            else GuardrailEventHooks.post_call
+        )
+
         try:
             httpx_response = await self.async_handler.post(
                 url=prepared_request.url,
@@ -469,6 +475,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 start_time=start_time.timestamp(),
                 end_time=datetime.now().timestamp(),
                 duration=(datetime.now() - start_time).total_seconds(),
+                event_type=event_type,
             )
             # Re-raise the exception to maintain existing behavior
             raise
@@ -486,6 +493,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             start_time=start_time.timestamp(),
             end_time=datetime.now().timestamp(),
             duration=(datetime.now() - start_time).total_seconds(),
+            event_type=event_type,
         )
         #########################################################
         if httpx_response.status_code == 200:
