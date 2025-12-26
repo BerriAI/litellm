@@ -146,6 +146,29 @@ async def get_provider_fields() -> List[ProviderCreateInfo]:
     with open(provider_create_fields_path, "r") as f:
         provider_create_fields = json.load(f)
 
+    # Add providers from providers.json (OpenAI-like providers)
+    try:
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        existing_provider_names = {p["provider"] for p in provider_create_fields}
+
+        for slug in JSONProviderRegistry.list_providers():
+            # Skip if already in provider_create_fields.json
+            if slug in existing_provider_names:
+                continue
+
+            provider_create_fields.append({
+                "provider": slug.title(),
+                "provider_display_name": slug.title(),
+                "litellm_provider": slug,
+                "credential_fields": [],
+                "default_model_placeholder": "{model}",
+            })
+    except Exception as e:
+        # Log error but don't fail the endpoint
+        import logging
+        logging.warning(f"Failed to load providers from providers.json: {e}")
+
     return provider_create_fields
 
 
