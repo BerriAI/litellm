@@ -613,10 +613,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """
         Only raise exception for "BLOCKED" actions, not for "ANONYMIZED" actions.
 
-        If `self.mask_request_content` or `self.mask_response_content` is set to `True`, 
+        If `self.mask_request_content` or `self.mask_response_content` is set to `True`,
         then use the output from the guardrail to mask the request or response content.
-        
-        However, even with masking enabled, content with action="BLOCKED" should still 
+
+        However, even with masking enabled, content with action="BLOCKED" should still
         raise an exception, only content with action="ANONYMIZED" should be masked.
         """
 
@@ -739,9 +739,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make the Bedrock API request ##########
         #########################################################
-        bedrock_guardrail_response: Optional[Union[BedrockGuardrailResponse, str]] = (
-            None
-        )
+        bedrock_guardrail_response: Optional[
+            Union[BedrockGuardrailResponse, str]
+        ] = None
         try:
             bedrock_guardrail_response = await self.make_bedrock_api_request(
                 source="INPUT", messages=filtered_messages, request_data=data
@@ -811,9 +811,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make the Bedrock API request ##########
         #########################################################
-        bedrock_guardrail_response: Optional[Union[BedrockGuardrailResponse, str]] = (
-            None
-        )
+        bedrock_guardrail_response: Optional[
+            Union[BedrockGuardrailResponse, str]
+        ] = None
         try:
             bedrock_guardrail_response = await self.make_bedrock_api_request(
                 source="INPUT", messages=filtered_messages, request_data=data
