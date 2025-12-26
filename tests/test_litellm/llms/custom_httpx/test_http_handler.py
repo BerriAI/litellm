@@ -904,3 +904,13 @@ class TestDefaultCachedClientTimeoutHonorsRequestTimeout:
         litellm.in_memory_llm_clients_cache = LLMClientCache()
         client = get_async_httpx_client(llm_provider=LlmProviders.BEDROCK)
         assert client.timeout.read == 300.0
+
+
+@pytest.mark.asyncio
+async def test_async_http_handler_context_manager():
+    """Test that AsyncHTTPHandler can be used as an async context manager"""
+    async with AsyncHTTPHandler() as client:
+        assert client is not None
+        assert isinstance(client, httpx.AsyncClient)
+
+    assert client.is_closed
