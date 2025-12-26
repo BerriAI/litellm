@@ -14,8 +14,9 @@ from litellm.proxy.proxy_server import (
 )
 from .zx_security_validator import security_validator
 
+ttl = 24 * 60 * 60
 user_key_hashed_token_cache = DualCache(
-    default_in_memory_ttl = 24 * 60 * 60
+    default_in_memory_ttl = ttl
 )
 
 tmp_prisma_client = None
@@ -66,7 +67,7 @@ async def user_api_key_auth(
                         code=401,
                     )
                 # 半小时内有效
-                if time.time() - int_num > 1800:
+                if time.time() - int_num > ttl:
                     raise ProxyException(
                         message=f"Invalid API key: timestamp[{timestamp}] expired",
                         type="invalid_request_error",
