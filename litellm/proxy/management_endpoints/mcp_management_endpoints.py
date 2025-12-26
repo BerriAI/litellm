@@ -296,7 +296,6 @@ if MCP_AVAILABLE:
         access_groups_list = sorted(list(access_groups))
         return {"access_groups": access_groups_list}
 
-
     ## FastAPI Routes
     @router.get(
         "/server",
@@ -374,7 +373,9 @@ if MCP_AVAILABLE:
                 server_id
             )
             # Update the server object with health check results
-            mcp_server.status = health_result.status if health_result.status else "unknown"
+            mcp_server.status = (
+                health_result.status if health_result.status else "unknown"
+            )
             mcp_server.last_health_check = health_result.last_health_check
             mcp_server.health_check_error = health_result.health_check_error
         except Exception as e:

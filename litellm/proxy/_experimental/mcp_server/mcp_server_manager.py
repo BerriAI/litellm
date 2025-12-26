@@ -11,7 +11,7 @@ import datetime
 import hashlib
 import json
 import re
-from typing import Any, Dict, List, Optional, Set, Tuple, Union, cast
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 from urllib.parse import urlparse
 
 from fastapi import HTTPException
@@ -2152,7 +2152,7 @@ class MCPServerManager:
                 last_health_check=datetime.now(),
             )
 
-        status = "unknown"
+        status: Literal["healthy", "unhealthy", "unknown"] = "unknown"
         health_check_error = None
 
         # Check if we should skip health check based on auth configuration
@@ -2162,7 +2162,11 @@ class MCPServerManager:
         if server.auth_type == MCPAuth.oauth2:
             should_skip_health_check = True
         # Skip if auth_type is not none and authentication_token is missing
-        elif server.auth_type and server.auth_type != MCPAuth.none and not server.authentication_token:
+        elif (
+            server.auth_type
+            and server.auth_type != MCPAuth.none
+            and not server.authentication_token
+        ):
             should_skip_health_check = True
 
         if not should_skip_health_check:
@@ -2178,6 +2182,7 @@ class MCPServerManager:
             )
 
             try:
+
                 async def _noop(session):
                     return "ok"
 
@@ -2192,9 +2197,7 @@ class MCPServerManager:
             server_name=server.server_name,
             alias=server.alias,
             description=(
-                server.mcp_info.get("description")
-                if server.mcp_info
-                else None
+                server.mcp_info.get("description") if server.mcp_info else None
             ),
             url=server.url,
             transport=server.transport,
@@ -2235,7 +2238,9 @@ class MCPServerManager:
         allowed_server_ids = await self.get_allowed_mcp_servers(user_api_key_auth)
 
         # Run health checks concurrently
-        tasks = [self.health_check_server(server_id) for server_id in allowed_server_ids]
+        tasks = [
+            self.health_check_server(server_id) for server_id in allowed_server_ids
+        ]
         results = await asyncio.gather(*tasks)
 
         # Filter out None results (servers that were not found)
