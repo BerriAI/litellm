@@ -182,6 +182,32 @@ class TestOpenAIResponsesHandlerInputProcessing:
         # Empty string should be processed
         assert result["input"][1]["content"] == " [GUARDRAILED]"
 
+    @pytest.mark.asyncio
+    async def test_process_input_preserves_web_search_tool(self):
+        """Ensure web_search tools remain after guardrail processing"""
+        handler = OpenAIResponsesHandler()
+        guardrail = MockGuardrail(guardrail_name="test")
+
+        data = {
+            "input": "Search the news",
+            "model": "gpt-4",
+            "tools": [
+                {
+                    "type": "web_search_preview",
+                    "search_context_size": "medium",
+                    "user_location": {"country": "US"},
+                }
+            ],
+        }
+
+        result = await handler.process_input_messages(data, guardrail)
+
+        assert "tools" in result
+        assert any(
+            tool.get("type") in {"web_search", "web_search_preview"}
+            for tool in result["tools"]
+        )
+
 
 class TestOpenAIResponsesHandlerOutputProcessing:
     """Test output processing functionality"""

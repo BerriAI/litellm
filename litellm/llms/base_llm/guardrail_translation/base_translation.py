@@ -98,3 +98,17 @@ class BaseTranslation(ABC):
         Optional to override in subclasses.
         """
         return responses_so_far
+
+    def is_stream_item_complete(self, responses_so_far: List[Any]) -> bool:
+        """
+        Check if a streaming item has completed.
+
+        This is used to determine when to run guardrails on a complete item
+
+        Args:
+            responses_so_far: List of streaming responses received so far
+
+        Returns:
+            bool: True if a stream item has completed, False otherwise
+        """
+        return False

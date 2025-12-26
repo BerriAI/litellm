@@ -934,7 +934,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
 
                 function_chunk = ChatCompletionToolCallFunctionChunk(
                     name=output_item.get("name", None),
-                    arguments="",  # responses API sends everything again, we don't
+                    arguments=output_item.get("arguments", None),
                 )
 
                 # Add provider_specific_fields to function if present
