@@ -748,8 +748,19 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return;
     }
 
-    // Require model selection for Responses API
-    if (endpointType === EndpointType.RESPONSES && !selectedModel) {
+    // Require model selection for all model-based endpoints
+    const modelRequiredEndpoints = [
+      EndpointType.CHAT,
+      EndpointType.IMAGE,
+      EndpointType.SPEECH,
+      EndpointType.IMAGE_EDITS,
+      EndpointType.RESPONSES,
+      EndpointType.ANTHROPIC_MESSAGES,
+      EndpointType.EMBEDDINGS,
+      EndpointType.TRANSCRIPTION,
+    ];
+
+    if (modelRequiredEndpoints.includes(endpointType as EndpointType) && !selectedModel) {
       NotificationsManager.fromBackend("Please select a model before sending a request");
       return;
     }
