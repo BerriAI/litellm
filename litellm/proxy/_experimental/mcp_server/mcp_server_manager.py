@@ -2127,7 +2127,7 @@ class MCPServerManager:
 
     async def health_check_server(
         self, server_id: str, mcp_auth_header: Optional[str] = None
-    ) -> Dict[str, Any]:
+    ) -> LiteLLM_MCPServerTable:
         """
         Perform a health check on a specific MCP server.
 
@@ -2138,96 +2138,82 @@ class MCPServerManager:
         Returns:
             Dict containing health check results
         """
-        import time
         from datetime import datetime
 
         server = self.get_mcp_server_by_id(server_id)
         if not server:
-            return {
-                "server_id": server_id,
-                "server_name": None,
-                "status": "unknown",
-                "error": "Server not found",
-                "last_health_check": datetime.now().isoformat(),
-                "response_time_ms": None,
-            }
-
-        start_time = time.time()
-        try:
-            # Try to get tools from the server as a health check
-            tools = await self._get_tools_from_server(server, mcp_auth_header)
-            response_time = (time.time() - start_time) * 1000
-
-            return {
-                "server_id": server_id,
-                "server_name": server.name,
-                "status": "healthy",
-                "tools_count": len(tools),
-                "last_health_check": datetime.now().isoformat(),
-                "response_time_ms": round(response_time, 2),
-                "error": None,
-            }
-        except Exception as e:
-            response_time = (time.time() - start_time) * 1000
-            error_message = str(e)
-
-            return {
-                "server_id": server_id,
-                "server_name": server.name,
-                "status": "unhealthy",
-                "last_health_check": datetime.now().isoformat(),
-                "response_time_ms": round(response_time, 2),
-                "error": error_message,
-            }
-
-    async def health_check_all_servers(
-        self, mcp_auth_header: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """
-        Perform health checks on all MCP servers.
-
-        Args:
-            mcp_auth_header: Optional authentication header for the MCP servers
-
-        Returns:
-            Dict containing health check results for all servers
-        """
-        all_servers = self.get_registry()
-        results = {}
-
-        for server_id, server in all_servers.items():
-            results[server_id] = await self.health_check_server(
-                server_id, mcp_auth_header
+            verbose_logger.warning(f"MCP Server {server_id} not found")
+            return LiteLLM_MCPServerTable(
+                server_id=server_id,
+                server_name=None,
+                transport=MCPTransport.http,  # Default transport for not found servers
+                status="unknown",
+                health_check_error="Server not found",
+                last_health_check=datetime.now(),
             )
 
-        return results
+        status = "unknown"
+        health_check_error = None
 
-    async def health_check_allowed_servers(
-        self,
-        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
-        mcp_auth_header: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """
-        Perform health checks on all MCP servers that the user has access to.
+        # Check if we should skip health check based on auth configuration
+        should_skip_health_check = False
 
-        Args:
-            user_api_key_auth: User authentication info for access control
-            mcp_auth_header: Optional authentication header for the MCP servers
+        # Skip if auth_type is oauth2
+        if server.auth_type == MCPAuth.oauth2:
+            should_skip_health_check = True
+        # Skip if auth_type is not none and authentication_token is missing
+        elif server.auth_type and server.auth_type != MCPAuth.none and not server.authentication_token:
+            should_skip_health_check = True
 
-        Returns:
-            Dict containing health check results for accessible servers
-        """
-        # Get allowed servers for the user
-        allowed_server_ids = await self.get_allowed_mcp_servers(user_api_key_auth)
+        if not should_skip_health_check:
+            extra_headers = {}
+            if server.static_headers:
+                extra_headers.update(server.static_headers)
 
-        # Perform health checks on allowed servers
-        results = {}
-        for server_id in allowed_server_ids:
-            results[server_id] = await self.health_check_server(
-                server_id, mcp_auth_header
+            client = self._create_mcp_client(
+                server=server,
+                mcp_auth_header=None,
+                extra_headers=extra_headers,
+                stdio_env=None,
             )
 
-        return results
+            try:
+                async def _noop(session):
+                    return "ok"
+
+                await client.run_with_session(_noop)
+                status = "healthy"
+            except Exception as e:
+                health_check_error = str(e)
+                status = "unhealthy"
+
+        return LiteLLM_MCPServerTable(
+            server_id=server.server_id,
+            server_name=server.server_name,
+            alias=server.alias,
+            description=(
+                server.mcp_info.get("description")
+                if server.mcp_info
+                else None
+            ),
+            url=server.url,
+            transport=server.transport,
+            auth_type=server.auth_type,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+            teams=[],
+            mcp_access_groups=server.access_groups or [],
+            allowed_tools=server.allowed_tools or [],
+            extra_headers=server.extra_headers or [],
+            mcp_info=server.mcp_info,
+            static_headers=server.static_headers,
+            status=status,
+            last_health_check=datetime.now(),
+            health_check_error=health_check_error,
+            command=getattr(server, "command", None),
+            args=getattr(server, "args", None) or [],
+            env=getattr(server, "env", None) or {},
+        )
 
     async def get_all_mcp_servers_with_health_and_teams(
         self,
@@ -2248,72 +2234,8 @@ class MCPServerManager:
         # Get allowed server IDs
         allowed_server_ids = await self.get_allowed_mcp_servers(user_api_key_auth)
 
-        async def _check_server_health(server_id: str) -> Optional[LiteLLM_MCPServerTable]:
-            """Helper function to check health of a single server"""
-            server = self.get_mcp_server_by_id(server_id)
-            if server is None:
-                verbose_logger.warning(f"MCP Server {server_id} not found")
-                return None
-
-            status = "unknown"
-            health_check_error = None
-
-            # Check if we should skip health check based on auth configuration
-            should_skip_health_check = False
-
-            # Skip if auth_type is oauth2
-            if server.auth_type == MCPAuth.oauth2:
-                should_skip_health_check = True
-            # Skip if auth_type is not none and authentication_token is missing
-            elif server.auth_type and server.auth_type != MCPAuth.none and not server.authentication_token:
-                should_skip_health_check = True
-
-            if not should_skip_health_check:
-                extra_headers = {}
-                if server.static_headers:
-                    extra_headers.update(server.static_headers)
-
-                client = self._create_mcp_client(
-                    server=server,
-                    mcp_auth_header=None,
-                    extra_headers=extra_headers,
-                    stdio_env=None,
-                )
-
-                try:
-                    async def _noop(session):
-                        return "ok"
-
-                    await client.run_with_session(_noop)
-                    status = "healthy"
-                except Exception as e:
-                    health_check_error = str(e)
-                    status = "unhealthy"
-
-            return LiteLLM_MCPServerTable(
-                **{
-                    **server.model_dump(),
-                    "created_at": datetime.datetime.now(),
-                    "updated_at": datetime.datetime.now(),
-                    "description": (
-                        server.mcp_info.get("description")
-                        if server.mcp_info
-                        else None
-                    ),
-                    "allowed_tools": server.allowed_tools or [],
-                    "mcp_info": server.mcp_info,
-                    "mcp_access_groups": server.access_groups or [],
-                    "extra_headers": server.extra_headers or [],
-                    "command": getattr(server, "command", None),
-                    "args": getattr(server, "args", None) or [],
-                    "env": getattr(server, "env", None) or {},
-                    "status": status,
-                    "health_check_error": health_check_error,
-                }
-            )
-
         # Run health checks concurrently
-        tasks = [_check_server_health(server_id) for server_id in allowed_server_ids]
+        tasks = [self.health_check_server(server_id) for server_id in allowed_server_ids]
         results = await asyncio.gather(*tasks)
 
         # Filter out None results (servers that were not found)
