@@ -84,6 +84,11 @@ interface ChatUIProps {
   };
 }
 
+const MCP_SUPPORTED_ENDPOINTS = new Set<EndpointType>([
+  EndpointType.CHAT,
+  EndpointType.RESPONSES,
+]);
+
 const ChatUI: React.FC<ChatUIProps> = ({
   accessToken,
   token,
@@ -1319,7 +1324,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   <ToolOutlined className="mr-2" /> MCP Tool
                   <Tooltip
                     className="ml-1"
-                    title="Select MCP tools to use in your conversation, only available for /v1/responses endpoint"
+                    title="Select MCP tools to use in your conversation."
                   >
                     <InfoCircleOutlined />
                   </Tooltip>
@@ -1334,7 +1339,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   className="mb-4"
                   allowClear
                   optionLabelProp="label"
-                  disabled={!(endpointType === EndpointType.RESPONSES)}
+                  disabled={!MCP_SUPPORTED_ENDPOINTS.has(endpointType as EndpointType)}
                   maxTagCount="responsive"
                 >
                   {Array.isArray(mcpTools) &&
