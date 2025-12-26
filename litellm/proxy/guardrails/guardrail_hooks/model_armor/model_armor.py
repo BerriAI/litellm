@@ -295,7 +295,9 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         filters = (
             list(filter_results.values())
             if isinstance(filter_results, dict)
-            else filter_results if isinstance(filter_results, list) else []
+            else filter_results
+            if isinstance(filter_results, list)
+            else []
         )
 
         # Prefer sanitized text from deidentifyResult if present
