@@ -1,14 +1,7 @@
-import os
-import sys
+from unittest.mock import AsyncMock
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
-
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
-from unittest.mock import AsyncMock
 
 from litellm.caching.redis_cache import RedisCache
 
@@ -39,7 +32,7 @@ async def test_redis_cache_async_increment(namespace, monkeypatch, redis_no_ping
     expected_key = "test:test" if namespace else "test"
 
     with patch.object(
-        redis_cache, "init_async_client", return_value=mock_redis_instance
+            redis_cache, "init_async_client", return_value=mock_redis_instance
     ):
         # Call async_set_cache
         await redis_cache.async_increment(key=expected_key, value=1)
@@ -82,7 +75,7 @@ async def test_redis_cache_async_batch_get_cache(monkeypatch, redis_no_ping):
     test_keys = ["key1", "key2", "key3"]
 
     with patch.object(
-        redis_cache, "init_async_client", return_value=mock_redis_instance
+            redis_cache, "init_async_client", return_value=mock_redis_instance
     ):
         # Call async_batch_get_cache
         result = await redis_cache.async_batch_get_cache(key_list=test_keys)
@@ -130,15 +123,15 @@ async def test_handle_lpop_count_for_older_redis_versions(monkeypatch):
         "7.0.0",  # Standard Redis string version
         7.0,  # Valkey/ElastiCache float version (THE BUG this fix addresses)
         7,  # Integer version (e.g., from some Redis forks)
-        
+
         # Version < 7
         "6",  # String without dots, version < 7
-        
+
         # Malformed versions (fallback to 7)
         "latest",  # Non-numeric version
         "",  # Empty string
         -7.0,  # Negative float
-        
+
         # Format variations
         " 7.0.0 ",  # Whitespace (should be stripped)
         "7.0.0-rc1",  # Version with suffix
@@ -146,7 +139,7 @@ async def test_handle_lpop_count_for_older_redis_versions(monkeypatch):
     ],
 )
 async def test_async_lpop_with_float_redis_version(
-    monkeypatch, redis_no_ping, redis_version
+        monkeypatch, redis_no_ping, redis_version
 ):
     """
     Test async_lpop with various Redis version formats (especially float).
@@ -166,36 +159,36 @@ async def test_async_lpop_with_float_redis_version(
     Related: Database deadlock issues when use_redis_transaction_buffer is enabled.
     """
     monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
-    
+
     # Create RedisCache instance
     redis_cache = RedisCache()
     redis_cache.redis_version = redis_version  # Set the version to test
-    
+
     # Create an AsyncMock for the Redis client
     mock_redis_instance = AsyncMock()
     mock_redis_instance.__aenter__.return_value = mock_redis_instance
     mock_redis_instance.__aexit__.return_value = None
-    
+
     # Mock lpop to return a test value (Redis >= 7.0 behavior)
     mock_redis_instance.lpop.return_value = [b"value1", b"value2"]
-    
+
     # Mock pipeline for Redis < 7.0 (used when major_version < 7)
     mock_pipeline = MagicMock()
     mock_pipeline.__aenter__ = AsyncMock(return_value=mock_pipeline)
     mock_pipeline.__aexit__ = AsyncMock(return_value=None)
     # Make pipeline() a regular method (not async) that returns the mock
     mock_redis_instance.pipeline = MagicMock(return_value=mock_pipeline)
-    
+
     # Mock handle_lpop_count_for_older_redis_versions for Redis < 7
     with patch.object(
-        redis_cache, "handle_lpop_count_for_older_redis_versions",
-        return_value=[b"value1", b"value2"]
+            redis_cache, "handle_lpop_count_for_older_redis_versions",
+            return_value=[b"value1", b"value2"]
     ):
         with patch.object(
-            redis_cache, "init_async_client", return_value=mock_redis_instance
+                redis_cache, "init_async_client", return_value=mock_redis_instance
         ):
             # Call async_lpop with count - this should not raise AttributeError
             result = await redis_cache.async_lpop(key="test_key", count=2)
-            
+
             # Verify the method completed without error
             assert result is not None
