@@ -945,7 +945,7 @@ class OpenTelemetry(CustomLogger):
             return
 
         from opentelemetry._logs import SeverityNumber, get_logger, get_logger_provider
-        from opentelemetry.sdk._logs import LogRecord as SdkLogRecord
+        from opentelemetry.sdk._logs import LogRecord as SdkLogRecord  # type: ignore
 
         otel_logger = get_logger(LITELLM_LOGGER_NAME)
 
