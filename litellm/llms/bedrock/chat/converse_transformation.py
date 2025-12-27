@@ -353,6 +353,7 @@ class AmazonConverseConfig(BaseConfig):
             "extra_headers",
             "response_format",
             "requestMetadata",
+            "service_tier",
         ]
 
         if (
@@ -676,6 +677,15 @@ class AmazonConverseConfig(BaseConfig):
                 if value is not None and isinstance(value, dict):
                     self._validate_request_metadata(value)  # type: ignore
                     optional_params["requestMetadata"] = value
+            if param == "service_tier" and isinstance(value, str):
+                # Map OpenAI service_tier (string) to Bedrock serviceTier (object)
+                # OpenAI values: "auto", "default", "flex", "priority"
+                # Bedrock values: "default", "flex", "priority" (no "auto")
+                bedrock_tier = value
+                if value == "auto":
+                    bedrock_tier = "default"  # Bedrock doesn't support "auto"
+                if bedrock_tier in ("default", "flex", "priority"):
+                    optional_params["serviceTier"] = {"type": bedrock_tier}
 
         # Only update thinking tokens for non-GPT-OSS models and non-Nova-Lite-2 models
         # Nova Lite 2 handles token budgeting differently through reasoningConfig
@@ -1534,6 +1544,13 @@ class AmazonConverseConfig(BaseConfig):
         # Add "trace" from Bedrock guardrails - if user has opted in to returning it
         if "trace" in completion_response:
             setattr(model_response, "trace", completion_response["trace"])
+
+        # Add service_tier if present in Bedrock response
+        # Map Bedrock serviceTier (object) to OpenAI service_tier (string)
+        if "serviceTier" in completion_response:
+            service_tier_block = completion_response["serviceTier"]
+            if isinstance(service_tier_block, dict) and "type" in service_tier_block:
+                setattr(model_response, "service_tier", service_tier_block["type"])
 
         return model_response
 
