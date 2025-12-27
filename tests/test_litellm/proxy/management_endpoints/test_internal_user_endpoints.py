@@ -62,6 +62,7 @@ async def test_ui_view_users_with_null_email(mocker, caplog):
         user_api_key_dict=UserAPIKeyAuth(user_id="test_user"),
         user_id="test_user",
         user_email=None,
+        organization_id=None,
         page=1,
         page_size=50,
     )

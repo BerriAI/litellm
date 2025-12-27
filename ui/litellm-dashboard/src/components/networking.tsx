@@ -2605,11 +2605,9 @@ export const userFilterUICall = async (accessToken: string, params: URLSearchPar
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/user/filter/ui` : `/user/filter/ui`;
 
-    if (params.get("user_email")) {
-      url += `?user_email=${params.get("user_email")}`;
-    }
-    if (params.get("user_id")) {
-      url += `?user_id=${params.get("user_id")}`;
+    const queryString = params.toString();
+    if (queryString) {
+      url += `?${queryString}`;
     }
 
     const response = await fetch(url, {

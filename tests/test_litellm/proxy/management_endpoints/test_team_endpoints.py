@@ -3958,3 +3958,707 @@ async def test_update_team_guardrails_with_org_id():
             assert "include" in first_call_kwargs
             assert "teams" in first_call_kwargs["include"]
             assert first_call_kwargs["include"]["teams"] is True
+
+
+# =============================================================================
+# Tests for Cross-Organization Team Member Addition Bug
+# =============================================================================
+# These tests verify that organization boundaries are enforced when adding
+# members to teams that belong to an organization.
+#
+# Key Logic:
+# - If team.organization_id is set → only users in that org can be added
+# - If team.organization_id is None (standalone) → any proxy user can be added
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_team_member_add_rejects_user_not_in_team_org():
+    """
+    Test that /team/member_add rejects adding a user who is NOT a member
+    of the team's organization.
+
+    Scenario:
+    - Team belongs to organization org-A
+    - User being added is NOT a member of org-A
+    - Expected: 403 Forbidden
+    """
+    from litellm.proxy._types import (
+        LiteLLM_OrganizationTable,
+        LiteLLM_TeamMembership,
+        LiteLLM_UserTable,
+        Member,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_add
+
+    # Team admin (can be from any org - what matters is the team's org)
+    team_admin = UserAPIKeyAuth(
+        user_id="team-admin-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        team_id="org-team-123",
+    )
+
+    # Request to add a user who is NOT in the team's organization
+    request_data = TeamMemberAddRequest(
+        team_id="org-team-123",
+        member=Member(
+            user_id="user-not-in-org-A",
+            role="user",
+        ),
+    )
+
+    # Mock team that belongs to org-A
+    mock_team = MagicMock(spec=LiteLLM_TeamTable)
+    mock_team.team_id = "org-team-123"
+    mock_team.organization_id = "org-A"  # Team belongs to organization A
+    mock_team.members_with_roles = [
+        Member(user_id="team-admin-user", role="admin"),
+    ]
+    mock_team.metadata = None
+    mock_team.model_dump.return_value = {
+        "team_id": "org-team-123",
+        "organization_id": "org-A",
+        "members_with_roles": [{"user_id": "team-admin-user", "role": "admin"}],
+        "metadata": None,
+        "spend": 0.0,
+    }
+
+    # Mock organization A - note: "user-not-in-org-A" is NOT in users list
+    mock_org = MagicMock(spec=LiteLLM_OrganizationTable)
+    mock_org.organization_id = "org-A"
+    mock_org.users = [
+        MagicMock(user_id="team-admin-user"),
+        MagicMock(user_id="existing-org-member"),
+    ]
+
+    # Mock for _add_team_members_to_team to allow the flow to complete (demonstrating bug)
+    mock_updated_team = MagicMock(spec=LiteLLM_TeamTable)
+    mock_updated_team.team_id = "org-team-123"
+    mock_updated_team.organization_id = "org-A"
+    mock_updated_team.model_dump.return_value = {
+        "team_id": "org-team-123",
+        "organization_id": "org-A",
+        "spend": 0.0,
+    }
+
+    mock_user = MagicMock(spec=LiteLLM_UserTable)
+    mock_user.user_id = "user-not-in-org-A"
+    mock_user.model_dump.return_value = {"user_id": "user-not-in-org-A"}
+
+    mock_membership = MagicMock(spec=LiteLLM_TeamMembership)
+    mock_membership.model_dump.return_value = {
+        "user_id": "user-not-in-org-A",
+        "team_id": "org-team-123",
+    }
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ), patch("litellm.proxy.proxy_server.proxy_logging_obj"), patch(
+        "litellm.proxy.proxy_server.premium_user", True
+    ), patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+        new_callable=AsyncMock,
+        return_value=mock_team,
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
+        new_callable=AsyncMock,
+        return_value=mock_org,
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints._is_user_team_admin",
+        return_value=True,
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints._add_team_members_to_team",
+        new_callable=AsyncMock,
+        return_value=(mock_updated_team, [mock_user], [mock_membership]),
+    ):
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_organizationmembership.find_many = AsyncMock(
+            return_value=[]
+        )
+
+        # Expected: Should raise 403 because user is not in the team's organization
+        with pytest.raises(HTTPException) as exc_info:
+            await team_member_add(
+                data=request_data,
+                user_api_key_dict=team_admin,
+            )
+        assert exc_info.value.status_code == 403
+        assert "organization" in str(exc_info.value.detail).lower()
+
+
+@pytest.mark.asyncio
+async def test_team_member_add_allows_user_in_team_org():
+    """
+    Test that /team/member_add allows adding a user who IS a member of
+    the team's organization.
+
+    Scenario:
+    - Team belongs to organization org-A
+    - User being added IS a member of org-A
+    - Expected: Success
+    """
+    from litellm.proxy._types import (
+        LiteLLM_OrganizationTable,
+        LiteLLM_TeamMembership,
+        LiteLLM_UserTable,
+        Member,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_add
+
+    team_admin = UserAPIKeyAuth(
+        user_id="team-admin-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        team_id="org-team-123",
+    )
+
+    request_data = TeamMemberAddRequest(
+        team_id="org-team-123",
+        member=Member(
+            user_id="user-in-org-A",  # This user IS in org-A
+            role="user",
+        ),
+    )
+
+    # Mock team belonging to org-A
+    mock_team = MagicMock(spec=LiteLLM_TeamTable)
+    mock_team.team_id = "org-team-123"
+    mock_team.organization_id = "org-A"
+    mock_team.members_with_roles = [
+        Member(user_id="team-admin-user", role="admin"),
+    ]
+    mock_team.metadata = None
+    mock_team.model_dump.return_value = {
+        "team_id": "org-team-123",
+        "organization_id": "org-A",
+        "members_with_roles": [{"user_id": "team-admin-user", "role": "admin"}],
+        "metadata": None,
+        "spend": 0.0,
+    }
+
+    # Mock organization A with the user being added as a member
+    mock_org = MagicMock(spec=LiteLLM_OrganizationTable)
+    mock_org.organization_id = "org-A"
+    mock_org.users = [
+        MagicMock(user_id="team-admin-user"),
+        MagicMock(user_id="user-in-org-A"),  # User being added IS in org
+    ]
+
+    # Mock updated team
+    mock_updated_team = MagicMock(spec=LiteLLM_TeamTable)
+    mock_updated_team.team_id = "org-team-123"
+    mock_updated_team.organization_id = "org-A"
+    mock_updated_team.model_dump.return_value = {
+        "team_id": "org-team-123",
+        "organization_id": "org-A",
+        "spend": 0.0,
+    }
+
+    mock_user = MagicMock(spec=LiteLLM_UserTable)
+    mock_user.user_id = "user-in-org-A"
+    mock_user.model_dump.return_value = {"user_id": "user-in-org-A"}
+
+    mock_membership = MagicMock(spec=LiteLLM_TeamMembership)
+    mock_membership.model_dump.return_value = {
+        "user_id": "user-in-org-A",
+        "team_id": "org-team-123",
+    }
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ), patch("litellm.proxy.proxy_server.proxy_logging_obj"), patch(
+        "litellm.proxy.proxy_server.premium_user", True
+    ), patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+        new_callable=AsyncMock,
+        return_value=mock_team,
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
+        new_callable=AsyncMock,
+        return_value=mock_org,
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints._is_user_team_admin",
+        return_value=True,
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints._add_team_members_to_team",
+        new_callable=AsyncMock,
+        return_value=(mock_updated_team, [mock_user], [mock_membership]),
+    ):
+        mock_prisma.db = MagicMock()
+
+        # Mock successful org membership check
+        mock_org_membership = MagicMock()
+        mock_org_membership.user_id = "user-in-org-A"
+        mock_prisma.db.litellm_organizationmembership.find_many = AsyncMock(
+            return_value=[mock_org_membership]
+        )
+
+        # Should succeed - user is in same org as team
+        result = await team_member_add(
+            data=request_data,
+            user_api_key_dict=team_admin,
+        )
+
+        assert result.team_id == "org-team-123"
+        assert len(result.updated_users) == 1
+
+
+@pytest.mark.asyncio
+async def test_team_member_add_allows_any_user_for_standalone_team():
+    """
+    Test that /team/member_add allows adding any user to a standalone team
+    (team without organization_id).
+
+    Scenario:
+    - Team has NO organization_id (standalone team)
+    - Any proxy user can be added
+    - Expected: Success (preserves existing behavior)
+    """
+    from litellm.proxy._types import (
+        LiteLLM_TeamMembership,
+        LiteLLM_UserTable,
+        Member,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_add
+
+    team_admin = UserAPIKeyAuth(
+        user_id="team-admin-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        team_id="standalone-team-123",
+    )
+
+    request_data = TeamMemberAddRequest(
+        team_id="standalone-team-123",
+        member=Member(
+            user_id="any-proxy-user",
+            role="user",
+        ),
+    )
+
+    # Mock standalone team (no organization_id)
+    mock_team = MagicMock(spec=LiteLLM_TeamTable)
+    mock_team.team_id = "standalone-team-123"
+    mock_team.organization_id = None  # No organization - standalone team
+    mock_team.members_with_roles = [
+        Member(user_id="team-admin-user", role="admin"),
+    ]
+    mock_team.metadata = None
+    mock_team.model_dump.return_value = {
+        "team_id": "standalone-team-123",
+        "organization_id": None,
+        "members_with_roles": [{"user_id": "team-admin-user", "role": "admin"}],
+        "metadata": None,
+        "spend": 0.0,
+    }
+
+    mock_updated_team = MagicMock(spec=LiteLLM_TeamTable)
+    mock_updated_team.team_id = "standalone-team-123"
+    mock_updated_team.organization_id = None
+    mock_updated_team.model_dump.return_value = {
+        "team_id": "standalone-team-123",
+        "organization_id": None,
+        "spend": 0.0,
+    }
+
+    mock_user = MagicMock(spec=LiteLLM_UserTable)
+    mock_user.user_id = "any-proxy-user"
+    mock_user.model_dump.return_value = {"user_id": "any-proxy-user"}
+
+    mock_membership = MagicMock(spec=LiteLLM_TeamMembership)
+    mock_membership.model_dump.return_value = {
+        "user_id": "any-proxy-user",
+        "team_id": "standalone-team-123",
+    }
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ), patch("litellm.proxy.proxy_server.proxy_logging_obj"), patch(
+        "litellm.proxy.proxy_server.premium_user", True
+    ), patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+        new_callable=AsyncMock,
+        return_value=mock_team,
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints._is_user_team_admin",
+        return_value=True,
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints._add_team_members_to_team",
+        new_callable=AsyncMock,
+        return_value=(mock_updated_team, [mock_user], [mock_membership]),
+    ):
+        mock_prisma.db = MagicMock()
+
+        # Should succeed - standalone teams allow any user
+        result = await team_member_add(
+            data=request_data,
+            user_api_key_dict=team_admin,
+        )
+
+        assert result.team_id == "standalone-team-123"
+        assert len(result.updated_users) == 1
+
+
+@pytest.mark.asyncio
+async def test_team_member_add_allows_user_with_multiple_orgs():
+    """
+    Test that /team/member_add allows adding a user who belongs to multiple
+    organizations, as long as they are a member of the team's organization.
+
+    Scenario:
+    - Team belongs to organization org-A
+    - User being added is a member of BOTH org-A and org-B
+    - Expected: Success (user is member of team's org)
+    """
+    from litellm.proxy._types import (
+        LiteLLM_OrganizationTable,
+        LiteLLM_TeamMembership,
+        LiteLLM_UserTable,
+        Member,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_add
+
+    team_admin = UserAPIKeyAuth(
+        user_id="team-admin-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        team_id="org-team-123",
+    )
+
+    request_data = TeamMemberAddRequest(
+        team_id="org-team-123",
+        member=Member(
+            user_id="user-in-multiple-orgs",  # In both org-A and org-B
+            role="user",
+        ),
+    )
+
+    # Mock team belonging to org-A
+    mock_team = MagicMock(spec=LiteLLM_TeamTable)
+    mock_team.team_id = "org-team-123"
+    mock_team.organization_id = "org-A"
+    mock_team.members_with_roles = [
+        Member(user_id="team-admin-user", role="admin"),
+    ]
+    mock_team.metadata = None
+    mock_team.model_dump.return_value = {
+        "team_id": "org-team-123",
+        "organization_id": "org-A",
+        "members_with_roles": [{"user_id": "team-admin-user", "role": "admin"}],
+        "metadata": None,
+        "spend": 0.0,
+    }
+
+    # Mock org-A with the multi-org user as a member
+    mock_org = MagicMock(spec=LiteLLM_OrganizationTable)
+    mock_org.organization_id = "org-A"
+    mock_org.users = [
+        MagicMock(user_id="team-admin-user"),
+        MagicMock(user_id="user-in-multiple-orgs"),  # User is in org-A
+    ]
+
+    mock_updated_team = MagicMock(spec=LiteLLM_TeamTable)
+    mock_updated_team.team_id = "org-team-123"
+    mock_updated_team.organization_id = "org-A"
+    mock_updated_team.model_dump.return_value = {
+        "team_id": "org-team-123",
+        "organization_id": "org-A",
+        "spend": 0.0,
+    }
+
+    mock_user = MagicMock(spec=LiteLLM_UserTable)
+    mock_user.user_id = "user-in-multiple-orgs"
+    mock_user.model_dump.return_value = {"user_id": "user-in-multiple-orgs"}
+
+    mock_membership = MagicMock(spec=LiteLLM_TeamMembership)
+    mock_membership.model_dump.return_value = {
+        "user_id": "user-in-multiple-orgs",
+        "team_id": "org-team-123",
+    }
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ), patch("litellm.proxy.proxy_server.proxy_logging_obj"), patch(
+        "litellm.proxy.proxy_server.premium_user", True
+    ), patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+        new_callable=AsyncMock,
+        return_value=mock_team,
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
+        new_callable=AsyncMock,
+        return_value=mock_org,
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints._is_user_team_admin",
+        return_value=True,
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints._add_team_members_to_team",
+        new_callable=AsyncMock,
+        return_value=(mock_updated_team, [mock_user], [mock_membership]),
+    ):
+        mock_prisma.db = MagicMock()
+
+        # Mock successful org membership check
+        mock_org_membership = MagicMock()
+        mock_org_membership.user_id = "user-in-multiple-orgs"
+        mock_prisma.db.litellm_organizationmembership.find_many = AsyncMock(
+            return_value=[mock_org_membership]
+        )
+
+        # Should succeed - user is member of team's org (even if also in other orgs)
+        result = await team_member_add(
+            data=request_data,
+            user_api_key_dict=team_admin,
+        )
+
+        assert result.team_id == "org-team-123"
+        assert len(result.updated_users) == 1
+
+
+@pytest.mark.asyncio
+async def test_team_member_add_rejects_cross_org_even_for_proxy_admin():
+    """
+    Test that /team/member_add rejects cross-organization member addition
+    even when the requester is a proxy admin.
+
+    Scenario:
+    - Team belongs to organization org-A
+    - Proxy admin tries to add a user NOT in org-A
+    - Expected: 403 Forbidden (no admin override for org boundaries)
+
+    Rationale: If proxy admins need cross-org teams, they should create
+    teams without organization_id (standalone teams).
+    """
+    from litellm.proxy._types import (
+        LiteLLM_OrganizationTable,
+        LiteLLM_TeamMembership,
+        LiteLLM_UserTable,
+        Member,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_add
+
+    # Proxy admin user
+    proxy_admin = UserAPIKeyAuth(
+        user_id="proxy-admin-user",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    request_data = TeamMemberAddRequest(
+        team_id="org-team-123",
+        member=Member(
+            user_id="user-not-in-org-A",
+            role="user",
+        ),
+    )
+
+    # Mock team belonging to org-A
+    mock_team = MagicMock(spec=LiteLLM_TeamTable)
+    mock_team.team_id = "org-team-123"
+    mock_team.organization_id = "org-A"
+    mock_team.members_with_roles = []
+    mock_team.metadata = None
+    mock_team.model_dump.return_value = {
+        "team_id": "org-team-123",
+        "organization_id": "org-A",
+        "members_with_roles": [],
+        "metadata": None,
+        "spend": 0.0,
+    }
+
+    # Mock org-A without the user being added
+    mock_org = MagicMock(spec=LiteLLM_OrganizationTable)
+    mock_org.organization_id = "org-A"
+    mock_org.users = [
+        MagicMock(user_id="existing-org-member"),
+    ]
+
+    # Mock for _add_team_members_to_team to allow the flow to complete
+    mock_updated_team = MagicMock(spec=LiteLLM_TeamTable)
+    mock_updated_team.team_id = "org-team-123"
+    mock_updated_team.organization_id = "org-A"
+    mock_updated_team.model_dump.return_value = {
+        "team_id": "org-team-123",
+        "organization_id": "org-A",
+        "spend": 0.0,
+    }
+
+    mock_user = MagicMock(spec=LiteLLM_UserTable)
+    mock_user.user_id = "user-not-in-org-A"
+    mock_user.model_dump.return_value = {"user_id": "user-not-in-org-A"}
+
+    mock_membership = MagicMock(spec=LiteLLM_TeamMembership)
+    mock_membership.model_dump.return_value = {
+        "user_id": "user-not-in-org-A",
+        "team_id": "org-team-123",
+    }
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ), patch("litellm.proxy.proxy_server.proxy_logging_obj"), patch(
+        "litellm.proxy.proxy_server.premium_user", True
+    ), patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+        new_callable=AsyncMock,
+        return_value=mock_team,
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
+        new_callable=AsyncMock,
+        return_value=mock_org,
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints._add_team_members_to_team",
+        new_callable=AsyncMock,
+        return_value=(mock_updated_team, [mock_user], [mock_membership]),
+    ):
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_organizationmembership.find_many = AsyncMock(
+            return_value=[]
+        )
+
+        # Expected: Even proxy admin should not be able to add cross-org users
+        with pytest.raises(HTTPException) as exc_info:
+            await team_member_add(
+                data=request_data,
+                user_api_key_dict=proxy_admin,
+            )
+        assert exc_info.value.status_code == 403
+        assert "organization" in str(exc_info.value.detail).lower()
+
+
+@pytest.mark.asyncio
+async def test_bulk_team_member_add_rejects_users_not_in_team_org():
+    """
+    Test that /team/bulk_member_add rejects adding users who are NOT members
+    of the team's organization.
+
+    Scenario:
+    - Team belongs to organization org-A
+    - Bulk request includes users not in org-A
+    - Expected: 403 Forbidden for users not in org
+
+    Note: bulk_team_member_add calls team_member_add internally, so the
+    validation should happen there. This test verifies the end-to-end behavior.
+    """
+    from litellm.proxy._types import (
+        LiteLLM_OrganizationTable,
+        LiteLLM_TeamMembership,
+        LiteLLM_UserTable,
+        Member,
+        TeamAddMemberResponse,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import bulk_team_member_add
+
+    team_admin = UserAPIKeyAuth(
+        user_id="team-admin-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        team_id="org-team-123",
+    )
+
+    # Bulk request with mix of org members and non-org members
+    bulk_request = BulkTeamMemberAddRequest(
+        team_id="org-team-123",
+        members=[
+            Member(user_id="user-in-org-A", role="user"),
+            Member(user_id="user-NOT-in-org-A", role="user"),  # Should be rejected
+        ],
+    )
+
+    # Mock team belonging to org-A
+    mock_team = MagicMock(spec=LiteLLM_TeamTable)
+    mock_team.team_id = "org-team-123"
+    mock_team.organization_id = "org-A"
+    mock_team.members_with_roles = [
+        Member(user_id="team-admin-user", role="admin"),
+    ]
+    mock_team.metadata = None
+    mock_team.model_dump.return_value = {
+        "team_id": "org-team-123",
+        "organization_id": "org-A",
+        "members_with_roles": [{"user_id": "team-admin-user", "role": "admin"}],
+        "metadata": None,
+        "spend": 0.0,
+    }
+
+    # Mock org-A - only has user-in-org-A, not user-NOT-in-org-A
+    mock_org = MagicMock(spec=LiteLLM_OrganizationTable)
+    mock_org.organization_id = "org-A"
+    mock_org.users = [
+        MagicMock(user_id="team-admin-user"),
+        MagicMock(user_id="user-in-org-A"),
+    ]
+
+    # Mock successful response for team_member_add (this is the bug - it should reject)
+    mock_user_1 = MagicMock(spec=LiteLLM_UserTable)
+    mock_user_1.user_id = "user-in-org-A"
+    mock_user_1.user_email = None
+    mock_user_1.model_dump.return_value = {"user_id": "user-in-org-A"}
+
+    mock_user_2 = MagicMock(spec=LiteLLM_UserTable)
+    mock_user_2.user_id = "user-NOT-in-org-A"
+    mock_user_2.user_email = None
+    mock_user_2.model_dump.return_value = {"user_id": "user-NOT-in-org-A"}
+
+    mock_membership_1 = MagicMock(spec=LiteLLM_TeamMembership)
+    mock_membership_1.model_dump.return_value = {
+        "user_id": "user-in-org-A",
+        "team_id": "org-team-123",
+    }
+
+    mock_membership_2 = MagicMock(spec=LiteLLM_TeamMembership)
+    mock_membership_2.model_dump.return_value = {
+        "user_id": "user-NOT-in-org-A",
+        "team_id": "org-team-123",
+    }
+
+    mock_team_response = TeamAddMemberResponse(
+        team_id="org-team-123",
+        organization_id="org-A",
+        updated_users=[mock_user_1, mock_user_2],
+        updated_team_memberships=[mock_membership_1, mock_membership_2],
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ), patch("litellm.proxy.proxy_server.proxy_logging_obj"), patch(
+        "litellm.proxy.proxy_server.premium_user", True
+    ), patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+        new_callable=AsyncMock,
+        return_value=mock_team,
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
+        new_callable=AsyncMock,
+        return_value=mock_org,
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints._is_user_team_admin",
+        return_value=True,
+    ):
+        mock_prisma.db = MagicMock()
+
+        # Mock finding only user-in-org-A
+        mock_membership = MagicMock()
+        mock_membership.user_id = "user-in-org-A"
+        mock_prisma.db.litellm_organizationmembership.find_many = AsyncMock(
+            return_value=[mock_membership]
+        )
+
+        # Expected: bulk_team_member_add catches exceptions and returns them in response
+        result = await bulk_team_member_add(
+            data=bulk_request,
+            user_api_key_dict=team_admin,
+        )
+
+        # All additions should have failed
+        assert result.failed_additions == 2
+        assert result.successful_additions == 0
+
+        # Error message should mention organization
+        assert any("organization" in str(r.error).lower() for r in result.results)
