@@ -208,13 +208,17 @@ class TestAlertingHangingRequestCheck:
         Test send_alerts_for_hanging_requests when request is actually hanging.
         Should send alert for requests that haven't completed within threshold.
         """
-        # Add a hanging request to the cache
+        import time
+        
+        # Add a hanging request to the cache with start_time that exceeds threshold
+        old_start_time = time.time() - 400  # Started 400 seconds ago (> 300s threshold)
         hanging_data = HangingRequestData(
             request_id="hanging_request_999",
             model="gpt-4",
             api_base="https://api.openai.com/v1",
             key_alias="test_key",
             team_alias="test_team",
+            start_time=old_start_time,  # Set explicit old start time
         )
         await hanging_request_checker.hanging_request_cache.async_set_cache(
             key="hanging_request_999", value=hanging_data, ttl=300
