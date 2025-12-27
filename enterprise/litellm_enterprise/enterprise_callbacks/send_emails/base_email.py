@@ -7,7 +7,7 @@ import json
 import os
 from typing import List, Literal, Optional
 
-from litellm_enterprise.types.enterprise_callbacks.send_emails import (
+from ...types.enterprise_callbacks.send_emails import (
     EmailEvent,
     EmailParams,
     SendKeyCreatedEmailEvent,
