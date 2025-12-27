@@ -41,7 +41,7 @@ That's it, your local dev environment is ready!
 
 - Add your test to the [`tests/test_litellm/` directory](https://github.com/BerriAI/litellm/tree/main/tests/litellm)
 
-- This directory 1:1 maps the the `litellm/` directory, and can only contain mocked tests.
+- This directory 1:1 maps the `litellm/` directory, and can only contain mocked tests.
 - Do not add real llm api calls to this directory.
 
 ### 2.1 File Naming Convention for `tests/test_litellm/`
