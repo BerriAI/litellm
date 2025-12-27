@@ -962,6 +962,7 @@ class ProxyLogging:
             Updated data dictionary if guardrail passes, None if guardrail should be skipped
         """
         from litellm.types.guardrails import GuardrailEventHooks
+        from litellm.integrations.prometheus import PrometheusLogger
 
         # Determine the event type based on call type
         event_type = GuardrailEventHooks.pre_call
@@ -974,30 +975,62 @@ class ProxyLogging:
 
         guardrail_name = callback.guardrail_name
 
-        # Check if load balancing should be used
-        if guardrail_name and self._should_use_guardrail_load_balancing(guardrail_name):
-            response = await self._execute_guardrail_with_load_balancing(
-                guardrail_name=guardrail_name,
-                hook_type="pre_call",
-                data=data,
-                user_api_key_dict=user_api_key_dict,
-                call_type=call_type,
-            )
-        else:
-            # Single guardrail - execute directly
-            response = await self._execute_guardrail_hook(
-                callback=callback,
-                hook_type="pre_call",
-                data=data,
-                user_api_key_dict=user_api_key_dict,
-                call_type=call_type,
-            )
+        # Track timing and errors for prometheus metrics
+        # Use time.perf_counter() for more accurate duration measurements
+        guardrail_start_time = time.perf_counter()
+        status = "success"
+        error_type = None
 
-        # Process the response if one was returned
-        if response is not None:
-            data = await self.process_pre_call_hook_response(
-                response=response, data=data, call_type=call_type
-            )
+        try:
+            # Check if load balancing should be used
+            if guardrail_name and self._should_use_guardrail_load_balancing(guardrail_name):
+                response = await self._execute_guardrail_with_load_balancing(
+                    guardrail_name=guardrail_name,
+                    hook_type="pre_call",
+                    data=data,
+                    user_api_key_dict=user_api_key_dict,
+                    call_type=call_type,
+                )
+            else:
+                # Single guardrail - execute directly
+                response = await self._execute_guardrail_hook(
+                    callback=callback,
+                    hook_type="pre_call",
+                    data=data,
+                    user_api_key_dict=user_api_key_dict,
+                    call_type=call_type,
+                )
+
+            # Process the response if one was returned
+            if response is not None:
+                data = await self.process_pre_call_hook_response(
+                    response=response, data=data, call_type=call_type
+                )
+
+        except Exception as e:
+            status = "error"
+            error_type = type(e).__name__
+            # Re-raise the exception to maintain existing behavior
+            raise
+        finally:
+            # Record prometheus metrics
+            guardrail_end_time = time.perf_counter()
+            latency_seconds = guardrail_end_time - guardrail_start_time
+
+            # Get guardrail name for metrics (fallback if not set)
+            metrics_guardrail_name = guardrail_name or getattr(callback, "guardrail_name", callback.__class__.__name__) or "unknown"
+
+            # Find PrometheusLogger in callbacks and record metrics
+            for prom_callback in litellm.callbacks:
+                if isinstance(prom_callback, PrometheusLogger):
+                    prom_callback._record_guardrail_metrics(
+                        guardrail_name=metrics_guardrail_name,
+                        latency_seconds=latency_seconds,
+                        status=status,
+                        error_type=error_type,
+                        hook_type="pre_call",
+                    )
+                    break
 
         return data
 

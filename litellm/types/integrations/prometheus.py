@@ -1,7 +1,7 @@
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Literal, Optional, Tuple, Union
+from typing import Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field
 from typing_extensions import Annotated
@@ -185,6 +185,10 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_redis_daily_spend_update_queue_size",
     "litellm_in_memory_spend_update_queue_size",
     "litellm_redis_spend_update_queue_size",
+    "litellm_request_queue_time_seconds",
+    "litellm_guardrail_latency_seconds",
+    "litellm_guardrail_errors_total",
+    "litellm_guardrail_requests_total",
 ]
 
 
@@ -218,6 +222,23 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
     ]
+
+    litellm_request_queue_time_seconds = [
+        UserAPIKeyLabelNames.END_USER.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+    ]
+
+    # Guardrail metrics - these use custom labels (guardrail_name, status, error_type, hook_type)
+    # which are not part of UserAPIKeyLabelNames
+    litellm_guardrail_latency_seconds: List[str] = []
+    litellm_guardrail_errors_total: List[str] = []
+    litellm_guardrail_requests_total: List[str] = []
 
     litellm_proxy_total_requests_metric = [
         UserAPIKeyLabelNames.END_USER.value,
@@ -458,11 +479,6 @@ class PrometheusMetricLabels:
         )
 
         return default_labels + custom_labels
-
-
-from typing import List, Optional
-
-from pydantic import BaseModel, Field
 
 
 class UserAPIKeyLabelValues(BaseModel):
