@@ -450,20 +450,27 @@ def convert_to_model_response_object(  # noqa: PLR0915
         and "error" in response_object
         and response_object["error"] is not None
     ):
-        error_args = {"status_code": 422, "message": "Error in response object"}
+        # Some providers return an empty error object even on success (e.g. Apertis)
+        # Only raise if there is an actual error message or code
+        is_empty_error = False
         if isinstance(response_object["error"], dict):
-            if "code" in response_object["error"]:
-                error_args["status_code"] = response_object["error"]["code"]
-            if "message" in response_object["error"]:
-                if isinstance(response_object["error"]["message"], dict):
-                    message_str = json.dumps(response_object["error"]["message"])
-                else:
-                    message_str = str(response_object["error"]["message"])
-                error_args["message"] = message_str
-        raised_exception = Exception()
-        setattr(raised_exception, "status_code", error_args["status_code"])
-        setattr(raised_exception, "message", error_args["message"])
-        raise raised_exception
+            if not response_object["error"].get("message") and not response_object["error"].get("code"):
+                is_empty_error = True
+        
+        if not is_empty_error:
+            error_args = {"status_code": 422, "message": "Error in response object"}
+            if isinstance(response_object["error"], dict):
+                if "code" in response_object["error"]:
+                    error_args["status_code"] = response_object["error"]["code"]
+                if "message" in response_object["error"]:
+                    if isinstance(response_object["error"]["message"], dict):
+                        message_str = json.dumps(response_object["error"]["message"])
+                    else:
+                        message_str = str(response_object["error"]["message"])
+                    error_args["message"] = message_str
+            raised_exception = Exception(error_args["message"])
+            setattr(raised_exception, "status_code", error_args["status_code"])
+            raise raised_exception
 
     try:
         if response_type == "completion" and (
