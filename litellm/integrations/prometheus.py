@@ -214,7 +214,7 @@ class PrometheusLogger(CustomLogger):
 
             # Remaining Rate Limit for model
             self.litellm_remaining_requests_metric = self._gauge_factory(
-                "litellm_remaining_requests",
+                "litellm_remaining_requests_metric",
                 "LLM Deployment Analytics - remaining requests for model, returned from LLM API Provider",
                 labelnames=self.get_labels_for_metric(
                     "litellm_remaining_requests_metric"
@@ -222,7 +222,7 @@ class PrometheusLogger(CustomLogger):
             )
 
             self.litellm_remaining_tokens_metric = self._gauge_factory(
-                "litellm_remaining_tokens",
+                "litellm_remaining_tokens_metric",
                 "remaining tokens for model, returned from LLM API Provider",
                 labelnames=self.get_labels_for_metric(
                     "litellm_remaining_tokens_metric"
