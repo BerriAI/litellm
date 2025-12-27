@@ -55,10 +55,11 @@ from litellm.types.utils import (
 )
 from litellm.utils import add_dummy_tool, has_tool_call_blocks, supports_reasoning
 
+from litellm.llms.anthropic.common_utils import get_anthropic_beta_from_headers
+
 from ..common_utils import (
     BedrockError,
     BedrockModelInfo,
-    get_anthropic_beta_from_headers,
     get_bedrock_tool_name,
 )
 
