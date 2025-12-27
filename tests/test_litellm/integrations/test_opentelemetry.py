@@ -15,6 +15,7 @@ from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.semconv.schemas import Schemas
 
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -448,7 +449,7 @@ class TestOpenTelemetry(unittest.TestCase):
             "deployment.environment": "production",
             "model_id": "litellm",
         }
-        mock_resource_create.assert_called_once_with(expected_attributes)
+        mock_resource_create.assert_called_once_with(expected_attributes, Schemas.V1_25_0.value)
         mock_detector.detect.assert_called_once()
         mock_base_resource.merge.assert_called_once_with(mock_env_resource)
         self.assertEqual(result, mock_merged_resource)
@@ -493,7 +494,7 @@ class TestOpenTelemetry(unittest.TestCase):
             "deployment.environment": "staging",
             "model_id": "test-model",
         }
-        mock_resource_create.assert_called_once_with(expected_attributes)
+        mock_resource_create.assert_called_once_with(expected_attributes, Schemas.V1_25_0.value)
         mock_detector.detect.assert_called_once()
         mock_base_resource.merge.assert_called_once_with(mock_env_resource)
         self.assertEqual(result, mock_merged_resource)
@@ -539,7 +540,7 @@ class TestOpenTelemetry(unittest.TestCase):
             "deployment.environment": "production",
             "model_id": "should-be-overridden",
         }
-        mock_resource_create.assert_called_once_with(expected_attributes)
+        mock_resource_create.assert_called_once_with(expected_attributes, Schemas.V1_25_0.value)
         mock_detector.detect.assert_called_once()
         mock_base_resource.merge.assert_called_once_with(mock_env_resource)
         self.assertEqual(result, mock_merged_resource)

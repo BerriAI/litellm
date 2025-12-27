@@ -59,6 +59,7 @@ def _get_litellm_resource():
     while maintaining backward compatibility with LiteLLM-specific environment variables.
     """
     from opentelemetry.sdk.resources import OTELResourceDetector, Resource
+    from opentelemetry.semconv.schemas import Schemas
 
     # Create base resource attributes with LiteLLM-specific defaults
     # These will be overridden by OTEL_RESOURCE_ATTRIBUTES if present
@@ -72,7 +73,7 @@ def _get_litellm_resource():
     }
 
     # Create base resource with LiteLLM-specific defaults
-    base_resource = Resource.create(base_attributes)  # type: ignore
+    base_resource = Resource.create(base_attributes, Schemas.V1_25_0.value)  # type: ignore
 
     # Create resource from OTEL_RESOURCE_ATTRIBUTES using the detector
     otel_resource_detector = OTELResourceDetector()
@@ -557,9 +558,9 @@ class OpenTelemetry(CustomLogger):
 
     def _get_dynamic_otel_headers_from_kwargs(self, kwargs) -> Optional[dict]:
         """Extract dynamic headers from kwargs if available."""
-        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
-            kwargs.get("standard_callback_dynamic_params")
-        )
+        standard_callback_dynamic_params: Optional[
+            StandardCallbackDynamicParams
+        ] = kwargs.get("standard_callback_dynamic_params")
 
         if not standard_callback_dynamic_params:
             return None
@@ -764,10 +765,10 @@ class OpenTelemetry(CustomLogger):
             return float(val)
         # isinstance(val, str) - parse datetime string (with or without microseconds)
         try:
-            return datetime.strptime(val, '%Y-%m-%d %H:%M:%S.%f').timestamp()
+            return datetime.strptime(val, "%Y-%m-%d %H:%M:%S.%f").timestamp()
         except ValueError:
             try:
-                return datetime.strptime(val, '%Y-%m-%d %H:%M:%S').timestamp()
+                return datetime.strptime(val, "%Y-%m-%d %H:%M:%S").timestamp()
             except ValueError:
                 return None
 
@@ -775,23 +776,23 @@ class OpenTelemetry(CustomLogger):
         """Record Time to First Token (TTFT) metric for streaming requests."""
         optional_params = kwargs.get("optional_params", {})
         is_streaming = optional_params.get("stream", False)
-        
+
         if not (self._time_to_first_token_histogram and is_streaming):
             return
-        
+
         # Use api_call_start_time for precision (matches Prometheus implementation)
         # This excludes LiteLLM overhead and measures pure LLM API latency
         api_call_start_time = kwargs.get("api_call_start_time", None)
         completion_start_time = kwargs.get("completion_start_time", None)
-        
+
         if api_call_start_time is not None and completion_start_time is not None:
             # Convert to timestamps if needed (handles datetime, float, and string)
             api_call_start_ts = self._to_timestamp(api_call_start_time)
             completion_start_ts = self._to_timestamp(completion_start_time)
-            
+
             if api_call_start_ts is None or completion_start_ts is None:
                 return  # Skip recording if conversion failed
-            
+
             time_to_first_token_seconds = completion_start_ts - api_call_start_ts
             self._time_to_first_token_histogram.record(
                 time_to_first_token_seconds, attributes=common_attrs
@@ -806,38 +807,40 @@ class OpenTelemetry(CustomLogger):
         common_attrs: dict,
     ):
         """Record Time Per Output Token (TPOT) metric.
-        
+
         Calculated as: generation_time / completion_tokens
         - For streaming: uses end_time - completion_start_time (time to generate all tokens after first)
         - For non-streaming: uses end_time - api_call_start_time (total generation time)
         """
         if not self._time_per_output_token_histogram:
             return
-        
+
         # Get completion tokens from response_obj
         completion_tokens = None
         if response_obj and (usage := response_obj.get("usage")):
             completion_tokens = usage.get("completion_tokens")
-        
+
         if completion_tokens is None or completion_tokens <= 0:
             return
-        
+
         # Calculate generation time
         completion_start_time = kwargs.get("completion_start_time", None)
         api_call_start_time = kwargs.get("api_call_start_time", None)
-        
+
         # Convert end_time to timestamp (handles datetime, float, and string)
         end_time_ts = self._to_timestamp(end_time)
         if end_time_ts is None:
             # Fallback to duration_s if conversion failed
             generation_time_seconds = duration_s
             if generation_time_seconds > 0:
-                time_per_output_token_seconds = generation_time_seconds / completion_tokens
+                time_per_output_token_seconds = (
+                    generation_time_seconds / completion_tokens
+                )
                 self._time_per_output_token_histogram.record(
                     time_per_output_token_seconds, attributes=common_attrs
                 )
             return
-        
+
         if completion_start_time is not None:
             # Streaming: use completion_start_time (when first token arrived)
             # This measures time to generate all tokens after the first one
@@ -858,7 +861,7 @@ class OpenTelemetry(CustomLogger):
         else:
             # Fallback: use duration_s (already calculated as (end_time - start_time).total_seconds())
             generation_time_seconds = duration_s
-        
+
         if generation_time_seconds > 0:
             time_per_output_token_seconds = generation_time_seconds / completion_tokens
             self._time_per_output_token_histogram.record(
@@ -872,37 +875,37 @@ class OpenTelemetry(CustomLogger):
         common_attrs: dict,
     ):
         """Record Total Generation Time (response duration) metric.
-        
+
         Measures pure LLM API generation time: end_time - api_call_start_time
         This excludes LiteLLM overhead and measures only the LLM provider's response time.
         Works for both streaming and non-streaming requests.
-        
+
         Mirrors Prometheus's litellm_llm_api_latency_metric.
         Uses kwargs.get("end_time") with fallback to parameter for consistency with Prometheus.
         """
         if not self._response_duration_histogram:
             return
-        
+
         api_call_start_time = kwargs.get("api_call_start_time", None)
         if api_call_start_time is None:
             return
-        
+
         # Use end_time from kwargs if available (matches Prometheus), otherwise use parameter
         # For streaming: end_time is when the stream completes (final chunk received)
         # For non-streaming: end_time is when the response is received
         _end_time = kwargs.get("end_time") or end_time
         if _end_time is None:
             _end_time = datetime.now()
-        
+
         # Convert to timestamps if needed (handles datetime, float, and string)
         api_call_start_ts = self._to_timestamp(api_call_start_time)
         end_time_ts = self._to_timestamp(_end_time)
-        
+
         if api_call_start_ts is None or end_time_ts is None:
             return  # Skip recording if conversion failed
-        
+
         response_duration_seconds = end_time_ts - api_call_start_ts
-        
+
         if response_duration_seconds > 0:
             self._response_duration_histogram.record(
                 response_duration_seconds, attributes=common_attrs
@@ -1263,7 +1266,9 @@ class OpenTelemetry(CustomLogger):
                 )
                 return
             elif self.callback_name == "weave_otel":
-                from litellm.integrations.weave.weave_otel import set_weave_otel_attributes
+                from litellm.integrations.weave.weave_otel import (
+                    set_weave_otel_attributes,
+                )
 
                 set_weave_otel_attributes(span, kwargs, response_obj)
                 return
@@ -1407,7 +1412,7 @@ class OpenTelemetry(CustomLogger):
                     value=usage.get("prompt_tokens"),
                 )
 
-                ########################################################################
+            ########################################################################
             ########## LLM Request Medssages / tools / content Attributes ###########
             #########################################################################
 
@@ -1994,7 +1999,7 @@ class OpenTelemetry(CustomLogger):
         """
         Create a span for the received proxy server request.
         """
-        
+
         return self.tracer.start_span(
             name="Received Proxy Server Request",
             start_time=self._to_ns(start_time),
