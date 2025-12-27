@@ -1197,6 +1197,67 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
+    @property
+    def output_text(self) -> str:
+        outputs: Union[
+            List[
+                Union[
+                    ResponseOutputItem,
+                    Dict[str, Any],
+                    GenericResponseOutputItem,
+                    OutputFunctionToolCall,
+                    OutputImageGenerationCall,
+                    ResponseFunctionToolCall,
+                ]
+            ],
+            Dict[str, Any],
+            None,
+        ] = getattr(self, "output", None)
+        if outputs is None:
+            return ""
+        if isinstance(outputs, dict):
+            outputs_list = [outputs]
+        elif isinstance(outputs, list):
+            outputs_list = outputs
+        else:
+            return ""
+
+        texts: List[str] = []
+        for output_item in outputs_list:
+            item_type = (
+                output_item.get("type")
+                if isinstance(output_item, dict)
+                else getattr(output_item, "type", None)
+            )
+            if item_type != "message":
+                continue
+
+            content = (
+                output_item.get("content")
+                if isinstance(output_item, dict)
+                else getattr(output_item, "content", None)
+            )
+            if isinstance(content, dict):
+                content = [content]
+            if not isinstance(content, list):
+                continue
+
+            for block in content:
+                block_type = (
+                    block.get("type")
+                    if isinstance(block, dict)
+                    else getattr(block, "type", None)
+                )
+                if block_type not in {"output_text", "text"}:
+                    continue
+                if isinstance(block, dict):
+                    text = block.get("text") or block.get("value")
+                else:
+                    text = getattr(block, "text", None) or getattr(block, "value", None)
+                if isinstance(text, str) and text:
+                    texts.append(text)
+
+        return "".join(texts)
 
 class ResponsesAPIStreamEvents(str, Enum):
     """
