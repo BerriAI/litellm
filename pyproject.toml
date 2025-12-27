@@ -21,6 +21,7 @@ Documentation = "https://docs.litellm.ai"
 [tool.poetry.dependencies]
 python = ">=3.9,<4.0"
 fastuuid = ">=0.13.0"
+google-auth = "^2.0.0"
 httpx = ">=0.23.0"
 openai = ">=2.8.0"
 python-dotenv = ">=0.2.0"
