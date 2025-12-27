@@ -773,7 +773,7 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
   };
 
   // New helper function to get raw request
-  const getRawRequest = () => {
+  const getClientRequest = () => {
     // First check if proxy_server_request exists in metadata
     if (row.original?.proxy_server_request) {
       return formatData(row.original.proxy_server_request);
@@ -781,6 +781,8 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
     // Fall back to messages if proxy_server_request is empty
     return formatData(row.original.messages);
   };
+
+  const getModelRequest = () => formatData(row.original.messages);
 
   // Extract error information from metadata if available
   const metadata = row.original.metadata || {};
@@ -794,7 +796,10 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
       ? row.original.messages.length > 0
       : Object.keys(row.original.messages).length > 0);
   const hasResponse = row.original.response && Object.keys(formatData(row.original.response)).length > 0;
-  const missingData = !hasMessages && !hasResponse;
+  const hasClientRequest =
+    !!row.original.proxy_server_request && Object.keys(formatData(row.original.proxy_server_request)).length > 0;
+  const hasClientResponse = hasResponse || hasError;
+  const missingData = !hasMessages && !hasResponse && !hasClientRequest;
 
   // Format the response with error details if present
   const formattedResponse = () => {
@@ -980,11 +985,13 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
       <div className="w-full max-w-full overflow-hidden">
         <RequestResponsePanel
           row={row}
-          hasMessages={hasMessages}
-          hasResponse={hasResponse}
+          hasClientRequest={hasClientRequest || hasMessages}
+          hasModelRequest={hasMessages}
+          hasClientResponse={hasClientResponse}
           hasError={hasError}
           errorInfo={errorInfo}
-          getRawRequest={getRawRequest}
+          getClientRequest={getClientRequest}
+          getModelRequest={getModelRequest}
           formattedResponse={formattedResponse}
         />
       </div>

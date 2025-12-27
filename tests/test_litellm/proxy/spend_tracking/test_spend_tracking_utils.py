@@ -55,7 +55,7 @@ def test_sanitize_request_body_for_spend_logs_payload_long_string():
         end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
     
     skipped_chars = len(long_string) - (start_chars + end_chars)
-    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+    expected_truncation_message = f"\n...\n({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars)\n...\n"
     expected_length = start_chars + len(expected_truncation_message) + end_chars
     
     assert len(sanitized["text"]) == expected_length
@@ -81,7 +81,7 @@ def test_sanitize_request_body_for_spend_logs_payload_nested_dict():
         end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
     
     skipped_chars = len(long_string) - total_keep
-    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+    expected_truncation_message = f"\n...\n({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars)\n...\n"
     expected_length = start_chars + len(expected_truncation_message) + end_chars
     
     assert len(sanitized["outer"]["inner"]["text"]) == expected_length
@@ -106,7 +106,7 @@ def test_sanitize_request_body_for_spend_logs_payload_nested_list():
         end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
     
     skipped_chars = len(long_string) - total_keep
-    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+    expected_truncation_message = f"\n...\n({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars)\n...\n"
     expected_length = start_chars + len(expected_truncation_message) + end_chars
     
     assert len(sanitized["items"][0]["text"]) == expected_length
@@ -146,7 +146,7 @@ def test_sanitize_request_body_for_spend_logs_payload_mixed_types():
         end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
     
     skipped_chars = len(long_string) - total_keep
-    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+    expected_truncation_message = f"\n...\n({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars)\n...\n"
     expected_length = start_chars + len(expected_truncation_message) + end_chars
     
     assert len(sanitized["text"]) == expected_length
@@ -849,4 +849,3 @@ def test_get_logging_payload_handles_missing_overhead_gracefully():
     assert (
         metadata.get("litellm_overhead_time_ms") is None
     ), "litellm_overhead_time_ms should be None when overhead is not provided"
-
