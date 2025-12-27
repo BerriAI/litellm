@@ -1496,9 +1496,10 @@ def convert_to_gemini_tool_call_result(
                 content_type = content.get("type", "")
                 if content_type == "text":
                     content_str += content.get("text", "")
-                elif content_type == "input_image":
-                    # Extract image for inline_data (for Computer Use screenshots)
-                    image_url = content.get("image_url", "")
+                elif content_type in ("input_image", "image_url"):
+                    # Extract image for inline_data (for Computer Use screenshots and tool results)
+                    image_url_data = content.get("image_url", "")
+                    image_url = image_url_data.get("url", "") if isinstance(image_url_data, dict) else image_url_data
                     
                     if image_url:
                         # Convert image to base64 blob format for Gemini
