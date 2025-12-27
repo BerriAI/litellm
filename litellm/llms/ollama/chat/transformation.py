@@ -482,7 +482,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
         except Exception:
             return False
 
-    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:  # noqa: PLR0915
         try:
             """
             Expected chunk format:
@@ -527,8 +527,8 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
                             tool_call["id"] = str(uuid.uuid4())
 
             # PROCESS REASONING CONTENT
-            reasoning_content: Optional[str] = None
-            content: Optional[str] = None
+            reasoning_content: str = ""
+            content: str = ""
             if chunk["message"].get("thinking") is not None:
                 if self.started_reasoning_content is False:
                     reasoning_content = chunk["message"].get("thinking")
@@ -538,21 +538,39 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
                     self.finished_reasoning_content = True
             elif chunk["message"].get("content") is not None:
                 message_content = chunk["message"].get("content")
-                if "<think>" in message_content:
-                    message_content = message_content.replace("<think>", "")
 
+                # Check if both tags are present (complete reasoning block in single chunk)
+                has_start_tag = "<think>" in message_content
+                has_end_tag = "</think>" in message_content
+
+                if has_start_tag and has_end_tag:
+                    # Complete reasoning block in single chunk
+                    import re
+                    # Extract reasoning content
+                    match = re.search(r'<think>(.*?)</think>', message_content)
+                    if match:
+                        reasoning_content = match.group(1)
+                    # Remove think tags and normalize whitespace
+                    content = re.sub(r'\s*<think>.*?</think>\s*', ' ', message_content).strip()
                     self.started_reasoning_content = True
-
-                if "</think>" in message_content and self.started_reasoning_content:
-                    message_content = message_content.replace("</think>", "")
                     self.finished_reasoning_content = True
-
-                if (
-                    self.started_reasoning_content
-                    and not self.finished_reasoning_content
-                ):
+                elif has_start_tag:
+                    # Start of reasoning - split content before and after <think>
+                    parts = message_content.split("<think>", 1)
+                    content = parts[0] if len(parts) > 0 else ""
+                    reasoning_content = parts[1] if len(parts) > 1 else ""
+                    self.started_reasoning_content = True
+                elif has_end_tag and self.started_reasoning_content:
+                    # End of reasoning - split content before and after </think>
+                    parts = message_content.split("</think>", 1)
+                    reasoning_content = parts[0] if len(parts) > 0 else ""
+                    content = parts[1] if len(parts) > 1 else ""
+                    self.finished_reasoning_content = True
+                elif self.started_reasoning_content and not self.finished_reasoning_content:
+                    # Middle of reasoning
                     reasoning_content = message_content
                 else:
+                    # Regular content
                     content = message_content
 
             delta = Delta(
