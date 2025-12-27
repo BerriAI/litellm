@@ -142,6 +142,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     ]  # only for vertex ai models
     input_cost_per_query: Optional[float]  # only for rerank models
     input_cost_per_image: Optional[float]  # only for vertex ai models
+    input_cost_per_image_token: Optional[float]  # for gpt-image-1 and similar models
     input_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     input_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     input_cost_per_second: Optional[float]  # for OpenAI Speech models
@@ -1300,7 +1301,7 @@ class CacheCreationTokenDetails(BaseModel):
 
 class PromptTokensDetailsWrapper(
     PromptTokensDetails
-):  # wrapper for older openai versions
+):  # extends with image generation fields (text_tokens, image_tokens)
     text_tokens: Optional[int] = None
     """Text tokens sent to the model."""
 
