@@ -342,3 +342,92 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 
 </TabItem>
 </Tabs>
+
+## Gemini - Use Native JSON Schema Format (Gemini 2.0+)
+
+Gemini 2.0+ models support a native `responseJsonSchema` parameter that uses standard JSON Schema format. This provides better compatibility with Pydantic schemas and supports `additionalProperties`.
+
+### Benefits of `use_json_schema: True`:
+- Standard JSON Schema format (lowercase types like `string`, `object`)
+- Supports `additionalProperties: false` for stricter validation
+- Better compatibility with Pydantic's `model_json_schema()`
+- No `propertyOrdering` required
+
+### Usage
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+from pydantic import BaseModel
+
+class UserInfo(BaseModel):
+    name: str
+    age: int
+
+response = completion(
+    model="gemini/gemini-2.0-flash",
+    messages=[{"role": "user", "content": "Extract: John is 25 years old"}],
+    response_format={
+        "type": "json_schema",
+        "json_schema": {
+            "name": "user_info",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "age": {"type": "integer"}
+                },
+                "required": ["name", "age"],
+                "additionalProperties": False  # Now works with use_json_schema!
+            }
+        },
+        "use_json_schema": True  # Opt-in to native JSON Schema format
+    }
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -d '{
+    "model": "gemini-2.0-flash",
+    "messages": [
+        {"role": "user", "content": "Extract: John is 25 years old"}
+    ],
+    "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "user_info",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "age": {"type": "integer"}
+                },
+                "required": ["name", "age"],
+                "additionalProperties": false
+            }
+        },
+        "use_json_schema": true
+    }
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+### Supported Models
+
+`use_json_schema: True` is supported on Gemini 2.0+ models:
+- `gemini-2.0-flash`
+- `gemini-2.0-flash-lite`
+- `gemini-2.5-pro`
+- `gemini-2.5-flash`
+
+For older models (e.g., `gemini-1.5-flash`), the parameter is ignored and falls back to the default `responseSchema` format.
