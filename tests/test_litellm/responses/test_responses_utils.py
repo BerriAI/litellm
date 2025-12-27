@@ -1,17 +1,13 @@
-import base64
-import json
 import os
 import sys
 
 import pytest
-from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
 import litellm
-from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
@@ -203,3 +199,22 @@ class TestResponseAPILoggingUtils:
         assert result.prompt_tokens == 0
         assert result.completion_tokens == 20
         assert result.total_tokens == 20
+
+    def test_transform_response_api_usage_calculates_total_from_input_and_output_tokens_if_available(self):
+        """Test transformation calculates total_tokens when it's None and input / output tokens are present"""
+        # Setup
+        usage = {
+            "input_tokens": 15,
+            "output_tokens": 25,
+            "total_tokens": None,
+        }
+
+        # Execute
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage
+        )
+
+        # Assert
+        assert result.prompt_tokens == 15
+        assert result.completion_tokens == 25
+        assert result.total_tokens == 40  # 15 + 25

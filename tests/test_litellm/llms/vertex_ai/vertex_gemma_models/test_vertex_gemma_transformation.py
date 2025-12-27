@@ -5,11 +5,13 @@ Maps to: litellm/llms/vertex_ai/vertex_gemma_models/transformation.py
 """
 
 import json
+import sys
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
 import litellm
+
 
 @pytest.fixture(autouse=True)
 def _reset_litellm_http_client_cache():
@@ -17,6 +19,16 @@ def _reset_litellm_http_client_cache():
     from litellm import in_memory_llm_clients_cache
 
     in_memory_llm_clients_cache.flush_cache()
+
+
+@pytest.fixture(autouse=True)
+def _mock_vertexai_import(monkeypatch):
+    vertex_preview = Mock()
+    vertex_preview.language_models = []
+    vertex_ai_mock = Mock()
+    vertex_ai_mock.preview = vertex_preview
+    with patch.dict(sys.modules, {"vertexai": vertex_ai_mock}):
+        yield
 
 
 class TestVertexGemmaCompletion:
@@ -117,10 +129,11 @@ class TestVertexGemmaCompletion:
                 },
             },
         }
-        
+
         # Mock the async HTTP handler and Vertex authentication
+
         with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler"
+                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler"
         ) as mock_http_handler, patch(
             "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
             return_value=("fake-access-token", "PROJECT_ID")
@@ -129,7 +142,7 @@ class TestVertexGemmaCompletion:
             mock_response.status_code = 200
             mock_response.json.return_value = mock_vertex_response
             mock_http_handler.return_value.post = AsyncMock(return_value=mock_response)
-            
+
             # Call litellm.acompletion()
             response = await litellm.acompletion(
                 model="vertex_ai/gemma/gemma-3-12b-it-1222199011122",
@@ -139,49 +152,49 @@ class TestVertexGemmaCompletion:
                 vertex_project="PROJECT_ID",
                 vertex_location="us-central1",
             )
-            
+
             # Verify the request sent to Vertex
             call_args = mock_http_handler.return_value.post.call_args
             assert call_args is not None, "HTTP handler was not called"
-            
+
             request_data = call_args.kwargs["json"]
             print("request body=", json.dumps(request_data, indent=4))
             request_url = call_args.kwargs["url"]
-            
+
             # Validate exact URL matches what we sent
             expected_url = "https://32277599999999999.us-central1-10582012152.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict"
             assert request_url == expected_url, f"Expected URL: {expected_url}\nActual URL: {request_url}"
-            
+
             # Validate Request Body matches expected format
             assert "instances" in request_data
             assert len(request_data["instances"]) == 1
-            
+
             instance = request_data["instances"][0]
             assert instance["@requestFormat"] == "chatCompletions"
-            
+
             # Messages should be directly in the instance, not double-nested
             assert "messages" in instance
             assert instance["messages"][0]["role"] == "user"
             assert instance["messages"][0]["content"] == "What is machine learning?"
             assert instance["max_tokens"] == 100
-            
+
             # Verify stream parameter is NOT sent to Vertex (will be faked client-side)
             assert "stream" not in instance
-            
+
             # Validate LiteLLM Response (OpenAI format)
             assert response.id == "chatcmpl-aaa4288f-2b8e-4bc0-8b14-4e444decd2c4"
             assert response.object == "chat.completion"
             assert response.created == 1759863903
             # Model name has the gemma/ prefix stripped during processing
             assert response.model == "gemma-3-12b-it-1222199011122"
-            
+
             # Validate choices
             assert len(response.choices) == 1
             assert response.choices[0].index == 0
             assert response.choices[0].finish_reason == "length"
             assert response.choices[0].message.role == "assistant"
             assert "machine learning" in response.choices[0].message.content.lower()
-            
+
             # Validate usage
             assert response.usage.prompt_tokens == 14
             assert response.usage.completion_tokens == 100
@@ -204,9 +217,9 @@ class TestVertexGemmaCompletion:
                 "message": "Invalid request"
             }
         }
-        
+
         with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler"
+                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler"
         ) as mock_http_handler, patch(
             "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
             return_value=("fake-access-token", "test-project")
@@ -215,7 +228,7 @@ class TestVertexGemmaCompletion:
             mock_response.status_code = 200
             mock_response.json.return_value = invalid_response
             mock_http_handler.return_value.post = AsyncMock(return_value=mock_response)
-            
+
             # Should raise exception (wrapped as APIConnectionError by LiteLLM)
             with pytest.raises(APIConnectionError) as exc_info:
                 await litellm.acompletion(
@@ -225,7 +238,7 @@ class TestVertexGemmaCompletion:
                     vertex_project="test-project",
                     vertex_location="us-central1",
                 )
-            
+
             # Verify the error message contains the original error
             assert "missing 'predictions' field" in str(exc_info.value)
 
@@ -274,9 +287,9 @@ class TestVertexGemmaCompletion:
                 },
             },
         }
-        
+
         with patch(
-            "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
         ) as mock_get_client, patch(
             "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
             return_value=("fake-access-token", "PROJECT_ID")
@@ -287,7 +300,7 @@ class TestVertexGemmaCompletion:
             mock_response.json.return_value = mock_vertex_response
             mock_client.post = AsyncMock(return_value=mock_response)
             mock_get_client.return_value = mock_client
-            
+
             # Call litellm.acompletion() with stream=True
             response = await litellm.acompletion(
                 model="vertex_ai/gemma/gemma-3-12b-it-1222199011122",
@@ -297,28 +310,28 @@ class TestVertexGemmaCompletion:
                 vertex_project="PROJECT_ID",
                 vertex_location="us-central1",
             )
-            
+
             # Verify the response is a MockResponseIterator
             assert isinstance(response, MockResponseIterator), f"Expected MockResponseIterator, got {type(response)}"
-            
+
             # Verify the request sent to Vertex does NOT include 'stream'
             call_args = mock_client.post.call_args
             assert call_args is not None, "HTTP client was not called"
-            
+
             request_data = call_args.kwargs["json"]
             instance = request_data["instances"][0]
-            
+
             # Critical: Verify stream parameter is NOT sent to Vertex API
             assert "stream" not in instance, "stream parameter should not be sent to Vertex API"
-            
+
             # Verify we can iterate the fake stream and get the response
             chunks = []
             async for chunk in response:
                 chunks.append(chunk)
-            
+
             # Should get exactly one chunk (fake streaming)
             assert len(chunks) == 1, f"Expected 1 chunk from fake stream, got {len(chunks)}"
-            
+
             # Verify the chunk has the expected content
             chunk = chunks[0]
             assert hasattr(chunk, "choices")
@@ -367,9 +380,9 @@ class TestVertexGemmaCompletion:
                 },
             },
         }
-        
+
         with patch(
-            "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
         ) as mock_get_client, patch(
             "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
             return_value=("fake-access-token", "PROJECT_ID")
@@ -380,7 +393,7 @@ class TestVertexGemmaCompletion:
             mock_response.json.return_value = mock_vertex_response
             mock_client.post = AsyncMock(return_value=mock_response)
             mock_get_client.return_value = mock_client
-            
+
             # Call with both stream and stream_options
             response = await litellm.acompletion(
                 model="vertex_ai/gemma/gemma-3-12b-it-1222199011122",
@@ -391,20 +404,19 @@ class TestVertexGemmaCompletion:
                 vertex_project="PROJECT_ID",
                 vertex_location="us-central1",
             )
-            
+
             # Verify the request sent to Vertex
             call_args = mock_client.post.call_args
             assert call_args is not None, "HTTP client was not called"
-            
+
             request_data = call_args.kwargs["json"]
             print("request body=", json.dumps(request_data, indent=4))
             instance = request_data["instances"][0]
-            
+
             # Critical: Verify both stream and stream_options are NOT sent to Vertex API
             assert "stream" not in instance, "stream parameter should not be sent to Vertex API"
             assert "stream_options" not in instance, "stream_options parameter should not be sent to Vertex API"
-            
+
             # Verify other parameters are present
             assert "messages" in instance
             assert instance["@requestFormat"] == "chatCompletions"
-

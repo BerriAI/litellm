@@ -1,6 +1,4 @@
-import unittest.mock as mock
-from typing import cast
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -52,9 +50,11 @@ class TestEnterpriseCallbackControls:
         litellm_params = {"proxy_server_request": {"url": "test"}}
         standard_callback_dynamic_params = StandardCallbackDynamicParams()
         
-        langfuse_logger = LangfusePromptManagement()
-        result = EnterpriseCallbackControls.is_callback_disabled_dynamically(langfuse_logger, litellm_params, standard_callback_dynamic_params)
-        assert result is True
+        # Mock LangfusePromptManagement to avoid initialization issues with langfuse library
+        with patch('litellm.integrations.langfuse.langfuse_prompt_management.LangfusePromptManagement.__init__', return_value=None):
+            langfuse_logger = LangfusePromptManagement()
+            result = EnterpriseCallbackControls.is_callback_disabled_dynamically(langfuse_logger, litellm_params, standard_callback_dynamic_params)
+            assert result is True
 
     def test_callback_disabled_s3_v2_string(self, mock_premium_user, mock_request_headers):
         """Test that 's3_v2' string callback is disabled when specified in headers"""
