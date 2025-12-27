@@ -8,6 +8,7 @@ forward_client_headers_to_llm_api were not being passed to Bedrock rerank provid
 import json
 import os
 import sys
+from typing import List, Union, Dict, Any
 from unittest.mock import Mock, patch
 
 import pytest
@@ -40,11 +41,20 @@ bedrock_rerank_response = {
 
 # Test data
 test_query = "What is the capital of the United States?"
-test_documents = [
+test_documents: List[Union[str, Dict[str, Any]]] = [
     "Carson City is the capital city of the American state of Nevada.",
     "The Commonwealth of the Northern Mariana Islands is a group of islands in the Pacific Ocean. Its capital is Saipan.",
     "Washington, D.C. is the capital of the United States.",
 ]
+
+
+def _get_test_aws_credentials():
+    """Return test AWS credentials for Bedrock rerank tests."""
+    return {
+        "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
+        "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        "aws_session_token": "AQoEXAMPLEH4aoAH0gNCAPyJxz4BlCFFxWNE1OPTgk5TthT+FvwqnKwRcOIfrRh3c/LTo6UDdyJwOOvEVPvLXCrrrUtdnniCEXAMPLE/IvU1dYUg2RVAJBanLiHb4IgRmpV3ZXrzoB348V+jZfXvYhEXAMPLEEXAMPLE",
+    }
 
 
 @pytest.mark.parametrize(
@@ -94,6 +104,7 @@ def test_bedrock_rerank_header_forwarding_sync(model):
                 aws_region_name="us-east-1",
                 aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
                 api_key=test_api_key,
+                **_get_test_aws_credentials(),
             )
             
             assert isinstance(response, litellm.RerankResponse)
@@ -174,6 +185,7 @@ async def test_bedrock_rerank_header_forwarding_async(model):
                 aws_region_name="us-east-1",
                 aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
                 api_key=test_api_key,
+                **_get_test_aws_credentials(),
             )
             
             assert isinstance(response, litellm.RerankResponse)
@@ -243,6 +255,7 @@ def test_bedrock_rerank_extra_headers_and_headers_merge():
                 aws_region_name="us-east-1",
                 aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
                 api_key=test_api_key,
+                **_get_test_aws_credentials(),
             )
             
             assert isinstance(response, litellm.RerankResponse)
