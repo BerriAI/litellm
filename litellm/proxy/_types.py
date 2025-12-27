@@ -760,16 +760,7 @@ class ModelInfo(LiteLLMPydanticObjectBase):
     def set_model_info(cls, values):
         if values.get("id") is None:
             values.update({"id": str(uuid.uuid4())})
-        if values.get("mode") is None:
-            values.update({"mode": None})
-        if values.get("input_cost_per_token") is None:
-            values.update({"input_cost_per_token": None})
-        if values.get("output_cost_per_token") is None:
-            values.update({"output_cost_per_token": None})
-        if values.get("max_tokens") is None:
-            values.update({"max_tokens": None})
-        if values.get("base_model") is None:
-            values.update({"base_model": None})
+
         return values
 
 
@@ -3491,7 +3482,6 @@ class ClientSideFallbackModel(TypedDict, total=False):
 
 ALL_FALLBACK_MODEL_VALUES = Union[str, ClientSideFallbackModel]
 
-
 RBAC_ROLES = Literal[
     LitellmUserRoles.PROXY_ADMIN,
     LitellmUserRoles.TEAM,
@@ -3623,33 +3613,33 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     )
     #########################################################
 
-    def __init__(self, **kwargs: Any) -> None:
+    @model_validator(mode="before")
+    @classmethod
+    def check_litellm_jwtauth_params(cls, values):
         # get the attribute names for this Pydantic model
-        allowed_keys = self.__annotations__.keys()
-
-        invalid_keys = set(kwargs.keys()) - allowed_keys
-        user_roles_jwt_field = kwargs.get("user_roles_jwt_field")
-        user_allowed_roles = kwargs.get("user_allowed_roles")
-        object_id_jwt_field = kwargs.get("object_id_jwt_field")
-        role_mappings = kwargs.get("role_mappings")
-        scope_mappings = kwargs.get("scope_mappings")
-        enforce_scope_based_access = kwargs.get("enforce_scope_based_access")
-        custom_validate = kwargs.get("custom_validate")
+        allowed_keys = cls.__annotations__.keys()
+        invalid_keys = set(values.keys()) - allowed_keys
+        user_roles_jwt_field = values.get("user_roles_jwt_field")
+        user_allowed_roles = values.get("user_allowed_roles")
+        object_id_jwt_field = values.get("object_id_jwt_field")
+        role_mappings = values.get("role_mappings")
+        scope_mappings = values.get("scope_mappings")
+        enforce_scope_based_access = values.get("enforce_scope_based_access")
+        custom_validate = values.get("custom_validate")
 
         if custom_validate is not None:
             fn = get_instance_fn(custom_validate)
             validate_custom_validate_return_type(fn)
-            kwargs["custom_validate"] = fn
+            values["custom_validate"] = fn
 
         if invalid_keys:
             raise ValueError(
                 f"Invalid arguments provided: {', '.join(invalid_keys)}. Allowed arguments are: {', '.join(allowed_keys)}."
             )
-        if (user_roles_jwt_field is not None and user_allowed_roles is None) or (
-            user_roles_jwt_field is None and user_allowed_roles is not None
-        ):
+
+        if (user_roles_jwt_field is None) != (user_allowed_roles is None):
             raise ValueError(
-                "user_allowed_roles must be provided if user_roles_jwt_field is set."
+                "user_allowed_roles and user_roles_jwt_field must both be provided if either is present."
             )
 
         if object_id_jwt_field is not None and role_mappings is None:
@@ -3662,7 +3652,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
                 "scope_mappings must be set if enforce_scope_based_access is true."
             )
 
-        super().__init__(**kwargs)
+        return values
 
 
 class PrismaCompatibleUpdateDBModel(TypedDict, total=False):
