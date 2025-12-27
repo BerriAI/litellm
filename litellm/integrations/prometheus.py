@@ -320,6 +320,8 @@ class PrometheusLogger(CustomLogger):
                     "team",
                     "team_alias",
                     "user",
+                    "api_base",
+                    "api_provider",
                 ],
             )
 
@@ -1207,6 +1209,8 @@ class PrometheusLogger(CustomLogger):
         user_api_team_alias = standard_logging_payload["metadata"][
             "user_api_key_team_alias"
         ]
+        api_base = standard_logging_payload.get("api_base", "") or ""
+        api_provider = litellm_params.get("custom_llm_provider", "") or ""
         kwargs.get("exception", None)
 
         try:
@@ -1218,6 +1222,8 @@ class PrometheusLogger(CustomLogger):
                 user_api_team,
                 user_api_team_alias,
                 user_id,
+                api_base,
+                api_provider,
             ).inc()
             self.set_llm_deployment_failure_metrics(kwargs)
         except Exception as e:
