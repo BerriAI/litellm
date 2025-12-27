@@ -236,10 +236,6 @@ def get_llm_provider(  # noqa: PLR0915
                 # Codestral splits chat vs FIM across endpoints; infer provider from api_base path.
                 custom_llm_provider = codestral_provider
                 dynamic_api_key = get_secret_str("CODESTRAL_API_KEY")
-                if api_base is not None and not isinstance(api_base, str):
-                    raise Exception(
-                        "api base needs to be a string. api_base={}".format(api_base)
-                    )
                 if dynamic_api_key is not None and not isinstance(
                     dynamic_api_key, str
                 ):
