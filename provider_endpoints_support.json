@@ -1546,7 +1546,7 @@
         "chat_completions": true,
         "messages": true,
         "responses": true,
-        "embeddings": false,
+        "embeddings": true,
         "image_generations": false,
         "audio_transcriptions": false,
         "audio_speech": false,
