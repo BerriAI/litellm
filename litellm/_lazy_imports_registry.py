@@ -62,6 +62,8 @@ TYPES_UTILS_NAMES = (
     "StandardKeyGenerationConfig",
     "SearchProviders",
     "GenericStreamingChunk",
+    "Message",
+    "Choices",
 )
 
 # Caching / cache classes that support lazy loading via _lazy_import_caching
@@ -270,6 +272,7 @@ LLM_CONFIG_NAMES = (
     "LemonadeChatConfig",
     "SnowflakeEmbeddingConfig",
     "AmazonNovaChatConfig",
+    "ClaudeCodeNativeConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -348,6 +351,8 @@ _TYPES_UTILS_IMPORT_MAP = {
     "StandardKeyGenerationConfig": (".types.utils", "StandardKeyGenerationConfig"),
     "SearchProviders": (".types.utils", "SearchProviders"),
     "GenericStreamingChunk": (".types.utils", "GenericStreamingChunk"),
+    "Message": (".types.utils", "Message"),
+    "Choices": (".types.utils", "Choices"),
 }
 
 _TOKEN_COUNTER_IMPORT_MAP = {
@@ -570,6 +575,7 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "LemonadeChatConfig": (".llms.lemonade.chat.transformation", "LemonadeChatConfig"),
     "SnowflakeEmbeddingConfig": (".llms.snowflake.embedding.transformation", "SnowflakeEmbeddingConfig"),
     "AmazonNovaChatConfig": (".llms.amazon_nova.chat.transformation", "AmazonNovaChatConfig"),
+    "ClaudeCodeNativeConfig": (".llms.claude_code_native.transformation", "ClaudeCodeNativeConfig"),
 }
 
 # Export all name tuples and import maps for use in _lazy_imports.py
