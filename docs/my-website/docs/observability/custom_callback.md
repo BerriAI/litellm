@@ -66,6 +66,7 @@ asyncio.run(completion())
 **Proxy-only hooks** (only work with LiteLLM Proxy):
 - `async_post_call_success_hook` - Access user data + modify responses
 - `async_pre_call_hook` - Modify requests before sending
+- `log_management_event` / `async_log_management_event` - Track management endpoint events (virtual keys, teams, users)
 
 ### Example: Modifying the Response in async_post_call_success_hook
 
@@ -200,6 +201,179 @@ async def test_chat_openai():
 
 asyncio.run(test_chat_openai())
 ```
+
+## Management Event Hooks (Proxy Only)
+
+Track management endpoint events like virtual key creation, team updates, user deletions, and more. These hooks are triggered automatically when management endpoints are called successfully.
+
+### Events Tracked
+
+Management event hooks are triggered for:
+
+**Virtual Key Events:**
+- `new_virtual_key_created` - When a new API key is generated
+- `virtual_key_updated` - When a key is modified
+- `virtual_key_deleted` - When a key is deleted
+
+**Team Events:**
+- `new_team_created` - When a new team is created
+- `team_updated` - When team details are modified
+- `team_deleted` - When a team is deleted
+
+**Internal User Events:**
+- `new_internal_user_created` - When a new internal user is created
+- `internal_user_updated` - When user details are modified
+- `internal_user_deleted` - When a user is deleted
+
+### Basic Usage
+
+```python
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UserAPIKeyAuth
+
+class MyManagementLogger(CustomLogger):
+    def log_management_event(
+        self,
+        event_name: str,
+        event_payload: dict,
+        user_api_key_dict: UserAPIKeyAuth = None,
+    ) -> None:
+        """Sync hook for management events"""
+        print(f"Management Event: {event_name}")
+        print(f"Payload: {event_payload}")
+        print(f"Triggered by: {user_api_key_dict.user_id if user_api_key_dict else 'Unknown'}")
+    
+    async def async_log_management_event(
+        self,
+        event_name: str,
+        event_payload: dict,
+        user_api_key_dict: UserAPIKeyAuth = None,
+    ) -> None:
+        """Async hook for management events"""
+        print(f"Async Management Event: {event_name}")
+        # Send to your external service
+        await send_to_audit_system(event_name, event_payload)
+
+# Add to your proxy config.yaml
+# litellm_settings:
+#   callbacks: ["my_module.MyManagementLogger"]
+```
+
+### Event Payload Structure
+
+The `event_payload` dictionary contains:
+
+```python
+{
+    "alert_type": str,          # e.g., "new_virtual_key_created"
+    "function_name": str,       # Internal function name
+    "request": dict,            # Request parameters (serialized)
+    "result": dict,             # Response data (serialized)
+    "triggered_at": str,        # ISO format timestamp with Z suffix
+}
+```
+
+### Practical Examples
+
+#### Audit Logging to Database
+
+```python
+import asyncio
+from litellm.integrations.custom_logger import CustomLogger
+
+class AuditLogger(CustomLogger):
+    async def async_log_management_event(
+        self,
+        event_name: str,
+        event_payload: dict,
+        user_api_key_dict=None,
+    ):
+        """Store all management events in an audit database"""
+        audit_record = {
+            "event_type": event_name,
+            "timestamp": event_payload.get("triggered_at"),
+            "user_id": user_api_key_dict.user_id if user_api_key_dict else None,
+            "user_role": user_api_key_dict.user_role if user_api_key_dict else None,
+            "details": event_payload,
+        }
+        await database.insert("audit_logs", audit_record)
+```
+
+#### Send to External Compliance System
+
+```python
+import httpx
+from litellm.integrations.custom_logger import CustomLogger
+
+class ComplianceLogger(CustomLogger):
+    async def async_log_management_event(
+        self,
+        event_name: str,
+        event_payload: dict,
+        user_api_key_dict=None,
+    ):
+        """Forward sensitive management events to compliance system"""
+        # Only track key creation and deletion
+        if event_name in ["New Virtual Key Created", "Virtual Key Deleted"]:
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    "https://compliance.example.com/api/events",
+                    json={
+                        "event": event_name,
+                        "payload": event_payload,
+                        "actor": user_api_key_dict.user_id if user_api_key_dict else "system",
+                    }
+                )
+```
+
+#### Filter and Alert on Specific Events
+
+```python
+from litellm.integrations.custom_logger import CustomLogger
+
+class SecurityAlertLogger(CustomLogger):
+    def log_management_event(
+        self,
+        event_name: str,
+        event_payload: dict,
+        user_api_key_dict=None,
+    ):
+        """Alert security team on key deletions"""
+        if event_name == "Virtual Key Deleted":
+            deleted_keys = event_payload.get("request", {}).get("data", {}).get("keys", [])
+            send_security_alert(
+                f"🚨 {len(deleted_keys)} API key(s) deleted by {user_api_key_dict.user_id}",
+                details=event_payload
+            )
+```
+
+### Setup in Proxy
+
+**Option 1: Via config.yaml**
+
+```yaml
+litellm_settings:
+  callbacks: ["your_module.YourManagementLogger"]
+```
+
+**Option 2: Programmatically**
+
+```python
+import litellm
+from your_module import YourManagementLogger
+
+# Add your logger
+custom_handler = YourManagementLogger()
+litellm.callbacks = [custom_handler]
+```
+
+### Notes
+
+- Management events are only triggered on **successful** management endpoint calls
+- Events are dispatched after the action completes
+- Both sync (`log_management_event`) and async (`async_log_management_event`) variants are supported
+- The hook receives serialized data (sensitive fields like `http_request` are automatically filtered)
+- Exceptions in your hook are caught and logged but won't break the management endpoint
 
 ## What's Available in kwargs?
 
