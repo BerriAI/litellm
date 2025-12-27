@@ -1,4 +1,4 @@
-﻿from litellm import BudgetManager
+from litellm import BudgetManager
 import litellm.budget_manager as budget_manager_module
 
 
@@ -14,4 +14,3 @@ def test_create_budget_uses_current_time(monkeypatch, tmp_path):
 
     assert budget1["created_at"] == 1000.0
     assert budget2["created_at"] == 1001.0
-    assert budget2["created_at"] > budget1["created_at"]
