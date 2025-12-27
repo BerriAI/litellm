@@ -3,7 +3,17 @@
 import os
 import traceback
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 from packaging.version import Version
 
@@ -505,9 +515,9 @@ class LangFuseLogger:
             # we clean out all extra litellm metadata params before logging
             clean_metadata: Dict[str, Any] = {}
             if prompt_management_metadata is not None:
-                clean_metadata[
-                    "prompt_management_metadata"
-                ] = prompt_management_metadata
+                clean_metadata["prompt_management_metadata"] = (
+                    prompt_management_metadata
+                )
             if isinstance(metadata, dict):
                 for key, value in metadata.items():
                     # generate langfuse tags - Default Tags sent to Langfuse from LiteLLM Proxy
@@ -543,7 +553,9 @@ class LangFuseLogger:
             # as we want to fall back to litellm_call_id instead for better traceability.
             # Note: Users can still explicitly set a UUID trace_id via metadata["trace_id"] (highest priority)
             if trace_id is None and standard_logging_object is not None:
-                standard_trace_id = cast(Optional[str], standard_logging_object.get("trace_id"))
+                standard_trace_id = cast(
+                    Optional[str], standard_logging_object.get("trace_id")
+                )
                 # Only use standard_logging_object.trace_id if it's not a UUID
                 # UUIDs are 36 characters with hyphens in format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
                 # We check for this specific pattern to avoid rejecting valid trace_ids that happen to have hyphens
@@ -575,7 +587,9 @@ class LangFuseLogger:
             mask_output = clean_metadata.pop("mask_output", False)
             # Look for masking function in the dedicated location first (set by scrub_sensitive_keys_in_metadata)
             # Fall back to metadata for backwards compatibility
-            masking_function = litellm_params.get("_langfuse_masking_function") or clean_metadata.pop("langfuse_masking_function", None)
+            masking_function = litellm_params.get(
+                "_langfuse_masking_function"
+            ) or clean_metadata.pop("langfuse_masking_function", None)
 
             # Apply custom masking function if provided
             if masking_function is not None and callable(masking_function):
@@ -732,12 +746,21 @@ class LangFuseLogger:
                     )
                     total_tokens = getattr(_usage_obj, "total_tokens", None) or 0
 
-                    cache_creation_input_tokens = (
-                        _usage_obj.get("cache_creation_input_tokens") or 0
-                    )
-                    cache_read_input_tokens = (
-                        _usage_obj.get("cache_read_input_tokens") or 0
-                    )
+                    if hasattr(_usage_obj, "get"):
+                        cache_creation_input_tokens = (
+                            _usage_obj.get("cache_creation_input_tokens") or 0
+                        )
+                        cache_read_input_tokens = (
+                            _usage_obj.get("cache_read_input_tokens") or 0
+                        )
+                    else:
+                        cache_creation_input_tokens = (
+                            getattr(_usage_obj, "cache_creation_input_tokens", None)
+                            or 0
+                        )
+                        cache_read_input_tokens = (
+                            getattr(_usage_obj, "cache_read_input_tokens", None) or 0
+                        )
 
                     usage = {
                         "prompt_tokens": prompt_tokens,
@@ -918,7 +941,9 @@ class LangFuseLogger:
         return Version(self.langfuse_sdk_version) >= Version("2.7.3")
 
     @staticmethod
-    def _apply_masking_function(data: Any, masking_function: Callable[[Any], Any]) -> Any:
+    def _apply_masking_function(
+        data: Any, masking_function: Callable[[Any], Any]
+    ) -> Any:
         """
         Apply a masking function to data, handling different data types.
 
