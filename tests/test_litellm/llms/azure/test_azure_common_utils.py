@@ -1540,3 +1540,97 @@ def test_is_azure_v1_api_version(api_version, expected):
     """
     result = BaseAzureLLM._is_azure_v1_api_version(api_version=api_version)
     assert result == expected
+
+
+@pytest.mark.parametrize(
+    "api_version",
+    ["v1", "latest", "preview"],
+)
+def test_initialize_azure_sdk_client_with_v1_api(api_version, setup_mocks):
+    """
+    Test that initialize_azure_sdk_client uses base_url instead of azure_endpoint
+    when api_version is v1, latest, or preview (OpenAI-compatible format).
+
+    Issue: #16449
+    """
+    result = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params={},
+        api_key="test-api-key",
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4o-mini",
+        api_version=api_version,
+        is_async=False,
+    )
+
+    # Verify base_url is set with the v1 format
+    assert "base_url" in result
+    assert result["base_url"] == f"https://test.openai.azure.com/openai/{api_version}"
+
+    # Verify azure_endpoint is NOT set
+    assert "azure_endpoint" not in result or result["azure_endpoint"] is None
+
+    # Verify api_version is still present (Azure SDK requires it)
+    assert result["api_version"] == api_version
+
+    # Verify select_azure_base_url_or_endpoint was NOT called for v1 API
+    setup_mocks["select_url"].assert_not_called()
+
+
+def test_initialize_azure_sdk_client_with_traditional_api(setup_mocks):
+    """
+    Test that initialize_azure_sdk_client uses azure_endpoint for traditional API versions.
+    """
+    result = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params={},
+        api_key="test-api-key",
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version="2024-10-21",
+        is_async=False,
+    )
+
+    # Verify azure_endpoint is set
+    assert result["azure_endpoint"] == "https://test.openai.azure.com"
+
+    # Verify api_version is set
+    assert result["api_version"] == "2024-10-21"
+
+    # Verify select_azure_base_url_or_endpoint WAS called for traditional API
+    setup_mocks["select_url"].assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "api_version,is_async,expected_client_type",
+    [
+        ("v1", False, "OpenAI"),
+        ("v1", True, "AsyncOpenAI"),
+        ("latest", False, "OpenAI"),
+        ("latest", True, "AsyncOpenAI"),
+        ("preview", False, "OpenAI"),
+        ("preview", True, "AsyncOpenAI"),
+        ("2024-10-21", False, "AzureOpenAI"),
+        ("2024-10-21", True, "AsyncAzureOpenAI"),
+        ("2023-05-15", False, "AzureOpenAI"),
+        ("2023-05-15", True, "AsyncAzureOpenAI"),
+    ],
+)
+def test_get_azure_openai_client_uses_correct_client_type(
+    api_version, is_async, expected_client_type
+):
+    """
+    Test that get_azure_openai_client returns the correct client type:
+    - OpenAI/AsyncOpenAI for v1 API versions (v1, latest, preview)
+    - AzureOpenAI/AsyncAzureOpenAI for traditional API versions (dated)
+
+    Issue: #16449
+    """
+    client = BaseAzureLLM().get_azure_openai_client(
+        api_key="test-api-key",
+        api_base="https://test.openai.azure.com",
+        api_version=api_version,
+        _is_async=is_async,
+    )
+
+    # Verify the correct client type is returned
+    # Note: AzureOpenAI inherits from OpenAI, so we check the exact type
+    assert type(client).__name__ == expected_client_type
