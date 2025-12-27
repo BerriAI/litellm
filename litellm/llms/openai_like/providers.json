@@ -1,4 +1,9 @@
 {
+  "aibadgr": {
+    "base_url": "https://aibadgr.com/api/v1",
+    "api_key_env": "AIBADGR_API_KEY",
+    "api_base_env": "AIBADGR_BASE_URL"
+  },
   "publicai": {
     "base_url": "https://api.publicai.co/v1",
     "api_key_env": "PUBLICAI_API_KEY",
