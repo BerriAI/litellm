@@ -229,10 +229,10 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://api.ai21.com/studio/v1":
                         custom_llm_provider = "ai21_chat"
                         dynamic_api_key = get_secret_str("AI21_API_KEY")
-                    elif endpoint == "https://codestral.mistral.ai/v1":
+                    elif endpoint == "codestral.mistral.ai/v1/chat/completions":
                         custom_llm_provider = "codestral"
                         dynamic_api_key = get_secret_str("CODESTRAL_API_KEY")
-                    elif endpoint == "https://codestral.mistral.ai/v1":
+                    elif endpoint == "codestral.mistral.ai/v1/fim/completions":
                         custom_llm_provider = "text-completion-codestral"
                         dynamic_api_key = get_secret_str("CODESTRAL_API_KEY")
                     elif endpoint == "app.empower.dev/api/v1":
