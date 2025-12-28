@@ -329,8 +329,8 @@ def populate_request_with_path_params(
     request_data: dict, request: Request
 ) -> dict:
     """
-    Copy FastAPI path params into the request payload so downstream checks
-    (e.g. vector store RBAC) see them the same way as body params.
+    Copy FastAPI path params and query params into the request payload so downstream checks
+    (e.g. vector store RBAC, organization RBAC) see them the same way as body params.
     
     Since path_params may not be available during dependency injection,
     we parse the URL path directly for known patterns.
@@ -340,8 +340,15 @@ def populate_request_with_path_params(
         request: The FastAPI Request object
         
     Returns:
-        dict: Updated request_data with path parameters added
+        dict: Updated request_data with path parameters and query parameters added
     """    
+    # Add query parameters to request_data (for GET requests, etc.)
+    query_params = _safe_get_request_query_params(request)
+    if query_params:
+        for key, value in query_params.items():
+            # Don't overwrite existing values from request body
+            request_data.setdefault(key, value)
+    
     # Try to get path_params if available (sometimes populated by FastAPI)
     path_params = getattr(request, "path_params", None)
     if isinstance(path_params, dict) and path_params:

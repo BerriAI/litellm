@@ -1,3 +1,5 @@
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import {
   ApiOutlined,
   AppstoreOutlined,
@@ -21,17 +23,17 @@ import {
   ToolOutlined,
   UserOutlined,
 } from "@ant-design/icons";
-import { Badge, ConfigProvider, Layout, Menu } from "antd";
 import type { MenuProps } from "antd";
+import { Badge, ConfigProvider, Layout, Menu } from "antd";
+import { useMemo } from "react";
 import { all_admin_roles, internalUserRoles, isAdminRole, rolesWithWriteAccess } from "../utils/roles";
+import type { Organization } from "./networking";
 import UsageIndicator from "./usage_indicator";
 const { Sider } = Layout;
 
 // Define the props type
 interface SidebarProps {
-  accessToken: string | null;
   setPage: (page: string) => void;
-  userRole: string;
   defaultSelectedKey: string;
   collapsed?: boolean;
 }
@@ -53,7 +55,18 @@ interface MenuGroup {
   roles?: string[];
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defaultSelectedKey, collapsed = false }) => {
+const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapsed = false }) => {
+  const { userId, accessToken, userRole } = useAuthorized();
+  const { data: organizations } = useOrganizations();
+
+  // Check if user is an org_admin
+  const isOrgAdmin = useMemo(() => {
+    if (!userId || !organizations) return false;
+    return organizations.some((org: Organization) =>
+      org.members?.some((member) => member.user_id === userId && member.user_role === "org_admin"),
+    );
+  }, [userId, organizations]);
+
   // Navigate to page helper
   const navigateToPage = (page: string) => {
     const newSearchParams = new URLSearchParams(window.location.search);
@@ -146,7 +159,7 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
             <span className="flex items-center gap-4">
               Usage <Badge color="blue" count="New" />
             </span>
-        ),
+          ),
         },
         {
           key: "logs",
@@ -302,7 +315,13 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
   // Filter items based on user role
   const filterItemsByRole = (items: MenuItem[]): MenuItem[] => {
     return items
-      .filter((item) => !item.roles || item.roles.includes(userRole))
+      .filter((item) => {
+        // Special handling for organizations menu item - allow org_admins
+        if (item.key === "organizations") {
+          return !item.roles || item.roles.includes(userRole) || isOrgAdmin;
+        }
+        return !item.roles || item.roles.includes(userRole);
+      })
       .map((item) => ({
         ...item,
         children: item.children ? filterItemsByRole(item.children) : undefined,

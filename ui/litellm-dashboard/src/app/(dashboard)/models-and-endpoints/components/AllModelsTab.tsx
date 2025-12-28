@@ -1,13 +1,14 @@
+import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { Team } from "@/components/key_team_helpers/key_list";
 import { ModelDataTable } from "@/components/model_dashboard/table";
 import { columns } from "@/components/molecules/models/columns";
 import { getDisplayModelName } from "@/components/view_model/model_name_display";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { PaginationState, Table as TableInstance } from "@tanstack/react-table";
+import { PaginationState } from "@tanstack/react-table";
 import { Grid, Select, SelectItem, TabPanel, Text } from "@tremor/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useModelsInfo } from "../../hooks/models/useModels";
 
 type ModelViewMode = "all" | "current_team";
 
@@ -19,7 +20,6 @@ interface AllModelsTabProps {
   setSelectedModelId: (id: string) => void;
   setSelectedTeamId: (id: string) => void;
   setEditModel: (edit: boolean) => void;
-  modelData: any;
 }
 
 const AllModelsTab = ({
@@ -30,10 +30,10 @@ const AllModelsTab = ({
   setSelectedModelId,
   setSelectedTeamId,
   setEditModel,
-  modelData,
 }: AllModelsTabProps) => {
+  const { data: modelData } = useModelsInfo();
   const { userId, userRole, premiumUser } = useAuthorized();
-  const { teams } = useTeams();
+  const { data: teams } = useTeams();
 
   const [modelNameSearch, setModelNameSearch] = useState<string>("");
   const [modelViewMode, setModelViewMode] = useState<ModelViewMode>("current_team");
@@ -45,7 +45,6 @@ const AllModelsTab = ({
     pageIndex: 0,
     pageSize: 50,
   });
-  const tableRef = useRef<TableInstance<any>>(null);
 
   const filteredData = useMemo(() => {
     if (!modelData || !modelData.data || modelData.data.length === 0) {
@@ -87,12 +86,6 @@ const AllModelsTab = ({
       return searchMatch && modelNameMatch && accessGroupMatch && teamAccessMatch;
     });
   }, [modelData, modelNameSearch, selectedModelGroup, selectedModelAccessGroupFilter, currentTeam, modelViewMode]);
-
-  const paginatedData = useMemo(() => {
-    const startIndex = pagination.pageIndex * pagination.pageSize;
-    const endIndex = startIndex + pagination.pageSize;
-    return filteredData.slice(startIndex, endIndex);
-  }, [filteredData, pagination.pageIndex, pagination.pageSize]);
 
   useEffect(() => {
     setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
@@ -370,9 +363,11 @@ const AllModelsTab = ({
                 expandedRows,
                 setExpandedRows,
               )}
-              data={paginatedData}
+              data={filteredData}
               isLoading={false}
-              table={tableRef}
+              pagination={pagination}
+              onPaginationChange={setPagination}
+              enablePagination={true}
             />
           </div>
         </div>

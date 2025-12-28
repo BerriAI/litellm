@@ -871,8 +871,6 @@ SKIP_MODELS = [
     "jamba",
     "deepinfra",
     "mistral.",
-    "groq/llama-guard-3-8b",
-    "groq/gemma2-9b-it",
 ]
 
 # Bedrock models to block - organized by type

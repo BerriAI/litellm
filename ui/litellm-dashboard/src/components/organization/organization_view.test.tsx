@@ -40,6 +40,24 @@ vi.mock("../mcp_server_management/MCPServerSelector", () => ({
   __esModule: true,
   default: () => null,
 }));
+const mockUseTeamsData = {
+  data: [
+    {
+      team_id: "team_123",
+      team_alias: "Engineering Team",
+    },
+    {
+      team_id: "team_456",
+      team_alias: "Marketing Team",
+    },
+  ],
+};
+
+const mockUseTeams = vi.fn(() => mockUseTeamsData);
+
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  useTeams: () => mockUseTeams(),
+}));
 
 const mockOrg = {
   organization_alias: "Acme Corp",
@@ -101,5 +119,65 @@ test("should display empty state when organization has no members", async () => 
 
   await waitFor(() => {
     expect(screen.getByText("No members found")).toBeInTheDocument();
+  });
+});
+
+test("should display team aliases when teams are available", async () => {
+  const { organizationInfoCall } = await import("../networking");
+  const orgWithTeams = {
+    ...mockOrg,
+    teams: [{ team_id: "team_123" }, { team_id: "team_456" }],
+  };
+  (organizationInfoCall as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(orgWithTeams);
+
+  render(
+    <OrganizationInfoView
+      organizationId="org_123"
+      onClose={() => {}}
+      accessToken="test-token"
+      is_org_admin={false}
+      is_proxy_admin={false}
+      userModels={[]}
+      editOrg={false}
+    />,
+  );
+
+  await waitFor(() => {
+    expect(screen.getByText("Engineering Team")).toBeInTheDocument();
+    expect(screen.getByText("Marketing Team")).toBeInTheDocument();
+  });
+});
+
+test("should display team ID as fallback when alias is not found", async () => {
+  const { organizationInfoCall } = await import("../networking");
+  mockUseTeams.mockReturnValueOnce({
+    data: [
+      {
+        team_id: "team_123",
+        team_alias: "Engineering Team",
+      },
+    ],
+  });
+
+  const orgWithUnknownTeam = {
+    ...mockOrg,
+    teams: [{ team_id: "team_999" }],
+  };
+  (organizationInfoCall as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(orgWithUnknownTeam);
+
+  render(
+    <OrganizationInfoView
+      organizationId="org_123"
+      onClose={() => {}}
+      accessToken="test-token"
+      is_org_admin={false}
+      is_proxy_admin={false}
+      userModels={[]}
+      editOrg={false}
+    />,
+  );
+
+  await waitFor(() => {
+    expect(screen.getByText("team_999")).toBeInTheDocument();
   });
 });

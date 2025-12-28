@@ -40,14 +40,22 @@ context_window_test_cases = [
         "`inputs` tokens + `max_new_tokens` must be <= 4096",
         True,
     ),
-    # Gemini context window error format
-    # See: https://github.com/BerriAI/litellm/issues/XXXX
+    # Gemini 2.5/3 format
     (
         "The input token count exceeds the maximum number of tokens allowed 1048576.",
         True,
     ),
     (
         "GeminiException BadRequestError - {\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"The input token count exceeds the maximum number of tokens allowed 1048576.\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }\n}\n",
+        True,
+    ),
+    # Gemini 2.0 Flash format (includes input token count in message)
+    (
+        "The input token count (2800010) exceeds the maximum number of tokens allowed (1048575).",
+        True,
+    ),
+    (
+        "GeminiException BadRequestError - {\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"The input token count (2800010) exceeds the maximum number of tokens allowed (1048575).\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }\n}\n",
         True,
     ),
     # Test case insensitivity
@@ -168,6 +176,54 @@ class TestExceptionCheckers:
         for error_str in negative_cases:
             result = ExceptionCheckers.is_azure_content_policy_violation_error(error_str)
             assert result is False, f"Should NOT detect policy violation in: {error_str}"
+
+gemini_context_window_test_cases = [
+    # Gemini 2.0 Flash format (includes input token count in message)
+    (
+        "The input token count (2800010) exceeds the maximum number of tokens allowed (1048575).",
+        True,
+    ),
+    # Gemini 2.5/3 format
+    (
+        "The input token count exceeds the maximum number of tokens allowed (1048576).",
+        True,
+    ),
+    ("A generic error occurred.", False),
+]
+
+
+@pytest.mark.parametrize(
+    "error_message, should_raise_context_window", gemini_context_window_test_cases
+)
+def test_gemini_context_window_error_mapping(error_message, should_raise_context_window):
+    """
+    Tests that the exception_type function correctly maps Gemini's
+    context window exceeded errors to litellm.ContextWindowExceededError.
+    """
+    model = "gemini/gemini-2.0-flash"
+    custom_llm_provider = "gemini"
+
+    # Create a generic exception with the specific error message
+    original_exception = Exception(error_message)
+
+    if should_raise_context_window:
+        with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+            exception_type(
+                model=model,
+                original_exception=original_exception,
+                custom_llm_provider=custom_llm_provider,
+            )
+        # Check if the raised exception is indeed a ContextWindowExceededError
+        assert isinstance(excinfo.value, litellm.ContextWindowExceededError)
+    else:
+        # For the negative case, we expect it to raise a generic APIConnectionError
+        with pytest.raises(litellm.APIConnectionError):
+            exception_type(
+                model=model,
+                original_exception=original_exception,
+                custom_llm_provider=custom_llm_provider,
+            )
+
 
 # Test cases for Vertex AI RateLimitError mapping
 # As per https://github.com/BerriAI/litellm/issues/16189

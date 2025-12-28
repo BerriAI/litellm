@@ -1291,6 +1291,9 @@ class Logging(LiteLLMLoggingBaseClass):
         original_cost: Optional[float] = None,
         discount_percent: Optional[float] = None,
         discount_amount: Optional[float] = None,
+        margin_percent: Optional[float] = None,
+        margin_fixed_amount: Optional[float] = None,
+        margin_total_amount: Optional[float] = None,
     ) -> None:
         """
         Helper method to store cost breakdown in the logging object.
@@ -1303,6 +1306,9 @@ class Logging(LiteLLMLoggingBaseClass):
             original_cost: Cost before discount
             discount_percent: Discount percentage (0.05 = 5%)
             discount_amount: Discount amount in USD
+            margin_percent: Margin percentage applied (0.10 = 10%)
+            margin_fixed_amount: Fixed margin amount in USD
+            margin_total_amount: Total margin added in USD
         """
 
         self.cost_breakdown = CostBreakdown(
@@ -1319,6 +1325,14 @@ class Logging(LiteLLMLoggingBaseClass):
             self.cost_breakdown["discount_percent"] = discount_percent
         if discount_amount is not None:
             self.cost_breakdown["discount_amount"] = discount_amount
+
+        # Store margin information if provided
+        if margin_percent is not None:
+            self.cost_breakdown["margin_percent"] = margin_percent
+        if margin_fixed_amount is not None:
+            self.cost_breakdown["margin_fixed_amount"] = margin_fixed_amount
+        if margin_total_amount is not None:
+            self.cost_breakdown["margin_total_amount"] = margin_total_amount
 
     def _response_cost_calculator(
         self,

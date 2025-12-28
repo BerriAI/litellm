@@ -2050,7 +2050,7 @@ class TestProcessSSOJWTAccessToken:
     @pytest.fixture
     def sample_jwt_token(self):
         """Create a sample JWT token string"""
-        return "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+        return "test-jwt-token-header.payload.signature"
 
     @pytest.fixture
     def sample_jwt_payload(self):

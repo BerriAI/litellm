@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.utils import (
+    CostBreakdown,
     StandardLoggingGuardrailInformation,
     StandardLoggingMCPToolCall,
     StandardLoggingModelInformation,
@@ -56,6 +57,7 @@ def _get_spend_logs_metadata(
     model_map_information: Optional[StandardLoggingModelInformation] = None,
     cold_storage_object_key: Optional[str] = None,
     litellm_overhead_time_ms: Optional[float] = None,
+    cost_breakdown: Optional[CostBreakdown] = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -80,6 +82,7 @@ def _get_spend_logs_metadata(
             guardrail_information=None,
             cold_storage_object_key=cold_storage_object_key,
             litellm_overhead_time_ms=None,
+            cost_breakdown=None,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "
@@ -105,6 +108,7 @@ def _get_spend_logs_metadata(
     clean_metadata["model_map_information"] = model_map_information
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
     clean_metadata["litellm_overhead_time_ms"] = litellm_overhead_time_ms
+    clean_metadata["cost_breakdown"] = cost_breakdown
 
     return clean_metadata
 
@@ -353,6 +357,11 @@ def get_logging_payload(  # noqa: PLR0915
             else None
         ),
         litellm_overhead_time_ms=litellm_overhead_time_ms,
+        cost_breakdown=(
+            standard_logging_payload.get("cost_breakdown", None)
+            if standard_logging_payload is not None
+            else None
+        ),
     )
 
     special_usage_fields = ["completion_tokens", "prompt_tokens", "total_tokens"]

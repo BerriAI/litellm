@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, renderHook, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { Form } from "antd";
 import type { UploadProps } from "antd/es/upload";
 import { describe, expect, it, vi } from "vitest";
@@ -7,6 +8,14 @@ import type { Team } from "../key_team_helpers/key_list";
 import type { CredentialItem } from "../networking";
 import { Providers } from "../provider_info_helpers";
 import AddModelTab from "./add_model_tab";
+
+vi.mock("../molecules/models/ProviderLogo", () => ({
+  ProviderLogo: ({ provider, className }: { provider: string; className?: string }) => (
+    <div className={className} data-testid={`provider-logo-${provider}`}>
+      {provider}
+    </div>
+  ),
+}));
 
 vi.mock("../networking", async () => {
   const actual = await vi.importActual("../networking");
@@ -258,4 +267,47 @@ describe("Add Model Tab", () => {
       { timeout: 10000 },
     );
   }, 15000); // 15 second timeout to allow waitFor to complete
+
+  it("should show team selection when team-only switch is enabled", async () => {
+    const props = createTestProps();
+    const queryClient = createQueryClient();
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AddModelTab
+          form={props.form}
+          handleOk={props.handleOk}
+          selectedProvider={props.selectedProvider}
+          setSelectedProvider={props.setSelectedProvider}
+          providerModels={props.providerModels}
+          setProviderModelsFn={props.setProviderModelsFn}
+          getPlaceholder={props.getPlaceholder}
+          uploadProps={props.uploadProps}
+          showAdvancedSettings={props.showAdvancedSettings}
+          setShowAdvancedSettings={props.setShowAdvancedSettings}
+          teams={props.teams}
+          credentials={props.credentials}
+          accessToken={props.accessToken}
+          userRole={props.userRole}
+          premiumUser={props.premiumUser}
+        />
+      </QueryClientProvider>,
+    );
+
+    // Wait for component to load
+    await screen.findByText("Provider");
+
+    // Find the team-BYOK switch by its role
+    const teamSwitch = screen.getByRole("switch");
+    expect(teamSwitch).toBeInTheDocument();
+
+    // Initially, team selection should not be visible
+    expect(screen.queryByText("Select Team")).not.toBeInTheDocument();
+
+    // Click the switch to enable team-only mode
+    await userEvent.click(teamSwitch!);
+
+    // Now team selection should be visible
+    expect(await screen.findByText("Select Team")).toBeInTheDocument();
+  });
 });

@@ -17,6 +17,7 @@ from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.vertex_ai.common_utils import (
     _convert_vertex_datetime_to_openai_datetime,
+    get_vertex_base_url,
 )
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.router import GenericLiteLLMParams
@@ -222,10 +223,8 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         # Construct the URL
         if api_base:
             base_url = api_base.rstrip("/")
-        elif vertex_location == "global":
-            base_url = "https://aiplatform.googleapis.com"
         else:
-            base_url = f"https://{vertex_location}-aiplatform.googleapis.com"
+            base_url = get_vertex_base_url(vertex_location)
 
         url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model_name}"
 

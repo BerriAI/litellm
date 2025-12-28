@@ -47,7 +47,7 @@ class TestCloudZeroHourlyExport:
             {
                 "team_id": ["a3d6b0bb-098f-4260-81d6-fabae695b622"],
                 "key_alias": ["key_1"],
-                "token": ["c1465c9a821f420927b3d81972323fb516745bc93a4a54ceca0ce6ddf6100c39"],
+                "token": ["sk-test-cloudzero-token-010"],
             }
         )
 

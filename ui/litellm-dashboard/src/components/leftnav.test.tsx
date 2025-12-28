@@ -1,14 +1,7 @@
-import { act, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { renderWithProviders } from "../../tests/test-utils";
 import Sidebar from "./leftnav";
-
-// Stub ResizeObserver used by antd in jsdom
-class ResizeObserver {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-}
-(global as any).ResizeObserver = ResizeObserver;
 
 vi.mock("../utils/roles", () => {
   return {
@@ -19,17 +12,53 @@ vi.mock("../utils/roles", () => {
   };
 });
 
+const { mockUseAuthorized, mockUseOrganizations } = vi.hoisted(() => {
+  const mockUseAuthorized = vi.fn(() => ({
+    userId: "test-user-id",
+    accessToken: "test-access-token",
+    userRole: "admin",
+    token: "test-token",
+    userEmail: "test@example.com",
+    premiumUser: false,
+    disabledPersonalKeyCreation: false,
+    showSSOBanner: false,
+  }));
+
+  const mockUseOrganizations = vi.fn(() => ({
+    data: [],
+    isLoading: false,
+    error: null,
+  }));
+
+  return { mockUseAuthorized, mockUseOrganizations };
+});
+
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: mockUseAuthorized,
+}));
+
+vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
+  useOrganizations: mockUseOrganizations,
+}));
+
+vi.mock("@/app/(dashboard)/hooks/uiConfig/useUIConfig", () => {
+  return {
+    useUIConfig: () => ({
+      data: { admin_ui_disabled: false },
+      isLoading: false,
+    }),
+  };
+});
+
 describe("Sidebar (leftnav)", () => {
   const defaultProps = {
-    accessToken: null as string | null,
     setPage: vi.fn(),
-    userRole: "admin",
     defaultSelectedKey: "api-keys",
     collapsed: false,
   };
 
   it("renders all top-level (non-nested) tabs for admin", () => {
-    const { getByText } = render(<Sidebar {...defaultProps} />);
+    renderWithProviders(<Sidebar {...defaultProps} />);
 
     const topLevelLabels = [
       "Virtual Keys",
@@ -51,19 +80,19 @@ describe("Sidebar (leftnav)", () => {
     ];
 
     topLevelLabels.forEach((label) => {
-      expect(getByText(label)).toBeInTheDocument();
+      expect(screen.getByText(label)).toBeInTheDocument();
     });
   });
 
   it("expands a nested tab to reveal its children (Tools > Search Tools)", async () => {
-    const { getByText, queryByText } = render(<Sidebar {...defaultProps} />);
+    renderWithProviders(<Sidebar {...defaultProps} />);
 
-    expect(queryByText("Search Tools")).not.toBeInTheDocument();
+    expect(screen.queryByText("Search Tools")).not.toBeInTheDocument();
     act(() => {
-      fireEvent.click(getByText("Tools"));
+      fireEvent.click(screen.getByText("Tools"));
     });
     await waitFor(() => {
-      expect(getByText("Search Tools")).toBeInTheDocument();
+      expect(screen.getByText("Search Tools")).toBeInTheDocument();
     });
   });
   it("has no duplicate keys among all menu items and their children", () => {
@@ -82,7 +111,7 @@ describe("Sidebar (leftnav)", () => {
       return allKeys;
     }
 
-    const { container } = render(<Sidebar {...defaultProps} />);
+    const { container } = renderWithProviders(<Sidebar {...defaultProps} />);
     const allRenderedKeys = getAllKeysFromMenu(container);
 
     const keySet = new Set<string>();
@@ -94,5 +123,44 @@ describe("Sidebar (leftnav)", () => {
       keySet.add(key);
     }
     expect(duplicates).toHaveLength(0);
+  });
+
+  it("should show Organizations tab for organization admins", () => {
+    mockUseAuthorized.mockReturnValueOnce({
+      userId: "org-admin-user-id",
+      accessToken: "test-access-token",
+      userRole: "viewer",
+      token: "test-token",
+      userEmail: "orgadmin@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    });
+
+    mockUseOrganizations.mockReturnValueOnce({
+      data: [
+        {
+          organization_id: "org-1",
+          organization_name: "Test Organization",
+          spend: 0,
+          max_budget: null,
+          models: [],
+          tpm_limit: null,
+          rpm_limit: null,
+          members: [
+            {
+              user_id: "org-admin-user-id",
+              user_role: "org_admin",
+            },
+          ],
+        },
+      ],
+      isLoading: false,
+      error: null,
+    } as any);
+
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    expect(screen.getByText("Organizations")).toBeInTheDocument();
   });
 });

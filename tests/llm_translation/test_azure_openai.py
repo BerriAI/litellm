@@ -196,7 +196,7 @@ def test_process_azure_endpoint_url(api_base, model, expected_endpoint):
             "azure_deployment": model,
             "max_retries": 2,
             "timeout": 600,
-            "api_key": "f28ab7b695af4154bc53498e5bdccb07",
+            "api_key": "sk-test-mock-key-505",
         },
         "model": model,
     }

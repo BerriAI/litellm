@@ -568,6 +568,111 @@ def get_dynamic_callbacks(
     return returned_callbacks
 
 
+def _is_gemini_model(model: Optional[str], custom_llm_provider: Optional[str]) -> bool:
+    """
+    Check if the target model is a Gemini or Vertex AI Gemini model.
+    """
+    if custom_llm_provider in ["gemini", "vertex_ai", "vertex_ai_beta"]:
+        # For vertex_ai, check if it's actually a Gemini model
+        if custom_llm_provider in ["vertex_ai", "vertex_ai_beta"]:
+            return model is not None and "gemini" in model.lower()
+        return True
+    
+    # Check if model name contains gemini
+    return model is not None and "gemini" in model.lower()
+
+
+def _remove_thought_signature_from_id(tool_call_id: str, separator: str) -> str:
+    """
+    Remove thought signature from a tool call ID.
+    """
+    if separator in tool_call_id:
+        return tool_call_id.split(separator, 1)[0]
+    return tool_call_id
+
+
+def _process_assistant_message_tool_calls(
+    msg_copy: dict, thought_signature_separator: str
+) -> dict:
+    """
+    Process assistant message to remove thought signatures from tool call IDs.
+    """
+    role = msg_copy.get("role")
+    tool_calls = msg_copy.get("tool_calls")
+    
+    if role == "assistant" and isinstance(tool_calls, list):
+        new_tool_calls = []
+        for tc in tool_calls:
+            # Handle both dict and Pydantic model tool calls
+            if hasattr(tc, "model_dump"):
+                # It's a Pydantic model, convert to dict
+                tc_dict = tc.model_dump()
+            elif isinstance(tc, dict):
+                tc_dict = tc.copy()
+            else:
+                new_tool_calls.append(tc)
+                continue
+            
+            # Remove thought signature from ID if present
+            if isinstance(tc_dict.get("id"), str):
+                if thought_signature_separator in tc_dict["id"]:
+                    tc_dict["id"] = _remove_thought_signature_from_id(
+                        tc_dict["id"], thought_signature_separator
+                    )
+            
+            new_tool_calls.append(tc_dict)
+        msg_copy["tool_calls"] = new_tool_calls
+    
+    return msg_copy
+
+
+def _process_tool_message_id(msg_copy: dict, thought_signature_separator: str) -> dict:
+    """
+    Process tool message to remove thought signature from tool_call_id.
+    """
+    if msg_copy.get("role") == "tool" and isinstance(
+        msg_copy.get("tool_call_id"), str
+    ):
+        if thought_signature_separator in msg_copy["tool_call_id"]:
+            msg_copy["tool_call_id"] = _remove_thought_signature_from_id(
+                msg_copy["tool_call_id"], thought_signature_separator
+            )
+    
+    return msg_copy
+
+
+def _remove_thought_signatures_from_messages(
+    messages: List, thought_signature_separator: str
+) -> List:
+    """
+    Remove thought signatures from tool call IDs in all messages.
+    """
+    processed_messages = []
+    
+    for msg in messages:
+        # Handle Pydantic models (convert to dict)
+        if hasattr(msg, "model_dump"):
+            msg_dict = msg.model_dump()
+        elif isinstance(msg, dict):
+            msg_dict = msg.copy()
+        else:
+            # Unknown type, keep as is
+            processed_messages.append(msg)
+            continue
+        
+        # Process assistant messages with tool_calls
+        msg_dict = _process_assistant_message_tool_calls(
+            msg_dict, thought_signature_separator
+        )
+        
+        # Process tool messages with tool_call_id
+        msg_dict = _process_tool_message_id(msg_dict, thought_signature_separator)
+        
+        processed_messages.append(msg_dict)
+    
+    return processed_messages
+
+
 def function_setup(  # noqa: PLR0915
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
@@ -779,6 +884,58 @@ def function_setup(  # noqa: PLR0915
                     input=buffer.getvalue(),
                     model=model,
                 )
+            
+            ### REMOVE THOUGHT SIGNATURES FROM TOOL CALL IDS FOR NON-GEMINI MODELS ###
+            # Gemini models embed thought signatures in tool call IDs. When sending
+            # messages with tool calls to non-Gemini providers, we need to remove these
+            # signatures to ensure compatibility.
+            if isinstance(messages, list) and len(messages) > 0:
+                try:
+                    from litellm.litellm_core_utils.get_llm_provider_logic import (
+                        get_llm_provider,
+                    )
+                    from litellm.litellm_core_utils.prompt_templates.factory import (
+                        THOUGHT_SIGNATURE_SEPARATOR,
+                    )
+
+                    # Get custom_llm_provider to determine target provider
+                    custom_llm_provider = kwargs.get("custom_llm_provider")
+                    
+                    # If custom_llm_provider not in kwargs, try to determine it from the model
+                    if not custom_llm_provider and model:
+                        try:
+                            _, custom_llm_provider, _, _ = get_llm_provider(
+                                model=model,
+                                custom_llm_provider=custom_llm_provider,
+                            )
+                        except Exception:
+                            # If we can't determine the provider, skip this processing
+                            pass
+                    
+                    # Only process if target is NOT a Gemini model
+                    if not _is_gemini_model(model, custom_llm_provider):
+                        verbose_logger.debug(
+                            "Removing thought signatures from tool call IDs for non-Gemini model"
+                        )
+                        
+                        # Process messages to remove thought signatures
+                        processed_messages = _remove_thought_signatures_from_messages(
+                            messages, THOUGHT_SIGNATURE_SEPARATOR
+                        )
+                        
+                        # Update messages in kwargs or args
+                        if "messages" in kwargs:
+                            kwargs["messages"] = processed_messages
+                        elif len(args) > 1:
+                            args_list = list(args)
+                            args_list[1] = processed_messages
+                            args = tuple(args_list)
+
+                except Exception as e:
+                    # Log the error but don't fail the request
+                    verbose_logger.warning(
+                        f"Error removing thought signatures from tool call IDs: {str(e)}"
+                    )
         elif (
             call_type == CallTypes.embedding.value
             or call_type == CallTypes.aembedding.value
@@ -7224,6 +7381,8 @@ class ProviderConfigManager:
             return litellm.IBMWatsonXAIConfig()
         elif litellm.LlmProviders.EMPOWER == provider:
             return litellm.EmpowerChatConfig()
+        elif litellm.LlmProviders.MINIMAX == provider:            
+            return litellm.MinimaxChatConfig()
         elif litellm.LlmProviders.GITHUB == provider:
             return litellm.GithubChatConfig()
         elif litellm.LlmProviders.COMPACTIFAI == provider:
@@ -7501,6 +7660,12 @@ class ProviderConfigManager:
                 )
 
                 return AzureAnthropicMessagesConfig()
+        elif litellm.LlmProviders.MINIMAX == provider:
+            from litellm.llms.minimax.messages.transformation import (
+                MinimaxMessagesConfig,
+            )
+
+            return MinimaxMessagesConfig()
         return None
 
     @staticmethod
@@ -8096,6 +8261,12 @@ class ProviderConfigManager:
             )
 
             return VertexAITextToSpeechConfig()
+        elif litellm.LlmProviders.MINIMAX == provider:
+            from litellm.llms.minimax.text_to_speech.transformation import (
+                MinimaxTextToSpeechConfig,
+            )
+
+            return MinimaxTextToSpeechConfig()
         elif litellm.LlmProviders.AWS_POLLY == provider:
             from litellm.llms.aws_polly.text_to_speech.transformation import (
                 AWSPollyTextToSpeechConfig,

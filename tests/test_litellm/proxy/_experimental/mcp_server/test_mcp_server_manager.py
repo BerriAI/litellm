@@ -8,6 +8,7 @@ from fastapi import HTTPException
 # Add the parent directory to the path so we can import litellm
 sys.path.insert(0, "../../../../../")
 
+
 import httpx
 from mcp import ReadResourceResult, Resource
 from mcp.types import (
@@ -99,6 +100,53 @@ class TestMCPServerManager:
         assert client.stdio_config["args"] == ["server.js"]
         assert client.stdio_config["env"] == {"NODE_ENV": "test"}
 
+    def test_build_stdio_env_only_accepts_x_prefixed_placeholders(self):
+        """Ensure only ${X-*} placeholders are substituted from headers."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="stdio-server-env",
+            name="stdio_env",
+            transport=MCPTransport.stdio,
+            command="node",
+            args=["server.js"],
+            env={
+                "PASSTHROUGH": "${X-Test-Header}",
+                "STATIC": "value",
+                "IGNORED": "${Not-Allowed}",
+            },
+        )
+
+        env = manager._build_stdio_env(
+            server,
+            raw_headers={
+                "x-test-header": "resolved-value",
+                "x-not-used": "other",
+            },
+        )
+
+        assert env == {
+            "PASSTHROUGH": "resolved-value",
+            "STATIC": "value",
+            "IGNORED": "${Not-Allowed}",
+        }
+
+    def test_build_stdio_env_missing_header_skips_entry(self):
+        """Ensure missing headers drop the placeholder from the resolved env."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="stdio-server-env-miss",
+            name="stdio_env_miss",
+            transport=MCPTransport.stdio,
+            command="node",
+            args=["server.js"],
+            env={"EXPECTED": "${X-Missing}"},
+        )
+
+        env = manager._build_stdio_env(server, raw_headers={})
+
+        # When the header isn't provided, the key is omitted entirely
+        assert env == {}
+
     @pytest.mark.asyncio
     async def test_list_tools_with_server_specific_auth_headers(self):
         """Test list_tools method with server-specific auth headers"""
@@ -123,7 +171,10 @@ class TestMCPServerManager:
 
         # Mock _get_tools_from_server to return different results
         async def mock_get_tools_from_server(
-            server, mcp_auth_header=None, mcp_protocol_version=None
+            server,
+            mcp_auth_header=None,
+            mcp_protocol_version=None,
+            raw_headers=None,
         ):
             if server.name == "github":
                 tool1 = MagicMock()
@@ -174,7 +225,10 @@ class TestMCPServerManager:
 
         # Mock _get_tools_from_server
         async def mock_get_tools_from_server(
-            server, mcp_auth_header=None, mcp_protocol_version=None
+            server,
+            mcp_auth_header=None,
+            mcp_protocol_version=None,
+            raw_headers=None,
         ):
             assert mcp_auth_header == "legacy-token"  # Should use legacy header
             tool = MagicMock()
@@ -209,7 +263,10 @@ class TestMCPServerManager:
 
         # Mock _get_tools_from_server
         async def mock_get_tools_from_server(
-            server, mcp_auth_header=None, mcp_protocol_version=None
+            server,
+            mcp_auth_header=None,
+            mcp_protocol_version=None,
+            raw_headers=None,
         ):
             assert (
                 mcp_auth_header == "server-specific-token"
@@ -373,6 +430,7 @@ class TestMCPServerManager:
             server=server,
             mcp_auth_header="auth",
             extra_headers=None,
+            stdio_env=None,
         )
         mock_client.list_resource_templates.assert_awaited_once()
         mock_prefix.assert_called_once_with(mock_templates, server, add_prefix=False)
@@ -554,7 +612,10 @@ class TestMCPServerManager:
 
         # Mock _get_tools_from_server
         async def mock_get_tools_from_server(
-            server, mcp_auth_header=None, mcp_protocol_version=None
+            server,
+            mcp_auth_header=None,
+            mcp_protocol_version=None,
+            raw_headers=None,
         ):
             assert (
                 mcp_auth_header == "server-specific-token"
@@ -587,7 +648,11 @@ class TestMCPServerManager:
         manager.get_mcp_server_by_id = MagicMock(return_value=server)
 
         # Mock successful _get_tools_from_server
-        async def mock_get_tools_from_server(server, mcp_auth_header=None):
+        async def mock_get_tools_from_server(
+            server,
+            mcp_auth_header=None,
+            raw_headers=None,
+        ):
             tool1 = MagicMock()
             tool1.name = "tool1"
             tool2 = MagicMock()
@@ -621,7 +686,11 @@ class TestMCPServerManager:
         manager.get_mcp_server_by_id = MagicMock(return_value=server)
 
         # Mock failed _get_tools_from_server
-        async def mock_get_tools_from_server(server, mcp_auth_header=None):
+        async def mock_get_tools_from_server(
+            server,
+            mcp_auth_header=None,
+            raw_headers=None,
+        ):
             raise Exception("Connection timeout")
 
         manager._get_tools_from_server = mock_get_tools_from_server
@@ -683,7 +752,11 @@ class TestMCPServerManager:
         manager.get_mcp_server_by_id = mock_get_server_by_id
 
         # Mock _get_tools_from_server with different results
-        async def mock_get_tools_from_server(server, mcp_auth_header=None):
+        async def mock_get_tools_from_server(
+            server,
+            mcp_auth_header=None,
+            raw_headers=None,
+        ):
             if server.server_id == "server1":
                 tool = MagicMock()
                 tool.name = "tool1"
@@ -724,7 +797,11 @@ class TestMCPServerManager:
         manager.get_mcp_server_by_id = MagicMock(return_value=server)
 
         # Mock _get_tools_from_server to verify auth header is passed
-        async def mock_get_tools_from_server(server, mcp_auth_header=None):
+        async def mock_get_tools_from_server(
+            server,
+            mcp_auth_header=None,
+            raw_headers=None,
+        ):
             assert mcp_auth_header == "test-token"
             tool = MagicMock()
             tool.name = "tool1"

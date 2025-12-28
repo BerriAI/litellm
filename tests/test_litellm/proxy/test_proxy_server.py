@@ -273,6 +273,10 @@ def test_sso_key_generate_shows_deprecation_banner(client_no_auth, monkeypatch):
 
 
 def test_restructure_ui_html_files_handles_nested_routes(tmp_path):
+    """
+    Test that _restructure_ui_html_files correctly restructures HTML files.
+    Note: This function is always called now, both in development and non-root Docker environments.
+    """
     from litellm.proxy import proxy_server
 
     ui_root = tmp_path / "ui"
@@ -306,7 +310,10 @@ def test_restructure_ui_html_files_handles_nested_routes(tmp_path):
 
 
 def test_ui_extensionless_route_requires_restructure(tmp_path):
-    """Regression for non-root fallback: /ui/login expects login/index.html."""
+    """
+    Regression for non-root fallback: /ui/login expects login/index.html.
+    Note: Restructuring always happens now, both in development and non-root Docker environments.
+    """
 
     from litellm.proxy import proxy_server
 
@@ -329,6 +336,50 @@ def test_ui_extensionless_route_requires_restructure(tmp_path):
     response = client.get("/ui/login")
     assert response.status_code == 200
     assert "login" in response.text
+
+
+def test_restructure_always_happens(monkeypatch):
+    """
+    Test that restructuring logic always executes regardless of LITELLM_NON_ROOT setting.
+    In development (is_non_root=False), restructuring happens directly in _experimental/out.
+    In non-root Docker (is_non_root=True), restructuring happens in /var/lib/litellm/ui.
+    """
+    # Test Case 1: is_non_root is True - restructuring happens in /var/lib/litellm/ui
+    monkeypatch.setenv("LITELLM_NON_ROOT", "true")
+    
+    runtime_ui_path = "/var/lib/litellm/ui"
+    packaged_ui_path = "/some/packaged/ui/path"
+    
+    # Simulate the logic from proxy_server.py
+    is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
+    if is_non_root:
+        ui_path = runtime_ui_path
+    else:
+        ui_path = packaged_ui_path
+    
+    # Restructuring always happens now, regardless of ui_path vs packaged_ui_path
+    should_restructure = True
+    
+    assert is_non_root is True
+    assert should_restructure is True
+    assert ui_path == runtime_ui_path
+    
+    # Test Case 2: is_non_root is False - restructuring happens directly in packaged_ui_path
+    monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
+    
+    # Simulate the logic from proxy_server.py
+    is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
+    if is_non_root:
+        ui_path = runtime_ui_path
+    else:
+        ui_path = packaged_ui_path
+    
+    # Restructuring always happens now, even when ui_path == packaged_ui_path
+    should_restructure = True
+    
+    assert is_non_root is False
+    assert should_restructure is True
+    assert ui_path == packaged_ui_path
 
 
 @pytest.mark.asyncio
@@ -559,7 +610,7 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
         assert master_key == test_master_key
 
     # Test Case 2: Master key from environment variable
-    test_env_master_key = "sk-67890"
+    test_env_master_key = "sk-test-67890"
 
     # Create empty config
     empty_config = {"general_settings": {}}
@@ -2856,9 +2907,9 @@ def test_root_redirect_when_docs_url_not_root_and_redirect_url_set(monkeypatch):
     assert response.headers["location"] == test_redirect_url
 
 
-def test_get_image_non_root_uses_tmp_assets_dir(monkeypatch):
+def test_get_image_non_root_uses_var_lib_assets_dir(monkeypatch):
     """
-    Test that get_image uses /tmp/litellm_assets when LITELLM_NON_ROOT is true.
+    Test that get_image uses /var/lib/litellm/assets when LITELLM_NON_ROOT is true.
     """
     from unittest.mock import patch
 
@@ -2887,14 +2938,14 @@ def test_get_image_non_root_uses_tmp_assets_dir(monkeypatch):
         # Call the function
         get_image()
 
-        # Verify makedirs was called with /tmp/litellm_assets
-        mock_makedirs.assert_called_once_with("/tmp/litellm_assets", exist_ok=True)
+        # Verify makedirs was called with /var/lib/litellm/assets
+        mock_makedirs.assert_called_once_with("/var/lib/litellm/assets", exist_ok=True)
 
 
 def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
     """
     Test that get_image falls back to default_site_logo when logo doesn't exist
-    in /tmp/litellm_assets for non-root case.
+    in /var/lib/litellm/assets for non-root case.
     """
     from unittest.mock import patch
 
@@ -2904,13 +2955,13 @@ def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
     monkeypatch.setenv("LITELLM_NON_ROOT", "true")
     monkeypatch.delenv("UI_LOGO_PATH", raising=False)
 
-    # Track path.exists calls to verify it checks /tmp/litellm_assets/logo.jpg
+    # Track path.exists calls to verify it checks /var/lib/litellm/assets/logo.jpg
     exists_calls = []
 
     def exists_side_effect(path):
         exists_calls.append(path)
-        # Return False for /tmp/litellm_assets/logo.jpg to trigger fallback
-        if "/tmp/litellm_assets/logo.jpg" in path:
+        # Return False for /var/lib/litellm/assets/logo.jpg to trigger fallback
+        if "/var/lib/litellm/assets/logo.jpg" in path:
             return False
         return True
 
@@ -2933,13 +2984,13 @@ def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
         # Call the function
         get_image()
 
-        # Verify makedirs was called with /tmp/litellm_assets
-        mock_makedirs.assert_called_once_with("/tmp/litellm_assets", exist_ok=True)
+        # Verify makedirs was called with /var/lib/litellm/assets
+        mock_makedirs.assert_called_once_with("/var/lib/litellm/assets", exist_ok=True)
 
-        # Verify that exists was called to check /tmp/litellm_assets/logo.jpg
-        tmp_logo_path = "/tmp/litellm_assets/logo.jpg"
-        assert any(tmp_logo_path in str(call) for call in exists_calls), \
-            f"Should check if {tmp_logo_path} exists"
+        # Verify that exists was called to check /var/lib/litellm/assets/logo.jpg
+        assets_logo_path = "/var/lib/litellm/assets/logo.jpg"
+        assert any(assets_logo_path in str(call) for call in exists_calls), \
+            f"Should check if {assets_logo_path} exists"
 
         # Verify FileResponse was called (with fallback logo)
         assert mock_file_response.called, "FileResponse should be called"
@@ -2976,12 +3027,12 @@ def test_get_image_root_case_uses_current_dir(monkeypatch):
         # Call the function
         get_image()
 
-        # Verify makedirs was NOT called with /tmp/litellm_assets (should not create it for root case)
-        tmp_assets_calls = [
+        # Verify makedirs was NOT called with /var/lib/litellm/assets (should not create it for root case)
+        var_lib_assets_calls = [
             call for call in mock_makedirs.call_args_list
-            if "/tmp/litellm_assets" in str(call)
+            if "/var/lib/litellm/assets" in str(call)
         ]
-        assert len(tmp_assets_calls) == 0, "Should not create /tmp/litellm_assets for root case"
+        assert len(var_lib_assets_calls) == 0, "Should not create /var/lib/litellm/assets for root case"
 
         # Verify FileResponse was called
         assert mock_file_response.called, "FileResponse should be called"

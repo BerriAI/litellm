@@ -775,6 +775,7 @@ if MCP_AVAILABLE:
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
                     add_prefix=add_prefix,
+                    raw_headers=raw_headers,
                 )
 
                 filtered_tools = filter_tools_by_allowed_tools(tools, server)
@@ -854,6 +855,7 @@ if MCP_AVAILABLE:
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
                     add_prefix=add_prefix,
+                    raw_headers=raw_headers,
                 )
 
                 all_prompts.extend(prompts)
@@ -912,6 +914,7 @@ if MCP_AVAILABLE:
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
                     add_prefix=add_prefix,
+                    raw_headers=raw_headers,
                 )
                 all_resources.extend(resources)
 
@@ -969,6 +972,7 @@ if MCP_AVAILABLE:
                         mcp_auth_header=server_auth_header,
                         extra_headers=extra_headers,
                         add_prefix=add_prefix,
+                        raw_headers=raw_headers,
                     )
                 )
                 all_resource_templates.extend(resource_templates)
@@ -1392,6 +1396,7 @@ if MCP_AVAILABLE:
             arguments=arguments,
             mcp_auth_header=server_auth_header,
             extra_headers=extra_headers,
+            raw_headers=raw_headers,
         )
 
     async def mcp_read_resource(
@@ -1440,6 +1445,7 @@ if MCP_AVAILABLE:
             url=url,
             mcp_auth_header=server_auth_header,
             extra_headers=extra_headers,
+            raw_headers=raw_headers,
         )
 
     def _get_standard_logging_mcp_tool_call(

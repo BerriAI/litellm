@@ -60,7 +60,7 @@ export async function makeOpenAIChatCompletionRequest(
             {
               type: "mcp",
               server_label: "litellm",
-              server_url: `${proxyBaseUrl}/mcp`,
+              server_url: 'litellm_proxy/mcp',
               require_approval: "never",
               allowed_tools: selectedMCPTools,
               headers: {

@@ -24,6 +24,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     get_form_data,
     get_request_body,
     get_tags_from_request_body,
+    populate_request_with_path_params,
 )
 
 
@@ -630,3 +631,69 @@ def test_get_tags_from_request_body_with_null_metadata():
 
     assert result == []
     assert isinstance(result, list)
+
+
+def test_populate_request_with_path_params_adds_query_params():
+    """
+    Test that populate_request_with_path_params correctly adds query parameters
+    like organization_id to the request data.
+    """
+    # Create a mock request with query parameters
+    mock_request = MagicMock()
+    # Mock query_params as a dict-like object that can be converted to dict
+    mock_request.query_params = {
+        "organization_id": "org-123",
+        "user_id": "user-456"
+    }
+    mock_request.path_params = {}
+    # Mock url.path to avoid errors in _add_vector_store_id_from_path
+    mock_request.url.path = "/v1/chat/completions"
+
+    # Initial request data without query params
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}]
+    }
+
+    # Call the function
+    result = populate_request_with_path_params(request_data, mock_request)
+
+    # Verify query params were added
+    assert result["organization_id"] == "org-123"
+    assert result["user_id"] == "user-456"
+    # Verify original data is preserved
+    assert result["model"] == "gpt-4"
+    assert result["messages"] == [{"role": "user", "content": "Hello"}]
+
+
+def test_populate_request_with_path_params_does_not_overwrite_existing_values():
+    """
+    Test that populate_request_with_path_params does not overwrite existing values
+    in request_data when query params contain the same keys.
+    """
+    # Create a mock request with query parameters
+    mock_request = MagicMock()
+    # Mock query_params as a dict-like object that can be converted to dict
+    mock_request.query_params = {
+        "organization_id": "org-query-param",
+        "model": "gpt-3.5-turbo"
+    }
+    mock_request.path_params = {}
+    # Mock url.path to avoid errors in _add_vector_store_id_from_path
+    mock_request.url.path = "/v1/chat/completions"
+
+    # Initial request data with existing values
+    request_data = {
+        "model": "gpt-4",  # This should NOT be overwritten
+        "organization_id": "org-existing",  # This should NOT be overwritten
+        "messages": [{"role": "user", "content": "Hello"}]
+    }
+
+    # Call the function
+    result = populate_request_with_path_params(request_data, mock_request)
+
+    # Verify existing values were NOT overwritten
+    assert result["model"] == "gpt-4"  # Should keep original, not "gpt-3.5-turbo"
+    assert result["organization_id"] == "org-existing"  # Should keep original, not "org-query-param"
+    # Verify other data is preserved
+    assert result["messages"] == [{"role": "user", "content": "Hello"}]

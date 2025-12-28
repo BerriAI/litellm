@@ -2,7 +2,7 @@ import { allEndUsersCall } from "@/components/networking";
 import { useQuery } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
 import { all_admin_roles } from "@/utils/roles";
-
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 const customersKeys = createQueryKeys("customers");
 
 export interface Customer {
@@ -32,10 +32,11 @@ export interface Customer {
 
 export type CustomersResponse = Customer[];
 
-export const useCustomers = (accessToken: string | null, userRole: string | null) => {
+export const useCustomers = () => {
+  const { accessToken, userRole } = useAuthorized();
   return useQuery<CustomersResponse>({
     queryKey: customersKeys.list({}),
     queryFn: async () => await allEndUsersCall(accessToken!),
-    enabled: Boolean(accessToken) && all_admin_roles.includes(userRole || ""),
+    enabled: Boolean(accessToken) && all_admin_roles.includes(userRole!),
   });
 };

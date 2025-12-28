@@ -71,12 +71,17 @@ if MCP_AVAILABLE:
             for tool in tools
         ]
 
-    async def _get_tools_for_single_server(server, server_auth_header):
+    async def _get_tools_for_single_server(
+        server,
+        server_auth_header,
+        raw_headers: Optional[Dict[str, str]] = None,
+    ):
         """Helper function to get tools for a single server."""
         tools = await global_mcp_server_manager._get_tools_from_server(
             server=server,
             mcp_auth_header=server_auth_header,
             add_prefix=False,
+            raw_headers=raw_headers,
         )
 
         # Filter tools based on allowed_tools configuration
@@ -122,6 +127,7 @@ if MCP_AVAILABLE:
         try:
             # Extract auth headers from request
             headers = request.headers
+            raw_headers_from_request = dict(headers)
             mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(
                 headers
             )
@@ -148,7 +154,7 @@ if MCP_AVAILABLE:
 
                 try:
                     list_tools_result = await _get_tools_for_single_server(
-                        server, server_auth_header
+                        server, server_auth_header, raw_headers_from_request
                     )
                 except Exception as e:
                     verbose_logger.exception(
@@ -169,7 +175,7 @@ if MCP_AVAILABLE:
 
                     try:
                         tools_result = await _get_tools_for_single_server(
-                            server, server_auth_header
+                            server, server_auth_header, raw_headers_from_request
                         )
                         list_tools_result.extend(tools_result)
                     except Exception as e:
@@ -232,13 +238,13 @@ if MCP_AVAILABLE:
             # but they weren't being extracted and passed to call_mcp_tool.
             # This fix ensures auth headers are properly extracted from the HTTP request
             # and passed through to the MCP server for authentication.
+            headers = request.headers
+            raw_headers_from_request = dict(headers)
             mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(
-                request.headers
+                headers
             )
             mcp_server_auth_headers = (
-                MCPRequestHandler._get_mcp_server_auth_headers_from_headers(
-                    request.headers
-                )
+                MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
             )
 
             # Add extracted headers to data dict to pass to call_mcp_tool
@@ -246,6 +252,7 @@ if MCP_AVAILABLE:
                 data["mcp_auth_header"] = mcp_auth_header
             if mcp_server_auth_headers:
                 data["mcp_server_auth_headers"] = mcp_server_auth_headers
+            data["raw_headers"] = raw_headers_from_request
 
             result = await call_mcp_tool(**data)
             return result
@@ -300,6 +307,7 @@ if MCP_AVAILABLE:
         operation,
         mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
+        raw_headers: Optional[Dict[str, str]] = None,
     ):
         """
         Common helper to create MCP client, execute operation, and ensure proper cleanup.
@@ -312,17 +320,27 @@ if MCP_AVAILABLE:
             Operation result or error response
         """
         try:
+            server_model = MCPServer(
+                server_id=request.server_id or "",
+                name=request.alias or request.server_name or "",
+                url=request.url,
+                transport=request.transport,
+                auth_type=request.auth_type,
+                mcp_info=request.mcp_info,
+                command=request.command,
+                args=request.args,
+                env=request.env,
+            )
+
+            stdio_env = global_mcp_server_manager._build_stdio_env(
+                server_model, raw_headers
+            )
+
             client = global_mcp_server_manager._create_mcp_client(
-                server=MCPServer(
-                    server_id=request.server_id or "",
-                    name=request.alias or request.server_name or "",
-                    url=request.url,
-                    transport=request.transport,
-                    auth_type=request.auth_type,
-                    mcp_info=request.mcp_info,
-                ),
+                server=server_model,
                 mcp_auth_header=mcp_auth_header,
                 extra_headers=oauth2_headers,
+                stdio_env=stdio_env,
             )
 
             return await operation(client)
@@ -338,7 +356,8 @@ if MCP_AVAILABLE:
 
     @router.post("/test/connection")
     async def test_connection(
-        request: NewMCPServerRequest,
+        request: Request,
+        new_mcp_server_request: NewMCPServerRequest,
     ):
         """
         Test if we can connect to the provided MCP server before adding it
@@ -351,7 +370,11 @@ if MCP_AVAILABLE:
             await client.run_with_session(_noop)
             return {"status": "ok"}
 
-        return await _execute_with_mcp_client(request, _test_connection_operation)
+        return await _execute_with_mcp_client(
+            new_mcp_server_request,
+            _test_connection_operation,
+            raw_headers=dict(request.headers),
+        )
 
     @router.post("/test/tools/list")
     async def test_tools_list(
@@ -405,4 +428,5 @@ if MCP_AVAILABLE:
             _list_tools_operation,
             mcp_auth_header=mcp_auth_header,
             oauth2_headers=oauth2_headers,
+            raw_headers=dict(request.headers),
         )
