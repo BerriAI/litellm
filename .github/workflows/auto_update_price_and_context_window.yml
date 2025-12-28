@@ -7,6 +7,7 @@ on:
 
 jobs:
   auto_update_price_and_context_window:
+    if: github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
