@@ -128,3 +128,55 @@
 #         pytest.fail(f"An error occurred - {str(e)}")
 
 # test_input_text_on_completion()
+
+
+import time
+
+from litellm import BudgetManager
+
+
+def test_create_budget_uses_current_time():
+    """
+    Tests that create_budget() uses the current time for each call,
+    not a stale timestamp from module load time.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/18459
+    """
+    budget_manager = BudgetManager(project_name="test_project", client_type="local")
+
+    # Create first budget
+    budget1 = budget_manager.create_budget(
+        total_budget=100.0, user="user1", duration="daily"
+    )
+    time1 = budget1["created_at"]
+
+    # Wait a short time
+    time.sleep(0.1)
+
+    # Create second budget
+    budget2 = budget_manager.create_budget(
+        total_budget=100.0, user="user2", duration="daily"
+    )
+    time2 = budget2["created_at"]
+
+    # The timestamps should be different (second should be later)
+    assert time2 > time1, (
+        f"Expected second budget's created_at ({time2}) to be greater than "
+        f"first budget's created_at ({time1}). "
+        "This indicates time.time() is being evaluated at module load time "
+        "instead of at each function call."
+    )
+
+
+def test_create_budget_allows_custom_created_at():
+    """
+    Tests that create_budget() accepts a custom created_at timestamp.
+    """
+    budget_manager = BudgetManager(project_name="test_project", client_type="local")
+
+    custom_time = 1234567890.0
+    budget = budget_manager.create_budget(
+        total_budget=100.0, user="user_custom", duration="daily", created_at=custom_time
+    )
+
+    assert budget["created_at"] == custom_time
