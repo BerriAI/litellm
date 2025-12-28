@@ -362,10 +362,54 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             elif isinstance(item, ResponseOutputMessage):
                 for content in item.content:
                     response_text = getattr(content, "text", "")
+
+                    # Preserve Responses API citations/annotations on the chat completion message.
+                    # OpenAI Responses API can return URL citations as annotations on output_text blocks.
+                    annotations = getattr(content, "annotations", None)
+                    converted_annotations: Optional[List[Dict[str, Any]]] = None
+                    if annotations:
+                        converted_annotations = []
+                        for ann in annotations:
+                            ann_dict: Optional[Dict[str, Any]] = None
+                            if isinstance(ann, dict):
+                                ann_dict = ann
+                            elif hasattr(ann, "model_dump"):
+                                # pydantic v2 / openai object
+                                ann_dict = cast(Dict[str, Any], ann.model_dump())
+                            elif hasattr(ann, "dict"):
+                                # pydantic v1
+                                ann_dict = cast(Dict[str, Any], ann.dict())
+                            elif hasattr(ann, "__dict__"):
+                                ann_dict = cast(Dict[str, Any], dict(ann.__dict__))
+
+                            if ann_dict is None:
+                                continue
+
+                            # Normalize nested url_citation object to a plain dict if needed
+                            url_citation = ann_dict.get("url_citation")
+                            if url_citation is not None and not isinstance(
+                                url_citation, dict
+                            ):
+                                if hasattr(url_citation, "model_dump"):
+                                    ann_dict["url_citation"] = cast(
+                                        Dict[str, Any], url_citation.model_dump()
+                                    )
+                                elif hasattr(url_citation, "dict"):
+                                    ann_dict["url_citation"] = cast(
+                                        Dict[str, Any], url_citation.dict()
+                                    )
+                                elif hasattr(url_citation, "__dict__"):
+                                    ann_dict["url_citation"] = cast(
+                                        Dict[str, Any], dict(url_citation.__dict__)
+                                    )
+
+                            converted_annotations.append(ann_dict)
+
                     msg = Message(
                         role=item.role,
                         content=response_text if response_text else "",
                         reasoning_content=reasoning_content,
+                        annotations=converted_annotations,
                     )
 
                     choices.append(
