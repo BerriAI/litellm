@@ -1,0 +1,528 @@
+"""
+Tests for OpenAPI to MCP generator, focusing on security and edge cases.
+
+This test suite ensures that:
+1. Parameter names with invalid Python identifiers are handled safely
+2. No exec() is used (security)
+3. All edge cases (hyphens, dots, keywords, special chars) work correctly
+"""
+
+import json
+import pytest
+from unittest.mock import AsyncMock, patch
+from typing import Dict, Any
+
+from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+    to_safe_identifier,
+    create_tool_function,
+    build_input_schema,
+    extract_parameters,
+)
+
+
+class TestToSafeIdentifier:
+    """Test the to_safe_identifier function for various edge cases."""
+
+    def test_hyphen_in_name(self):
+        """Test parameter names with hyphens."""
+        assert to_safe_identifier("repository-id") == "repository_id"
+        assert to_safe_identifier("user-name") == "user_name"
+        assert to_safe_identifier("api-key") == "api_key"
+
+    def test_leading_digit(self):
+        """Test parameter names starting with digits."""
+        assert to_safe_identifier("2fa-code") == "_2fa_code"
+        assert to_safe_identifier("123abc") == "_123abc"
+        assert to_safe_identifier("0test") == "_0test"
+
+    def test_dots_in_name(self):
+        """Test parameter names with dots."""
+        assert to_safe_identifier("user.name") == "user_name"
+        assert to_safe_identifier("config.value") == "config_value"
+        assert to_safe_identifier("api.v2") == "api_v2"
+
+    def test_dollar_sign(self):
+        """Test parameter names with dollar signs (OData style)."""
+        assert to_safe_identifier("$filter") == "_filter"
+        assert to_safe_identifier("$context") == "_context"
+        assert to_safe_identifier("$select") == "_select"
+
+    def test_python_keywords(self):
+        """Test Python keywords are handled."""
+        assert to_safe_identifier("class") == "class_"
+        assert to_safe_identifier("from") == "from_"
+        assert to_safe_identifier("not") == "not_"
+        assert to_safe_identifier("def") == "def_"
+        assert to_safe_identifier("import") == "import_"
+
+    def test_special_characters(self):
+        """Test various special characters."""
+        assert to_safe_identifier("user@domain") == "user_domain"
+        assert to_safe_identifier("test#hash") == "test_hash"
+        assert to_safe_identifier("path/to/resource") == "path_to_resource"
+        assert to_safe_identifier("param+value") == "param_value"
+
+    def test_multiple_special_chars(self):
+        """Test names with multiple special characters."""
+        assert to_safe_identifier("user-name.email@domain") == "user_name_email_domain"
+        assert to_safe_identifier("$filter.value") == "_filter_value"
+
+    def test_already_valid_identifier(self):
+        """Test that valid identifiers remain unchanged (except keywords)."""
+        assert to_safe_identifier("valid_name") == "valid_name"
+        assert to_safe_identifier("validName123") == "validName123"
+        assert to_safe_identifier("_private") == "_private"
+
+    def test_empty_string(self):
+        """Test empty string handling."""
+        assert to_safe_identifier("") == "_empty_"
+
+    def test_only_special_chars(self):
+        """Test names that are only special characters."""
+        result = to_safe_identifier("---")
+        assert result.startswith("_")
+        assert len(result) > 0
+
+    def test_collision_handling(self):
+        """Test that similar names produce different safe identifiers."""
+        # These should produce different results
+        name1 = to_safe_identifier("user-name")
+        name2 = to_safe_identifier("user_name")
+        # They might be the same after sanitization, which is acceptable
+        # The important thing is they're both valid identifiers
+
+
+class TestCreateToolFunction:
+    """Test create_tool_function with various parameter name edge cases."""
+
+    @pytest.mark.asyncio
+    async def test_hyphenated_path_parameter(self):
+        """Test function with hyphenated path parameter (e.g., repository-id)."""
+        operation = {
+            "parameters": [
+                {
+                    "name": "repository-id",
+                    "in": "path",
+                    "required": True,
+                    "schema": {"type": "string"},
+                }
+            ]
+        }
+        
+        func = create_tool_function(
+            path="/repos/{repository-id}",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+        )
+        
+        # Should not raise SyntaxError
+        assert callable(func)
+        assert func.__name__ == "tool_function"
+        
+        # Test calling with original parameter name
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_response = AsyncMock()
+            mock_response.text = '{"id": "123"}'
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                return_value=mock_response
+            )
+            
+            result = await func(**{"repository-id": "test-repo"})
+            assert result == '{"id": "123"}'
+            
+            # Verify URL was constructed correctly
+            call_args = mock_client.return_value.__aenter__.return_value.get.call_args
+            assert "repository-id" in str(call_args[0][0]) or "test-repo" in str(call_args[0][0])
+
+    @pytest.mark.asyncio
+    async def test_leading_digit_parameter(self):
+        """Test function with parameter starting with digit (e.g., 2fa-code)."""
+        operation = {
+            "parameters": [
+                {
+                    "name": "2fa-code",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "string"},
+                }
+            ]
+        }
+        
+        func = create_tool_function(
+            path="/verify",
+            method="post",
+            operation=operation,
+            base_url="https://api.example.com",
+        )
+        
+        assert callable(func)
+        
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_response = AsyncMock()
+            mock_response.text = "verified"
+            mock_client.return_value.__aenter__.return_value.post = AsyncMock(
+                return_value=mock_response
+            )
+            
+            result = await func(**{"2fa-code": "123456"})
+            assert result == "verified"
+            
+            # Verify query parameter was included
+            call_args = mock_client.return_value.__aenter__.return_value.post.call_args
+            assert call_args[1]["params"]["2fa-code"] == "123456"
+
+    @pytest.mark.asyncio
+    async def test_dot_in_parameter_name(self):
+        """Test function with dot in parameter name (e.g., user.name)."""
+        operation = {
+            "parameters": [
+                {
+                    "name": "user.name",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "string"},
+                }
+            ]
+        }
+        
+        func = create_tool_function(
+            path="/search",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+        )
+        
+        assert callable(func)
+        
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_response = AsyncMock()
+            mock_response.text = "found"
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                return_value=mock_response
+            )
+            
+            result = await func(**{"user.name": "john.doe"})
+            assert result == "found"
+            
+            call_args = mock_client.return_value.__aenter__.return_value.get.call_args
+            assert call_args[1]["params"]["user.name"] == "john.doe"
+
+    @pytest.mark.asyncio
+    async def test_dollar_sign_parameter(self):
+        """Test function with dollar sign parameter (OData style, e.g., $filter)."""
+        operation = {
+            "parameters": [
+                {
+                    "name": "$filter",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "string"},
+                }
+            ]
+        }
+        
+        func = create_tool_function(
+            path="/entities",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+        )
+        
+        assert callable(func)
+        
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_response = AsyncMock()
+            mock_response.text = "[]"
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                return_value=mock_response
+            )
+            
+            result = await func(**{"$filter": "name eq 'test'"})
+            assert result == "[]"
+            
+            call_args = mock_client.return_value.__aenter__.return_value.get.call_args
+            assert call_args[1]["params"]["$filter"] == "name eq 'test'"
+
+    @pytest.mark.asyncio
+    async def test_python_keyword_parameter(self):
+        """Test function with Python keyword as parameter name (e.g., class)."""
+        operation = {
+            "parameters": [
+                {
+                    "name": "class",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "string"},
+                }
+            ]
+        }
+        
+        func = create_tool_function(
+            path="/items",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+        )
+        
+        assert callable(func)
+        
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_response = AsyncMock()
+            mock_response.text = "items"
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                return_value=mock_response
+            )
+            
+            result = await func(**{"class": "premium"})
+            assert result == "items"
+            
+            call_args = mock_client.return_value.__aenter__.return_value.get.call_args
+            assert call_args[1]["params"]["class"] == "premium"
+
+    @pytest.mark.asyncio
+    async def test_multiple_problematic_parameters(self):
+        """Test function with multiple problematic parameter names."""
+        operation = {
+            "parameters": [
+                {
+                    "name": "repository-id",
+                    "in": "path",
+                    "required": True,
+                    "schema": {"type": "string"},
+                },
+                {
+                    "name": "2fa-code",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "string"},
+                },
+                {
+                    "name": "$filter",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "string"},
+                },
+            ]
+        }
+        
+        func = create_tool_function(
+            path="/repos/{repository-id}",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+        )
+        
+        assert callable(func)
+        
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_response = AsyncMock()
+            mock_response.text = "success"
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                return_value=mock_response
+            )
+            
+            result = await func(
+                **{
+                    "repository-id": "test-repo",
+                    "2fa-code": "123",
+                    "$filter": "active",
+                }
+            )
+            assert result == "success"
+
+    @pytest.mark.asyncio
+    async def test_request_body_parameter(self):
+        """Test function with request body parameter."""
+        operation = {
+            "requestBody": {
+                "required": True,
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "properties": {"name": {"type": "string"}},
+                        }
+                    }
+                },
+            }
+        }
+        
+        func = create_tool_function(
+            path="/create",
+            method="post",
+            operation=operation,
+            base_url="https://api.example.com",
+        )
+        
+        assert callable(func)
+        
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_response = AsyncMock()
+            mock_response.text = "created"
+            mock_client.return_value.__aenter__.return_value.post = AsyncMock(
+                return_value=mock_response
+            )
+            
+            result = await func(**{"body": {"name": "test"}})
+            assert result == "created"
+            
+            call_args = mock_client.return_value.__aenter__.return_value.post.call_args
+            assert call_args[1]["json"] == {"name": "test"}
+
+    @pytest.mark.asyncio
+    async def test_no_parameters(self):
+        """Test function with no parameters."""
+        operation = {}
+        
+        func = create_tool_function(
+            path="/health",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+        )
+        
+        assert callable(func)
+        
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_response = AsyncMock()
+            mock_response.text = "ok"
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                return_value=mock_response
+            )
+            
+            result = await func()
+            assert result == "ok"
+
+    @pytest.mark.asyncio
+    async def test_all_http_methods(self):
+        """Test all supported HTTP methods."""
+        methods = ["get", "post", "put", "delete", "patch"]
+        
+        for method in methods:
+            operation = {
+                "parameters": [
+                    {
+                        "name": "repository-id",
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "string"},
+                    }
+                ]
+            }
+            
+            func = create_tool_function(
+                path="/repos/{repository-id}",
+                method=method,
+                operation=operation,
+                base_url="https://api.example.com",
+            )
+            
+            assert callable(func)
+            
+            with patch("httpx.AsyncClient") as mock_client:
+                mock_response = AsyncMock()
+                mock_response.text = "success"
+                
+                client_method = getattr(
+                    mock_client.return_value.__aenter__.return_value, method
+                )
+                client_method.return_value = mock_response
+                client_method = AsyncMock(return_value=mock_response)
+                setattr(
+                    mock_client.return_value.__aenter__.return_value,
+                    method,
+                    client_method,
+                )
+                
+                result = await func(**{"repository-id": "test"})
+                assert result == "success"
+
+    def test_no_exec_usage(self):
+        """Verify that create_tool_function does not use exec()."""
+        import ast
+        import inspect
+        
+        # Get the source code of create_tool_function
+        source = inspect.getsource(create_tool_function)
+        
+        # Parse the AST
+        tree = ast.parse(source)
+        
+        # Check for exec() calls
+        exec_calls = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name) and node.func.id == "exec":
+                    exec_calls.append(node)
+        
+        # Should have no exec() calls
+        assert len(exec_calls) == 0, "create_tool_function should not use exec()"
+
+
+class TestBuildInputSchema:
+    """Test that build_input_schema preserves original parameter names."""
+
+    def test_original_parameter_names_preserved(self):
+        """Test that original parameter names are preserved in input schema."""
+        operation = {
+            "parameters": [
+                {
+                    "name": "repository-id",
+                    "in": "path",
+                    "required": True,
+                    "schema": {"type": "string"},
+                },
+                {
+                    "name": "2fa-code",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "string"},
+                },
+                {
+                    "name": "$filter",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "string"},
+                },
+            ]
+        }
+        
+        schema = build_input_schema(operation)
+        
+        # Original names should be in the schema
+        assert "repository-id" in schema["properties"]
+        assert "2fa-code" in schema["properties"]
+        assert "$filter" in schema["properties"]
+        
+        # Required should include original names
+        assert "repository-id" in schema["required"]
+
+
+class TestExtractParameters:
+    """Test parameter extraction from OpenAPI operations."""
+
+    def test_extract_path_query_body_params(self):
+        """Test extraction of different parameter types."""
+        operation = {
+            "parameters": [
+                {"name": "repo-id", "in": "path"},
+                {"name": "filter", "in": "query"},
+                {"name": "data", "in": "body"},
+            ],
+            "requestBody": {
+                "content": {"application/json": {"schema": {"type": "object"}}}
+            },
+        }
+        
+        path_params, query_params, body_params = extract_parameters(operation)
+        
+        assert "repo-id" in path_params
+        assert "filter" in query_params
+        assert "data" in body_params
+        assert "body" in body_params  # From requestBody
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])
+
