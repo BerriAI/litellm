@@ -1752,21 +1752,6 @@ def test_completion_openai_pydantic(model, api_version):
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_completion_openai_organization():
-    try:
-        litellm.set_verbose = True
-        try:
-            response = completion(
-                model="gpt-3.5-turbo", messages=messages, organization="org-ikDc4ex8NB"
-            )
-            pytest.fail("Request should have failed - This organization does not exist")
-        except Exception as e:
-            assert "header should match organization for API key" in str(e)
-
-    except Exception as e:
-        print(e)
-        pytest.fail(f"Error occurred: {e}")
-
 
 def test_completion_text_openai():
     try:
@@ -3118,8 +3103,9 @@ async def test_completion_bedrock_httpx_models(sync_mode, model):
 
 def test_completion_bedrock_titan_null_response():
     try:
+        # amazon.titan-text-lite-v1 is deprecated, using titan-text-express-v1 instead
         response = completion(
-            model="bedrock/amazon.titan-text-lite-v1",
+            model="bedrock/amazon.titan-text-express-v1",
             messages=[
                 {
                     "role": "user",

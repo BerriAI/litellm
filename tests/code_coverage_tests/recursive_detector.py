@@ -36,6 +36,7 @@ IGNORE_FUNCTIONS = [
     "_collect_argument_paths",  # max depth set.
     "_split_text",  # max depth set.
     "_delete_nested_value_custom",  # max depth set (bounded by number of path segments).
+    "filter_exceptions_from_params",  # max depth set (default 20) to prevent infinite recursion.
 ]
 
 

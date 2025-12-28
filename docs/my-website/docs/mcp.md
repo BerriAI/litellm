@@ -746,8 +746,33 @@ curl --location 'http://localhost:4000/github_mcp/mcp' \
 3. **Header Forwarding**: LiteLLM automatically forwards matching headers to the backend MCP server
 4. **Authentication**: The backend MCP server receives both the configured auth headers and the custom headers
 
----
 
+### Passing Request Headers to STDIO env Vars
+
+If your stdio MCP server needs per-request credentials, you can map HTTP headers from the client request directly into the environment for the launched stdio process. Reference the header name in the env value using the `${X-HEADER_NAME}` syntax. LiteLLM will read that header from the incoming request and set the env var before starting the command.
+
+```json title="Forward X-GITHUB_PERSONAL_ACCESS_TOKEN header to stdio env" showLineNumbers
+{
+  "mcpServers": {
+    "github": {
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "-e",
+        "GITHUB_PERSONAL_ACCESS_TOKEN",
+        "ghcr.io/github/github-mcp-server"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${X-GITHUB_PERSONAL_ACCESS_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+In this example, when a client makes a request with the `X-GITHUB_PERSONAL_ACCESS_TOKEN` header, the proxy forwards that value into the stdio process as the `GITHUB_PERSONAL_ACCESS_TOKEN` environment variable.
 
 ## Using your MCP with client side credentials
 
@@ -1136,6 +1161,37 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
     "tool_choice": "required"
 }'
 ```
+
+## Use MCP tools with `/chat/completions`
+
+:::tip Works with all providers
+This flow is **provider-agnostic**: the same MCP tool definition works for _every_ LLM backend behind LiteLLM (OpenAI, Azure OpenAI, Anthropic, Amazon Bedrock, Vertex, self-hosted deployments, etc.).
+:::
+
+LiteLLM Proxy also supports MCP-aware tooling on the classic `/v1/chat/completions` endpoint. Provide the MCP tool definition directly in the `tools` array and LiteLLM will fetch and transform the MCP server's tools into OpenAI-compatible function calls. When `require_approval` is set to `"never"`, the proxy automatically executes the returned tool calls and feeds the results back into the model before returning the assistant response.
+
+```bash title="Chat Completions with MCP Tools" showLineNumbers
+curl --location '<your-litellm-proxy-base-url>/v1/chat/completions' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $LITELLM_API_KEY" \
+--data '{
+  "model": "gpt-4o-mini",
+  "messages": [
+    {"role": "user", "content": "Summarize the latest open PR."}
+  ],
+  "tools": [
+    {
+      "type": "mcp",
+      "server_url": "litellm_proxy/mcp/github",
+      "server_label": "github_mcp",
+      "require_approval": "never"
+    }
+  ]
+}'
+```
+
+If you omit `require_approval` or set it to any value other than `"never"`, the MCP tool calls are returned to the client so that you can review and execute them manually, matching the upstream OpenAI behavior.
+
 
 ## LiteLLM Proxy - Walk through MCP Gateway
 LiteLLM exposes an MCP Gateway for admins to add all their MCP servers to LiteLLM. The key benefits of using LiteLLM Proxy with MCP are:

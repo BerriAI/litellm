@@ -29,6 +29,7 @@ from litellm.proxy.auth.auth_checks import (
     _get_user_role,
     _is_user_proxy_admin,
     _virtual_key_max_budget_check,
+    _virtual_key_max_budget_alert_check,
     _virtual_key_soft_budget_check,
     can_key_call_model,
     common_checks,
@@ -517,6 +518,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
                     parent_otel_span=parent_otel_span,
+                    request_headers=dict(request.headers),
                 )
 
                 is_proxy_admin = result["is_proxy_admin"]
@@ -1061,10 +1063,18 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     user_obj=user_obj,
                 )
 
-            # Check 5. Soft Budget Check
+            # Check 5. Max Budget Alert Check
+            await _virtual_key_max_budget_alert_check(
+                valid_token=valid_token,
+                proxy_logging_obj=proxy_logging_obj,
+                user_obj=user_obj,
+            )
+
+            # Check 6. Soft Budget Check
             await _virtual_key_soft_budget_check(
                 valid_token=valid_token,
                 proxy_logging_obj=proxy_logging_obj,
+                user_obj=user_obj,
             )
 
             # Check 5. Token Model Spend is under Model budget

@@ -1,10 +1,9 @@
 import { CopyOutlined } from "@ant-design/icons";
-import { Table as TableInstance } from "@tanstack/react-table";
 import { Badge, Button, Card, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
 import { Modal } from "antd";
 import { Copy } from "lucide-react";
 import { useRouter } from "next/navigation";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { isAdminRole } from "../utils/roles";
 import { agentHubColumns, AgentHubData } from "./agent_hub_table_columns";
@@ -76,9 +75,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   const [isMcpModalVisible, setIsMcpModalVisible] = useState(false);
   const [isMakeMcpPublicModalVisible, setIsMakeMcpPublicModalVisible] = useState(false);
   const router = useRouter();
-  const tableRef = useRef<TableInstance<any>>(null);
-  const agentTableRef = useRef<TableInstance<any>>(null);
-  const mcpTableRef = useRef<TableInstance<any>>(null);
 
   useEffect(() => {
     const fetchData = async (accessToken: string) => {
@@ -404,7 +400,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                     columns={modelHubColumns(showModal, copyToClipboard, publicPage)}
                     data={filteredData}
                     isLoading={loading}
-                    table={tableRef}
                     defaultSorting={[{ id: "model_group", desc: false }]}
                   />
                 </Card>
@@ -431,7 +426,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                     columns={agentHubColumns(showAgentModal, copyToClipboard, publicPage)}
                     data={agentHubData || []}
                     isLoading={agentLoading}
-                    table={agentTableRef}
                     defaultSorting={[{ id: "name", desc: false }]}
                   />
                 </Card>
@@ -458,7 +452,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                     columns={mcpHubColumns(showMcpModal, copyToClipboard, publicPage)}
                     data={mcpHubData || []}
                     isLoading={mcpLoading}
-                    table={mcpTableRef}
                     defaultSorting={[{ id: "server_name", desc: false }]}
                   />
                 </Card>

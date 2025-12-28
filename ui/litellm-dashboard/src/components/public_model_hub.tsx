@@ -1,25 +1,24 @@
-import React, { useEffect, useState, useRef, useMemo } from "react";
-import {
-  modelHubPublicModelsCall,
-  getPublicModelHubInfo,
-  agentHubPublicModelsCall,
-  mcpHubPublicServersCall,
-  getUiConfig,
-} from "./networking";
-import { ModelDataTable } from "./model_dashboard/table";
-import { ColumnDef } from "@tanstack/react-table";
-import { Card, Text, Title, Button } from "@tremor/react";
-import { Tag, Tooltip, Modal, Select, Tabs } from "antd";
+import { ThemeProvider } from "@/contexts/ThemeContext";
 import { ExternalLinkIcon, SearchIcon } from "@heroicons/react/outline";
+import { ColumnDef } from "@tanstack/react-table";
+import { Button, Card, Text, Title } from "@tremor/react";
+import { Modal, Select, Tabs, Tag, Tooltip } from "antd";
 import { Copy, Info } from "lucide-react";
-import { Table as TableInstance } from "@tanstack/react-table";
+import React, { useEffect, useMemo, useState } from "react";
+import { ModelDataTable } from "./model_dashboard/table";
+import NotificationsManager from "./molecules/notifications_manager";
+import Navbar from "./navbar";
+import {
+  agentHubPublicModelsCall,
+  getPublicModelHubInfo,
+  getUiConfig,
+  mcpHubPublicServersCall,
+  modelHubPublicModelsCall,
+} from "./networking";
 import { generateCodeSnippet } from "./playground/chat_ui/CodeSnippets";
 import { getEndpointType } from "./playground/chat_ui/mode_endpoint_mapping";
 import { MessageType } from "./playground/chat_ui/types";
 import { getProviderLogoAndName } from "./provider_info_helpers";
-import Navbar from "./navbar";
-import { ThemeProvider } from "@/contexts/ThemeContext";
-import NotificationsManager from "./molecules/notifications_manager";
 
 const { TabPane } = Tabs;
 
@@ -97,7 +96,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const [pageTitle, setPageTitle] = useState<string>("LiteLLM Gateway");
   const [customDocsDescription, setCustomDocsDescription] = useState<string | null>(null);
   const [litellmVersion, setLitellmVersion] = useState<string>("");
-  const [usefulLinks, setUsefulLinks] = useState<Record<string, string>>({});
+  const [usefulLinks, setUsefulLinks] = useState<Record<string, string | { url: string; index: number }>>({});
   const [loading, setLoading] = useState<boolean>(true);
   const [agentLoading, setAgentLoading] = useState<boolean>(true);
   const [mcpLoading, setMcpLoading] = useState<boolean>(true);
@@ -118,9 +117,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const [selectedMcpServer, setSelectedMcpServer] = useState<null | MCPServerData>(null);
   const [proxySettings, setProxySettings] = useState<any>({});
   const [activeTab, setActiveTab] = useState<string>("models");
-  const tableRef = useRef<TableInstance<any>>(null);
-  const agentTableRef = useRef<TableInstance<any>>(null);
-  const mcpTableRef = useRef<TableInstance<any>>(null);
 
   useEffect(() => {
     const initializeAndFetch = async () => {
@@ -976,16 +972,24 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
             <Card className="mb-10 p-8 bg-white border border-gray-200 rounded-lg shadow-sm">
               <Title className="text-2xl font-semibold mb-6 text-gray-900">Useful Links</Title>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {Object.entries(usefulLinks || {}).map(([title, url]) => (
-                  <button
-                    key={title}
-                    onClick={() => window.open(url, "_blank")}
-                    className="flex items-center space-x-3 text-blue-600 hover:text-blue-800 transition-colors p-3 rounded-lg hover:bg-blue-50 border border-gray-200"
-                  >
-                    <ExternalLinkIcon className="w-4 h-4" />
-                    <Text className="text-sm font-medium">{title}</Text>
-                  </button>
-                ))}
+                {Object.entries(usefulLinks || {})
+                  .map(([title, value]) => {
+                    // Handle both old format (string) and new format ({url, index})
+                    const url = typeof value === "string" ? value : value.url;
+                    const index = typeof value === "string" ? 0 : value.index ?? 0;
+                    return { title, url, index };
+                  })
+                  .sort((a, b) => a.index - b.index)
+                  .map(({ title, url }) => (
+                    <button
+                      key={title}
+                      onClick={() => window.open(url, "_blank")}
+                      className="flex items-center space-x-3 text-blue-600 hover:text-blue-800 transition-colors p-3 rounded-lg hover:bg-blue-50 border border-gray-200"
+                    >
+                      <ExternalLinkIcon className="w-4 h-4" />
+                      <Text className="text-sm font-medium">{title}</Text>
+                    </button>
+                  ))}
               </div>
             </Card>
           )}
@@ -1113,7 +1117,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   columns={publicModelHubColumns()}
                   data={filteredData}
                   isLoading={loading}
-                  table={tableRef}
                   defaultSorting={[{ id: "model_group", desc: false }]}
                 />
 
@@ -1176,7 +1179,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                     columns={publicAgentHubColumns()}
                     data={filteredAgentData}
                     isLoading={agentLoading}
-                    table={agentTableRef}
                     defaultSorting={[{ id: "name", desc: false }]}
                   />
 
@@ -1240,7 +1242,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                     columns={publicMCPHubColumns()}
                     data={filteredMcpData}
                     isLoading={mcpLoading}
-                    table={mcpTableRef}
                     defaultSorting={[{ id: "server_name", desc: false }]}
                   />
 

@@ -169,7 +169,7 @@ class LiteLLMAnthropicMessagesAdapter:
         """
         Which anthropic params, we need to translate to the openai format.
         """
-        return ["messages", "metadata", "system", "tool_choice", "tools"]
+        return ["messages", "metadata", "system", "tool_choice", "tools", "thinking"]
 
     def translate_anthropic_messages_to_openai(  # noqa: PLR0915
         self,
@@ -420,6 +420,35 @@ class LiteLLMAnthropicMessagesAdapter:
 
         return new_messages
 
+    def translate_anthropic_thinking_to_openai(
+        self, thinking: Dict[str, Any]
+    ) -> Optional[str]:
+        """
+        Translate Anthropic's thinking parameter to OpenAI's reasoning_effort.
+        
+        Anthropic thinking format: {'type': 'enabled'|'disabled', 'budget_tokens': int}
+        OpenAI reasoning_effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'default'
+        """
+        if not isinstance(thinking, dict):
+            return None
+        
+        thinking_type = thinking.get("type", "disabled")
+        
+        if thinking_type == "disabled":
+            return None
+        elif thinking_type == "enabled":
+            budget_tokens = thinking.get("budget_tokens", 0)
+            if budget_tokens >= 10000:
+                return "high"
+            elif budget_tokens >= 5000:
+                return "medium"
+            elif budget_tokens >= 2000:
+                return "low"
+            else:
+                return "minimal"
+        
+        return None
+
     def translate_anthropic_tool_choice_to_openai(
         self, tool_choice: AnthropicMessagesToolChoice
     ) -> ChatCompletionToolChoiceValues:
@@ -529,6 +558,16 @@ class LiteLLMAnthropicMessagesAdapter:
                     tools=cast(List[AllAnthropicToolsValues], tools)
                 )
 
+        ## CONVERT THINKING
+        if "thinking" in anthropic_message_request:
+            thinking = anthropic_message_request["thinking"]
+            if thinking:
+                reasoning_effort = self.translate_anthropic_thinking_to_openai(
+                    thinking=cast(Dict[str, Any], thinking)
+                )
+                if reasoning_effort:
+                    new_kwargs["reasoning_effort"] = reasoning_effort
+
         translatable_params = self.translatable_anthropic_params()
         for k, v in anthropic_message_request.items():
             if k not in translatable_params:  # pass remaining params as is
@@ -613,7 +652,14 @@ class LiteLLMAnthropicMessagesAdapter:
                             )
                         )
 
-            # Handle tool calls
+            # Handle text content
+            if choice.message.content is not None:
+                new_content.append(
+                    AnthropicResponseContentBlockText(
+                        type="text", text=choice.message.content
+                    )
+                )
+            # Handle tool calls (in parallel to text content)
             if (
                 choice.message.tool_calls is not None
                 and len(choice.message.tool_calls) > 0
@@ -642,13 +688,6 @@ class LiteLLMAnthropicMessagesAdapter:
                             provider_specific_fields
                         )
                     new_content.append(tool_use_block)
-            # Handle text content
-            elif choice.message.content is not None:
-                new_content.append(
-                    AnthropicResponseContentBlockText(
-                        type="text", text=choice.message.content
-                    )
-                )
 
         return new_content
 
@@ -701,9 +740,7 @@ class LiteLLMAnthropicMessagesAdapter:
         from litellm.types.llms.anthropic import TextBlock, ToolUseBlock
 
         for choice in choices:
-            if choice.delta.content is not None and len(choice.delta.content) > 0:
-                return "text", TextBlock(type="text", text="")
-            elif (
+            if (
                 choice.delta.tool_calls is not None
                 and len(choice.delta.tool_calls) > 0
                 and choice.delta.tool_calls[0].function is not None
@@ -714,6 +751,8 @@ class LiteLLMAnthropicMessagesAdapter:
                     name=choice.delta.tool_calls[0].function.name or "",
                     input={},  # type: ignore[typeddict-item]
                 )
+            elif choice.delta.content is not None and len(choice.delta.content) > 0:
+                return "text", TextBlock(type="text", text="")
             elif isinstance(choice, StreamingChoices) and hasattr(
                 choice.delta, "thinking_blocks"
             ):
@@ -757,7 +796,7 @@ class LiteLLMAnthropicMessagesAdapter:
         for choice in choices:
             if choice.delta.content is not None and len(choice.delta.content) > 0:
                 text += choice.delta.content
-            elif choice.delta.tool_calls is not None:
+            if choice.delta.tool_calls is not None:
                 partial_json = ""
                 for tool in choice.delta.tool_calls:
                     if (

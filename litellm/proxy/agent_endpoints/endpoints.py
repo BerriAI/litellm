@@ -8,7 +8,7 @@ Follows the A2A Spec.
 3. Get specific agent via GET `/v1/agents/{agent_id}`
 """
 
-from typing import Any, List
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -22,6 +22,11 @@ from litellm.types.agents import (
     AgentResponse,
     MakeAgentsPublicRequest,
     PatchAgentRequest,
+)
+
+from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    SpendAnalyticsPaginatedResponse,
 )
 
 router = APIRouter()
@@ -703,3 +708,64 @@ async def make_agents_public(
     except Exception as e:
         verbose_proxy_logger.exception(f"Error making agent public: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get(
+    "/agent/daily/activity",
+    tags=["Agent Management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=SpendAnalyticsPaginatedResponse,
+)
+async def get_agent_daily_activity(
+    agent_ids: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 10,
+    exclude_agent_ids: Optional[str] = None,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get daily activity for specific agents or all accessible agents.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    agent_ids_list = agent_ids.split(",") if agent_ids else None
+    exclude_agent_ids_list: Optional[List[str]] = None
+    if exclude_agent_ids:
+        exclude_agent_ids_list = (
+            exclude_agent_ids.split(",") if exclude_agent_ids else None
+        )
+
+    where_condition = {}
+    if agent_ids_list:
+        where_condition["agent_id"] = {"in": list(agent_ids_list)}
+
+    agent_records = await prisma_client.db.litellm_agentstable.find_many(
+        where=where_condition
+    )
+    agent_metadata = {
+        agent.agent_id: {"agent_name": agent.agent_name} for agent in agent_records
+    }
+
+    return await get_daily_activity(
+        prisma_client=prisma_client,
+        table_name="litellm_dailyagentspend",
+        entity_id_field="agent_id",
+        entity_id=agent_ids_list,
+        entity_metadata_field=agent_metadata,
+        exclude_entity_ids=exclude_agent_ids_list,
+        start_date=start_date,
+        end_date=end_date,
+        model=model,
+        api_key=api_key,
+        page=page,
+        page_size=page_size,
+    )

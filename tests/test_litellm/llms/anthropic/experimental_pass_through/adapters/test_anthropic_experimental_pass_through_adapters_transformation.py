@@ -1,5 +1,6 @@
 import os
 import sys
+from typing import Any, cast
 
 import pytest
 
@@ -20,7 +21,9 @@ from litellm.types.utils import (
     Delta,
     Function,
     Message,
+    ModelResponse,
     StreamingChoices,
+    Usage,
 )
 
 
@@ -339,6 +342,81 @@ def test_translate_openai_content_to_anthropic_empty_function_arguments():
     assert result[0].id == "call_empty_args"
     assert result[0].name == "test_function"
     assert result[0].input == {}, "Empty function arguments should result in empty dict"
+
+
+def test_translate_openai_content_to_anthropic_text_and_tool_calls():
+    """Ensure content blocks contain both the assistant text + tool call data."""
+    openai_choices = [
+        Choices(
+            message=Message(
+                role="assistant",
+                content="Calling get_weather now.",
+                tool_calls=[
+                    ChatCompletionAssistantToolCall(
+                        id="call_weather",
+                        type="function",
+                        function=Function(
+                            name="get_weather",
+                            arguments='{"location": "Boston"}',
+                        ),
+                    )
+                ],
+            )
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
+
+    assert len(result) == 2
+    assert result[0].type == "text"
+    assert result[0].text == "Calling get_weather now."
+    assert result[1].type == "tool_use"
+    assert result[1].id == "call_weather"
+    assert result[1].name == "get_weather"
+    assert result[1].input == {"location": "Boston"}
+
+
+def test_translate_openai_response_to_anthropic_text_and_tool_calls():
+    """`translate_openai_response_to_anthropic` should surface assistant text even when tools fire."""
+    openai_response = ModelResponse(
+        id="resp_text_tool",
+        model="gpt-4o-mini",
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                message=Message(
+                    role="assistant",
+                    content="Let me grab the current weather.",
+                    tool_calls=[
+                        ChatCompletionAssistantToolCall(
+                            id="call_tool_combo",
+                            type="function",
+                            function=Function(
+                                name="get_weather", arguments='{"location": "Paris"}'
+                            ),
+                        )
+                    ],
+                ),
+            )
+        ],
+        usage=Usage(prompt_tokens=5, completion_tokens=2),
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=openai_response
+    )
+
+    anthropic_content = anthropic_response.get("content")
+    assert anthropic_content is not None
+    assert len(anthropic_content) == 2
+    assert cast(Any, anthropic_content[0]).type == "text"
+    assert cast(Any, anthropic_content[0]).text == "Let me grab the current weather."
+    assert cast(Any, anthropic_content[1]).type == "tool_use"
+    assert cast(Any, anthropic_content[1]).id == "call_tool_combo"
+    assert cast(Any, anthropic_content[1]).input == {"location": "Paris"}
+    assert anthropic_response.get("stop_reason") == "tool_use"
 
 
 def test_translate_streaming_openai_chunk_to_anthropic_with_partial_json():
@@ -977,3 +1055,56 @@ def test_translate_anthropic_messages_to_openai_tool_result_single_item_backward
         f"got {type(tool_message['content'])}"
     )
     assert tool_message["content"] == "72°F and sunny"
+
+
+def test_streaming_chunk_with_both_text_and_tool_calls_issue_18238():
+    """
+    When a streaming choice contains both text content and tool_calls,
+    both should be processed (tool_calls should not be ignored).
+    """
+    # streaming choice with both text and tool_calls
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                provider_specific_fields=None,
+                content="Here is some text for litellm",
+                role=None,
+                function_call=None,
+                tool_calls=[
+                    ChatCompletionDeltaToolCall(
+                        id="toolu_bdrk_013xRVejhv3ybmLEGCoZib2b",
+                        function=Function(arguments='{"cmd": "init"}', name="Bash"),
+                        type="function",
+                        index=0,
+                    )
+                ],
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    # When both text and tool_calls exist, tool_calls (input_json_delta) takes priority
+    (
+        type_of_content,
+        content_block_delta,
+    ) = adapter._translate_streaming_openai_chunk_to_anthropic(choices=choices)
+
+    assert type_of_content == "input_json_delta"
+    assert content_block_delta["partial_json"] == '{"cmd": "init"}'
+
+    # When both text and tool_calls exist, tool_use should be detected and tool name captured
+    (
+        block_type,
+        content_block_start,
+    ) = adapter._translate_streaming_openai_chunk_to_anthropic_content_block(
+        choices=choices
+    )
+
+    assert block_type == "tool_use"
+    assert content_block_start["name"] == "Bash"
+    assert content_block_start["id"] == "toolu_bdrk_013xRVejhv3ybmLEGCoZib2b"

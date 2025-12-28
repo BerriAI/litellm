@@ -84,6 +84,11 @@ interface ChatUIProps {
   };
 }
 
+const MCP_SUPPORTED_ENDPOINTS = new Set<EndpointType>([
+  EndpointType.CHAT,
+  EndpointType.RESPONSES,
+]);
+
 const ChatUI: React.FC<ChatUIProps> = ({
   accessToken,
   token,
@@ -743,8 +748,19 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return;
     }
 
-    // Require model selection for Responses API
-    if (endpointType === EndpointType.RESPONSES && !selectedModel) {
+    // Require model selection for all model-based endpoints
+    const modelRequiredEndpoints = [
+      EndpointType.CHAT,
+      EndpointType.IMAGE,
+      EndpointType.SPEECH,
+      EndpointType.IMAGE_EDITS,
+      EndpointType.RESPONSES,
+      EndpointType.ANTHROPIC_MESSAGES,
+      EndpointType.EMBEDDINGS,
+      EndpointType.TRANSCRIPTION,
+    ];
+
+    if (modelRequiredEndpoints.includes(endpointType as EndpointType) && !selectedModel) {
       NotificationsManager.fromBackend("Please select a model before sending a request");
       return;
     }
@@ -1208,6 +1224,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     placeholder="Select a Model"
                     onChange={onModelChange}
                     options={[
+                      { value: "custom", label: "Enter custom model", key: "custom" },
                       ...Array.from(
                         new Set(
                           modelInfo
@@ -1237,7 +1254,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         label: model_group,
                         key: index,
                       })),
-                      { value: "custom", label: "Enter custom model", key: "custom" },
                     ]}
                     style={{ width: "100%" }}
                     showSearch={true}
@@ -1319,7 +1335,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   <ToolOutlined className="mr-2" /> MCP Tool
                   <Tooltip
                     className="ml-1"
-                    title="Select MCP tools to use in your conversation, only available for /v1/responses endpoint"
+                    title="Select MCP tools to use in your conversation."
                   >
                     <InfoCircleOutlined />
                   </Tooltip>
@@ -1334,7 +1350,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   className="mb-4"
                   allowClear
                   optionLabelProp="label"
-                  disabled={!(endpointType === EndpointType.RESPONSES)}
+                  disabled={!MCP_SUPPORTED_ENDPOINTS.has(endpointType as EndpointType)}
                   maxTagCount="responsive"
                 >
                   {Array.isArray(mcpTools) &&
@@ -1857,6 +1873,25 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       ))}
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* Suggested prompts - show when chat is empty and not loading */}
+              {chatHistory.length === 0 && !isLoading && (
+                <div className="flex items-center gap-2 mb-3 overflow-x-auto">
+                  {(endpointType === EndpointType.A2A_AGENTS
+                    ? ["What can you help me with?", "Tell me about yourself", "What tasks can you perform?"]
+                    : ["Write me a poem", "Explain quantum computing", "Draft a polite email requesting a meeting"]
+                  ).map((prompt) => (
+                    <button
+                      key={prompt}
+                      type="button"
+                      className="shrink-0 rounded-full border border-gray-200 px-3 py-1 text-xs font-medium text-gray-600 transition-colors hover:bg-blue-50 hover:border-blue-300 hover:text-blue-600 cursor-pointer"
+                      onClick={() => setInputMessage(prompt)}
+                    >
+                      {prompt}
+                    </button>
+                  ))}
                 </div>
               )}
 

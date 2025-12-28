@@ -179,24 +179,26 @@ async def create_streaming_response(
 
 def _get_cost_breakdown_from_logging_obj(
     litellm_logging_obj: Optional[LiteLLMLoggingObj],
-) -> Tuple[Optional[float], Optional[float]]:
+) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
     """
-    Extract discount information from logging object's cost breakdown.
+    Extract discount and margin information from logging object's cost breakdown.
 
     Returns:
-        Tuple of (original_cost, discount_amount)
+        Tuple of (original_cost, discount_amount, margin_total_amount, margin_percent)
     """
     if not litellm_logging_obj or not hasattr(litellm_logging_obj, "cost_breakdown"):
-        return None, None
+        return None, None, None, None
 
     cost_breakdown = litellm_logging_obj.cost_breakdown
     if not cost_breakdown:
-        return None, None
+        return None, None, None, None
 
     original_cost = cost_breakdown.get("original_cost")
     discount_amount = cost_breakdown.get("discount_amount")
+    margin_total_amount = cost_breakdown.get("margin_total_amount")
+    margin_percent = cost_breakdown.get("margin_percent")
 
-    return original_cost, discount_amount
+    return original_cost, discount_amount, margin_total_amount, margin_percent
 
 
 class ProxyBaseLLMRequestProcessing:
@@ -224,10 +226,23 @@ class ProxyBaseLLMRequestProcessing:
         exclude_values = {"", None, "None"}
         hidden_params = hidden_params or {}
 
-        # Extract discount info from cost_breakdown if available
-        original_cost, discount_amount = _get_cost_breakdown_from_logging_obj(
+        # Extract discount and margin info from cost_breakdown if available
+        original_cost, discount_amount, margin_total_amount, margin_percent = _get_cost_breakdown_from_logging_obj(
             litellm_logging_obj=litellm_logging_obj
         )
+
+        # Calculate updated spend for header (include current response_cost)
+        current_spend = user_api_key_dict.spend or 0.0
+        updated_spend = current_spend
+        if response_cost is not None:
+            try:
+                # Convert response_cost to float if it's a string
+                cost_value = float(response_cost) if isinstance(response_cost, str) else response_cost
+                if cost_value > 0:
+                    updated_spend = current_spend + cost_value
+            except (ValueError, TypeError):
+                # If conversion fails, use original spend
+                pass
 
         headers = {
             "x-litellm-call-id": call_id,
@@ -245,10 +260,16 @@ class ProxyBaseLLMRequestProcessing:
             "x-litellm-response-cost-discount-amount": (
                 str(discount_amount) if discount_amount is not None else None
             ),
+            "x-litellm-response-cost-margin-amount": (
+                str(margin_total_amount) if margin_total_amount is not None else None
+            ),
+            "x-litellm-response-cost-margin-percent": (
+                str(margin_percent) if margin_percent is not None else None
+            ),
             "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
             "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
             "x-litellm-key-max-budget": str(user_api_key_dict.max_budget),
-            "x-litellm-key-spend": str(user_api_key_dict.spend),
+            "x-litellm-key-spend": str(updated_spend),
             "x-litellm-response-duration-ms": str(
                 hidden_params.get("_response_ms", None)
             ),
@@ -338,6 +359,10 @@ class ProxyBaseLLMRequestProcessing:
             "aget_skill",
             "adelete_skill",
             "anthropic_messages",
+            "acreate_interaction",
+            "aget_interaction",
+            "adelete_interaction",
+            "acancel_interaction",
         ],
         version: Optional[str] = None,
         user_model: Optional[str] = None,
@@ -463,6 +488,10 @@ class ProxyBaseLLMRequestProcessing:
             "aget_skill",
             "adelete_skill",
             "anthropic_messages",
+            "acreate_interaction",
+            "aget_interaction",
+            "adelete_interaction",
+            "acancel_interaction",
         ],
         proxy_logging_obj: ProxyLogging,
         general_settings: dict,
@@ -765,11 +794,15 @@ class ProxyBaseLLMRequestProcessing:
         verbose_proxy_logger.exception(
             f"litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - {str(e)}"
         )
-        await proxy_logging_obj.post_call_failure_hook(
+        # Allow callbacks to transform the error response
+        transformed_exception = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
             request_data=self.data,
         )
+        # Use transformed exception if callback returned one, otherwise use original
+        if transformed_exception is not None:
+            e = transformed_exception
         litellm_debug_info = getattr(e, "litellm_debug_info", "")
         verbose_proxy_logger.debug(
             "\033[1;31mAn error occurred: %s %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
@@ -864,14 +897,16 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     def _get_pre_call_type(
-        route_type: Literal["acompletion", "aembedding", "aresponses"],
-    ) -> Literal["completion", "embeddings", "responses"]:
+        route_type: Literal["acompletion", "aembedding", "aresponses", "allm_passthrough_route"],
+    ) -> Literal["completion", "embeddings", "responses", "allm_passthrough_route"]:
         if route_type == "acompletion":
             return "completion"
         elif route_type == "aembedding":
             return "embeddings"
         elif route_type == "aresponses":
             return "responses"
+        elif route_type == "allm_passthrough_route":
+            return "allm_passthrough_route"
 
     #########################################################
     # Proxy Level Streaming Data Generator
@@ -947,11 +982,15 @@ class ProxyBaseLLMRequestProcessing:
                     str(e)
                 )
             )
-            await proxy_logging_obj.post_call_failure_hook(
+            # Allow callbacks to transform the error response
+            transformed_exception = await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=e,
                 request_data=request_data,
             )
+            # Use transformed exception if callback returned one, otherwise use original
+            if transformed_exception is not None:
+                e = transformed_exception
             verbose_proxy_logger.debug(
                 f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`"
             )

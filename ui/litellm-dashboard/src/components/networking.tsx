@@ -215,19 +215,22 @@ export interface AgentCreateInfo {
   credential_fields: AgentCredentialFieldMetadata[];
   litellm_params_template?: Record<string, string> | null;
   model_template?: string | null;
+  use_a2a_form_fields?: boolean;
 }
 
 export interface PublicModelHubInfo {
   docs_title: string;
   custom_docs_description: string | null;
   litellm_version: string;
-  useful_links: Record<string, string>;
+  // Supports both old format (Record<string, string>) and new format (Record<string, {url: string, index: number}>)
+  useful_links: Record<string, string | { url: string; index: number }>;
 }
 
 export interface LiteLLMWellKnownUiConfig {
   server_root_path: string;
   proxy_base_url: string | null;
   auto_redirect_to_sso: boolean;
+  admin_ui_disabled: boolean;
 }
 
 export interface CredentialsResponse {
@@ -1796,6 +1799,25 @@ export const customerDailyActivityCall = async (
   });
 };
 
+export const agentDailyActivityCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  page: number = 1,
+  agentIds: string[] | null = null,
+) => {
+  return fetchDailyActivity({
+    accessToken,
+    endpoint: "/agent/daily/activity",
+    startTime,
+    endTime,
+    page,
+    extraQueryParams: {
+      agent_ids: agentIds,
+    },
+  });
+};
+
 export const getTotalSpendCall = async (accessToken: string) => {
   /**
    * Get all models on proxy
@@ -2343,7 +2365,10 @@ export const modelExceptionsCall = async (
   }
 };
 
-export const updateUsefulLinksCall = async (accessToken: string, useful_links: Record<string, string>) => {
+export const updateUsefulLinksCall = async (
+  accessToken: string,
+  useful_links: Record<string, string | { url: string; index: number }>,
+) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/model_hub/update_useful_links` : `/model_hub/update_useful_links`;
     const response = await fetch(url, {
@@ -2663,6 +2688,7 @@ export const uiSpendLogsCall = async (
   status_filter?: string,
   model?: string,
   keyAlias?: string,
+  error_code?: string,
 ) => {
   try {
     // Construct base URL
@@ -2682,6 +2708,7 @@ export const uiSpendLogsCall = async (
     if (status_filter) queryParams.append("status_filter", status_filter);
     if (model) queryParams.append("model", model);
     if (keyAlias) queryParams.append("key_alias", keyAlias);
+    if (error_code) queryParams.append("error_code", error_code);
     // Append query parameters to URL if any exist
     const queryString = queryParams.toString();
     if (queryString) {
@@ -6808,6 +6835,40 @@ export const getGuardrailProviderSpecificParams = async (accessToken: string) =>
     return data;
   } catch (error) {
     console.error("Failed to get guardrail provider specific parameters:", error);
+    throw error;
+  }
+};
+
+export const getCategoryYaml = async (accessToken: string, categoryName: string) => {
+  try {
+    // URL encode the category name to handle special characters
+    const encodedCategoryName = encodeURIComponent(categoryName);
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/guardrails/ui/category_yaml/${encodedCategoryName}`
+      : `/guardrails/ui/category_yaml/${encodedCategoryName}`;
+
+    console.log(`Fetching category YAML from: ${url}`);
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      console.error(`Failed to get category YAML. Status: ${response.status}, Error:`, errorData);
+      handleError(errorData);
+      throw new Error(`Failed to get category YAML: ${response.status} ${errorData}`);
+    }
+
+    const data = await response.json();
+    console.log("Category YAML response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to get category YAML:", error);
     throw error;
   }
 };

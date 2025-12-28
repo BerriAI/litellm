@@ -3646,7 +3646,7 @@ class BaseLLMHTTPHandler:
             ssl_context = get_shared_realtime_ssl_context()
             async with websockets.connect(  # type: ignore
                 url,
-                extra_headers=headers,
+                additional_headers=headers,
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
                 ssl=ssl_context,
             ) as backend_ws:
@@ -3761,20 +3761,31 @@ class BaseLLMHTTPHandler:
             input=prompt,
             api_key="",
             additional_args={
-                "complete_input_dict": data,
+                "complete_input_dict": files,
                 "api_base": api_base,
                 "headers": headers,
             },
         )
 
         try:
-            response = sync_httpx_client.post(
-                url=api_base,
-                headers=headers,
-                data=data,
-                files=files,
-                timeout=timeout,
-            )
+            # Check if provider uses multipart/form-data or JSON
+            if image_edit_provider_config.use_multipart_form_data():
+                # Use form-data (OpenAI style)
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=data,
+                    files=files,
+                    timeout=timeout,
+                )
+            else:
+                # Use JSON (Gemini style)
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=data,
+                    timeout=timeout,
+                )
 
         except Exception as e:
             raise self._handle_error(
@@ -3853,13 +3864,24 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = await async_httpx_client.post(
-                url=api_base,
-                headers=headers,
-                data=data,
-                files=files,
-                timeout=timeout,
-            )
+            # Check if provider uses multipart/form-data or JSON
+            if image_edit_provider_config.use_multipart_form_data():
+                # Use form-data (OpenAI style)
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=data,
+                    files=files,
+                    timeout=timeout,
+                )
+            else:
+                # Use JSON (Gemini style)
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=data,
+                    timeout=timeout,
+                )
 
         except Exception as e:
             raise self._handle_error(
@@ -3965,12 +3987,24 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = sync_httpx_client.post(
-                url=api_base,
-                headers=headers,
-                json=data,
-                timeout=timeout,
-            )
+            # Check if provider requires multipart/form-data (e.g., Stability AI)
+            if image_generation_provider_config.use_multipart_form_data():
+                # Use form-data: pass files={} to force multipart encoding
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=data,
+                    files={"none": ""},  # Forces multipart/form-data
+                    timeout=timeout,
+                )
+            else:
+                # Use JSON (default)
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=data,
+                    timeout=timeout,
+                )
 
         except Exception as e:
             raise self._handle_error(
@@ -4063,12 +4097,24 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = await async_httpx_client.post(
-                url=api_base,
-                headers=headers,
-                json=data,
-                timeout=timeout,
-            )
+            # Check if provider requires multipart/form-data (e.g., Stability AI)
+            if image_generation_provider_config.use_multipart_form_data():
+                # Use form-data: pass files={} to force multipart encoding
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=data,
+                    files={"none": ""},  # Forces multipart/form-data
+                    timeout=timeout,
+                )
+            else:
+                # Use JSON (default)
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=data,
+                    timeout=timeout,
+                )
 
         except Exception as e:
             raise self._handle_error(

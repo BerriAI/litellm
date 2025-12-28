@@ -16,10 +16,10 @@ from typing import (
 from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
-from litellm.caching.caching import DualCache
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
 from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
+from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import (
     AdapterCompletionStreamWrapper,
     CallTypes,
@@ -32,6 +32,9 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
+    from fastapi import HTTPException
+
+    from litellm.caching.caching import DualCache
     from opentelemetry.trace import Span as _Span
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -158,9 +161,12 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: LiteLLMLoggingObj,
+        prompt_spec: Optional[PromptSpec] = None,
         tools: Optional[List[Dict]] = None,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Returns:
@@ -178,6 +184,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_spec: Optional[PromptSpec] = None,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
         ignore_prompt_manager_model: Optional[bool] = False,
@@ -329,7 +336,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        cache: DualCache,
+        cache: "DualCache",
         data: dict,
         call_type: CallTypesLiteral,
     ) -> Optional[
@@ -343,7 +350,20 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: Optional[str] = None,
-    ):
+    ) -> Optional["HTTPException"]:
+        """
+        Called after an LLM API call fails. Can return or raise HTTPException to transform error responses.
+
+        Args:
+            - request_data: dict - The request data.
+            - original_exception: Exception - The original exception that occurred.
+            - user_api_key_dict: UserAPIKeyAuth - The user API key dictionary.
+            - traceback_str: Optional[str] - The traceback string.
+
+        Returns:
+            - Optional[HTTPException]: Return an HTTPException to transform the error response sent to the client.
+                                      Return None to use the original exception.
+        """
         pass
 
     async def async_post_call_success_hook(

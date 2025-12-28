@@ -2050,7 +2050,7 @@ class TestProcessSSOJWTAccessToken:
     @pytest.fixture
     def sample_jwt_token(self):
         """Create a sample JWT token string"""
-        return "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+        return "test-jwt-token-header.payload.signature"
 
     @pytest.fixture
     def sample_jwt_payload(self):
@@ -3043,3 +3043,346 @@ class TestAddMissingTeamMember:
         assert set(added_teams) == set(
             expected_teams_added
         ), f"Expected teams {expected_teams_added}, but got {added_teams}"
+
+
+@pytest.mark.asyncio
+async def test_role_mappings_override_default_internal_user_params():
+    """
+    Test that when role_mappings is configured in SSO settings,
+    the SSO-extracted role overrides default_internal_user_params role.
+    """
+    from litellm.proxy._types import NewUserResponse, SSOUserDefinedValues
+    from litellm.proxy.management_endpoints.ui_sso import insert_sso_user
+
+    # Save original default_internal_user_params
+    original_default_params = getattr(litellm, "default_internal_user_params", None)
+
+    try:
+        # Set default_internal_user_params with a role that should be overridden
+        litellm.default_internal_user_params = {
+            "user_role": "internal_user",
+            "max_budget": 100,
+            "budget_duration": "30d",
+            "models": ["gpt-3.5-turbo"],
+        }
+
+        # Mock SSO result
+        mock_result_openid = CustomOpenID(
+            id="test-user-123",
+            email="test@example.com",
+            display_name="Test User",
+            provider="microsoft",
+            team_ids=[],
+        )
+
+        # User defined values with SSO-extracted role (from role_mappings)
+        user_defined_values: SSOUserDefinedValues = {
+            "user_id": "test-user-123",
+            "user_email": "test@example.com",
+            "user_role": "proxy_admin",  # Role from SSO role_mappings
+            "max_budget": None,
+            "budget_duration": None,
+            "models": [],
+        }
+
+        # Mock Prisma client with SSO config that has role_mappings configured
+        mock_prisma = MagicMock()
+        mock_sso_config = MagicMock()
+        mock_sso_config.sso_settings = {
+            "role_mappings": {
+                "Admin": "proxy_admin",
+                "User": "internal_user",
+            }
+        }
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(
+            return_value=mock_sso_config
+        )
+
+        # Mock new_user function
+        mock_new_user_response = NewUserResponse(
+            user_id="test-user-123",
+            key="sk-xxxxx",
+            teams=None,
+        )
+
+        with patch(
+            "litellm.proxy.utils.get_prisma_client_or_throw",
+            return_value=mock_prisma,
+        ), patch(
+            "litellm.proxy.management_endpoints.ui_sso.new_user",
+            return_value=mock_new_user_response,
+        ) as mock_new_user:
+            # Act
+            result = await insert_sso_user(
+                result_openid=mock_result_openid,
+                user_defined_values=user_defined_values,
+            )
+
+            # Assert - verify new_user was called with preserved SSO role
+            mock_new_user.assert_called_once()
+            call_args = mock_new_user.call_args
+            new_user_request = call_args.kwargs["data"]
+
+            # The role from SSO should be preserved, not overridden by default_internal_user_params
+            assert (
+                new_user_request.user_role == "proxy_admin"
+            ), "SSO-extracted role should override default_internal_user_params role"
+
+            # Other default params should still be applied
+            assert (
+                new_user_request.max_budget == 100
+            ), "max_budget from default_internal_user_params should be applied"
+            assert (
+                new_user_request.budget_duration == "30d"
+            ), "budget_duration from default_internal_user_params should be applied"
+            
+            # Note: models are applied via _update_internal_new_user_params inside new_user,
+            # not in insert_sso_user, so we verify user_defined_values was updated correctly
+            # by checking that the function completed successfully and other defaults were applied
+            # The models will be applied when new_user processes the request
+
+    finally:
+        # Restore original default_internal_user_params
+        if original_default_params is not None:
+            litellm.default_internal_user_params = original_default_params
+        else:
+            if hasattr(litellm, "default_internal_user_params"):
+                delattr(litellm, "default_internal_user_params")
+
+
+class TestSSOReadinessEndpoint:
+    """Test the /sso/readiness endpoint"""
+
+    @pytest.mark.asyncio
+    async def test_sso_readiness_no_sso_configured(self):
+        """Test that readiness returns healthy when no SSO is configured"""
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.proxy_server import app
+
+        mock_user_auth = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+        try:
+            client = TestClient(app)
+
+            with patch.dict(os.environ, {}, clear=True):
+                response = client.get("/sso/readiness")
+
+                assert response.status_code == 200
+                data = response.json()
+                assert data["status"] == "healthy"
+                assert data["sso_configured"] is False
+                assert data["message"] == "No SSO provider configured"
+        finally:
+            app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    async def test_sso_readiness_google_fully_configured(self):
+        """Test that readiness returns healthy when Google SSO is fully configured"""
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.proxy_server import app
+
+        mock_user_auth = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+        try:
+            client = TestClient(app)
+
+            with patch.dict(
+                os.environ,
+                {
+                    "GOOGLE_CLIENT_ID": "test-google-client-id",
+                    "GOOGLE_CLIENT_SECRET": "test-google-secret",
+                },
+                clear=True,
+            ):
+                response = client.get("/sso/readiness")
+
+                assert response.status_code == 200
+                data = response.json()
+                assert data["status"] == "healthy"
+                assert data["sso_configured"] is True
+                assert data["provider"] == "google"
+                assert "Google SSO is properly configured" in data["message"]
+        finally:
+            app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    async def test_sso_readiness_google_missing_secret(self):
+        """Test that readiness returns unhealthy when Google SSO is missing GOOGLE_CLIENT_SECRET"""
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.proxy_server import app
+
+        mock_user_auth = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+        try:
+            client = TestClient(app)
+
+            with patch.dict(
+                os.environ,
+                {"GOOGLE_CLIENT_ID": "test-google-client-id"},
+                clear=True,
+            ):
+                response = client.get("/sso/readiness")
+
+                assert response.status_code == 503
+                data = response.json()["detail"]
+                assert data["status"] == "unhealthy"
+                assert data["sso_configured"] is True
+                assert data["provider"] == "google"
+                assert "GOOGLE_CLIENT_SECRET" in data["missing_environment_variables"]
+                assert "Google SSO is configured but missing required environment variables" in data["message"]
+        finally:
+            app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "env_vars,expected_status,expected_provider,expected_missing_vars",
+        [
+            (
+                {
+                    "MICROSOFT_CLIENT_ID": "test-microsoft-client-id",
+                    "MICROSOFT_CLIENT_SECRET": "test-microsoft-secret",
+                    "MICROSOFT_TENANT": "test-tenant",
+                },
+                200,
+                "microsoft",
+                [],
+            ),
+            (
+                {"MICROSOFT_CLIENT_ID": "test-microsoft-client-id"},
+                503,
+                "microsoft",
+                ["MICROSOFT_CLIENT_SECRET", "MICROSOFT_TENANT"],
+            ),
+        ],
+    )
+    async def test_sso_readiness_microsoft_configurations(
+        self, env_vars, expected_status, expected_provider, expected_missing_vars
+    ):
+        """Test Microsoft SSO readiness with both fully configured and missing variables"""
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.proxy_server import app
+
+        mock_user_auth = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+        try:
+            client = TestClient(app)
+
+            with patch.dict(os.environ, env_vars, clear=True):
+                response = client.get("/sso/readiness")
+
+                assert response.status_code == expected_status
+                
+                if expected_status == 200:
+                    data = response.json()
+                    assert data["sso_configured"] is True
+                    assert data["provider"] == expected_provider
+                    assert data["status"] == "healthy"
+                    assert "Microsoft SSO is properly configured" in data["message"]
+                else:
+                    data = response.json()["detail"]
+                    assert data["sso_configured"] is True
+                    assert data["provider"] == expected_provider
+                    assert data["status"] == "unhealthy"
+                    assert set(data["missing_environment_variables"]) == set(
+                        expected_missing_vars
+                    )
+        finally:
+            app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "env_vars,expected_status,expected_provider,expected_missing_vars",
+        [
+            (
+                {
+                    "GENERIC_CLIENT_ID": "test-generic-client-id",
+                    "GENERIC_CLIENT_SECRET": "test-generic-secret",
+                    "GENERIC_AUTHORIZATION_ENDPOINT": "https://auth.example.com/authorize",
+                    "GENERIC_TOKEN_ENDPOINT": "https://auth.example.com/token",
+                    "GENERIC_USERINFO_ENDPOINT": "https://auth.example.com/userinfo",
+                },
+                200,
+                "generic",
+                [],
+            ),
+            (
+                {"GENERIC_CLIENT_ID": "test-generic-client-id"},
+                503,
+                "generic",
+                [
+                    "GENERIC_CLIENT_SECRET",
+                    "GENERIC_AUTHORIZATION_ENDPOINT",
+                    "GENERIC_TOKEN_ENDPOINT",
+                    "GENERIC_USERINFO_ENDPOINT",
+                ],
+            ),
+        ],
+    )
+    async def test_sso_readiness_generic_configurations(
+        self, env_vars, expected_status, expected_provider, expected_missing_vars
+    ):
+        """Test Generic SSO readiness with both fully configured and missing variables"""
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.proxy_server import app
+
+        mock_user_auth = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+        try:
+            client = TestClient(app)
+
+            with patch.dict(os.environ, env_vars, clear=True):
+                response = client.get("/sso/readiness")
+
+                assert response.status_code == expected_status
+                
+                if expected_status == 200:
+                    data = response.json()
+                    assert data["sso_configured"] is True
+                    assert data["provider"] == expected_provider
+                    assert data["status"] == "healthy"
+                    assert "Generic SSO is properly configured" in data["message"]
+                else:
+                    data = response.json()["detail"]
+                    assert data["sso_configured"] is True
+                    assert data["provider"] == expected_provider
+                    assert data["status"] == "unhealthy"
+                    assert set(data["missing_environment_variables"]) == set(
+                        expected_missing_vars
+                    )
+        finally:
+            app.dependency_overrides.clear()

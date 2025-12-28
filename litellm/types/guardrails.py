@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Required, TypedDict
 
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk, ChatCompletionToolParam
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionToolCallChunk,
@@ -13,9 +13,6 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
     EnkryptAIGuardrailConfigs,
-)
-from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
-    GenericGuardrailAPIOptionalParams,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.grayswan import (
     GraySwanGuardrailConfigModel,
@@ -49,6 +46,7 @@ class SupportedGuardrailIntegrations(Enum):
     LAKERA_V2 = "lakera_v2"
     PRESIDIO = "presidio"
     HIDE_SECRETS = "hide-secrets"
+    HIDDENLAYER = "hiddenlayer"
     AIM = "aim"
     PANGEA = "pangea"
     LASSO = "lasso"
@@ -268,6 +266,13 @@ class PresidioPresidioConfigModelUserInterface(BaseModel):
         default=None,
         description="Base URL for the Presidio anonymizer API",
     )
+    presidio_filter_scope: Optional[Literal["input", "output", "both"]] = Field(
+        default=None,
+        description=(
+            "Where to apply Presidio checks: 'input' (user -> model), "
+            "'output' (model -> user), or 'both' (default)."
+        ),
+    )
     output_parse_pii: Optional[bool] = Field(
         default=None,
         description="When True, LiteLLM will replace the masked text with the original text in the response",
@@ -278,6 +283,10 @@ class PresidioPresidioConfigModelUserInterface(BaseModel):
         default="en",
         description="Language code for Presidio PII analysis (e.g., 'en', 'de', 'es', 'fr')",
     )
+    presidio_run_on: Optional[Literal["input", "output", "both"]] = Field(
+        default=None,
+        description="Where to apply Presidio checks: input, output, or both (default).",
+    )
 
 
 class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
@@ -285,6 +294,22 @@ class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
 
     pii_entities_config: Optional[Dict[Union[PiiEntityType, str], PiiAction]] = Field(
         default=None, description="Configuration for PII entity types and actions"
+    )
+    presidio_filter_scope: Literal["input", "output", "both"] = Field(
+        default="both",
+        description=(
+            "Where to apply Presidio checks: 'input' runs on user → model traffic, "
+            "'output' runs on model → user traffic, and 'both' applies to both."
+        ),
+    )
+    presidio_score_thresholds: Optional[
+        Dict[Union[PiiEntityType, str], float]
+    ] = Field(
+        default=None,
+        description=(
+            "Optional per-entity minimum confidence scores for Presidio detections. "
+            "Entities below the threshold are ignored."
+        ),
     )
     presidio_ad_hoc_recognizers: Optional[str] = Field(
         default=None,
@@ -365,6 +390,10 @@ class LakeraV2GuardrailConfigModel(BaseModel):
     dev_info: Optional[bool] = Field(
         default=True,
         description="Whether to include developer information in the response",
+    )
+    on_flagged: Optional[Literal["block", "monitor"]] = Field(
+        default="block",
+        description="Action to take when content is flagged: 'block' (raise exception) or 'monitor' (log only)",
     )
 
 
@@ -745,13 +774,3 @@ class PatchGuardrailRequest(BaseModel):
     guardrail_name: Optional[str] = None
     litellm_params: Optional[BaseLitellmParams] = None
     guardrail_info: Optional[Dict[str, Any]] = None
-
-
-class GenericGuardrailAPIInputs(TypedDict, total=False):
-    texts: List[str]  # extracted text from the LLM response - for basic text guardrails
-    images: List[str]  # extracted images from the LLM response - for image guardrails
-    tools: List[ChatCompletionToolParam]  # tools sent to the LLM
-    tool_calls: List[ChatCompletionToolCallChunk]  # tool calls sent from the LLM
-    structured_messages: List[
-        AllMessageValues
-    ]  # structured messages sent to the LLM - indicates if text is from system or user

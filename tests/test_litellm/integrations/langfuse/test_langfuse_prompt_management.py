@@ -28,27 +28,23 @@ class TestLangfusePromptManagement:
             mock_get_prompt_from_id.assert_called_once()
             assert mock_get_prompt_from_id.call_args.kwargs["prompt_version"] == 4
 
-    def test_trace_id_propagation_flag_from_env(self):
-        with patch.dict(
-            os.environ,
-            {
-                "LANGFUSE_SECRET_KEY": "secret",
-                "LANGFUSE_PUBLIC_KEY": "public",
-                "LANGFUSE_PROPAGATE_TRACE_ID": "True",
-            },
-            clear=True,
-        ):
-            pm = LangfusePromptManagement()
-            assert pm.langfuse_propagate_trace_id is True
+    def test_log_failure_event_runs_async_logger(self):
+        langfuse_prompt_management = LangfusePromptManagement()
+        with patch(
+            "litellm.integrations.langfuse.langfuse_prompt_management.run_async_function"
+        ) as mock_run_async:
+            kwargs = {"standard_callback_dynamic_params": {}}
+            start_time, end_time = 1, 2
 
-        with patch.dict(
-            os.environ,
-            {
-                "LANGFUSE_SECRET_KEY": "secret",
-                "LANGFUSE_PUBLIC_KEY": "public",
-                "LANGFUSE_PROPAGATE_TRACE_ID": "False",
-            },
-            clear=True,
-        ):
-            pm2 = LangfusePromptManagement()
-            assert pm2.langfuse_propagate_trace_id is False
+            langfuse_prompt_management.log_failure_event(
+                kwargs=kwargs,
+                response_obj=None,
+                start_time=start_time,
+                end_time=end_time,
+            )
+
+            mock_run_async.assert_called_once()
+            assert (
+                mock_run_async.call_args[0][0]
+                == langfuse_prompt_management.async_log_failure_event
+            )

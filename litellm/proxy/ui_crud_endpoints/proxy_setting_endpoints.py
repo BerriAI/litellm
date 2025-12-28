@@ -433,10 +433,21 @@ async def get_sso_settings():
     if sso_db_record and sso_db_record.sso_settings:
         # Load settings from database
         sso_settings_dict = dict(sso_db_record.sso_settings)
+
+    # Extract role_mappings before removing it (it's a dict, not an env variable)
+    role_mappings_data = sso_settings_dict.pop("role_mappings", None)
+    role_mappings = None
+    if role_mappings_data:
+        from litellm.types.proxy.management_endpoints.ui_sso import RoleMappings
+        if isinstance(role_mappings_data, dict):
+            role_mappings = RoleMappings(**role_mappings_data)
+        elif isinstance(role_mappings_data, RoleMappings):
+            role_mappings = role_mappings_data
     
     decrypted_sso_settings_dict = proxy_config._decrypt_and_set_db_env_variables(environment_variables=sso_settings_dict)
 
     # Build SSO config with database values or environment fallback
+    
     sso_config = SSOConfig(
         google_client_id=decrypted_sso_settings_dict.get("google_client_id", None),
         google_client_secret=decrypted_sso_settings_dict.get("google_client_secret", None),
@@ -451,6 +462,7 @@ async def get_sso_settings():
         proxy_base_url=decrypted_sso_settings_dict.get("proxy_base_url", None),
         user_email=decrypted_sso_settings_dict.get("user_email"),
         ui_access_mode=decrypted_sso_settings_dict.get("ui_access_mode"),
+        role_mappings=role_mappings,
     )
 
     # Get the schema for UI display
@@ -560,6 +572,41 @@ async def update_sso_settings(sso_config: SSOConfig):
             },
         },
     )
+
+    # Remove SSO-related env vars from config.environment_variables
+    try:
+        env_var_entry = await prisma_client.db.litellm_config.find_unique(
+            where={"param_name": "environment_variables"}
+        )
+
+        # If no environment_variables entry exists, nothing to clean up
+        if env_var_entry is not None:
+            if env_var_entry.param_value is not None:
+                if isinstance(env_var_entry.param_value, str):
+                    environment_variables = json.loads(env_var_entry.param_value)
+                else:
+                    environment_variables = dict(env_var_entry.param_value)
+            else:
+                environment_variables = {}
+
+            env_vars_to_remove = set(env_var_mapping.values())
+            filtered_env_vars = {
+                key: value
+                for key, value in environment_variables.items()
+                if key not in env_vars_to_remove
+            }
+
+            await prisma_client.db.litellm_config.update(
+                where={"param_name": "environment_variables"},
+                data={
+                    "param_value": json.dumps(filtered_env_vars, default=str),
+                },
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": f"Error updating environment_variables: {str(e)}"},
+        )
 
     return {
         "message": "SSO settings updated successfully",
@@ -671,7 +718,6 @@ async def update_ui_theme_settings(theme_config: UIThemeConfig):
 @router.get(
     "/get/ui_settings",
     tags=["UI Settings"],
-    dependencies=[Depends(user_api_key_auth)],
     response_model=UISettingsResponse,
 )
 async def get_ui_settings():

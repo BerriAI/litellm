@@ -16,6 +16,7 @@ Log Proxy input, output, and exceptions using:
 - Custom Callbacks - Custom code and API endpoints
 - Langsmith
 - DataDog
+- Azure Sentinel
 - DynamoDB
 - etc.
 
@@ -371,8 +372,6 @@ export LANGFUSE_PUBLIC_KEY="pk_kk"
 export LANGFUSE_SECRET_KEY="sk_ss"
 # Optional, defaults to https://cloud.langfuse.com
 export LANGFUSE_HOST="https://xxx.langfuse.com"
-# Optional - When True, forwards LiteLLM's logging trace_id to Langfuse
-LANGFUSE_PROPAGATE_TRACE_ID=True
 ```
 
 **Step 4**: Start the proxy, make a test request
@@ -1575,6 +1574,10 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 ## [Datadog](../observability/datadog)
 
 👉 Go here for using [Datadog LLM Observability](../observability/datadog) with LiteLLM Proxy
+
+## [Azure Sentinel](../observability/azure_sentinel)
+
+👉 Go here for using [Azure Sentinel](../observability/azure_sentinel) with LiteLLM Proxy
 
 
 ## Lunary

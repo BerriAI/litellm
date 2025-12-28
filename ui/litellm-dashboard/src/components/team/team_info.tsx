@@ -375,6 +375,19 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         return;
       }
 
+      let secretManagerSettings: Record<string, any> | undefined;
+      if (typeof values.secret_manager_settings === "string") {
+        const trimmedSecretConfig = values.secret_manager_settings.trim();
+        if (trimmedSecretConfig.length > 0) {
+          try {
+            secretManagerSettings = JSON.parse(values.secret_manager_settings);
+          } catch (e) {
+            NotificationsManager.fromBackend("Invalid JSON in secret manager settings");
+            return;
+          }
+        }
+      }
+
       const sanitizeNumeric = (v: any) => {
         if (v === null || v === undefined) return null;
         if (typeof v === "string" && v.trim() === "") return null;
@@ -394,6 +407,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           ...parsedMetadata,
           guardrails: values.guardrails || [],
           logging: values.logging_settings || [],
+          ...(secretManagerSettings !== undefined ? { secret_manager_settings: secretManagerSettings } : {}),
         },
         organization_id: values.organization_id,
       };
@@ -449,6 +463,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       }
       delete values.agents_and_groups;
 
+      // Handle vector stores permissions
+      if (values.vector_stores && values.vector_stores.length > 0) {
+        updateData.object_permission.vector_stores = values.vector_stores;
+      }
+
       const response = await teamUpdateCall(accessToken, updateData);
 
       NotificationsManager.success("Team settings updated successfully");
@@ -489,7 +508,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             Back to Teams
           </TremorButton>
           <Title>{info.team_alias}</Title>
-          <div className="flex items-center cursor-pointer">
+          <div className="flex items-center">
             <Text className="text-gray-500 font-mono">{info.team_id}</Text>
             <Button
               type="text"
@@ -634,9 +653,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     guardrails: info.metadata?.guardrails || [],
                     disable_global_guardrails: info.metadata?.disable_global_guardrails || false,
                     metadata: info.metadata
-                      ? JSON.stringify((({ logging, ...rest }) => rest)(info.metadata), null, 2)
+                      ? JSON.stringify(
+                          (({ logging, secret_manager_settings, ...rest }) => rest)(info.metadata),
+                          null,
+                          2,
+                        )
                       : "",
                     logging_settings: info.metadata?.logging || [],
+                    secret_manager_settings: info.metadata?.secret_manager_settings
+                      ? JSON.stringify(info.metadata.secret_manager_settings, null, 2)
+                      : "",
                     organization_id: info.organization_id,
                     vector_stores: info.object_permission?.vector_stores || [],
                     mcp_servers: info.object_permission?.mcp_servers || [],
@@ -803,7 +829,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <Switch checkedChildren="Yes" unCheckedChildren="No" />
                   </Form.Item>
 
-                  <Form.Item label="Vector Stores" name="vector_stores">
+                  <Form.Item label="Vector Stores" name="vector_stores" aria-label="Vector Stores">
                     <VectorStoreSelector
                       onChange={(values: string[]) => form.setFieldValue("vector_stores", values)}
                       value={form.getFieldValue("vector_stores")}
@@ -871,6 +897,37 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <EditLoggingSettings
                       value={form.getFieldValue("logging_settings")}
                       onChange={(values) => form.setFieldValue("logging_settings", values)}
+                    />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="Secret Manager Settings"
+                    name="secret_manager_settings"
+                    help={
+                      premiumUser
+                        ? "Enter secret manager configuration as a JSON object."
+                        : "Premium feature - Upgrade to manage secret manager settings."
+                    }
+                    rules={[
+                      {
+                        validator: async (_, value) => {
+                          if (!value) {
+                            return Promise.resolve();
+                          }
+                          try {
+                            JSON.parse(value);
+                            return Promise.resolve();
+                          } catch (error) {
+                            return Promise.reject(new Error("Please enter valid JSON"));
+                          }
+                        },
+                      },
+                    ]}
+                  >
+                    <Input.TextArea
+                      rows={6}
+                      placeholder='{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}'
+                      disabled={!premiumUser}
                     />
                   </Form.Item>
 
@@ -971,6 +1028,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     variant="inline"
                     className="pt-4 border-t border-gray-200"
                   />
+
+                  {info.metadata?.secret_manager_settings && (
+                    <div className="pt-4 border-t border-gray-200">
+                      <Text className="font-medium">Secret Manager Settings</Text>
+                      <pre className="mt-2 bg-gray-50 p-3 rounded text-xs overflow-x-auto">
+                        {JSON.stringify(info.metadata.secret_manager_settings, null, 2)}
+                      </pre>
+                    </div>
+                  )}
                 </div>
               )}
             </Card>

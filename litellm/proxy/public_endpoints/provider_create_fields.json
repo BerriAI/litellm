@@ -812,9 +812,19 @@
   },
   {
     "provider": "Databricks",
-    "provider_display_name": "Databricks (Qwen API)",
+    "provider_display_name": "Databricks",
     "litellm_provider": "databricks",
     "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
       {
         "key": "api_key",
         "label": "API Key",
@@ -2689,8 +2699,8 @@
         "key": "vertex_credentials",
         "label": "Vertex Credentials",
         "placeholder": null,
-        "tooltip": null,
-        "required": true,
+        "tooltip": "Optional - Upload your GCP service account JSON file. If not provided, uses default GCP credentials (ADC).",
+        "required": false,
         "field_type": "upload",
         "options": null,
         "default_value": null

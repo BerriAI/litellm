@@ -42,6 +42,7 @@ const sidebars = {
       label: "Guardrails",
       items: [
         "proxy/guardrails/quick_start",
+        "proxy/guardrails/guardrail_load_balancing",
         {
           type: "category",
           "label": "Contributing to Guardrails",
@@ -52,6 +53,7 @@ const sidebars = {
           ]
         },
         "proxy/guardrails/test_playground",
+        "proxy/guardrails/litellm_content_filter",
         ...[
           "proxy/guardrails/aim_security",
           "proxy/guardrails/onyx_security",
@@ -61,8 +63,8 @@ const sidebars = {
           "proxy/guardrails/enkryptai",
           "proxy/guardrails/ibm_guardrails",
           "proxy/guardrails/grayswan",
+          "proxy/guardrails/hiddenlayer",
           "proxy/guardrails/lasso_security",
-          "proxy/guardrails/litellm_content_filter",
           "proxy/guardrails/guardrails_ai",
           "proxy/guardrails/lakera_ai",
           "proxy/guardrails/model_armor",
@@ -287,7 +289,7 @@ const sidebars = {
           label: "All Endpoints (Swagger)",
           href: "https://litellm-api.up.railway.app/",
         },
-  "proxy/enterprise",
+        "proxy/enterprise",
         {
           type: "category",
           label: "Authentication",
@@ -388,6 +390,8 @@ const sidebars = {
           items: [
             "proxy/cost_tracking",
             "proxy/custom_pricing",
+            "proxy/provider_margins",
+            "proxy/provider_discounts",
             "proxy/sync_models_github",
             "proxy/billing",
           ],
@@ -410,7 +414,8 @@ const sidebars = {
           label: "/a2a - A2A Agent Gateway",
           items: [
             "a2a",
-            "a2a_agent_permissions",
+            "a2a_cost_tracking",
+            "a2a_agent_permissions"
           ],
         },
         "assistants",
@@ -467,9 +472,10 @@ const sidebars = {
             "proxy/managed_finetuning",
           ]
         },
-          "generateContent",
-          "apply_guardrail",
-          "bedrock_invoke",
+        "generateContent",
+        "apply_guardrail",
+        "bedrock_invoke",
+        "interactions",
         {
           type: "category",
           label: "/images",
@@ -524,7 +530,14 @@ const sidebars = {
             "proxy/pass_through_guardrails"
           ]
         },
-        "rag_ingest",
+        {
+          type: "category",
+          label: "/rag",
+          items: [
+            "rag_ingest",
+            "rag_query",
+          ]
+        },
         "realtime",
         "rerank",
         "response_api",
@@ -541,6 +554,7 @@ const sidebars = {
             "search/dataforseo",
             "search/firecrawl",
             "search/searxng",
+            "search/linkup",
           ]
         },
         "skills",
@@ -608,6 +622,7 @@ const sidebars = {
           label: "Azure AI",
           items: [
             "providers/azure_ai",
+            "providers/azure_ai_agents",
             "providers/azure_ocr",
             "providers/azure_document_intelligence",
             "providers/azure_ai_speech",
@@ -629,6 +644,7 @@ const sidebars = {
             "providers/vertex_speech",
             "providers/vertex_batch",
             "providers/vertex_ocr",
+            "providers/vertex_ai_agent_engine",
           ]
         },
         {
@@ -657,6 +673,7 @@ const sidebars = {
             "providers/bedrock_agents",
             "providers/bedrock_writer",
             "providers/bedrock_batches",
+            "providers/aws_polly",
             "providers/bedrock_vector_store",
           ]
         },
@@ -664,10 +681,13 @@ const sidebars = {
         "providers/ai21",
         "providers/aiml",
         "providers/aleph_alpha",
+        "providers/amazon_nova",
         "providers/anyscale",
+        "providers/apertis",
         "providers/baseten",
         "providers/bytez",
         "providers/cerebras",
+        "providers/chutes",
         "providers/clarifai",
         "providers/cloudflare_workers",
         "providers/codestral",
@@ -713,10 +733,12 @@ const sidebars = {
         "providers/meta_llama",
         "providers/milvus_vector_stores",
         "providers/mistral",
+        "providers/minimax",
         "providers/moonshot",
         "providers/morph",
         "providers/nebius",
         "providers/nlp_cloud",
+        "providers/nano-gpt",
         "providers/novita",
         { type: "doc", id: "providers/nscale", label: "Nscale (EU Sovereign)" },
         {
@@ -733,8 +755,10 @@ const sidebars = {
         "providers/ovhcloud",
         "providers/perplexity",
         "providers/petals",
+        "providers/poe",
         "providers/publicai",
         "providers/predibase",
+        "providers/pydantic_ai_agent",
         "providers/ragflow",
         "providers/recraft",
         "providers/replicate",
@@ -748,13 +772,22 @@ const sidebars = {
         },
         "providers/sambanova",
         "providers/sap",
+        "providers/stability",
+        "providers/synthetic",
         "providers/snowflake",
         "providers/togetherai",
         "providers/topaz",
         "providers/triton-inference-server",
         "providers/v0",
         "providers/vercel_ai_gateway",
-        "providers/vllm",
+        {
+          type: "category",
+          label: "vLLM",
+          items: [
+            "providers/vllm",
+            "providers/vllm_batches",
+          ]
+        },
         "providers/volcano",
         "providers/voyage",
         "providers/wandb_inference",
@@ -767,6 +800,7 @@ const sidebars = {
           ]
         },
         "providers/xai",
+        "providers/xiaomi_mimo",
         "providers/xinference",
         "providers/zai",
       ],

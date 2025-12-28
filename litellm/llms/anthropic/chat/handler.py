@@ -340,7 +340,7 @@ class AnthropicChatCompletion(BaseLLM):
         data = config.transform_request(
             model=model,
             messages=messages,
-            optional_params=optional_params,
+            optional_params={**optional_params, "is_vertex_request": is_vertex_request},
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -504,6 +504,14 @@ class ModelResponseIterator:
         self.accumulated_json: str = ""
         self.chunk_type: Literal["valid_json", "accumulated_json"] = "valid_json"
 
+        # Track current content block type to avoid emitting tool calls for non-tool blocks
+        # See: https://github.com/BerriAI/litellm/issues/17254
+        self.current_content_block_type: Optional[str] = None
+
+        # Accumulate web_search_tool_result blocks for multi-turn reconstruction
+        # See: https://github.com/BerriAI/litellm/issues/17737
+        self.web_search_results: List[Dict[str, Any]] = []
+
     def check_empty_tool_call_args(self) -> bool:
         """
         Check if the tool call block so far has been an empty string
@@ -553,18 +561,22 @@ class ModelResponseIterator:
         if "text" in content_block["delta"]:
             text = content_block["delta"]["text"]
         elif "partial_json" in content_block["delta"]:
-            tool_use = cast(
-                ChatCompletionToolCallChunk,
-                {
-                    "id": None,
-                    "type": "function",
-                    "function": {
-                        "name": None,
-                        "arguments": content_block["delta"]["partial_json"],
+            # Only emit tool calls if we're in a tool_use or server_tool_use block
+            # web_search_tool_result blocks also have input_json_delta but should not be treated as tool calls
+            # See: https://github.com/BerriAI/litellm/issues/17254
+            if self.current_content_block_type in ("tool_use", "server_tool_use"):
+                tool_use = cast(
+                    ChatCompletionToolCallChunk,
+                    {
+                        "id": None,
+                        "type": "function",
+                        "function": {
+                            "name": None,
+                            "arguments": content_block["delta"]["partial_json"],
+                        },
+                        "index": self.tool_index,
                     },
-                    "index": self.tool_index,
-                },
-            )
+                )
         elif "citation" in content_block["delta"]:
             provider_specific_fields["citation"] = content_block["delta"]["citation"]
         elif (
@@ -674,10 +686,15 @@ class ModelResponseIterator:
 
                 content_block_start = self.get_content_block_start(chunk=chunk)
                 self.content_blocks = []  # reset content blocks when new block starts
+                # Track current content block type for filtering deltas
+                self.current_content_block_type = content_block_start["content_block"]["type"]
                 if content_block_start["content_block"]["type"] == "text":
                     text = content_block_start["content_block"]["text"]
-                elif content_block_start["content_block"]["type"] == "tool_use":
+                elif content_block_start["content_block"]["type"] == "tool_use" or content_block_start["content_block"]["type"] == "server_tool_use":
                     self.tool_index += 1
+                    # Use empty string for arguments in content_block_start - actual arguments
+                    # come in subsequent content_block_delta chunks and get accumulated.
+                    # Using str(input) here would prepend '{}' causing invalid JSON accumulation.
                     tool_use = ChatCompletionToolCallChunk(
                         id=content_block_start["content_block"]["id"],
                         type="function",
@@ -692,18 +709,6 @@ class ModelResponseIterator:
                         caller_data = content_block_start["content_block"]["caller"]
                         if caller_data:
                             tool_use["caller"] = cast(Dict[str, Any], caller_data)  # type: ignore[typeddict-item]
-                elif content_block_start["content_block"]["type"] == "server_tool_use":
-                    # Handle server tool use (for tool search)
-                    self.tool_index += 1
-                    tool_use = ChatCompletionToolCallChunk(
-                        id=content_block_start["content_block"]["id"],
-                        type="function",
-                        function=ChatCompletionToolCallFunctionChunk(
-                            name=content_block_start["content_block"]["name"],
-                            arguments="",
-                        ),
-                        index=self.tool_index,
-                    )
                 elif (
                     content_block_start["content_block"]["type"] == "redacted_thinking"
                 ):
@@ -714,28 +719,46 @@ class ModelResponseIterator:
                         content_block_start=content_block_start,
                         provider_specific_fields=provider_specific_fields,
                     )
+                elif (
+                    content_block_start["content_block"]["type"]
+                    == "web_search_tool_result"
+                ):
+                    # Capture web_search_tool_result for multi-turn reconstruction
+                    # The full content comes in content_block_start, not in deltas
+                    # See: https://github.com/BerriAI/litellm/issues/17737
+                    self.web_search_results.append(
+                        content_block_start["content_block"]
+                    )
+                    provider_specific_fields["web_search_results"] = (
+                        self.web_search_results
+                    )
             elif type_chunk == "content_block_stop":
                 ContentBlockStop(**chunk)  # type: ignore
-                # check if tool call content block
-                is_empty = self.check_empty_tool_call_args()
-                if is_empty:
-                    tool_use = ChatCompletionToolCallChunk(
-                        id=None,  # type: ignore[typeddict-item]
-                        type="function",
-                        function=ChatCompletionToolCallFunctionChunk(
-                            name=None,  # type: ignore[typeddict-item]
-                            arguments="{}",
-                        ),
-                        index=self.tool_index,
-                    )
+                # check if tool call content block - only for tool_use and server_tool_use blocks
+                if self.current_content_block_type in ("tool_use", "server_tool_use"):
+                    is_empty = self.check_empty_tool_call_args()
+                    if is_empty:
+                        tool_use = ChatCompletionToolCallChunk(
+                            id=None,  # type: ignore[typeddict-item]
+                            type="function",
+                            function=ChatCompletionToolCallFunctionChunk(
+                                name=None,  # type: ignore[typeddict-item]
+                                arguments="{}",
+                            ),
+                            index=self.tool_index,
+                        )
                 # Reset response_format tool tracking when block stops
                 self.is_response_format_tool = False
+                # Reset current content block type
+                self.current_content_block_type = None
             elif type_chunk == "tool_result":
                 # Handle tool_result blocks (for tool search results with tool_reference)
                 # These are automatically handled by Anthropic API, we just pass them through
                 pass
             elif type_chunk == "message_delta":
-                finish_reason, usage = self._handle_message_delta(chunk)
+                finish_reason, usage, container = self._handle_message_delta(chunk)
+                if container:
+                    provider_specific_fields["container"] = container
             elif type_chunk == "message_start":
                 """
                 Anthropic
@@ -851,15 +874,15 @@ class ModelResponseIterator:
 
         return text, tool_use
 
-    def _handle_message_delta(self, chunk: dict) -> Tuple[str, Optional[Usage]]:
+    def _handle_message_delta(self, chunk: dict) -> Tuple[str, Optional[Usage], Optional[Dict[str, Any]]]:
         """
-        Handle message_delta event for finish_reason and usage.
+        Handle message_delta event for finish_reason, usage, and container.
 
         Args:
             chunk: The message_delta chunk
 
         Returns:
-            Tuple of (finish_reason, usage)
+            Tuple of (finish_reason, usage, container)
         """
         message_delta = MessageBlockDelta(**chunk)  # type: ignore
         finish_reason = map_finish_reason(
@@ -870,7 +893,8 @@ class ModelResponseIterator:
         if self.converted_response_format_tool:
             finish_reason = "stop"
         usage = self._handle_usage(anthropic_usage_chunk=message_delta["usage"])
-        return finish_reason, usage
+        container = message_delta["delta"].get("container")
+        return finish_reason, usage, container
 
     def _handle_accumulated_json_chunk(
         self, data_str: str
@@ -1033,9 +1057,12 @@ class ModelResponseIterator:
         str_line = chunk
         if isinstance(chunk, bytes):  # Handle binary data
             str_line = chunk.decode("utf-8")  # Convert bytes to string
-            index = str_line.find("data:")
-            if index != -1:
-                str_line = str_line[index:]
+
+        # Extract the data line from SSE format
+        # SSE events can be: "event: X\ndata: {...}\n\n" or just "data: {...}\n\n"
+        index = str_line.find("data:")
+        if index != -1:
+            str_line = str_line[index:]
 
         if str_line.startswith("data:"):
             data_json = json.loads(str_line[5:])

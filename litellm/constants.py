@@ -54,6 +54,9 @@ MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = int(
 SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD = int(
     os.getenv("SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD", 1000)
 )  # Minimum number of requests to consider "reasonable traffic". Used for single-deployment cooldown logic.
+DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS = int(
+    os.getenv("DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS", 5)
+)  # Minimum number of requests before applying error rate cooldown. Prevents cooldown from triggering on first failure.
 
 DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET", 0)
@@ -150,6 +153,7 @@ REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_spend_update_buffer"
 REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_team_spend_update_buffer"
 REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_org_spend_update_buffer"
 REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_end_user_spend_update_buffer"
+REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_agent_spend_update_buffer"
 REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_tag_spend_update_buffer"
 MAX_REDIS_BUFFER_DEQUEUE_COUNT = int(os.getenv("MAX_REDIS_BUFFER_DEQUEUE_COUNT", 100))
 MAX_SIZE_IN_MEMORY_QUEUE = int(os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", 2000))
@@ -309,6 +313,8 @@ DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE = os.getenv(
     "DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE", "streaming.chunk.yield"
 )
 
+EMAIL_BUDGET_ALERT_TTL = int(os.getenv("EMAIL_BUDGET_ALERT_TTL", 24 * 60 * 60))  # 24 hours in seconds
+EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE = float(os.getenv("EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE", 0.8))  # 80% of max budget
 ############### LLM Provider Constants ###############
 ### ANTHROPIC CONSTANTS ###
 ANTHROPIC_SKILLS_API_BETA_VERSION = "skills-2025-10-02"
@@ -550,6 +556,11 @@ openai_compatible_endpoints: List = [
     "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "https://api.moonshot.ai/v1",
     "https://api.publicai.co/v1",
+    "https://api.synthetic.new/openai/v1",
+    "https://api.stima.tech/v1",
+    "https://nano-gpt.com/api/v1",
+    "https://api.poe.com/v1",
+    "https://llm.chutes.ai/v1/",
     "https://api.v0.dev/v1",
     "https://api.morphllm.com/v1",
     "https://api.lambda.ai/v1",
@@ -593,12 +604,16 @@ openai_compatible_providers: List = [
     "novita",
     "meta_llama",
     "publicai",  # PublicAI - JSON-configured provider
+    "synthetic",  # Synthetic - JSON-configured provider
+    "apertis",  # Apertis - JSON-configured provider
+    "nano-gpt",  # Nano-GPT - JSON-configured provider
+    "poe",  # Poe - JSON-configured provider
+    "chutes",  # Chutes - JSON-configured provider
     "featherless_ai",
     "nscale",
     "nebius",
     "dashscope",
     "moonshot",
-    "publicai",
     "v0",
     "helicone",
     "morph",
@@ -624,6 +639,11 @@ openai_text_completion_compatible_providers: List = (
         "dashscope",
         "moonshot",
         "publicai",
+        "synthetic",
+        "apertis",
+        "nano-gpt",
+        "poe",
+        "chutes",
         "v0",
         "lambda_ai",
         "hyperbolic",
@@ -886,6 +906,7 @@ BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "qwen2",
     "twelvelabs",
     "openai",
+    "stability",
 ]
 
 BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[
@@ -1179,6 +1200,8 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES = [
     "public_agent_groups",
     "public_model_groups",
     "public_model_groups_links",
+    "cost_discount_config",
+    "cost_margin_config",
 ]
 SPECIAL_LITELLM_AUTH_TOKEN = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(
