@@ -903,3 +903,121 @@ def test_convert_to_model_response_object_with_thinking_content():
     resp: ModelResponse = convert_to_model_response_object(**args)
     assert resp is not None
     assert resp.choices[0].message.reasoning_content is not None
+
+
+def test_convert_to_model_response_object_with_deepseek_cache_tokens():
+    """
+    Test that convert_to_model_response_object correctly passes DeepSeek
+    prompt_cache_hit_tokens and prompt_cache_miss_tokens to populate
+    prompt_tokens_details.
+
+    Fixes issue #16009 where prompt_tokens_details was null for DeepSeek.
+    """
+    response_object = {
+        "id": "chatcmpl-deepseek-123",
+        "object": "chat.completion",
+        "created": 1728933352,
+        "model": "deepseek-chat",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello! How can I assist you today?",
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 10,
+            "total_tokens": 110,
+            "prompt_cache_hit_tokens": 80,
+            "prompt_cache_miss_tokens": 20,
+        },
+    }
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(),
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        hidden_params=None,
+        _response_headers=None,
+        convert_tool_call_to_json_mode=False,
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert result.id == "chatcmpl-deepseek-123"
+
+    # Verify usage fields
+    assert result.usage.prompt_tokens == 100
+    assert result.usage.completion_tokens == 10
+    assert result.usage.total_tokens == 110
+
+    # Verify DeepSeek cache tokens are preserved
+    assert result.usage.prompt_cache_hit_tokens == 80
+    assert result.usage.prompt_cache_miss_tokens == 20
+
+    # Verify prompt_tokens_details is populated from prompt_cache_hit_tokens
+    assert result.usage.prompt_tokens_details is not None
+    assert result.usage.prompt_tokens_details.cached_tokens == 80
+
+    # Verify internal cache tracking
+    assert result.usage._cache_read_input_tokens == 80
+
+
+def test_convert_to_streaming_response_with_deepseek_cache_tokens():
+    """
+    Test that convert_to_streaming_response correctly passes DeepSeek
+    prompt_cache_hit_tokens and prompt_cache_miss_tokens.
+
+    This tests the streaming response path which previously dropped these fields.
+    Fixes issue #16009.
+    """
+    from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+        convert_to_streaming_response,
+    )
+
+    response_object = {
+        "id": "chatcmpl-deepseek-stream-123",
+        "object": "chat.completion.chunk",
+        "created": 1728933352,
+        "model": "deepseek-chat",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello!",
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 50,
+            "completion_tokens": 5,
+            "total_tokens": 55,
+            "prompt_cache_hit_tokens": 40,
+            "prompt_cache_miss_tokens": 10,
+        },
+    }
+
+    # Get the streaming response (it's a generator)
+    streaming_gen = convert_to_streaming_response(response_object=response_object)
+    result = next(streaming_gen)
+
+    # Verify usage fields are present
+    assert result.usage is not None
+    assert result.usage.prompt_tokens == 50
+    assert result.usage.completion_tokens == 5
+    assert result.usage.total_tokens == 55
+
+    # Verify DeepSeek cache tokens are preserved
+    assert result.usage.prompt_cache_hit_tokens == 40
+    assert result.usage.prompt_cache_miss_tokens == 10
+
+    # Verify prompt_tokens_details is populated
+    assert result.usage.prompt_tokens_details is not None
+    assert result.usage.prompt_tokens_details.cached_tokens == 40
