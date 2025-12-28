@@ -417,3 +417,31 @@ def test_get_llm_provider_use_proxy_arg_true_with_direct_args():
     assert provider == "litellm_proxy"
     assert key == arg_api_key  # Should use the argument key
     assert base == arg_api_base # Should use the argument base
+
+
+def test_get_llm_provider_codestral_chat_endpoint():
+    """
+    Tests that codestral.mistral.ai/v1/chat/completions endpoint is correctly
+    routed to the 'codestral' provider.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/18464
+    """
+    model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
+        model="some-model",
+        api_base="https://codestral.mistral.ai/v1/chat/completions",
+    )
+    assert custom_llm_provider == "codestral"
+
+
+def test_get_llm_provider_codestral_fim_endpoint():
+    """
+    Tests that codestral.mistral.ai/v1/fim/completions endpoint is correctly
+    routed to the 'text-completion-codestral' provider for FIM (Fill-In-Middle).
+
+    Regression test for https://github.com/BerriAI/litellm/issues/18464
+    """
+    model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
+        model="some-model",
+        api_base="https://codestral.mistral.ai/v1/fim/completions",
+    )
+    assert custom_llm_provider == "text-completion-codestral"
