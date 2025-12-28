@@ -249,6 +249,30 @@
             "/v1/images/generations"
         ]
     },
+    "aiml/google/imagen-4.0-ultra-generate-001": {
+        "litellm_provider": "aiml",
+        "metadata": {
+            "notes": "Imagen 4.0 Ultra Generate API - Photorealistic image generation with precise text rendering"
+        },
+        "mode": "image_generation",
+        "output_cost_per_image": 0.063,
+        "source": "https://docs.aimlapi.com/api-references/image-models/google/imagen-4-ultra-generate",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "aiml/google/nano-banana-pro": {
+        "litellm_provider": "aiml",
+        "metadata": {
+            "notes": "Gemini 3 Pro Image (Nano Banana Pro) - Advanced text-to-image generation with reasoning and 4K resolution support"
+        },
+        "mode": "image_generation",
+        "output_cost_per_image": 0.1575,
+        "source": "https://docs.aimlapi.com/api-references/image-models/google/gemini-3-pro-image-preview",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
     "amazon.nova-canvas-v1:0": {
         "litellm_provider": "bedrock",
         "max_input_tokens": 2600,
