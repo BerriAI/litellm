@@ -10943,13 +10943,13 @@
         "supports_tool_choice": true
     },
     "fireworks_ai/accounts/fireworks/models/deepseek-v3p2": {
-        "input_cost_per_token": 1.2e-06,
+        "input_cost_per_token": 5.6e-07,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 163840,
         "max_output_tokens": 163840,
         "max_tokens": 163840,
         "mode": "chat",
-        "output_cost_per_token": 1.2e-06,
+        "output_cost_per_token": 1.68e-06,
         "source": "https://fireworks.ai/models/fireworks/deepseek-v3p2",
         "supports_function_calling": true,
         "supports_reasoning": true,
