@@ -28,6 +28,49 @@ class _ProxyDBLogger(CustomLogger):
             kwargs, response_obj, start_time, end_time
         )
 
+    async def async_post_call_success_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+    ):
+        """Persist spend logs after proxy guardrails mutate metadata."""
+
+        if ProxyUpdateSpend.should_store_proxy_response_in_spend_logs() is not True:
+            return
+
+        logging_obj = data.get("litellm_logging_obj", None)
+        if logging_obj is None or not hasattr(logging_obj, "model_call_details"):
+            verbose_proxy_logger.debug(
+                "async_post_call_success_hook: missing logging_obj or model_call_details"
+            )
+            return
+
+        kwargs = logging_obj.model_call_details
+
+        metadata = data.get("metadata") or data.get("litellm_metadata")
+        if isinstance(metadata, dict):
+            kwargs["metadata"] = metadata
+            litellm_params = kwargs.get("litellm_params", {}) or {}
+            litellm_params["metadata"] = metadata
+            kwargs["litellm_params"] = litellm_params
+
+            guardrail_info = metadata.get("standard_logging_guardrail_information")
+            if guardrail_info is not None:
+                sl_object = kwargs.get("standard_logging_object")
+                if isinstance(sl_object, dict):
+                    sl_object["guardrail_information"] = guardrail_info
+
+        start_time = getattr(logging_obj, "start_time")
+        end_time = kwargs.get("end_time")
+
+        await self._write_proxy_response_spend_log(
+            kwargs=kwargs,
+            completion_response=response,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
     async def async_post_call_failure_hook(
         self,
         request_data: dict,
@@ -168,18 +211,22 @@ class _ProxyDBLogger(CustomLogger):
                     end_user_id=end_user_id,
                 ):
                     ## UPDATE DATABASE
-                    await proxy_logging_obj.db_spend_update_writer.update_database(
-                        token=user_api_key,
-                        response_cost=response_cost,
-                        user_id=user_id,
-                        end_user_id=end_user_id,
-                        team_id=team_id,
-                        kwargs=kwargs,
-                        completion_response=completion_response,
-                        start_time=start_time,
-                        end_time=end_time,
-                        org_id=org_id,
-                    )
+                    if (
+                        ProxyUpdateSpend.should_store_proxy_response_in_spend_logs()
+                        is not True
+                    ):
+                        await proxy_logging_obj.db_spend_update_writer.update_database(
+                            token=user_api_key,
+                            response_cost=response_cost,
+                            user_id=user_id,
+                            end_user_id=end_user_id,
+                            team_id=team_id,
+                            kwargs=kwargs,
+                            completion_response=completion_response,
+                            start_time=start_time,
+                            end_time=end_time,
+                            org_id=org_id,
+                        )
 
                     # update cache
                     asyncio.create_task(
@@ -253,6 +300,65 @@ class _ProxyDBLogger(CustomLogger):
         if general_settings.get("disable_error_logs") is True:
             return False
         return
+
+    @log_db_metrics
+    async def _write_proxy_response_spend_log(
+        self,
+        *,
+        kwargs: dict,
+        completion_response: Any,
+        start_time,
+        end_time,
+    ) -> None:
+        from litellm.proxy.proxy_server import proxy_logging_obj
+
+        metadata = get_litellm_metadata_from_kwargs(kwargs=kwargs)
+        user_id = cast(Optional[str], metadata.get("user_api_key_user_id", None))
+        team_id = cast(Optional[str], metadata.get("user_api_key_team_id", None))
+        org_id = cast(Optional[str], metadata.get("user_api_key_org_id", None))
+        user_api_key = metadata.get("user_api_key", None)
+        end_user_id = get_end_user_id_for_cost_tracking(
+            kwargs.get("litellm_params", {}) or {}
+        )
+
+        sl_object: Optional[StandardLoggingPayload] = kwargs.get(
+            "standard_logging_object", None
+        )
+        response_cost = (
+            sl_object.get("response_cost", None)
+            if sl_object is not None
+            else kwargs.get("response_cost", None)
+        )
+
+        if kwargs.get("cache_hit", False) is True:
+            response_cost = 0.0
+
+        if response_cost is None:
+            verbose_proxy_logger.debug(
+                "async_post_call_success_hook: missing response_cost, skipping db write"
+            )
+            return
+
+        if not _should_track_cost_callback(
+            user_api_key=user_api_key,
+            user_id=user_id,
+            team_id=team_id,
+            end_user_id=end_user_id,
+        ):
+            return
+
+        await proxy_logging_obj.db_spend_update_writer.update_database(
+            token=user_api_key,
+            response_cost=response_cost,
+            user_id=user_id,
+            end_user_id=end_user_id,
+            team_id=team_id,
+            kwargs=kwargs,
+            completion_response=completion_response,
+            start_time=start_time,
+            end_time=end_time,
+            org_id=org_id,
+        )
 
 
 def _should_track_cost_callback(

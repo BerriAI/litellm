@@ -1321,11 +1321,28 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
 
 def cost_tracking():
     global prisma_client
-    if prisma_client is not None:
-        litellm.logging_callback_manager.add_litellm_callback(_ProxyDBLogger())
-        litellm.logging_callback_manager.add_litellm_async_success_callback(
-            _ProxyDBLogger()
+    if prisma_client is None:
+        return
+
+    from litellm.proxy.utils import ProxyUpdateSpend
+
+    store_proxy_response = (
+        ProxyUpdateSpend.should_store_proxy_response_in_spend_logs()
+    )
+    disable_spend = ProxyUpdateSpend.disable_spend_updates()
+
+    if store_proxy_response is None and not disable_spend:
+        verbose_proxy_logger.warning(
+            "general_settings.spend_logs_store_proxy_response is not set. "
+            "Current default logs the upstream LLM response; this will change in a future release. "
+            "Set it to True to store the proxy-mutated response or False to keep current behavior."
         )
+
+    proxy_db_logger = _ProxyDBLogger()
+    litellm.logging_callback_manager.add_litellm_callback(proxy_db_logger)
+    litellm.logging_callback_manager.add_litellm_async_success_callback(
+        proxy_db_logger
+    )
 
 
 async def update_cache(  # noqa: PLR0915
