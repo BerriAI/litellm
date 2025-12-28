@@ -135,6 +135,7 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _parse_content_for_reasoning,
+    _strip_leading_thinking_tags_from_content,
 )
 from litellm.litellm_core_utils.redact_messages import (
     LiteLLMLoggingObject,

@@ -1059,6 +1059,83 @@ def test_parse_content_for_reasoning(content, expected_reasoning, expected_conte
 
 
 @pytest.mark.parametrize(
+    "content, expected",
+    [
+        (None, None),
+        ("", ""),
+        # Test stripping <think> tag
+        ("<think>Hello world", "Hello world"),
+        ("<think>\nHello world", "Hello world"),
+        ("<think>\n\nHello world", "Hello world"),
+        # Test stripping <thinking> tag
+        ("<thinking>Hello world", "Hello world"),
+        ("<thinking>\nHello world", "Hello world"),
+        # Test stripping <budget:thinking> tag
+        ("<budget:thinking>Hello world", "Hello world"),
+        ("<budget:thinking>\nHello world", "Hello world"),
+        # Test stripping closing tags
+        ("</think>Hello world", "Hello world"),
+        ("</thinking>Hello world", "Hello world"),
+        ("</budget:thinking>Hello world", "Hello world"),
+        # Content without thinking tags should be unchanged
+        ("Hello world", "Hello world"),
+        ("Regular content with <think> in middle", "Regular content with <think> in middle"),
+    ],
+)
+def test_strip_leading_thinking_tags_from_content(content, expected):
+    """Test that leading thinking tags are stripped from content.
+
+    This addresses issue #16451 where Together AI + DeepSeek returns
+    reasoning_content separately but leaves <think> tag in content.
+    """
+    assert litellm.utils._strip_leading_thinking_tags_from_content(content) == expected
+
+
+def test_extract_reasoning_content_with_together_ai_format():
+    """Test _extract_reasoning_content handles Together AI format.
+
+    Together AI with DeepSeek returns reasoning_content separately but
+    also leaves a <think> tag in the content field. This test verifies
+    the fix for issue #16451.
+    """
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _extract_reasoning_content,
+    )
+
+    # Simulate Together AI response format for DeepSeek v3.1
+    message = {
+        "role": "assistant",
+        "reasoning_content": "Let me think about a whale joke...",
+        "content": "<think>\nWhy don't whales get lost? Because they always remember to spout their location!",
+    }
+
+    reasoning, content = _extract_reasoning_content(message)
+
+    assert reasoning == "Let me think about a whale joke..."
+    assert content == "Why don't whales get lost? Because they always remember to spout their location!"
+    # Verify <think> tag was stripped
+    assert not content.startswith("<think>")
+
+
+def test_extract_reasoning_content_with_reasoning_field():
+    """Test _extract_reasoning_content handles 'reasoning' field format."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _extract_reasoning_content,
+    )
+
+    message = {
+        "role": "assistant",
+        "reasoning": "Thinking process here",
+        "content": "<thinking>\nActual response here",
+    }
+
+    reasoning, content = _extract_reasoning_content(message)
+
+    assert reasoning == "Thinking process here"
+    assert content == "Actual response here"
+
+
+@pytest.mark.parametrize(
     "model, expected_bool",
     [
         ("vertex_ai/gemini-1.5-pro", True),
