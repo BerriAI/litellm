@@ -3475,7 +3475,7 @@ jobs:
       - run:
           name: Install Playwright Browsers
           command: |
-            npx playwright install
+            cd ui/litellm-dashboard && npx playwright install
 
       - run:
           name: Build Docker image
