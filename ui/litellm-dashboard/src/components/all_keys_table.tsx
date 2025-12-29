@@ -1,23 +1,39 @@
 "use client";
-import React, { useEffect, useState } from "react";
-import { ColumnDef, ColumnResizeMode, ColumnResizeDirection } from "@tanstack/react-table";
-import { Select, SelectItem } from "@tremor/react";
-import { Button } from "@tremor/react";
-import KeyInfoView from "./templates/key_info_view";
-import { Tooltip } from "antd";
-import { Team, KeyResponse } from "./key_team_helpers/key_list";
-import FilterComponent from "./molecules/filter";
-import { FilterOption } from "./molecules/filter";
-import { Organization, userListCall } from "./networking";
-import { useFilterLogic } from "./key_team_helpers/filter_logic";
 import { Setter } from "@/types";
-import { updateExistingKeys } from "@/utils/dataUtils";
-import { flexRender, getCoreRowModel, getSortedRowModel, SortingState, useReactTable } from "@tanstack/react-table";
-import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell, Icon } from "@tremor/react";
-import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
-import { Badge, Text } from "@tremor/react";
+import { formatNumberWithCommas, updateExistingKeys } from "@/utils/dataUtils";
+import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, SwitchVerticalIcon } from "@heroicons/react/outline";
+import {
+  ColumnDef,
+  ColumnResizeDirection,
+  ColumnResizeMode,
+  flexRender,
+  getCoreRowModel,
+  getSortedRowModel,
+  SortingState,
+  useReactTable,
+} from "@tanstack/react-table";
+import {
+  Badge,
+  Button,
+  Icon,
+  Select,
+  SelectItem,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
+  Text,
+} from "@tremor/react";
+import { Tooltip } from "antd";
+import React, { useEffect, useState } from "react";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { useFilterLogic } from "./key_team_helpers/filter_logic";
+import { KeyResponse, Team } from "./key_team_helpers/key_list";
+import FilterComponent, { FilterOption } from "./molecules/filter";
+import { Organization } from "./networking";
+import KeyInfoView from "./templates/key_info_view";
 
 interface AllKeysTableProps {
   keys: KeyResponse[];
@@ -124,7 +140,6 @@ export function AllKeysTable({
   setAccessToken,
 }: AllKeysTableProps) {
   const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
-  const [userList, setUserList] = useState<UserResponse[]>([]);
   const [columnResizeMode, setColumnResizeMode] = React.useState<ColumnResizeMode>("onChange");
   const [columnResizeDirection, setColumnResizeDirection] = React.useState<ColumnResizeDirection>("ltr");
   const [sorting, setSorting] = React.useState<SortingState>(() => {
@@ -154,17 +169,6 @@ export function AllKeysTable({
       organizations,
       accessToken,
     });
-
-  useEffect(() => {
-    if (accessToken) {
-      const user_IDs = keys.map((key) => key.user_id).filter((id) => id !== null);
-      const fetchUserList = async () => {
-        const userListData = await userListCall(accessToken, user_IDs, 1, 100);
-        setUserList(userListData.users);
-      };
-      fetchUserList();
-    }
-  }, [accessToken, keys]);
 
   // Add a useEffect to call refresh when a key is created
   useEffect(() => {
@@ -269,18 +273,19 @@ export function AllKeysTable({
     },
     {
       id: "user_email",
-      accessorKey: "user_id",
+      accessorKey: "user",
       header: "User Email",
       size: 160,
       cell: (info) => {
-        const userId = info.getValue() as string;
-        const user = userList.find((u) => u.user_id === userId);
-        return user?.user_email ? (
-          <Tooltip title={user?.user_email}>
-            <span>{user?.user_email.slice(0, 20)}...</span>
+        const user = info.getValue() as any;
+        const value = user?.user_email;
+        const width = info.cell.column.getSize();
+        return (
+          <Tooltip title={value}>
+            <span className={`font-mono text-xs truncate block`} style={{ maxWidth: width, overflow: "hidden" }}>
+              {value ?? "-"}
+            </span>
           </Tooltip>
-        ) : (
-          "-"
         );
       },
     },
