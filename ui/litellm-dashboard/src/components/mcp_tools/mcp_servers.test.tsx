@@ -32,7 +32,7 @@ const createQueryClient = () =>
 
 describe("MCPServers", () => {
   const defaultProps = {
-    accessToken: "test-token",
+    accessToken: "123",
     userRole: "Admin",
     userID: "admin-user-id",
   };
@@ -120,6 +120,7 @@ describe("MCPServers", () => {
     expect(getByText("test-server-2")).toBeInTheDocument();
 
     // Verify the API was called
-    expect(networking.fetchMCPServers).toHaveBeenCalledWith("test-token");
+    // Note: useMCPServers uses useAuthorized() internally, which returns "123" from global mock
+    expect(networking.fetchMCPServers).toHaveBeenCalledWith("123");
   });
 });

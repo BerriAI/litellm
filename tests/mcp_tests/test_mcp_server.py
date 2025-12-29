@@ -812,10 +812,19 @@ async def test_get_tools_from_mcp_servers():
                 return_value=["server1_id", "server2_id"]
             )
             mock_manager_2.get_mcp_server_by_id = lambda server_id: mock_server_1 if server_id == "server1_id" else mock_server_2
+            async def mock_get_tools_side_effect(
+                server,
+                mcp_auth_header=None,
+                extra_headers=None,
+                add_prefix=False,
+                raw_headers=None,
+            ):
+                if server.server_id == "server1_id":
+                    return [mock_tool_1]
+                return [mock_tool_2]
+
             mock_manager_2._get_tools_from_server = AsyncMock(
-                side_effect=lambda server, mcp_auth_header=None, extra_headers=None, add_prefix=False: (
-                    [mock_tool_1] if server.server_id == "server1_id" else [mock_tool_2]
-                )
+                side_effect=mock_get_tools_side_effect
             )
 
         with patch(
@@ -1693,6 +1702,7 @@ async def test_get_tools_for_single_server():
             server=mock_server,
             mcp_auth_header="Bearer test_token",
             add_prefix=False,
+            raw_headers=None,
         )
 
         # Verify the result

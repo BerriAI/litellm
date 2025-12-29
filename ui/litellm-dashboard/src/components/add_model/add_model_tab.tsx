@@ -15,6 +15,7 @@ import {
   tagListCall,
 } from "../networking";
 import { Providers, providerLogoMap } from "../provider_info_helpers";
+import { ProviderLogo } from "../molecules/models/ProviderLogo";
 import { Tag } from "../tag_management/types";
 import AddAutoRouterTab from "./add_auto_router_tab";
 import { TEST_MODES } from "./add_model_modes";
@@ -191,6 +192,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                     labelAlign="left"
                   >
                     <AntdSelect
+                      virtual={false}
                       showSearch
                       loading={isProviderMetadataLoading}
                       placeholder={isProviderMetadataLoading ? "Loading providers..." : "Select a provider"}
@@ -220,34 +222,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                         return (
                           <AntdSelect.Option key={providerKey} value={providerKey} data-label={displayName}>
                             <div className="flex items-center space-x-2">
-                              {logoSrc ? (
-                                <img
-                                  src={logoSrc}
-                                  alt={`${displayName} logo`}
-                                  className="w-5 h-5"
-                                  onError={(e) => {
-                                    const target = e.currentTarget as HTMLImageElement;
-                                    const parent = target.parentElement;
-                                    if (!parent || !parent.contains(target)) {
-                                      return;
-                                    }
-
-                                    try {
-                                      const fallbackDiv = document.createElement("div");
-                                      fallbackDiv.className =
-                                        "w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs";
-                                      fallbackDiv.textContent = displayName.charAt(0);
-                                      parent.replaceChild(fallbackDiv, target);
-                                    } catch (error) {
-                                      console.error("Failed to replace provider logo fallback:", error);
-                                    }
-                                  }}
-                                />
-                              ) : (
-                                <div className="w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs">
-                                  {displayName.charAt(0)}
-                                </div>
-                              )}
+                              <ProviderLogo provider={providerKey} className="w-5 h-5" />
                               <span>{displayName}</span>
                             </div>
                           </AntdSelect.Option>
