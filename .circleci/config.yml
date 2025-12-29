@@ -3422,8 +3422,8 @@ jobs:
               --coverage.reportsDirectory=coverage/html
 
   e2e_ui_testing:
-    machine:
-      image: mcr.microsoft.com/playwright:v1.57.0-noble
+    docker:
+      - image: mcr.microsoft.com/playwright:v1.57.0-noble
     resource_class: xlarge
     working_directory: ~/project
     steps:
@@ -3431,12 +3431,6 @@ jobs:
       - setup_google_dns
       - attach_workspace:
           at: ~/project
-      - run:
-          name: Upgrade Docker to v24.x (API 1.44+)
-          command: |
-            curl -fsSL https://get.docker.com | sh
-            sudo usermod -aG docker $USER
-            docker version
       - run:
           name: Install Python 3.9
           command: |
