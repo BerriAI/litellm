@@ -65,6 +65,7 @@ from litellm.responses.streaming_iterator import (
     ResponsesAPIStreamingIterator,
     SyncResponsesAPIStreamingIterator,
 )
+from litellm.types.utils import CallTypes
 from litellm.types.containers.main import (
     ContainerFileListResponse,
     ContainerListResponse,
@@ -2060,6 +2061,13 @@ class BaseLLMHTTPHandler:
         if extra_body:
             data.update(extra_body)
 
+        request_context: Dict[str, Any] = {"input": input}
+        try:
+            request_context.update(response_api_optional_request_params)
+        except Exception:
+            pass
+        request_context["litellm_params"] = dict(litellm_params)
+
         ## LOGGING
         logging_obj.pre_call(
             input=input,
@@ -2097,6 +2105,8 @@ class BaseLLMHTTPHandler:
                         responses_api_provider_config=responses_api_provider_config,
                         litellm_metadata=litellm_metadata,
                         custom_llm_provider=custom_llm_provider,
+                        request_data=request_context,
+                        call_type=CallTypes.responses.value,
                     )
 
                 return SyncResponsesAPIStreamingIterator(
@@ -2106,6 +2116,8 @@ class BaseLLMHTTPHandler:
                     responses_api_provider_config=responses_api_provider_config,
                     litellm_metadata=litellm_metadata,
                     custom_llm_provider=custom_llm_provider,
+                    request_data=request_context,
+                    call_type=CallTypes.responses.value,
                 )
             else:
                 # For non-streaming requests
@@ -2189,6 +2201,13 @@ class BaseLLMHTTPHandler:
         if extra_body:
             data.update(extra_body)
 
+        request_context: Dict[str, Any] = {"input": input}
+        try:
+            request_context.update(response_api_optional_request_params)
+        except Exception:
+            pass
+        request_context["litellm_params"] = dict(litellm_params)
+
         ## LOGGING
         logging_obj.pre_call(
             input=input,
@@ -2227,6 +2246,8 @@ class BaseLLMHTTPHandler:
                         responses_api_provider_config=responses_api_provider_config,
                         litellm_metadata=litellm_metadata,
                         custom_llm_provider=custom_llm_provider,
+                        request_data=request_context,
+                        call_type=CallTypes.responses.value,
                     )
 
                 # Return the streaming iterator
@@ -2237,6 +2258,8 @@ class BaseLLMHTTPHandler:
                     responses_api_provider_config=responses_api_provider_config,
                     litellm_metadata=litellm_metadata,
                     custom_llm_provider=custom_llm_provider,
+                    request_data=request_context,
+                    call_type=CallTypes.responses.value,
                 )
             else:
                 # For non-streaming, proceed as before
