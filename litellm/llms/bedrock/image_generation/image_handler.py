@@ -12,6 +12,9 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.llms.bedrock.image_generation.amazon_nova_canvas_transformation import (
     AmazonNovaCanvasConfig,
 )
+from litellm.llms.bedrock.image_generation.amazon_stability1_transformation import (
+    AmazonStabilityConfig,
+)
 from litellm.llms.bedrock.image_generation.amazon_stability3_transformation import (
     AmazonStability3Config,
 )
@@ -50,7 +53,7 @@ BedrockImageConfigClass = Union[
     type[AmazonTitanImageGenerationConfig],
     type[AmazonNovaCanvasConfig],
     type[AmazonStability3Config],
-    type[litellm.AmazonStabilityConfig],
+    type[AmazonStabilityConfig],
 ]
 
 

@@ -816,6 +816,37 @@ async def test_update_service_account_works_with_team_id():
 
 
 @pytest.mark.asyncio
+async def test_prepare_key_update_data_duration_never_expires():
+    """Test that duration="-1" sets expires to None (never expires)."""
+    from litellm.proxy._types import UpdateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        prepare_key_update_data,
+    )
+
+    # Mock existing key
+    existing_key = LiteLLM_VerificationToken(
+        token="test-token",
+        key_alias="test-key",
+        models=["gpt-3.5-turbo"],
+        user_id="test-user",
+        team_id=None,
+        auto_rotate=False,
+        rotation_interval=None,
+        metadata={},
+    )
+
+    # Test setting duration to "-1" (never expires)
+    update_request = UpdateKeyRequest(key="test-token", duration="-1")
+
+    result = await prepare_key_update_data(
+        data=update_request, existing_key_row=existing_key
+    )
+
+    # Verify that expires is set to None
+    assert result["expires"] is None
+
+
+@pytest.mark.asyncio
 async def test_validate_team_id_used_in_service_account_request_requires_team_id():
     """
     Test that validate_team_id_used_in_service_account_request raises HTTPException

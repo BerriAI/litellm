@@ -1465,9 +1465,10 @@ class ProxyLogging:
         error_type: Optional[ProxyErrorTypes] = None,
         route: Optional[str] = None,
         traceback_str: Optional[str] = None,
-    ):
+    ) -> Optional[HTTPException]:
         """
         Allows users to raise custom exceptions/log when a call fails, without having to deal with parsing Request body.
+        Callbacks can return or raise HTTPException to transform error responses sent to clients.
 
         Covers:
         1. /chat/completions
@@ -1481,6 +1482,10 @@ class ProxyLogging:
             - error_type: Optional[ProxyErrorTypes] - The error type.
             - route: Optional[str] - The route.
             - traceback_str: Optional[str] - The traceback string, sometimes upstream endpoints might need to send the upstream traceback. In which case we use this
+
+        Returns:
+            - Optional[HTTPException]: If any callback returns or raises an HTTPException, the first one found is returned.
+                                      Otherwise, returns None and the original exception is used.
         """
 
         ### ALERTING ###
@@ -1522,6 +1527,9 @@ class ProxyLogging:
                 original_exception=original_exception,
             )
 
+        # Track the first HTTPException returned or raised by any callback
+        transformed_exception: Optional[HTTPException] = None
+
         for callback in litellm.callbacks:
             try:
                 _callback: Optional[CustomLogger] = None
@@ -1532,19 +1540,31 @@ class ProxyLogging:
                 else:
                     _callback = callback  # type: ignore
                 if _callback is not None and isinstance(_callback, CustomLogger):
-                    asyncio.create_task(
-                        _callback.async_post_call_failure_hook(
+                    try:
+                        hook_result = await _callback.async_post_call_failure_hook(
                             request_data=request_data,
                             user_api_key_dict=user_api_key_dict,
                             original_exception=original_exception,
                             traceback_str=traceback_str,
                         )
-                    )
+                        # If callback returned an HTTPException, use it (first one wins)
+                        if isinstance(hook_result, HTTPException) and transformed_exception is None:
+                            transformed_exception = hook_result
+                    except HTTPException as e:
+                        # If callback raised an HTTPException, use it (first one wins)
+                        if transformed_exception is None:
+                            transformed_exception = e
+                    except Exception as e:
+                        # Log non-HTTPException errors from callbacks but don't break the flow
+                        verbose_proxy_logger.exception(
+                            f"[Non-Blocking] Error in async_post_call_failure_hook callback: {e}"
+                        )
             except Exception as e:
                 verbose_proxy_logger.exception(
-                    f"[Non-Blocking] Error in post_call_failure_hook: {e}"
+                    f"[Non-Blocking] Error setting up post_call_failure_hook callback: {e}"
                 )
-        return
+
+        return transformed_exception
 
     def _is_proxy_only_llm_api_error(
         self,

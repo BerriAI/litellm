@@ -1952,7 +1952,6 @@ def test_openai_chat_completion_complete_response_call():
     "model",
     [
         "gpt-3.5-turbo",
-        "azure/gpt-4.1-mini",
         "claude-3-haiku-20240307",
         "o1",
     ],

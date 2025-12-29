@@ -738,7 +738,19 @@ async def test_users_in_team_budget():
     """
     get_user = f"krrish_{time.time()}@berri.ai"
     async with aiohttp.ClientSession() as session:
-        # Create user first to avoid user_id collision when creating team
+        # IMPORTANT: Create team first, then create user with team_id.
+        # This order is critical for the test to work correctly:
+        # - When a user is created with team_id, the API key gets team_id set from the start
+        # - This ensures spend tracking and budget enforcement work correctly
+        # - If we create the user first (without team_id) and then add them to a team,
+        #   the key's team_id remains None, breaking team budget tracking
+        # DO NOT change this order - it's testing the intended flow where keys are
+        # associated with teams at creation time.
+        team = await new_team(session, 0, user_id=None)
+        print(f"[DEBUG] Created team: {team['team_id']}")
+        print(f"[DEBUG] Full team data: {team}")
+        
+        # Create user with team_id so the key is associated with the team from the start
         key_gen = await new_user(
             session,
             0,
@@ -746,26 +758,61 @@ async def test_users_in_team_budget():
             budget=10,
             budget_duration="5s",
             models=["fake-openai-endpoint"],
+            team_id=team["team_id"],
         )
         key = key_gen["key"]
-        
-        # Create team with the user (user already exists, so it will just add them)
-        team = await new_team(session, 0, user_id=get_user)
-        print("New team=", team)
+        print(f"[DEBUG] Created user '{get_user}' with key: {key}")
+        print(f"[DEBUG] User budget: 10, budget_duration: 5s")
+        print(f"[DEBUG] Key team_id: {team['team_id']}")
+
+        # Check user info BEFORE updating member budget
+        user_info_before = await get_user_info(session, get_user, call_user="sk-1234")
+        print(f"[DEBUG] User info BEFORE update_member:")
+        print(f"  - User budget: {user_info_before.get('max_budget')}")
+        print(f"  - User spend: {user_info_before.get('spend')}")
+        if user_info_before.get("teams"):
+            for team_info in user_info_before["teams"]:
+                if team_info.get("team_id") == team["team_id"]:
+                    print(f"  - Team memberships: {team_info.get('team_memberships')}")
 
         # update user to have budget = 0.0000001
-        await update_member(
+        update_result = await update_member(
             session, 0, team_id=team["team_id"], user_id=get_user, max_budget=0.0000001
         )
+        print(f"[DEBUG] Updated member budget to 0.0000001")
+        print(f"[DEBUG] Update result: {update_result}")
+
+        # Check user info AFTER updating member budget
+        user_info_after = await get_user_info(session, get_user, call_user="sk-1234")
+        print(f"[DEBUG] User info AFTER update_member:")
+        print(f"  - User budget: {user_info_after.get('max_budget')}")
+        print(f"  - User spend: {user_info_after.get('spend')}")
+        if user_info_after.get("teams"):
+            for team_info in user_info_after["teams"]:
+                if team_info.get("team_id") == team["team_id"]:
+                    print(f"  - Team: {team_info.get('team_id')}")
+                    for membership in team_info.get('team_memberships', []):
+                        print(f"    - Membership: {membership}")
+                        if 'litellm_budget_table' in membership:
+                            budget_table = membership['litellm_budget_table']
+                            print(f"    - Max budget: {budget_table.get('max_budget')}")
+                            print(f"    - Current spend: {membership.get('spend', 0)}")
 
         # Call 1
+        print("\n[DEBUG] ===== Making Call 1 =====")
         result = await chat_completion(session, key, model="fake-openai-endpoint")
-        print("Call 1 passed", result)
+        print(f"[DEBUG] Call 1 PASSED (expected)")
+        print(f"[DEBUG] Call 1 result: {result}")
+        # Extract cost from result if available
+        if isinstance(result, dict):
+            usage = result.get('usage', {})
+            print(f"[DEBUG] Call 1 usage: {usage}")
 
         # Wait for spend to be committed to database before checking budget
         # Spend updates are queued asynchronously and committed periodically (every minute),
         # so we need to wait for the spend from Call 1 to be persisted
         # Note: Even if cost is 0 (model has no pricing), we wait to ensure the update queue is processed
+        print("\n[DEBUG] ===== Waiting for spend to be committed =====")
         print("Waiting for team member spend to be committed to database...")
         print("Note: Spend updates are flushed periodically, this may take up to 60 seconds...")
         spend_updated = await wait_for_team_member_spend_update(
@@ -775,16 +822,111 @@ async def test_users_in_team_budget():
             print("[WARNING] Team member spend not updated in time, but continuing test...")
             print("This may indicate the spend update queue hasn't been flushed yet.")
 
+        # Check user info BEFORE Call 2
+        user_info_before_call2 = await get_user_info(session, get_user, call_user="sk-1234")
+        print(f"\n[DEBUG] User info BEFORE Call 2:")
+        print(f"  - User budget: {user_info_before_call2.get('max_budget')}")
+        print(f"  - User spend: {user_info_before_call2.get('spend')}")
+        if user_info_before_call2.get("teams"):
+            for team_info in user_info_before_call2["teams"]:
+                if team_info.get("team_id") == team["team_id"]:
+                    print(f"  - Team: {team_info.get('team_id')}")
+                    for membership in team_info.get('team_memberships', []):
+                        if 'litellm_budget_table' in membership:
+                            budget_table = membership['litellm_budget_table']
+                            current_spend = membership.get('spend', 0)
+                            max_budget = budget_table.get('max_budget')
+                            print(f"    - Max budget in team: {max_budget}")
+                            print(f"    - Current spend in team: {current_spend}")
+                            print(f"    - Budget remaining: {max_budget - current_spend}")
+                            print(f"    - Should fail?: {current_spend >= max_budget}")
+
         # Call 2
+        print("\n[DEBUG] ===== Making Call 2 =====")
+        call2_failed = False
+        call2_error = None
+        call2_status = None
         try:
-            await chat_completion(session, key, model="fake-openai-endpoint")
-            pytest.fail(
-                "Call 2 should have failed. The user crossed their budget within their team"
-            )
+            # Capture the response to check status code
+            url = "http://localhost:4000/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+            }
+            data = {
+                "model": "fake-openai-endpoint",
+                "messages": [
+                    {"role": "system", "content": "You are a helpful assistant."},
+                    {"role": "user", "content": "Hello!"},
+                ],
+            }
+            async with session.post(url, headers=headers, json=data) as response:
+                call2_status = response.status
+                response_text = await response.text()
+                print(f"[DEBUG] Call 2 status code: {call2_status}")
+                print(f"[DEBUG] Call 2 response: {response_text}")
+                
+                if call2_status != 200:
+                    call2_failed = True
+                    call2_error = f"Status {call2_status}: {response_text}"
+                    raise Exception(call2_error)
+                else:
+                    # Call succeeded when it should have failed
+                    print(f"[ERROR] Call 2 PASSED when it should have FAILED!")
+                    print(f"[ERROR] Response was 200 OK")
+                    
         except Exception as e:
-            print("got exception, this is expected")
-            print(e)
-            assert "Budget has been exceeded" in str(e)
+            if call2_failed:
+                print(f"[DEBUG] Call 2 FAILED (expected): {e}")
+                print(f"[DEBUG] Checking if error message indicates budget exceeded...")
+            else:
+                call2_error = str(e)
+                print(f"[DEBUG] Call 2 raised exception: {e}")
+
+        # Check user info AFTER Call 2
+        user_info_after_call2 = await get_user_info(session, get_user, call_user="sk-1234")
+        print(f"\n[DEBUG] User info AFTER Call 2:")
+        print(f"  - User budget: {user_info_after_call2.get('max_budget')}")
+        print(f"  - User spend: {user_info_after_call2.get('spend')}")
+        if user_info_after_call2.get("teams"):
+            for team_info in user_info_after_call2["teams"]:
+                if team_info.get("team_id") == team["team_id"]:
+                    print(f"  - Team: {team_info.get('team_id')}")
+                    for membership in team_info.get('team_memberships', []):
+                        if 'litellm_budget_table' in membership:
+                            budget_table = membership['litellm_budget_table']
+                            print(f"    - Max budget: {budget_table.get('max_budget')}")
+                            print(f"    - Current spend: {membership.get('spend', 0)}")
+
+        # Assert Call 2 failed
+        if not call2_failed:
+            error_msg = (
+                f"\n[FAILURE] Call 2 should have failed but it passed!\n"
+                f"Expected: Budget enforcement to block the call\n"
+                f"Actual: Call returned status {call2_status}\n"
+                f"Team member budget: 0.0000001\n"
+                f"User budget: {user_info_before_call2.get('max_budget')}\n"
+                f"User spend before call: {user_info_before_call2.get('spend')}\n"
+            )
+            # Add team member info if available
+            if user_info_before_call2.get("teams"):
+                for team_info in user_info_before_call2["teams"]:
+                    if team_info.get("team_id") == team["team_id"]:
+                        for membership in team_info.get('team_memberships', []):
+                            if 'litellm_budget_table' in membership:
+                                error_msg += f"Team member spend before call: {membership.get('spend', 0)}\n"
+                                error_msg += f"Team member max budget: {membership['litellm_budget_table'].get('max_budget')}\n"
+            pytest.fail(error_msg)
+        
+        # Check the error message contains budget exceeded
+        if call2_error and "Budget has been exceeded" not in call2_error:
+            pytest.fail(
+                f"Call 2 failed but not with expected error message.\n"
+                f"Expected error to contain: 'Budget has been exceeded'\n"
+                f"Actual error: {call2_error}"
+            )
+        
+        print("[DEBUG] Call 2 failed as expected with budget exceeded error")
 
         ## Check user info
         user_info = await get_user_info(session, get_user, call_user="sk-1234")
