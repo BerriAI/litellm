@@ -201,8 +201,12 @@ class NewRelicLogger(CustomLogger):
         - litellm_params.metadata.headers.traceparent (W3C Trace Context)
         - litellm_params.metadata.headers.newrelic (New Relic proprietary)
 
+        If no trace_id is found in headers, generates a random UUID for event grouping.
+
         Returns:
-            Tuple of (trace_id, span_id) - both Optional[str] (None if not available)
+            Tuple of (trace_id, span_id):
+            - trace_id: str or None (str if found/generated, None only on error)
+            - span_id: str or None (only present if found in headers)
         """
         try:
             litellm_params = kwargs.get("litellm_params", {})
@@ -226,11 +230,12 @@ class NewRelicLogger(CustomLogger):
                 pass
 
             if not trace_id:
+                # Generate a random trace_id for grouping AI monitoring events
+                trace_id = str(uuid.uuid4())
                 verbose_logger.debug(
-                    "New Relic trace_id not available from distributed tracing headers. "
-                    "AI monitoring events will be recorded without trace correlation."
+                    f"New Relic trace_id not available from distributed tracing headers. "
+                    f"Generated trace_id={trace_id} for AI monitoring event grouping."
                 )
-                return None, None
 
             return trace_id, span_id
 
@@ -612,10 +617,13 @@ class NewRelicLogger(CustomLogger):
         import pprint
         verbose_logger.info(f"newrelic._process_success called, kwargs=\n{pprint.pformat(kwargs)}, \nresponse_obj=\n{pprint.pformat(response_obj)}")
 
-        # Get trace context (may be empty string if not available)
+        # Get trace context
         trace_id, span_id = self._get_trace_context(kwargs)
+        if not trace_id:
+            verbose_logger.debug("No trace_id available, skipping New Relic event recording.")
+            return
 
-        verbose_logger.info(f"Trace ID: {trace_id or '(none)'}, Span ID: {span_id or '(none)'}")
+        verbose_logger.info(f"Trace ID: {trace_id}, Span ID: {span_id or '(none)'}")
 
         # Generate unique request ID for this request (used as Summary event id)
         request_id = str(uuid.uuid4())
