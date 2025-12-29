@@ -9,9 +9,18 @@ Environment Variables:
     NEW_RELIC_APP_NAME: Your application name (required)
     NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED: Whether to record message content (optional, default: false)
 
+Configuration:
+    Message logging can be controlled via:
+    1. turn_off_message_logging parameter (takes priority) - pass via callback initialization
+    2. NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED env var (fallback)
+
 Usage:
     import litellm
     litellm.callbacks = ["newrelic"]
+
+    # Or with explicit configuration:
+    from litellm.integrations.newrelic import NewRelicLogger
+    litellm.callbacks = [NewRelicLogger(turn_off_message_logging=True)]
 
     # Ensure New Relic agent is initialized (use newrelic-admin or initialize manually)
     # newrelic-admin run-program python your_app.py
@@ -47,14 +56,27 @@ class NewRelicLogger(CustomLogger):
     """
 
     def __init__(self, **kwargs):
+        # Check if turn_off_message_logging was explicitly provided before calling super()
+        turn_off_message_logging_provided = "turn_off_message_logging" in kwargs
+
+        # CustomLogger.__init__ will set self.turn_off_message_logging from kwargs
         super().__init__(**kwargs)
 
         # Check for required environment variables
         self.license_key = os.getenv("NEW_RELIC_LICENSE_KEY")
         self.app_name = os.getenv("NEW_RELIC_APP_NAME")
-        self.record_content = self._parse_bool_env(
-            "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED", False
-        )
+
+        # Determine if message content should be recorded
+        # Priority: turn_off_message_logging param > env var
+        # Note: turn_off_message_logging=True means record_content=False (inverted logic)
+        if turn_off_message_logging_provided:
+            # Use the parameter value set by CustomLogger.__init__ (inverted for record_content)
+            self.record_content = not self.turn_off_message_logging
+        else:
+            # Fall back to env var when parameter not provided
+            self.record_content = self._parse_bool_env(
+                "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED", False
+            )
 
         # Validate configuration
         if not self.license_key or not self.app_name:
