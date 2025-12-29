@@ -3223,46 +3223,17 @@ def _validate_sort_params(
     return order_by
 
 
-async def _list_key_helper(
-    prisma_client: PrismaClient,
-    page: int,
-    size: int,
+def _build_key_filter_conditions(
     user_id: Optional[str],
     team_id: Optional[str],
     organization_id: Optional[str],
     key_alias: Optional[str],
     key_hash: Optional[str],
-    exclude_team_id: Optional[str] = None,
-    return_full_object: bool = False,
-    admin_team_ids: Optional[
-        List[str]
-    ] = None,  # New parameter for teams where user is admin
-    include_created_by_keys: bool = False,
-    sort_by: Optional[str] = None,
-    sort_order: str = "desc",
-    expand: Optional[List[str]] = None,
-) -> KeyListResponseObject:
-    """
-    Helper function to list keys
-    Args:
-        page: int
-        size: int
-        user_id: Optional[str]
-        team_id: Optional[str]
-        key_alias: Optional[str]
-        exclude_team_id: Optional[str] # exclude a specific team_id
-        return_full_object: bool # when true, will return UserAPIKeyAuth objects instead of just the token
-        admin_team_ids: Optional[List[str]] # list of team IDs where the user is an admin
-
-    Returns:
-        KeyListResponseObject
-        {
-            "keys": List[str] or List[UserAPIKeyAuth],  # Updated to reflect possible return types
-            "total_count": int,
-            "current_page": int,
-            "total_pages": int,
-        }
-    """
+    exclude_team_id: Optional[str],
+    admin_team_ids: Optional[List[str]],
+    include_created_by_keys: bool,
+) -> Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]]:
+    """Build filter conditions for key listing."""
     # Prepare filter conditions
     where: Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]] = {}
     where.update(_get_condition_to_filter_out_ui_session_tokens())
@@ -3303,6 +3274,59 @@ async def _list_key_helper(
         where.update(or_conditions[0])
 
     verbose_proxy_logger.debug(f"Filter conditions: {where}")
+    return where
+
+
+async def _list_key_helper(
+    prisma_client: PrismaClient,
+    page: int,
+    size: int,
+    user_id: Optional[str],
+    team_id: Optional[str],
+    organization_id: Optional[str],
+    key_alias: Optional[str],
+    key_hash: Optional[str],
+    exclude_team_id: Optional[str] = None,
+    return_full_object: bool = False,
+    admin_team_ids: Optional[
+        List[str]
+    ] = None,  # New parameter for teams where user is admin
+    include_created_by_keys: bool = False,
+    sort_by: Optional[str] = None,
+    sort_order: str = "desc",
+    expand: Optional[List[str]] = None,
+) -> KeyListResponseObject:
+    """
+    Helper function to list keys
+    Args:
+        page: int
+        size: int
+        user_id: Optional[str]
+        team_id: Optional[str]
+        key_alias: Optional[str]
+        exclude_team_id: Optional[str] # exclude a specific team_id
+        return_full_object: bool # when true, will return UserAPIKeyAuth objects instead of just the token
+        admin_team_ids: Optional[List[str]] # list of team IDs where the user is an admin
+
+    Returns:
+        KeyListResponseObject
+        {
+            "keys": List[str] or List[UserAPIKeyAuth],  # Updated to reflect possible return types
+            "total_count": int,
+            "current_page": int,
+            "total_pages": int,
+        }
+    """
+    where = _build_key_filter_conditions(
+        user_id=user_id,
+        team_id=team_id,
+        organization_id=organization_id,
+        key_alias=key_alias,
+        key_hash=key_hash,
+        exclude_team_id=exclude_team_id,
+        admin_team_ids=admin_team_ids,
+        include_created_by_keys=include_created_by_keys,
+    )
 
     # Calculate skip for pagination
     skip = (page - 1) * size
