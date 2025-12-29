@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
-import { keyListCall, Member, Organization } from "../networking";
 import { Setter } from "@/types";
+import { useEffect, useState } from "react";
+import { keyListCall, Member, Organization } from "../networking";
 
 export interface Team {
   team_id: string;
@@ -106,6 +106,7 @@ interface UseKeyListProps {
   selectedKeyAlias: string | null;
   accessToken: string;
   createClicked: boolean;
+  expand?: string[];
 }
 
 interface PaginationData {
@@ -129,6 +130,7 @@ const useKeyList = ({
   selectedKeyAlias,
   accessToken,
   createClicked,
+  expand = [],
 }: UseKeyListProps): UseKeyListReturn => {
   const [keyData, setKeyData] = useState<KeyListResponse>({
     keys: [],
@@ -151,7 +153,19 @@ const useKeyList = ({
       const page = typeof params.page === "number" ? params.page : 1;
       const pageSize = typeof params.pageSize === "number" ? params.pageSize : 100;
 
-      const data = await keyListCall(accessToken, null, null, null, null, null, page, pageSize);
+      const data = await keyListCall(
+        accessToken,
+        null,
+        null,
+        null,
+        null,
+        null,
+        page,
+        pageSize,
+        null,
+        null,
+        expand.join(","),
+      );
       console.log("data", data);
       setKeyData(data);
       setError(null);

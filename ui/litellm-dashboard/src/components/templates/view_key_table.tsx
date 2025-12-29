@@ -1,17 +1,14 @@
 "use client";
-import React, { useEffect, useState } from "react";
-import { keyDeleteCall, Organization } from "../networking";
-import { add } from "date-fns";
-import { regenerateKeyCall } from "../networking";
-import { Grid, Col, Button, Text, Title, TextInput } from "@tremor/react";
-import { fetchAvailableModelsForTeamOrKey } from "../key_team_helpers/fetch_available_models_team_key";
-import { Modal, Form, InputNumber } from "antd";
-import { CopyToClipboard } from "react-copy-to-clipboard";
-import useKeyList from "../key_team_helpers/key_list";
-import { KeyResponse } from "../key_team_helpers/key_list";
-import { AllKeysTable } from "../all_keys_table";
-import { Team } from "../key_team_helpers/key_list";
 import { Setter } from "@/types";
+import { Button, Col, Grid, Text, TextInput, Title } from "@tremor/react";
+import { Form, InputNumber, Modal } from "antd";
+import { add } from "date-fns";
+import React, { useEffect, useState } from "react";
+import { CopyToClipboard } from "react-copy-to-clipboard";
+import { AllKeysTable } from "../all_keys_table";
+import { fetchAvailableModelsForTeamOrKey } from "../key_team_helpers/fetch_available_models_team_key";
+import useKeyList, { KeyResponse, Team } from "../key_team_helpers/key_list";
+import { keyDeleteCall, Organization, regenerateKeyCall } from "../networking";
 
 import NotificationManager from "../molecules/notifications_manager";
 
@@ -125,6 +122,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     selectedKeyAlias,
     accessToken: accessToken || "",
     createClicked,
+    expand: ["user"],
   });
 
   const handlePageChange = (newPage: number) => {
