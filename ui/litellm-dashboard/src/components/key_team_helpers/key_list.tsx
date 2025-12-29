@@ -91,6 +91,10 @@ export interface KeyResponse {
   last_rotation_at?: string;
   key_rotation_at?: string;
   next_rotation_at?: string;
+  user?: {
+    user_id: string;
+    user_email: string;
+  };
 }
 
 interface KeyListResponse {
