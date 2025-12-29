@@ -3433,14 +3433,10 @@ jobs:
       - run:
           name: Install Python 3.9
           command: |
-            curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
             bash miniconda.sh -b -p $HOME/miniconda
             export PATH="$HOME/miniconda/bin:$PATH"
-            conda init bash
-            source ~/.bashrc
-            conda create -n myenv python=3.9 -y
-            conda activate myenv
-            python --version
+            $HOME/miniconda/bin/conda create -y -n myenv python=3.9
+            conda run -n myenv python --version
       - run:
           name: Install Dependencies
           command: |
