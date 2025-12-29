@@ -1451,10 +1451,9 @@ class JWTAuthManager:
         )
 
         # check if user is proxy admin
-        if user_object and user_object.user_role == LitellmUserRoles.PROXY_ADMIN:
-            is_proxy_admin = True
-        else:
-            is_proxy_admin = False
+        is_proxy_admin = bool(
+            user_object and user_object.user_role == LitellmUserRoles.PROXY_ADMIN
+        )
 
         return JWTAuthBuilderResult(
             is_proxy_admin=is_proxy_admin,
