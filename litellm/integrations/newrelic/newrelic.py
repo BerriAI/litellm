@@ -7,20 +7,28 @@ LLM requests, responses, and usage metrics.
 Environment Variables:
     NEW_RELIC_LICENSE_KEY: Your New Relic license key (required)
     NEW_RELIC_APP_NAME: Your application name (required)
-    NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED: Whether to record message content (optional, default: false)
+    NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED: Whether to record message content (optional, default: true)
 
 Configuration:
     Message logging can be controlled via:
-    1. turn_off_message_logging parameter (takes priority) - pass via callback initialization
+    1. turn_off_message_logging parameter (takes priority) - pass via callback initialization or config YAML
     2. NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED env var (fallback)
 
-Usage:
+    Default behavior: Messages ARE recorded unless explicitly disabled
+
+Usage - Python SDK:
     import litellm
     litellm.callbacks = ["newrelic"]
 
     # Or with explicit configuration:
     from litellm.integrations.newrelic import NewRelicLogger
     litellm.callbacks = [NewRelicLogger(turn_off_message_logging=True)]
+
+Usage - Proxy Server (config.yaml):
+    litellm_settings:
+      callbacks: ["newrelic"]
+      newrelic_params:
+        turn_off_message_logging: true
 
     # Ensure New Relic agent is initialized (use newrelic-admin or initialize manually)
     # newrelic-admin run-program python your_app.py
@@ -33,8 +41,10 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.integrations.newrelic import NewRelicInitParams
 from litellm.types.utils import ModelResponse, Message
 
 import newrelic.agent
@@ -56,7 +66,13 @@ class NewRelicLogger(CustomLogger):
     """
 
     def __init__(self, **kwargs):
-        # Check if turn_off_message_logging was explicitly provided before calling super()
+        #########################################################
+        # Handle newrelic_params set as litellm.newrelic_params
+        #########################################################
+        dict_newrelic_params = self._get_newrelic_params()
+        kwargs.update(dict_newrelic_params)
+
+        # Check if turn_off_message_logging was explicitly provided (after merging params)
         turn_off_message_logging_provided = "turn_off_message_logging" in kwargs
 
         # CustomLogger.__init__ will set self.turn_off_message_logging from kwargs
@@ -69,13 +85,15 @@ class NewRelicLogger(CustomLogger):
         # Determine if message content should be recorded
         # Priority: turn_off_message_logging param > env var
         # Note: turn_off_message_logging=True means record_content=False (inverted logic)
+        # Default: Messages ARE recorded (record_content=True) unless explicitly disabled
         if turn_off_message_logging_provided:
             # Use the parameter value set by CustomLogger.__init__ (inverted for record_content)
             self.record_content = not self.turn_off_message_logging
         else:
             # Fall back to env var when parameter not provided
+            # Default to True to match Pydantic default (turn_off_message_logging=False)
             self.record_content = self._parse_bool_env(
-                "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED", False
+                "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED", True
             )
 
         # Validate configuration
@@ -102,6 +120,23 @@ class NewRelicLogger(CustomLogger):
                     "Integration will be disabled."
                 )
                 self.enabled = False
+
+    def _get_newrelic_params(self) -> Dict:
+        """
+        Get the newrelic_params from litellm.newrelic_params
+
+        These are params specific to initializing the NewRelicLogger e.g. turn_off_message_logging
+        """
+        dict_newrelic_params: Dict = {}
+        if litellm.newrelic_params is not None:
+            if isinstance(litellm.newrelic_params, NewRelicInitParams):
+                dict_newrelic_params = litellm.newrelic_params.model_dump()
+            elif isinstance(litellm.newrelic_params, Dict):
+                # only allow params that are of NewRelicInitParams
+                dict_newrelic_params = NewRelicInitParams(
+                    **litellm.newrelic_params
+                ).model_dump()
+        return dict_newrelic_params
 
     def _parse_bool_env(self, var_name: str, default: bool = False) -> bool:
         """Parse boolean environment variable. Accepts 'true' (case-insensitive) per spec."""
