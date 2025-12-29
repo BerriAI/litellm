@@ -994,7 +994,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             anthropic_messages = anthropic_messages_pt(
                 model=model,
                 messages=messages,
-                llm_provider="anthropic",
+                llm_provider=self.custom_llm_provider or "anthropic",
             )
         except Exception as e:
             raise AnthropicError(
