@@ -112,6 +112,7 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.Google_AI_Studio]: `${asset_logos_folder}google.svg`,
   [Providers.Hosted_Vllm]: `${asset_logos_folder}vllm.png`,
   [Providers.Infinity]: `${asset_logos_folder}infinity.png`,
+  [Providers.MiniMax]: `${asset_logos_folder}minimax.svg`,
   [Providers.MistralAI]: `${asset_logos_folder}mistral.svg`,
   [Providers.Ollama]: `${asset_logos_folder}ollama.svg`,
   [Providers.OpenAI]: `${asset_logos_folder}openai_small.svg`,
