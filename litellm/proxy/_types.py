@@ -2152,6 +2152,7 @@ class UserAPIKeyAuth(
     user_rpm_limit: Optional[int] = None
     user_email: Optional[str] = None
     request_route: Optional[str] = None
+    user: Optional[Any] = None  # Expanded user object when expand=user is used
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

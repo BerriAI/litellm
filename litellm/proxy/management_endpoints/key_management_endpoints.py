@@ -3020,9 +3020,13 @@ async def list_keys(
         description="Column to sort by (e.g. 'user_id', 'created_at', 'spend')",
     ),
     sort_order: str = Query(default="desc", description="Sort order ('asc' or 'desc')"),
+    expand: Optional[List[str]] = Query(None, description="Expand related objects (e.g. 'user')"),
 ) -> KeyListResponseObject:
     """
     List all keys for a given user / team / organization.
+
+    Parameters:
+        expand: Optional[List[str]] - Expand related objects (e.g. 'user' to include user information)
 
     Returns:
         {
@@ -3031,6 +3035,9 @@ async def list_keys(
             "current_page": int,
             "total_pages": int,
         }
+
+    When expand includes "user", each key object will include a "user" field with the associated user object.
+    Note: When expand=user is specified, full key objects are returned regardless of the return_full_object parameter.
     """
     try:
         from litellm.proxy.proxy_server import prisma_client
@@ -3080,6 +3087,7 @@ async def list_keys(
             include_created_by_keys=include_created_by_keys,
             sort_by=sort_by,
             sort_order=sort_order,
+            expand=expand,
         )
 
         verbose_proxy_logger.debug("Successfully prepared response")
@@ -3232,6 +3240,7 @@ async def _list_key_helper(
     include_created_by_keys: bool = False,
     sort_by: Optional[str] = None,
     sort_order: str = "desc",
+    expand: Optional[List[str]] = None,
 ) -> KeyListResponseObject:
     """
     Helper function to list keys
@@ -3334,13 +3343,28 @@ async def _list_key_helper(
     # Calculate total pages
     total_pages = -(-total_count // size)  # Ceiling division
 
+    # Fetch user information if expand includes "user"
+    user_map = {}
+    if expand and "user" in expand:
+        user_ids = [key.user_id for key in keys if key.user_id]
+        if user_ids:
+            users = await prisma_client.db.litellm_usertable.find_many(
+                where={"user_id": {"in": list(set(user_ids))}}  # Remove duplicates
+            )
+            user_map = {user.user_id: user for user in users}
+
     # Prepare response
     key_list: List[Union[str, UserAPIKeyAuth]] = []
     for key in keys:
         key_dict = key.dict()
         # Attach object_permission if object_permission_id is set
         key_dict = await attach_object_permission_to_dict(key_dict, prisma_client)
-        if return_full_object is True:
+
+        # Include user information if expand includes "user"
+        if expand and "user" in expand and key.user_id and key.user_id in user_map:
+            key_dict["user"] = user_map[key.user_id].dict()
+
+        if return_full_object is True or (expand and "user" in expand):
             key_list.append(UserAPIKeyAuth(**key_dict))  # Return full key object
         else:
             _token = key_dict.get("token")
