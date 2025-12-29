@@ -93,6 +93,10 @@ const mockKey: KeyResponse = {
   user_tpm_limit: 1000,
   user_rpm_limit: 100,
   user_email: "user@example.com",
+  user: {
+    user_email: "user@example.com",
+    user_id: "user-1",
+  },
 };
 
 const mockTeam: Team = {
@@ -188,5 +192,37 @@ it("should display key information correctly", async () => {
     expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
     expect(screen.getByText("Test Team")).toBeInTheDocument();
     expect(screen.getByText("5.5000")).toBeInTheDocument();
+  });
+});
+
+it("should display user email correctly", async () => {
+  const mockProps = {
+    keys: [mockKey],
+    setKeys: vi.fn(),
+    isLoading: false,
+    pagination: {
+      currentPage: 1,
+      totalPages: 1,
+      totalCount: 1,
+    },
+    onPageChange: vi.fn(),
+    pageSize: 50,
+    teams: [mockTeam],
+    selectedTeam: null,
+    setSelectedTeam: vi.fn(),
+    selectedKeyAlias: null,
+    setSelectedKeyAlias: vi.fn(),
+    accessToken: "test-token",
+    userID: "user-1",
+    userRole: "admin",
+    organizations: [mockOrganization],
+    setCurrentOrg: vi.fn(),
+    premiumUser: false,
+  };
+
+  renderWithProviders(<AllKeysTable {...mockProps} />);
+
+  await waitFor(() => {
+    expect(screen.getByText("user@example.com")).toBeInTheDocument();
   });
 });
