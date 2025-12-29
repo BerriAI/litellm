@@ -191,20 +191,18 @@ class NewRelicLogger(CustomLogger):
 
     def _get_trace_context(self, kwargs: Dict) -> Tuple[Optional[str], Optional[str]]:
         """
-        Get current New Relic trace ID and span ID.
-        This integration runs asynchronously from the actual request, so we
-        cannot just use the New Relic agent to pull the current traceId and spanId.
+        Get current New Relic trace ID and span ID from distributed tracing headers.
 
-        For the traceID, we can look in the kwargs for litellm_params.metadata.headers.newrelic
-        or litellm_params.metadata.headers.traceparent. If either are set, we can pull the traceId
-        from those values.
+        This integration runs asynchronously from the actual request (via logging worker),
+        so we cannot use the New Relic agent to pull the current traceId and spanId.
+        Instead, we extract from request headers if available.
 
-        We do not have access to the SpanID for the method in the litellm server where the 
-        request to the LLM was being invoked. We may be able to pass that through later
-        by including litellm instrumentation with the New Relic agent.
+        For the trace ID, we look in kwargs for:
+        - litellm_params.metadata.headers.traceparent (W3C Trace Context)
+        - litellm_params.metadata.headers.newrelic (New Relic proprietary)
 
         Returns:
-            Tuple of (trace_id, None) or (None, None) if not available
+            Tuple of (trace_id, span_id) - both Optional[str] (None if not available)
         """
         try:
             litellm_params = kwargs.get("litellm_params", {})
@@ -228,9 +226,9 @@ class NewRelicLogger(CustomLogger):
                 pass
 
             if not trace_id:
-                verbose_logger.warning(
-                    "New Relic trace_id or span_id not available. "
-                    "Skipping New Relic event recording."
+                verbose_logger.debug(
+                    "New Relic trace_id not available from distributed tracing headers. "
+                    "AI monitoring events will be recorded without trace correlation."
                 )
                 return None, None
 
@@ -238,11 +236,11 @@ class NewRelicLogger(CustomLogger):
 
         except ImportError:
             verbose_logger.warning(
-                "New Relic Python agent not available. Skipping event recording."
+                "New Relic Python agent not available."
             )
             return None, None
-        except Exception:
-            verbose_logger.warning("Unable to get New Relic trace context.")
+        except Exception as e:
+            verbose_logger.warning(f"Unable to get New Relic trace context: {e}")
             return None, None
 
     def _extract_completion_id(self, kwargs: Dict, response_obj: ModelResponse) -> str:
@@ -459,7 +457,7 @@ class NewRelicLogger(CustomLogger):
     def _record_summary_event(
         self,
         request_id: str,
-        trace_id: str,
+        trace_id: Optional[str],
         span_id: Optional[str],
         request_model: str,
         response_model: str,
@@ -477,7 +475,6 @@ class NewRelicLogger(CustomLogger):
             event_data = {
                 "id": request_id,
                 "request_id": request_id,
-                "trace_id": trace_id,
                 "request.model": request_model,
                 "response.model": response_model,
                 "response.choices.finish_reason": finish_reason,
@@ -490,6 +487,8 @@ class NewRelicLogger(CustomLogger):
             }
 
             # Add optional attributes if present
+            if trace_id:
+                event_data["trace_id"] = trace_id
             if span_id:
                 event_data["span_id"] = span_id
 
@@ -521,7 +520,7 @@ class NewRelicLogger(CustomLogger):
         self,
         request_id: str,
         llm_response_id: str,
-        trace_id: str,
+        trace_id: Optional[str],
         span_id: Optional[str],
         messages: List[Dict[str, Any]]
     ):
@@ -530,8 +529,8 @@ class NewRelicLogger(CustomLogger):
         Args:
             request_id: Agent-generated UUID that links to Summary event's id
             llm_response_id: LLM's response ID (e.g., "chatcmpl-...") for message id format
-            trace_id: Trace ID for distributed tracing
-            span_id: Span ID for distributed tracing
+            trace_id: Trace ID for distributed tracing (None if not available)
+            span_id: Span ID for distributed tracing (None if not available)
             messages: List of message dicts to record
         """
         try:
@@ -543,7 +542,6 @@ class NewRelicLogger(CustomLogger):
                     "id": f"{llm_response_id}-{sequence}",
                     "request_id": request_id,
                     "completion_id": request_id,
-                    "trace_id": trace_id,
                     "role": message["role"],
                     "sequence": sequence,
                     "response.model": message["response.model"],
@@ -552,6 +550,12 @@ class NewRelicLogger(CustomLogger):
                     "token_count": 0
                 }
 
+                # Add trace context if available
+                if trace_id:
+                    event_data["trace_id"] = trace_id
+                if span_id:
+                    event_data["span_id"] = span_id
+
                 # Add content only if it was included in the message data
                 if "content" in message:
                     event_data["content"] = message["content"]
@@ -559,9 +563,6 @@ class NewRelicLogger(CustomLogger):
                 # Add is_response only if True (per spec, omit for request messages)
                 if message.get("is_response"):
                     event_data["is_response"] = True
-
-                if span_id:
-                    event_data["span_id"] = span_id
 
 
                 if app and app.enabled:
@@ -611,12 +612,10 @@ class NewRelicLogger(CustomLogger):
         import pprint
         verbose_logger.info(f"newrelic._process_success called, kwargs=\n{pprint.pformat(kwargs)}, \nresponse_obj=\n{pprint.pformat(response_obj)}")
 
-        # Get trace context
+        # Get trace context (may be empty string if not available)
         trace_id, span_id = self._get_trace_context(kwargs)
-        if not trace_id:
-            return
 
-        verbose_logger.info(f"Trace ID: {trace_id}, Span ID: {span_id}")
+        verbose_logger.info(f"Trace ID: {trace_id or '(none)'}, Span ID: {span_id or '(none)'}")
 
         # Generate unique request ID for this request (used as Summary event id)
         request_id = str(uuid.uuid4())
