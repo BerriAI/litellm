@@ -3515,7 +3515,7 @@ jobs:
       - run:
           name: Run Playwright Tests
           command: |
-            npx playwright test e2e_ui_tests/ --reporter=html --output=test-results
+            cd ui/litellm-dashboard && npm run e2e
           no_output_timeout: 120m
       - store_artifacts:
           path: test-results
