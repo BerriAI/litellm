@@ -3423,7 +3423,7 @@ jobs:
 
   e2e_ui_testing:
     machine:
-      image: ubuntu-2204:2023.10.1
+      image: mcr.microsoft.com/playwright:v1.57.0-noble
     resource_class: xlarge
     working_directory: ~/project
     steps:
