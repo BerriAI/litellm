@@ -3475,7 +3475,7 @@ jobs:
       - run:
           name: Install Playwright Browsers
           command: |
-            npx playwright install --with-deps
+            npx playwright install
       - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
