@@ -3431,13 +3431,6 @@ jobs:
       - attach_workspace:
           at: ~/project
       - run:
-          name: Install Python 3.9
-          command: |
-            bash miniconda.sh -b -p $HOME/miniconda
-            export PATH="$HOME/miniconda/bin:$PATH"
-            $HOME/miniconda/bin/conda create -y -n myenv python=3.9
-            conda run -n myenv python --version
-      - run:
           name: Install Dependencies
           command: |
             npm install -D @playwright/test
