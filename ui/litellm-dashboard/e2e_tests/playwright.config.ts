@@ -44,4 +44,5 @@ export default defineConfig({
   expect: {
     timeout: 10 * 1000,
   },
+  globalSetup: require.resolve("./globalSetup"),
 });
