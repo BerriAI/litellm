@@ -499,7 +499,6 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         Recursively fill nested dict/list structures based on the annotated model.
         """
         model_cls = VolcEngineResponsesAPIConfig._pick_model_class(annotation, value)
-        origin = get_origin(annotation)
         args = get_args(annotation)
 
         if isinstance(value, dict) and model_cls is not None:
