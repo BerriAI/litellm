@@ -103,3 +103,4 @@ scripts/test_vertex_ai_search.py
 LAZY_LOADING_IMPROVEMENTS.md
 **/test-results
 **/playwright-report
+**/*.storageState.json
