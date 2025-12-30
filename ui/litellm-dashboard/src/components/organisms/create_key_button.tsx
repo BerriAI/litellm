@@ -401,7 +401,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       console.log("key create Response:", response);
 
       // Add the data to the state in the parent component
-      // Also directly update the keys list in AllKeysTable without an API call
+      // Also directly update the keys list in VirtualKeysTable without an API call
       addKey(response);
 
       setApiKey(response["key"]);

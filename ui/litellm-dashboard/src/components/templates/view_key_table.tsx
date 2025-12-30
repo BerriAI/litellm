@@ -5,27 +5,10 @@ import { Form, InputNumber, Modal } from "antd";
 import { add } from "date-fns";
 import React, { useEffect, useState } from "react";
 import { CopyToClipboard } from "react-copy-to-clipboard";
-import { AllKeysTable } from "../all_keys_table";
-import { fetchAvailableModelsForTeamOrKey } from "../key_team_helpers/fetch_available_models_team_key";
+import { VirtualKeysTable } from "../VirtualKeysPage/VirtualKeysTable";
 import useKeyList, { KeyResponse, Team } from "../key_team_helpers/key_list";
-import { keyDeleteCall, Organization, regenerateKeyCall } from "../networking";
-
 import NotificationManager from "../molecules/notifications_manager";
-
-interface EditKeyModalProps {
-  visible: boolean;
-  onCancel: () => void;
-  token: any; // Assuming TeamType is a type representing your team object
-  onSubmit: (data: FormData) => void; // Assuming FormData is the type of data to be submitted
-}
-
-interface ModelLimitModalProps {
-  visible: boolean;
-  onCancel: () => void;
-  token: KeyResponse;
-  onSubmit: (updatedMetadata: any) => void;
-  accessToken: string;
-}
+import { keyDeleteCall, Organization, regenerateKeyCall } from "../networking";
 
 // Define the props type
 interface ViewKeyTableProps {
@@ -47,39 +30,6 @@ interface ViewKeyTableProps {
   setAccessToken?: (token: string) => void;
 }
 
-interface ItemData {
-  key_alias: string | null;
-  key_name: string;
-  spend: string;
-  max_budget: string | null;
-  models: string[];
-  tpm_limit: string | null;
-  rpm_limit: string | null;
-  token: string;
-  token_id: string | null;
-  id: number;
-  team_id: string;
-  metadata: any;
-  user_id: string | null;
-  expires: any;
-  budget_duration: string | null;
-  budget_reset_at: string | null;
-  // Add any other properties that exist in the item data
-}
-
-interface ModelLimits {
-  [key: string]: number; // Index signature allowing string keys
-}
-
-interface CombinedLimit {
-  tpm: number;
-  rpm: number;
-}
-
-interface CombinedLimits {
-  [key: string]: CombinedLimit; // Index signature allowing string keys
-}
-
 const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   userID,
   userRole,
@@ -98,24 +48,10 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   createClicked,
   setAccessToken,
 }) => {
-  const [isButtonClicked, setIsButtonClicked] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [keyToDelete, setKeyToDelete] = useState<string | null>(null);
   const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
-  const [selectedItem, setSelectedItem] = useState<KeyResponse | null>(null);
-  const [spendData, setSpendData] = useState<{ day: string; spend: number }[] | null>(null);
 
-  // NEW: Declare filter states for team and key alias.
-  const [teamFilter, setTeamFilter] = useState<string>(selectedTeam?.team_id || "");
-
-  // Keep the team filter in sync with the incoming prop.
-  useEffect(() => {
-    setTeamFilter(selectedTeam?.team_id || "");
-  }, [selectedTeam]);
-
-  // Build a memoized filters object for the backend call.
-
-  // Pass filters into the hook so the API call includes these query parameters.
   const { keys, isLoading, error, pagination, refresh, setKeys } = useKeyList({
     selectedTeam: selectedTeam || undefined,
     currentOrg,
@@ -129,20 +65,12 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     refresh({ page: newPage });
   };
 
-  const [editModalVisible, setEditModalVisible] = useState(false);
-  const [infoDialogVisible, setInfoDialogVisible] = useState(false);
   const [selectedToken, setSelectedToken] = useState<KeyResponse | null>(null);
-  const [userModels, setUserModels] = useState<string[]>([]);
-  const initialKnownTeamIDs: Set<string> = new Set();
-  const [modelLimitModalVisible, setModelLimitModalVisible] = useState(false);
   const [regenerateDialogVisible, setRegenerateDialogVisible] = useState(false);
   const [regeneratedKey, setRegeneratedKey] = useState<string | null>(null);
   const [regenerateFormData, setRegenerateFormData] = useState<any>(null);
   const [regenerateForm] = Form.useForm();
   const [newExpiryTime, setNewExpiryTime] = useState<string | null>(null);
-
-  const [knownTeamIDs, setKnownTeamIDs] = useState(initialKnownTeamIDs);
-  const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
 
   useEffect(() => {
     const calculateNewExpiryTime = (duration: string | undefined) => {
@@ -189,36 +117,6 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
     console.log("calculateNewExpiryTime:", newExpiryTime);
   }, [selectedToken, regenerateFormData?.duration]);
-
-  useEffect(() => {
-    const fetchUserModels = async () => {
-      try {
-        if (userID === null || userRole === null || accessToken === null) {
-          return;
-        }
-
-        const models = await fetchAvailableModelsForTeamOrKey(userID, userRole, accessToken);
-        if (models) {
-          setUserModels(models);
-        }
-      } catch (error) {
-        NotificationManager.error({ description: "Error fetching user models" });
-      }
-    };
-
-    fetchUserModels();
-  }, [accessToken, userID, userRole]);
-
-  useEffect(() => {
-    if (teams) {
-      const teamIDSet: Set<string> = new Set();
-      teams.forEach((team: any, index: number) => {
-        const team_obj: string = team.team_id;
-        teamIDSet.add(team_obj);
-      });
-      setKnownTeamIDs(teamIDSet);
-    }
-  }, [teams]);
 
   const confirmDelete = async () => {
     if (keyToDelete == null || keys == null) {
@@ -305,7 +203,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
   return (
     <div>
-      <AllKeysTable
+      <VirtualKeysTable
         keys={keys}
         setKeys={setKeys}
         isLoading={isLoading}
@@ -315,16 +213,11 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         teams={teams}
         selectedTeam={selectedTeam}
         setSelectedTeam={setSelectedTeam}
-        accessToken={accessToken}
-        userID={userID}
-        userRole={userRole}
         organizations={organizations}
         setCurrentOrg={setCurrentOrg}
         refresh={refresh}
         selectedKeyAlias={selectedKeyAlias}
         setSelectedKeyAlias={setSelectedKeyAlias}
-        premiumUser={premiumUser}
-        setAccessToken={setAccessToken}
       />
 
       {isDeleteModalOpen &&
