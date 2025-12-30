@@ -8,12 +8,11 @@ import { type CredentialItem } from "../networking";
 import { Providers } from "../provider_info_helpers";
 import AddAutoRouterTab from "./add_auto_router_tab";
 import AddModelForm from "./AddModelForm";
-import AdvancedSettings from "./advanced_settings";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 
 interface AddModelTabProps {
   form: FormInstance; // For the Add Model tab
-  handleOk: (values?: any) => void;
+  handleOk: (values?: any) => Promise<void>;
   selectedProvider: Providers;
   setSelectedProvider: (provider: Providers) => void;
   providerModels: string[];
