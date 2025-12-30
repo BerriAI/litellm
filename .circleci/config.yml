@@ -3422,14 +3422,32 @@ jobs:
               --coverage.reportsDirectory=coverage/html
 
   e2e_ui_testing:
-    docker:
-      - image: mcr.microsoft.com/playwright:v1.57.0-noble
+    machine:
+      image: ubuntu-2204:2023.10.1
     resource_class: xlarge
     working_directory: ~/project
     steps:
       - checkout
+      - setup_google_dns
       - attach_workspace:
           at: ~/project
+      - run:
+          name: Upgrade Docker to v24.x (API 1.44+)
+          command: |
+            curl -fsSL https://get.docker.com | sh
+            sudo usermod -aG docker $USER
+            docker version
+      - run:
+          name: Install Python 3.9
+          command: |
+            curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
+            bash miniconda.sh -b -p $HOME/miniconda
+            export PATH="$HOME/miniconda/bin:$PATH"
+            conda init bash
+            source ~/.bashrc
+            conda create -n myenv python=3.9 -y
+            conda activate myenv
+            python --version
       - run:
           name: Install Dependencies
           command: |
@@ -3457,8 +3475,7 @@ jobs:
       - run:
           name: Install Playwright Browsers
           command: |
-            cd ui/litellm-dashboard && npx playwright install
-
+            npx playwright install --with-deps
       - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
@@ -3497,7 +3514,10 @@ jobs:
       - run:
           name: Run Playwright Tests
           command: |
-            cd ui/litellm-dashboard && npx playwright test --config=e2e_tests/playwright.config.ts
+            npx playwright test \
+              --config ui/litellm-dashboard/e2e_tests/playwright.config.ts \
+              --reporter=html \
+              --output=test-results
           no_output_timeout: 120m
       - store_artifacts:
           path: test-results
