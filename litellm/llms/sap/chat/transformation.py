@@ -169,11 +169,6 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             params.remove("tool_choice")
         return params
 
-    def params_should_raise_error_for_model(self, model):
-        return {
-            "thinking_config": any([model.startswith("gpt"), model.startswith("o"), model.startswith("amazon")])
-        }
-
     def validate_environment(
         self,
         headers: dict,
@@ -212,19 +207,8 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         model_params = {
             k: v for k, v in optional_params.items() if k in supported_params
         }
-
-        for param, flag in self.params_should_raise_error_for_model(model).items():
-            if (param in model_params
-                    and flag
-                    and litellm.drop_params is False
-            ):
-                raise litellm.utils.UnsupportedParamsError(
-                        message=f"sap does not support parameters: ['{param}'], for model={model}. "
-                                "To drop these, set `litellm.drop_params=True`.",
-                        status_code=400,
-                    )
-
         model_version = optional_params.pop("model_version", "latest")
+
         template = []
         for message in messages:
             if message["role"] == "user":
@@ -251,6 +235,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             else:
                 response_format = validate_dict(response_format, ResponseFormat)
             response_format = {"response_format": response_format}
+
         model_params.pop("stream", False)
         stream_config = {}
         if "stream_options" in model_params:
@@ -258,8 +243,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             stream_config["chunk_size"] = stream_options.get("chunk_size", 100)
             if "delimiters" in stream_options:
                 stream_config["delimiters"] = stream_options.get("delimiters")
-        # else:
-        #     stream_config["enabled"] = False
+
         config = {
             "config": {
                 "modules": {
