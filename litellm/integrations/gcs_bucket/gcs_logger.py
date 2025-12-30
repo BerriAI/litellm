@@ -44,7 +44,8 @@ class ProductionGCSLogger(CustomLogger):
             correlation_id = data.get("correlation_id", str(uuid.uuid4()))
 
             if log_type == "success":
-                # Success logs: department/team/user/{date}_{correlation_id}.json
+                # Success logs: date={date}/department/team/user/{timestamp}_{correlation_id}.json
+                # Using hive-style partitioning for BigQuery cost optimization
                 user_data = data.get("user", {})
                 department = user_data.get("department") or "unknown_dept"
                 team = user_data.get("team_alias") or "unknown_team"
@@ -56,10 +57,11 @@ class ProductionGCSLogger(CustomLogger):
                 team = team.replace("/", "_").replace(" ", "_")
                 username = username.replace("/", "_").replace(" ", "_")
 
-                filename = f"{date}_{timestamp}_{correlation_id}.json"
-                gcs_path = f"success/{department}/{team}/{username}/{filename}"
+                filename = f"{timestamp}_{correlation_id}.json"
+                gcs_path = f"success/date={date}/{department}/{team}/{username}/{filename}"
             else:
-                # Error logs: model/{date}_{correlation_id}.json
+                # Error logs: date={date}/model/{timestamp}_{correlation_id}.json
+                # Using hive-style partitioning for BigQuery cost optimization
                 model_data = data.get("model", {})
                 model_name = (
                     model_data.get("requested")
@@ -71,7 +73,7 @@ class ProductionGCSLogger(CustomLogger):
                 model_name = model_name.replace("/", "_").replace(" ", "_")
 
                 filename = f"{timestamp}_{correlation_id}.json"
-                gcs_path = f"failure/{model_name}/{date}/{filename}"
+                gcs_path = f"failure/date={date}/{model_name}/{filename}"
 
             # Use async httpx to upload to GCS
             headers = await self.gcs_base.construct_request_headers(
@@ -104,6 +106,19 @@ class ProductionGCSLogger(CustomLogger):
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
         pass
 
+    def _get_session_id(self, kwargs, litellm_params, metadata) -> Optional[str]:
+        """
+        Extract session ID from request parameters.
+        Priority: litellm_session_id > metadata.session_id
+        """
+        if litellm_params.get("litellm_session_id"):
+            return str(litellm_params.get("litellm_session_id"))
+        if metadata.get("session_id"):
+            return str(metadata.get("session_id"))
+        if kwargs.get("litellm_session_id"):
+            return str(kwargs.get("litellm_session_id"))
+        return None
+
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Log successful requests for LLM training history"""
         try:
@@ -111,10 +126,16 @@ class ProductionGCSLogger(CustomLogger):
             litellm_params = kwargs.get("litellm_params", {})
             metadata = litellm_params.get("metadata", {})
 
+            # Extract date and session_id for queryability
+            log_date = datetime.utcnow().strftime("%Y-%m-%d")
+            session_id = self._get_session_id(kwargs, litellm_params, metadata)
+
             success_log = {
                 "correlation_id": correlation_id,
                 "timestamp": time.time(),
                 "timestamp_iso": datetime.utcnow().isoformat(),
+                "date": log_date,
+                "litellm_session_id": session_id,
                 "type": "SUCCESS",
                 "user": {
                     "email": metadata.get("user_api_key_user_email"),
@@ -205,10 +226,16 @@ class ProductionGCSLogger(CustomLogger):
             litellm_params = kwargs.get("litellm_params", {})
             metadata = litellm_params.get("metadata", {})
 
+            # Extract date and session_id for queryability
+            log_date = datetime.utcnow().strftime("%Y-%m-%d")
+            session_id = self._get_session_id(kwargs, litellm_params, metadata)
+
             error_log = {
                 "correlation_id": correlation_id,
                 "timestamp": time.time(),
                 "timestamp_iso": datetime.utcnow().isoformat(),
+                "date": log_date,
+                "litellm_session_id": session_id,
                 "type": "ERROR",
                 "user": {
                     "email": metadata.get("user_api_key_user_email"),
