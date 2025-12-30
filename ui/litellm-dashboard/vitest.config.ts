@@ -8,6 +8,8 @@ export default defineConfig({
     globals: true,
     css: true, // lets you import CSS/modules without extra mocks
     coverage: { reporter: ["text", "lcov"] },
+    exclude: ["e2e_tests/**,", "node_modules/**"],
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx", "tests/**/*.test.ts", "tests/**/*.test.tsx"],
   },
   resolve: {
     alias: {
