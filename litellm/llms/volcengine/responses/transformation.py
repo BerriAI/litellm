@@ -63,6 +63,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         "thinking",
         "caching",
         "expire_at",
+        "context_management",
         # LiteLLM-internal metadata (not sent to provider)
         "metadata",
         # Request plumbing helpers
