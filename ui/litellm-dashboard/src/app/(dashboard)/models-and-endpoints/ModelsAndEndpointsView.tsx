@@ -679,7 +679,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
                       credentials={credentialsList}
                       accessToken={accessToken}
                       userRole={userRole}
-                      premiumUser={premiumUser}
                     />
                   </TabPanel>
                 )}
