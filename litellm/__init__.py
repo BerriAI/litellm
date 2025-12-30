@@ -1600,34 +1600,6 @@ def __getattr__(name: str) -> Any:
         handler_func = registry[name]
         return handler_func(name)
 
-    # Lazy load litellm_logging functions
-    _litellm_logging_names = (
-        "Logging",
-        "modify_integration",
-    )
-    if name in _litellm_logging_names:
-        from ._lazy_imports import _lazy_import_litellm_logging
-        return _lazy_import_litellm_logging(name)
-
-    # Lazy load utils functions
-    _utils_names = (
-        "exception_type", "get_optional_params", "get_response_string", "token_counter",
-        "create_pretrained_tokenizer", "create_tokenizer", "supports_function_calling",
-        "supports_web_search", "supports_url_context", "supports_response_schema",
-        "supports_parallel_function_calling", "supports_vision", "supports_audio_input",
-        "supports_audio_output", "supports_system_messages", "supports_reasoning",
-        "get_litellm_params", "acreate", "get_max_tokens", "get_model_info",
-        "register_prompt_template", "validate_environment", "check_valid_key",
-        "register_model", "encode", "decode", "_calculate_retry_after", "_should_retry",
-        "get_supported_openai_params", "get_api_base", "get_first_chars_messages",
-        "ModelResponse", "ModelResponseStream", "EmbeddingResponse", "ImageResponse",
-        "TranscriptionResponse", "TextCompletionResponse", "get_provider_fields",
-        "ModelResponseListIterator", "get_valid_models",
-    )
-    if name in _utils_names:
-        from ._lazy_imports import _lazy_import_utils
-        return _lazy_import_utils(name)
-
     # Lazy load encoding from main.py to avoid heavy tiktoken import
     if name == "encoding":
         from ._lazy_imports import _get_litellm_globals
