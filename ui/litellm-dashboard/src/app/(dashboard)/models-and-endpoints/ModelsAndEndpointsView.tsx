@@ -536,21 +536,19 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
     );
   };
 
-  const handleOk = () => {
-    addModelForm
-      .validateFields()
-      .then((values: any) => {
-        handleAddModelSubmit(values, accessToken, addModelForm, handleRefreshClick);
-      })
-      .catch((error: any) => {
-        const errorMessages =
-          error.errorFields
-            ?.map((field: any) => {
-              return `${field.name.join(".")}: ${field.errors.join(", ")}`;
-            })
-            .join(" | ") || "Unknown validation error";
-        NotificationsManager.fromBackend(`Please fill in the following required fields: ${errorMessages}`);
-      });
+  const handleOk = async () => {
+    try {
+      const values = await addModelForm.validateFields();
+      await handleAddModelSubmit(values, accessToken, addModelForm, handleRefreshClick);
+    } catch (error: any) {
+      const errorMessages =
+        error.errorFields
+          ?.map((field: any) => {
+            return `${field.name.join(".")}: ${field.errors.join(", ")}`;
+          })
+          .join(" | ") || "Unknown validation error";
+      NotificationsManager.fromBackend(`Please fill in the following required fields: ${errorMessages}`);
+    }
   };
 
   Object.keys(Providers).find((key) => (Providers as { [index: string]: any })[key] === selectedProvider);
@@ -679,7 +677,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
                       credentials={credentialsList}
                       accessToken={accessToken}
                       userRole={userRole}
-                      premiumUser={premiumUser}
                     />
                   </TabPanel>
                 )}
