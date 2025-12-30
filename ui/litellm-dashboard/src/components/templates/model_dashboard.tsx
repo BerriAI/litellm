@@ -950,7 +950,7 @@ const OldModelDashboard: React.FC<ModelDashboardProps> = ({
     );
   };
 
-  const handleOk = () => {
+  const handleOk = async () => {
     console.log("🚀 handleOk called from model dashboard!");
     console.log("Current form values:", addModelForm.getFieldsValue());
 
@@ -1354,7 +1354,6 @@ const OldModelDashboard: React.FC<ModelDashboardProps> = ({
                     credentials={credentialsList}
                     accessToken={accessToken}
                     userRole={userRole}
-                    premiumUser={premiumUser}
                   />
                 </TabPanel>
                 <TabPanel>
