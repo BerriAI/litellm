@@ -88,11 +88,14 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ):
+    ) -> VolcEngineError:
+        typed_headers: httpx.Headers = (
+            headers if isinstance(headers, httpx.Headers) else httpx.Headers(headers or {})
+        )
         return VolcEngineError(
             status_code=status_code,
             message=error_message,
-            headers=headers,
+            headers=typed_headers,
         )
 
     def validate_environment(
