@@ -1,12 +1,14 @@
 "use client";
-import { Setter } from "@/types";
-import { formatNumberWithCommas, updateExistingKeys } from "@/utils/dataUtils";
+import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, SwitchVerticalIcon } from "@heroicons/react/outline";
 import {
   ColumnDef,
   flexRender,
   getCoreRowModel,
+  getPaginationRowModel,
   getSortedRowModel,
+  PaginationState,
   SortingState,
   useReactTable,
 } from "@tanstack/react-table";
@@ -30,27 +32,10 @@ import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import FilterComponent, { FilterOption } from "../molecules/filter";
 import { Organization } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
-import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 interface VirtualKeysTableProps {
-  keys: KeyResponse[];
-  setKeys: (keys: KeyResponse[] | ((prev: KeyResponse[]) => KeyResponse[])) => void;
-  isLoading?: boolean;
-  pagination: {
-    currentPage: number;
-    totalPages: number;
-    totalCount: number;
-  };
-  onPageChange: (page: number) => void;
-  pageSize?: number;
   teams: Team[] | null;
-  selectedTeam: Team | null;
-  setSelectedTeam: (team: Team | null) => void;
-  selectedKeyAlias: string | null;
-  setSelectedKeyAlias: Setter<string | null>;
   organizations: Organization[] | null;
-  setCurrentOrg: React.Dispatch<React.SetStateAction<Organization | null>>;
-  refresh?: () => void;
   onSortChange?: (sortBy: string, sortOrder: "asc" | "desc") => void;
   currentSort?: {
     sortBy: string;
@@ -63,21 +48,8 @@ interface VirtualKeysTableProps {
  * The team selector and filtering have been removed so that all keys are shown.
  */
 
-export function VirtualKeysTable({
-  keys,
-  setKeys,
-  isLoading = false,
-  pagination,
-  onPageChange,
-  pageSize = 50,
-  teams,
-  organizations,
-  refresh,
-  onSortChange,
-  currentSort,
-}: VirtualKeysTableProps) {
-  const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
-  const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
+export function VirtualKeysTable({ teams, organizations, onSortChange, currentSort }: VirtualKeysTableProps) {
+  const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
   const [sorting, setSorting] = React.useState<SortingState>(() => {
     if (currentSort) {
       return [
@@ -94,22 +66,33 @@ export function VirtualKeysTable({
       },
     ];
   });
+  const [tablePagination, setTablePagination] = React.useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: 100,
+  });
+
+  const {
+    data: keys,
+    isPending: isLoading,
+    refetch,
+  } = useKeys(tablePagination.pageIndex + 1, tablePagination.pageSize);
+  const totalCount = keys?.total_count || 0;
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
 
   // Use the filter logic hook
 
   const { filters, filteredKeys, allKeyAliases, allTeams, allOrganizations, handleFilterChange, handleFilterReset } =
     useFilterLogic({
-      keys,
+      keys: keys?.keys || [],
       teams,
       organizations,
     });
 
   // Add a useEffect to call refresh when a key is created
   useEffect(() => {
-    if (refresh) {
+    if (refetch) {
       const handleStorageChange = () => {
-        refresh();
+        refetch();
       };
 
       // Listen for storage events that might indicate a key was created
@@ -119,7 +102,7 @@ export function VirtualKeysTable({
         window.removeEventListener("storage", handleStorageChange);
       };
     }
-  }, [refresh]);
+  }, [refetch]);
 
   const columns: ColumnDef<KeyResponse>[] = [
     {
@@ -145,7 +128,7 @@ export function VirtualKeysTable({
               size="xs"
               variant="light"
               className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
-              onClick={() => setSelectedKeyId(info.getValue() as string)}
+              onClick={() => setSelectedKey(info.row.original)}
             >
               {info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "-"}
             </Button>
@@ -496,6 +479,7 @@ export function VirtualKeysTable({
     columnResizeDirection: "ltr",
     state: {
       sorting,
+      pagination: tablePagination,
     },
     onSortingChange: (updaterOrValue) => {
       const newSorting = typeof updaterOrValue === "function" ? updaterOrValue(sorting) : updaterOrValue;
@@ -514,10 +498,14 @@ export function VirtualKeysTable({
         onSortChange?.(sortBy, sortOrder);
       }
     },
+    onPaginationChange: setTablePagination,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
     enableSorting: true,
     manualSorting: false,
+    manualPagination: true,
+    pageCount: Math.ceil(totalCount / tablePagination.pageSize),
   });
 
   // Update local sorting state when currentSort prop changes
@@ -534,26 +522,11 @@ export function VirtualKeysTable({
 
   return (
     <div className="w-full h-full overflow-hidden">
-      {selectedKeyId ? (
+      {selectedKey ? (
         <KeyInfoView
-          keyId={selectedKeyId}
-          onClose={() => setSelectedKeyId(null)}
-          keyData={filteredKeys.find((k) => k.token === selectedKeyId)}
-          onKeyDataUpdate={(updatedKeyData) => {
-            setKeys((keys) =>
-              keys.map((key) => {
-                if (key.token === updatedKeyData.token) {
-                  return updateExistingKeys(key, updatedKeyData);
-                }
-                return key;
-              }),
-            );
-            if (refresh) refresh(); // Minimal fix: refresh the full key list after an update
-          }}
-          onDelete={() => {
-            setKeys((keys) => keys.filter((key) => key.token !== selectedKeyId));
-            if (refresh) refresh(); // Minimal fix: refresh the full key list after a delete
-          }}
+          keyId={selectedKey.token}
+          onClose={() => setSelectedKey(null)}
+          keyData={selectedKey}
           teams={allTeams}
         />
       ) : (
@@ -572,26 +545,30 @@ export function VirtualKeysTable({
               Showing{" "}
               {isLoading
                 ? "..."
-                : `${(pagination.currentPage - 1) * pageSize + 1} - ${Math.min(pagination.currentPage * pageSize, pagination.totalCount)}`}{" "}
-              of {isLoading ? "..." : pagination.totalCount} results
+                : `${table.getState().pagination.pageIndex * table.getState().pagination.pageSize + 1} - ${Math.min(
+                    (table.getState().pagination.pageIndex + 1) * table.getState().pagination.pageSize,
+                    totalCount,
+                  )}`}{" "}
+              of {isLoading ? "..." : totalCount} results
             </span>
 
             <div className="inline-flex items-center gap-2">
               <span className="text-sm text-gray-700">
-                Page {isLoading ? "..." : pagination.currentPage} of {isLoading ? "..." : pagination.totalPages}
+                Page {isLoading ? "..." : table.getState().pagination.pageIndex + 1} of{" "}
+                {isLoading ? "..." : table.getPageCount()}
               </span>
 
               <button
-                onClick={() => onPageChange(pagination.currentPage - 1)}
-                disabled={isLoading || pagination.currentPage === 1}
+                onClick={() => table.previousPage()}
+                disabled={isLoading || !table.getCanPreviousPage()}
                 className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Previous
               </button>
 
               <button
-                onClick={() => onPageChange(pagination.currentPage + 1)}
-                disabled={isLoading || pagination.currentPage === pagination.totalPages}
+                onClick={() => table.nextPage()}
+                disabled={isLoading || !table.getCanNextPage()}
                 className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Next
