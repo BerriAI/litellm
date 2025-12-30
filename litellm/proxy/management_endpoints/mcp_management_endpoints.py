@@ -16,7 +16,7 @@ Endpoints here:
 import importlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Literal, Optional
 
 from fastapi import (
     APIRouter,
@@ -24,6 +24,7 @@ from fastapi import (
     Form,
     Header,
     HTTPException,
+    Query,
     Request,
     Response,
     status,
@@ -318,7 +319,7 @@ if MCP_AVAILABLE:
 
         aggregated_servers: Dict[str, LiteLLM_MCPServerTable] = {}
         for auth_context in auth_contexts:
-            servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_and_teams(
+            servers = await global_mcp_server_manager.get_all_allowed_mcp_servers(
                 user_api_key_auth=auth_context
             )
             for server in servers:
@@ -335,6 +336,56 @@ if MCP_AVAILABLE:
                         server.mcp_info = {}
                     server.mcp_info["is_public"] = True
         return redacted_mcp_servers
+
+    @router.get(
+        "/server/health",
+        description="Health check for MCP servers",
+        dependencies=[Depends(user_api_key_auth)],
+    )
+    async def health_check_servers(
+        server_ids: Optional[List[str]] = Query(
+            None,
+            description="Server IDs to check. If not provided, checks all accessible servers.",
+        ),
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """
+        Perform health checks on one or more MCP servers.
+
+        Parameters:
+        - server_ids: Optional list of server IDs. If not provided, checks all accessible servers.
+
+        Returns:
+        - Health check results for requested servers
+
+        ```
+        # Check all accessible servers
+        curl --location 'http://localhost:4000/v1/mcp/server/health' \
+        --header 'Authorization: Bearer your_api_key_here'
+
+        # Check specific servers
+        curl --location 'http://localhost:4000/v1/mcp/server/health?server_ids=server-1&server_ids=server-2' \
+        --header 'Authorization: Bearer your_api_key_here'
+        ```
+        """
+        auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
+
+        server_status_map: Dict[
+            str, Optional[Literal["healthy", "unhealthy", "unknown"]]
+        ] = {}
+        for auth_context in auth_contexts:
+            servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_and_teams(
+                user_api_key_auth=auth_context,
+                server_ids=server_ids,
+            )
+            for server in servers:
+                if server.server_id not in server_status_map:
+                    server_status_map[server.server_id] = server.status
+
+        return [
+            {"server_id": server_id, "status": status}
+            for server_id, status in server_status_map.items()
+        ]
 
     @router.get(
         "/server/{server_id}",
