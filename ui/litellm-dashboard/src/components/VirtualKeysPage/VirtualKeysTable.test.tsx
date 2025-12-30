@@ -236,3 +236,31 @@ it("should display user email correctly", async () => {
     expect(screen.getByText("user@example.com")).toBeInTheDocument();
   });
 });
+
+it("should show skeleton loaders when isLoading is true", () => {
+  // Mock loading state
+  mockUseKeys.mockReturnValue({
+    data: null,
+    isPending: true,
+    refetch: vi.fn(),
+  } as any);
+
+  const mockProps = {
+    teams: [mockTeam],
+    organizations: [mockOrganization],
+    onSortChange: vi.fn(),
+    currentSort: {
+      sortBy: "created_at",
+      sortOrder: "desc" as const,
+    },
+  };
+
+  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+  // Check that loading message is shown
+  expect(screen.getByText("🚅 Loading keys...")).toBeInTheDocument();
+
+  // Check that actual key data is not shown
+  expect(screen.queryByText("Test Key Alias")).not.toBeInTheDocument();
+  expect(screen.queryByText("Test Team")).not.toBeInTheDocument();
+});
