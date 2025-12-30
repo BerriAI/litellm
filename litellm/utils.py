@@ -3760,7 +3760,14 @@ def get_optional_params(  # noqa: PLR0915
                 ),
             )
         elif "anthropic" in bedrock_base_model and bedrock_route == "invoke":
-            if bedrock_base_model.startswith("anthropic.claude-3"):
+            # Check for Claude 3+ models (Messages API) including regional prefixes and Claude 4
+            # Models like eu.anthropic.claude-opus-4-5, us.anthropic.claude-3-5-sonnet, etc.
+            bedrock_base_model_lower = bedrock_base_model.lower()
+            is_messages_api_model = any(
+                indicator in bedrock_base_model_lower
+                for indicator in ["claude-3", "claude-opus-4", "claude-sonnet-4", "claude-haiku-4"]
+            )
+            if is_messages_api_model:
                 optional_params = (
                     litellm.AmazonAnthropicClaudeConfig().map_openai_params(
                         non_default_params=non_default_params,
