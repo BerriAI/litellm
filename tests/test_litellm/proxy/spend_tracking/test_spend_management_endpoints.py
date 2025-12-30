@@ -1857,3 +1857,203 @@ async def test_view_spend_logs_with_date_range_summarized(client, monkeypatch):
     assert "spend" in data[0]
     assert "users" in data[0]
     assert "models" in data[0]
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_with_error_code(client):
+    """Test filtering spend logs by error code"""
+    mock_spend_logs = [
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "team_id": "team1",
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-3.5-turbo",
+            "metadata": '{"error_information": {"error_code": "404"}}',
+        },
+        {
+            "id": "log2",
+            "request_id": "req2",
+            "api_key": "sk-test-key",
+            "user": "test_user_2",
+            "team_id": "team1",
+            "spend": 0.10,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+            "metadata": '{"error_information": {"error_code": "500"}}',
+        },
+    ]
+
+    with patch.object(ps, "prisma_client") as mock_prisma:
+        # Mock the find_many method to return filtered results
+        async def mock_find_many(*args, **kwargs):
+            where_conditions = kwargs.get("where", {})
+            if "metadata" in where_conditions:
+                metadata_filter = where_conditions["metadata"]
+                if metadata_filter.get("path") == ["error_information", "error_code"]:
+                    error_code = metadata_filter.get("equals")
+                    # Handle both string and integer error codes
+                    # The endpoint wraps error_code in quotes, so strip them for comparison
+                    error_code_value = str(error_code).strip('"')
+                    if error_code_value == "404":
+                        return [mock_spend_logs[0]]
+                    elif error_code_value == "500":
+                        return [mock_spend_logs[1]]
+            return mock_spend_logs
+
+        async def mock_count(*args, **kwargs):
+            where_conditions = kwargs.get("where", {})
+            if "metadata" in where_conditions:
+                metadata_filter = where_conditions["metadata"]
+                if metadata_filter.get("path") == ["error_information", "error_code"]:
+                    error_code = metadata_filter.get("equals")
+                    # Handle both string and integer error codes
+                    # The endpoint wraps error_code in quotes, so strip them for comparison
+                    error_code_value = str(error_code).strip('"')
+                    if error_code_value == "404":
+                        return 1
+                    elif error_code_value == "500":
+                        return 1
+            return len(mock_spend_logs)
+
+        mock_prisma.db.litellm_spendlogs.find_many = mock_find_many
+        mock_prisma.db.litellm_spendlogs.count = mock_count
+
+        start_date = (
+            datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)
+        ).strftime("%Y-%m-%d %H:%M:%S")
+        end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "error_code": "404",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["id"] == "log1"
+        metadata = json.loads(data["data"][0]["metadata"])
+        assert "error_information" in metadata
+        assert metadata["error_information"]["error_code"] == "404"
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_with_error_code_and_key_alias(client):
+    """Test merging error_code and key_alias filters with AND logic"""
+    mock_spend_logs = [
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "team_id": "team1",
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-3.5-turbo",
+            "metadata": '{"user_api_key_alias": "test-key-1", "error_information": {"error_code": "404"}}',
+        },
+        {
+            "id": "log2",
+            "request_id": "req2",
+            "api_key": "sk-test-key",
+            "user": "test_user_2",
+            "team_id": "team1",
+            "spend": 0.10,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+            "metadata": '{"user_api_key_alias": "test-key-2", "error_information": {"error_code": "500"}}',
+        },
+        {
+            "id": "log3",
+            "request_id": "req3",
+            "api_key": "sk-test-key",
+            "user": "test_user_3",
+            "team_id": "team1",
+            "spend": 0.15,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+            "metadata": '{"user_api_key_alias": "test-key-1", "error_information": {"error_code": "500"}}',
+        },
+    ]
+
+    with patch.object(ps, "prisma_client") as mock_prisma:
+        # Mock the find_many method to handle AND conditions
+        async def mock_find_many(*args, **kwargs):
+            where_conditions = kwargs.get("where", {})
+            if "AND" in where_conditions:
+                key_alias_filter = None
+                error_code_filter = None
+                for condition in where_conditions["AND"]:
+                    if "metadata" in condition:
+                        metadata_filter = condition["metadata"]
+                        if metadata_filter.get("path") == ["user_api_key_alias"]:
+                            key_alias_filter = metadata_filter.get("string_contains")
+                        elif metadata_filter.get("path") == ["error_information", "error_code"]:
+                            error_code_filter = metadata_filter.get("equals")
+
+                # Handle both string and integer error codes
+                # The endpoint wraps error_code in quotes, so strip them for comparison
+                error_code_value = str(error_code_filter).strip('"')
+                if key_alias_filter == "test-key-1" and error_code_value == "500":
+                    return [mock_spend_logs[2]]  # Only log3 matches both conditions
+            return mock_spend_logs
+
+        async def mock_count(*args, **kwargs):
+            where_conditions = kwargs.get("where", {})
+            if "AND" in where_conditions:
+                key_alias_filter = None
+                error_code_filter = None
+                for condition in where_conditions["AND"]:
+                    if "metadata" in condition:
+                        metadata_filter = condition["metadata"]
+                        if metadata_filter.get("path") == ["user_api_key_alias"]:
+                            key_alias_filter = metadata_filter.get("string_contains")
+                        elif metadata_filter.get("path") == ["error_information", "error_code"]:
+                            error_code_filter = metadata_filter.get("equals")
+
+                # Handle both string and integer error codes
+                # The endpoint wraps error_code in quotes, so strip them for comparison
+                error_code_value = str(error_code_filter).strip('"')
+                if key_alias_filter == "test-key-1" and error_code_value == "500":
+                    return 1
+            return len(mock_spend_logs)
+
+        mock_prisma.db.litellm_spendlogs.find_many = mock_find_many
+        mock_prisma.db.litellm_spendlogs.count = mock_count
+
+        start_date = (
+            datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)
+        ).strftime("%Y-%m-%d %H:%M:%S")
+        end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "error_code": "500",
+                "key_alias": "test-key-1",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["id"] == "log3"
+        metadata = json.loads(data["data"][0]["metadata"])
+        assert "user_api_key_alias" in metadata
+        assert metadata["user_api_key_alias"] == "test-key-1"
+        assert "error_information" in metadata
+        assert metadata["error_information"]["error_code"] == "500"

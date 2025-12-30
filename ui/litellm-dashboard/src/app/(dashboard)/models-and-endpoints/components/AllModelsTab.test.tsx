@@ -1,8 +1,26 @@
 import * as useAuthorizedModule from "@/app/(dashboard)/hooks/useAuthorized";
-import * as useTeamsModule from "@/app/(dashboard)/hooks/useTeams";
 import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AllModelsTab from "./AllModelsTab";
+
+// Mock the useModelsInfo hook
+const mockUseModelsInfo = vi.fn(() => ({ data: { data: [] } })) as any;
+
+vi.mock("../../hooks/models/useModels", () => ({
+  useModelsInfo: () => mockUseModelsInfo(),
+}));
+
+// Mock the useTeams hook (react-query implementation)
+const mockUseTeams = vi.fn(() => ({
+  data: [],
+  isLoading: false,
+  error: null,
+  refetch: vi.fn(),
+})) as any;
+
+vi.mock("../../hooks/teams/useTeams", () => ({
+  useTeams: () => mockUseTeams(),
+}));
 
 describe("AllModelsTab", () => {
   const mockSetSelectedModelGroup = vi.fn();
@@ -18,9 +36,6 @@ describe("AllModelsTab", () => {
     setSelectedModelId: mockSetSelectedModelId,
     setSelectedTeamId: mockSetSelectedTeamId,
     setEditModel: mockSetEditModel,
-    modelData: {
-      data: [],
-    },
   };
 
   const mockUseAuthorized = {
@@ -40,9 +55,13 @@ describe("AllModelsTab", () => {
   });
 
   it("should render with empty data", () => {
-    vi.spyOn(useTeamsModule, "default").mockReturnValue({
-      teams: [],
-      setTeams: vi.fn(),
+    mockUseModelsInfo.mockReturnValueOnce({ data: { data: [] } });
+
+    mockUseTeams.mockReturnValueOnce({
+      data: [],
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
     });
 
     render(<AllModelsTab {...defaultProps} />);
@@ -66,9 +85,11 @@ describe("AllModelsTab", () => {
       },
     ];
 
-    vi.spyOn(useTeamsModule, "default").mockReturnValue({
-      teams: mockTeams,
-      setTeams: vi.fn(),
+    mockUseTeams.mockReturnValueOnce({
+      data: mockTeams,
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
     });
 
     const modelData = {
@@ -92,7 +113,9 @@ describe("AllModelsTab", () => {
       ],
     };
 
-    render(<AllModelsTab {...defaultProps} modelData={modelData} />);
+    mockUseModelsInfo.mockReturnValue({ data: modelData });
+
+    render(<AllModelsTab {...defaultProps} />);
 
     await waitFor(() => {
       expect(screen.getByText("Showing 0 results")).toBeInTheDocument();
@@ -116,9 +139,11 @@ describe("AllModelsTab", () => {
       },
     ];
 
-    vi.spyOn(useTeamsModule, "default").mockReturnValue({
-      teams: mockTeams,
-      setTeams: vi.fn(),
+    mockUseTeams.mockReturnValue({
+      data: mockTeams,
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
     });
 
     const modelData = {
@@ -142,7 +167,9 @@ describe("AllModelsTab", () => {
       ],
     };
 
-    render(<AllModelsTab {...defaultProps} modelData={modelData} />);
+    mockUseModelsInfo.mockReturnValue({ data: modelData });
+
+    render(<AllModelsTab {...defaultProps} />);
 
     await waitFor(() => {
       expect(screen.getByText("Showing 0 results")).toBeInTheDocument();
@@ -150,9 +177,11 @@ describe("AllModelsTab", () => {
   });
 
   it("should filter models by direct_access for personal team", async () => {
-    vi.spyOn(useTeamsModule, "default").mockReturnValue({
-      teams: [],
-      setTeams: vi.fn(),
+    mockUseTeams.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
     });
 
     const modelData = {
@@ -178,7 +207,9 @@ describe("AllModelsTab", () => {
       ],
     };
 
-    render(<AllModelsTab {...defaultProps} modelData={modelData} />);
+    mockUseModelsInfo.mockReturnValue({ data: modelData });
+
+    render(<AllModelsTab {...defaultProps} />);
 
     await waitFor(() => {
       expect(screen.getByText("Showing 1 - 1 of 1 results")).toBeInTheDocument();
@@ -186,9 +217,11 @@ describe("AllModelsTab", () => {
   });
 
   it("should show config model status for models defined in configs", async () => {
-    vi.spyOn(useTeamsModule, "default").mockReturnValue({
-      teams: [],
-      setTeams: vi.fn(),
+    mockUseTeams.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
     });
 
     const modelData = {
@@ -226,7 +259,9 @@ describe("AllModelsTab", () => {
       ],
     };
 
-    render(<AllModelsTab {...defaultProps} modelData={modelData} />);
+    mockUseModelsInfo.mockReturnValue({ data: modelData });
+
+    render(<AllModelsTab {...defaultProps} />);
 
     await waitFor(() => {
       expect(screen.getByText("Config Model")).toBeInTheDocument();
@@ -235,19 +270,21 @@ describe("AllModelsTab", () => {
   });
 
   it("should show 'Defined in config' for models defined in configs", async () => {
-    vi.spyOn(useTeamsModule, "default").mockReturnValue({
-      teams: [],
-      setTeams: vi.fn(),
+    mockUseTeams.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
     });
 
     const modelData = {
       data: [
         {
-          model_name: "gpt-4-config-model",
-          litellm_model_name: "gpt-4-config-model",
+          model_name: "gpt-4-config",
+          litellm_model_name: "gpt-4-config",
           provider: "openai",
           model_info: {
-            id: "model-config-defined",
+            id: "model-config-1",
             db_model: false,
             direct_access: true,
             access_via_team_ids: [],
@@ -260,8 +297,12 @@ describe("AllModelsTab", () => {
       ],
     };
 
-    render(<AllModelsTab {...defaultProps} modelData={modelData} />);
+    mockUseModelsInfo.mockReturnValue({ data: modelData });
 
-    expect(screen.getByText("Defined in config")).toBeInTheDocument();
+    render(<AllModelsTab {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Defined in config")).toBeInTheDocument();
+    });
   });
 });

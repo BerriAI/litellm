@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import TypedDict
 
+from litellm.types.utils import ModelResponse
+
 
 class RAGChunkingStrategy(TypedDict, total=False):
     """
@@ -186,4 +188,40 @@ class RAGIngestRequest(BaseModel):
     ingest_options: Dict[str, Any]  # RAGIngestOptions as dict for flexibility
 
     model_config = ConfigDict(extra="allow")  # Allow additional fields
+
+
+class RAGRetrievalConfig(TypedDict, total=False):
+    """Configuration for vector store retrieval."""
+
+    vector_store_id: str
+    custom_llm_provider: str
+    top_k: int  # max results from vector store
+    filters: Optional[Dict[str, Any]]  # optional - vector store filters
+
+
+class RAGRerankConfig(TypedDict, total=False):
+    """Configuration for reranking results."""
+
+    enabled: bool
+    model: str
+    top_n: int  # final number of chunks after reranking
+    return_documents: Optional[bool]
+
+
+class RAGQueryRequest(BaseModel):
+    """Request body for RAG query API."""
+
+    model: str
+    messages: List[Any]
+    retrieval_config: RAGRetrievalConfig
+    rerank: Optional[RAGRerankConfig] = None
+    stream: Optional[bool] = False
+
+    model_config = ConfigDict(extra="allow")
+
+
+class RAGQueryResponse(ModelResponse):
+    """Response from RAG query API."""
+
+    pass
 

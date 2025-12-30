@@ -495,7 +495,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 |-------|----------------------|------------------|
 | `gpt-5.1` | `none` | `none`, `low`, `medium`, `high` |
 | `gpt-5` | `medium` | `minimal`, `low`, `medium`, `high` |
-| `gpt-5-mini` | `medium` | `none`, `minimal`, `low`, `medium`, `high` |
+| `gpt-5-mini` | `medium` | `minimal`, `low`, `medium`, `high` |
 | `gpt-5-nano` | `none` | `none`, `low`, `medium`, `high` |
 | `gpt-5-codex` | `adaptive` | `low`, `medium`, `high` (no `minimal`) |
 | `gpt-5.1-codex` | `adaptive` | `low`, `medium`, `high` (no `minimal`) |

@@ -1,23 +1,23 @@
 "use client";
-import React, { useState, useEffect } from "react";
-import {
-  userInfoCall,
-  modelAvailableCall,
-  getProxyUISettings,
-  Organization,
-  keyInfoCall,
-  getProxyBaseUrl,
-} from "./networking";
-import { fetchTeams } from "./common_components/fetch_teams";
-import { Grid, Col } from "@tremor/react";
-import CreateKey from "./organisms/create_key_button";
-import ViewKeyTable from "./templates/view_key_table";
-import Onboarding from "../app/onboarding/page";
-import { useSearchParams } from "next/navigation";
-import { KeyResponse, Team } from "./key_team_helpers/key_list";
-import { jwtDecode } from "jwt-decode";
-import { Typography } from "antd";
 import { clearTokenCookies } from "@/utils/cookieUtils";
+import { Col, Grid } from "@tremor/react";
+import { Typography } from "antd";
+import { jwtDecode } from "jwt-decode";
+import { useSearchParams } from "next/navigation";
+import React, { useEffect, useState } from "react";
+import Onboarding from "../app/onboarding/page";
+import { fetchTeams } from "./common_components/fetch_teams";
+import { KeyResponse, Team } from "./key_team_helpers/key_list";
+import {
+  getProxyBaseUrl,
+  getProxyUISettings,
+  keyInfoCall,
+  modelAvailableCall,
+  Organization,
+  userInfoCall,
+} from "./networking";
+import CreateKey from "./organisms/create_key_button";
+import { VirtualKeysTable } from "./VirtualKeysPage/VirtualKeysTable";
 
 export interface ProxySettings {
   PROXY_BASE_URL: string | null;
@@ -361,25 +361,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             addKey={addKey}
             premiumUser={premiumUser}
           />
-
-          <ViewKeyTable
-            userID={userID}
-            userRole={userRole}
-            accessToken={accessToken}
-            selectedTeam={selectedTeam ? selectedTeam : null}
-            setSelectedTeam={setSelectedTeam}
-            selectedKeyAlias={selectedKeyAlias}
-            setSelectedKeyAlias={setSelectedKeyAlias}
-            data={keys}
-            setData={setKeys}
-            premiumUser={premiumUser}
-            teams={teams}
-            currentOrg={currentOrg}
-            setCurrentOrg={setCurrentOrg}
-            organizations={organizations}
-            createClicked={createClicked}
-            setAccessToken={setAccessToken}
-          />
+          <VirtualKeysTable teams={teams} organizations={organizations} />
         </Col>
       </Grid>
     </div>

@@ -674,7 +674,7 @@ class CostCalculatorUtils:
         from litellm.llms.azure_ai.image_generation.cost_calculator import (
             cost_calculator as azure_ai_image_cost_calculator,
         )
-        from litellm.llms.bedrock.image.cost_calculator import (
+        from litellm.llms.bedrock.image_generation.cost_calculator import (
             cost_calculator as bedrock_image_cost_calculator,
         )
         from litellm.llms.gemini.image_generation.cost_calculator import (
