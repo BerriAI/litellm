@@ -10,11 +10,12 @@ Environment Variables:
     NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED: Whether to record message content (optional, default: true)
 
 Configuration:
-    Message logging can be controlled via:
-    1. turn_off_message_logging parameter (takes priority) - pass via callback initialization or config YAML
-    2. NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED env var (fallback)
+    Message logging can be controlled via (both must agree to record):
+    1. turn_off_message_logging parameter - pass via callback initialization or config YAML
+    2. NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED env var
 
-    Default behavior: Messages ARE recorded unless explicitly disabled
+    Default behavior: Messages ARE recorded unless explicitly disabled by either method
+    Either method can disable recording - both must enable for recording to occur
 
 Usage - Python SDK:
     import litellm
@@ -28,7 +29,10 @@ Usage - Proxy Server (config.yaml):
     litellm_settings:
       callbacks: ["newrelic"]
       newrelic_params:
-        turn_off_message_logging: true
+        turn_off_message_logging: true  # Disable message content recording
+
+    # Or disable via environment variable:
+    # export NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED=false
 
     # Ensure New Relic agent is initialized (use newrelic-admin or initialize manually)
     # newrelic-admin run-program python your_app.py
@@ -72,9 +76,6 @@ class NewRelicLogger(CustomLogger):
         dict_newrelic_params = self._get_newrelic_params()
         kwargs.update(dict_newrelic_params)
 
-        # Check if turn_off_message_logging was explicitly provided (after merging params)
-        turn_off_message_logging_provided = "turn_off_message_logging" in kwargs
-
         # CustomLogger.__init__ will set self.turn_off_message_logging from kwargs
         super().__init__(**kwargs)
 
@@ -83,18 +84,14 @@ class NewRelicLogger(CustomLogger):
         self.app_name = os.getenv("NEW_RELIC_APP_NAME")
 
         # Determine if message content should be recorded
-        # Priority: turn_off_message_logging param > env var
-        # Note: turn_off_message_logging=True means record_content=False (inverted logic)
-        # Default: Messages ARE recorded (record_content=True) unless explicitly disabled
-        if turn_off_message_logging_provided:
-            # Use the parameter value set by CustomLogger.__init__ (inverted for record_content)
-            self.record_content = not self.turn_off_message_logging
-        else:
-            # Fall back to env var when parameter not provided
-            # Default to True to match Pydantic default (turn_off_message_logging=False)
-            self.record_content = self._parse_bool_env(
-                "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED", True
-            )
+        # Both turn_off_message_logging param AND env var must agree to record content
+        # If either disables recording, content will not be recorded
+        # Default: Messages ARE recorded (record_content=True) unless explicitly disabled by either method
+        self.record_content = (
+            not self.turn_off_message_logging
+        ) and self._parse_bool_env(
+            "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED", True
+        )
 
         # Validate configuration
         if not self.license_key or not self.app_name:
