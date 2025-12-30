@@ -1,13 +1,13 @@
 import { screen, waitFor } from "@testing-library/react";
 import { vi, it, expect } from "vitest";
-import { renderWithProviders } from "../../tests/test-utils";
-import { AllKeysTable } from "./all_keys_table";
-import { KeyResponse, Team } from "./key_team_helpers/key_list";
-import { Organization } from "./networking";
+import { renderWithProviders } from "../../../tests/test-utils";
+import { VirtualKeysTable } from "./VirtualKeysTable";
+import { KeyResponse, Team } from "../key_team_helpers/key_list";
+import { Organization } from "../networking";
 
 // Mock network calls
 vi.mock("./networking", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./networking")>();
+  const actual = await importOriginal<typeof import("../networking")>();
   return {
     ...actual,
     userListCall: vi.fn().mockResolvedValue({
@@ -131,7 +131,7 @@ const mockOrganization: Organization = {
   members: [],
 };
 
-it("should render AllKeysTable component", () => {
+it("should render VirtualKeysTable component", () => {
   const mockProps = {
     keys: [mockKey],
     setKeys: vi.fn(),
@@ -156,7 +156,7 @@ it("should render AllKeysTable component", () => {
     premiumUser: false,
   };
 
-  renderWithProviders(<AllKeysTable {...mockProps} />);
+  renderWithProviders(<VirtualKeysTable {...mockProps} />);
 
   expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
 });
@@ -186,7 +186,7 @@ it("should display key information correctly", async () => {
     premiumUser: false,
   };
 
-  renderWithProviders(<AllKeysTable {...mockProps} />);
+  renderWithProviders(<VirtualKeysTable {...mockProps} />);
 
   await waitFor(() => {
     expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
@@ -220,7 +220,7 @@ it("should display user email correctly", async () => {
     premiumUser: false,
   };
 
-  renderWithProviders(<AllKeysTable {...mockProps} />);
+  renderWithProviders(<VirtualKeysTable {...mockProps} />);
 
   await waitFor(() => {
     expect(screen.getByText("user@example.com")).toBeInTheDocument();
