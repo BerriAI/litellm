@@ -80,8 +80,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   });
 
   const [allTags, setAllTags] = useState<EntityList[]>([]);
-  const { data: customers = [] } = useCustomers(accessToken, userRole);
-  const { data: agentsResponse } = useAgents(accessToken, userRole);
+  const { data: customers = [] } = useCustomers();
+  const { data: agentsResponse } = useAgents();
   const [modelViewType, setModelViewType] = useState<"groups" | "individual">("groups");
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);

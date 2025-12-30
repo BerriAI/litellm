@@ -33,6 +33,7 @@ from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.secret_managers.main import KeyManagementSystem
 from litellm.types.utils import (
     CallTypes,
+    CostBreakdown,
     EmbeddingResponse,
     GenericBudgetConfigType,
     ImageResponse,
@@ -388,6 +389,8 @@ class LiteLLMRoutes(enum.Enum):
     litellm_native_routes = [
         "/rag/ingest",
         "/v1/rag/ingest",
+        "/rag/query",
+        "/v1/rag/query",
     ]
 
     anthropic_routes = [
@@ -2149,6 +2152,7 @@ class UserAPIKeyAuth(
     user_rpm_limit: Optional[int] = None
     user_email: Optional[str] = None
     request_route: Optional[str] = None
+    user: Optional[Any] = None  # Expanded user object when expand=user is used
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -2736,6 +2740,9 @@ class SpendLogsMetadata(TypedDict):
     litellm_overhead_time_ms: Optional[
         float
     ]  # LiteLLM overhead time in milliseconds
+    cost_breakdown: Optional[
+        CostBreakdown
+    ]  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
 
 
 class SpendLogsPayload(TypedDict):

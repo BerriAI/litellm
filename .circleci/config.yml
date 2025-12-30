@@ -3476,7 +3476,6 @@ jobs:
           name: Install Playwright Browsers
           command: |
             npx playwright install
-
       - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
@@ -3515,7 +3514,10 @@ jobs:
       - run:
           name: Run Playwright Tests
           command: |
-            npx playwright test e2e_ui_tests/ --reporter=html --output=test-results
+            npx playwright test \
+              --config ui/litellm-dashboard/e2e_tests/playwright.config.ts \
+              --reporter=html \
+              --output=test-results
           no_output_timeout: 120m
       - store_artifacts:
           path: test-results

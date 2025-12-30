@@ -19,7 +19,7 @@ const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
 const { Option } = Select;
 
 const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID }) => {
-  const { data: mcpServers, isLoading: isLoadingServers, refetch, dataUpdatedAt } = useMCPServers(accessToken);
+  const { data: mcpServers, isLoading: isLoadingServers, refetch, dataUpdatedAt } = useMCPServers();
 
   // Log allowed_tools from fetched servers
   React.useEffect(() => {

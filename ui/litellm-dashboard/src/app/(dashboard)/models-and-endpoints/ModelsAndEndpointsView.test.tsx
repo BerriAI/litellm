@@ -37,19 +37,6 @@ vi.mock("@/app/(dashboard)/models-and-endpoints/components/ModelAnalyticsTab/Mod
   default: () => null,
 }));
 
-vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
-  default: () => ({
-    token: "123",
-    accessToken: "123",
-    userId: "user-1",
-    userEmail: "user@example.com",
-    userRole: "Admin",
-    premiumUser: false,
-    disabledPersonalKeyCreation: null,
-    showSSOBanner: false,
-  }),
-}));
-
 vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
   default: () => ({
     teams: [],

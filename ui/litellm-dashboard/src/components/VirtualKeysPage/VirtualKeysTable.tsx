@@ -1,130 +1,55 @@
 "use client";
-import React, { useEffect, useState } from "react";
-import { ColumnDef } from "@tanstack/react-table";
-import { Select, SelectItem } from "@tremor/react";
-import { Button } from "@tremor/react";
-import KeyInfoView from "./templates/key_info_view";
-import { Tooltip } from "antd";
-import { Team, KeyResponse } from "./key_team_helpers/key_list";
-import FilterComponent from "./molecules/filter";
-import { FilterOption } from "./molecules/filter";
-import { Organization, userListCall } from "./networking";
-import { useFilterLogic } from "./key_team_helpers/filter_logic";
-import { Setter } from "@/types";
-import { updateExistingKeys } from "@/utils/dataUtils";
-import { flexRender, getCoreRowModel, getSortedRowModel, SortingState, useReactTable } from "@tanstack/react-table";
-import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell, Icon } from "@tremor/react";
-import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
-import { Badge, Text } from "@tremor/react";
-import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
+import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, SwitchVerticalIcon } from "@heroicons/react/outline";
+import {
+  ColumnDef,
+  flexRender,
+  getCoreRowModel,
+  getPaginationRowModel,
+  getSortedRowModel,
+  PaginationState,
+  SortingState,
+  useReactTable,
+} from "@tanstack/react-table";
+import {
+  Badge,
+  Button,
+  Icon,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
+  Text,
+} from "@tremor/react";
+import { Tooltip } from "antd";
+import React, { useEffect, useState } from "react";
+import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
+import { useFilterLogic } from "../key_team_helpers/filter_logic";
+import { KeyResponse, Team } from "../key_team_helpers/key_list";
+import FilterComponent, { FilterOption } from "../molecules/filter";
+import { Organization } from "../networking";
+import KeyInfoView from "../templates/key_info_view";
 
-interface AllKeysTableProps {
-  keys: KeyResponse[];
-  setKeys: (keys: KeyResponse[] | ((prev: KeyResponse[]) => KeyResponse[])) => void;
-  isLoading?: boolean;
-  pagination: {
-    currentPage: number;
-    totalPages: number;
-    totalCount: number;
-  };
-  onPageChange: (page: number) => void;
-  pageSize?: number;
+interface VirtualKeysTableProps {
   teams: Team[] | null;
-  selectedTeam: Team | null;
-  setSelectedTeam: (team: Team | null) => void;
-  selectedKeyAlias: string | null;
-  setSelectedKeyAlias: Setter<string | null>;
-  accessToken: string | null;
-  userID: string | null;
-  userRole: string | null;
   organizations: Organization[] | null;
-  setCurrentOrg: React.Dispatch<React.SetStateAction<Organization | null>>;
-  refresh?: () => void;
   onSortChange?: (sortBy: string, sortOrder: "asc" | "desc") => void;
   currentSort?: {
     sortBy: string;
     sortOrder: "asc" | "desc";
   };
-  premiumUser: boolean;
-  setAccessToken?: (token: string) => void;
 }
-
-// Define columns similar to our logs table
-
-interface UserResponse {
-  user_id: string;
-  user_email: string;
-  user_role: string;
-}
-
-const TeamFilter = ({
-  teams,
-  selectedTeam,
-  setSelectedTeam,
-}: {
-  teams: Team[] | null;
-  selectedTeam: Team | null;
-  setSelectedTeam: (team: Team | null) => void;
-}) => {
-  const handleTeamChange = (value: string) => {
-    const team = teams?.find((t) => t.team_id === value);
-    setSelectedTeam(team || null);
-  };
-
-  return (
-    <div className="mb-4">
-      <div className="flex items-center gap-2">
-        <span className="text-sm text-gray-600">Where Team is</span>
-        <Select
-          value={selectedTeam?.team_id || ""}
-          onValueChange={handleTeamChange}
-          placeholder="Team ID"
-          className="w-[400px]"
-        >
-          <SelectItem value="team_id">Team ID</SelectItem>
-          {teams?.map((team) => (
-            <SelectItem key={team.team_id} value={team.team_id}>
-              <span className="font-medium">{team.team_alias}</span>{" "}
-              <span className="text-gray-500">({team.team_id})</span>
-            </SelectItem>
-          ))}
-        </Select>
-      </div>
-    </div>
-  );
-};
 
 /**
- * AllKeysTable – a new table for keys that mimics the table styling used in view_logs.
+ * VirtualKeysTable – a new table for keys that mimics the table styling used in view_logs.
  * The team selector and filtering have been removed so that all keys are shown.
  */
 
-export function AllKeysTable({
-  keys,
-  setKeys,
-  isLoading = false,
-  pagination,
-  onPageChange,
-  pageSize = 50,
-  teams,
-  selectedTeam,
-  setSelectedTeam,
-  selectedKeyAlias,
-  setSelectedKeyAlias,
-  accessToken,
-  userID,
-  userRole,
-  organizations,
-  setCurrentOrg,
-  refresh,
-  onSortChange,
-  currentSort,
-  premiumUser,
-  setAccessToken,
-}: AllKeysTableProps) {
-  const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
-  const [userList, setUserList] = useState<UserResponse[]>([]);
+export function VirtualKeysTable({ teams, organizations, onSortChange, currentSort }: VirtualKeysTableProps) {
+  const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
   const [sorting, setSorting] = React.useState<SortingState>(() => {
     if (currentSort) {
       return [
@@ -141,34 +66,33 @@ export function AllKeysTable({
       },
     ];
   });
+  const [tablePagination, setTablePagination] = React.useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: 100,
+  });
+
+  const {
+    data: keys,
+    isPending: isLoading,
+    refetch,
+  } = useKeys(tablePagination.pageIndex + 1, tablePagination.pageSize);
+  const totalCount = keys?.total_count || 0;
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
 
   // Use the filter logic hook
 
   const { filters, filteredKeys, allKeyAliases, allTeams, allOrganizations, handleFilterChange, handleFilterReset } =
     useFilterLogic({
-      keys,
+      keys: keys?.keys || [],
       teams,
       organizations,
-      accessToken,
     });
-
-  useEffect(() => {
-    if (accessToken) {
-      const user_IDs = keys.map((key) => key.user_id).filter((id) => id !== null);
-      const fetchUserList = async () => {
-        const userListData = await userListCall(accessToken, user_IDs, 1, 100);
-        setUserList(userListData.users);
-      };
-      fetchUserList();
-    }
-  }, [accessToken, keys]);
 
   // Add a useEffect to call refresh when a key is created
   useEffect(() => {
-    if (refresh) {
+    if (refetch) {
       const handleStorageChange = () => {
-        refresh();
+        refetch();
       };
 
       // Listen for storage events that might indicate a key was created
@@ -178,12 +102,13 @@ export function AllKeysTable({
         window.removeEventListener("storage", handleStorageChange);
       };
     }
-  }, [refresh]);
+  }, [refetch]);
 
   const columns: ColumnDef<KeyResponse>[] = [
     {
       id: "expander",
       header: () => null,
+      size: 40,
       cell: ({ row }) =>
         row.getCanExpand() ? (
           <button onClick={row.getToggleExpandedHandler()} style={{ cursor: "pointer" }}>
@@ -195,6 +120,7 @@ export function AllKeysTable({
       id: "token",
       accessorKey: "token",
       header: "Key ID",
+      size: 150,
       cell: (info) => (
         <div className="overflow-hidden">
           <Tooltip title={info.getValue() as string}>
@@ -202,7 +128,7 @@ export function AllKeysTable({
               size="xs"
               variant="light"
               className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
-              onClick={() => setSelectedKeyId(info.getValue() as string)}
+              onClick={() => setSelectedKey(info.row.original)}
             >
               {info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "-"}
             </Button>
@@ -214,10 +140,16 @@ export function AllKeysTable({
       id: "key_alias",
       accessorKey: "key_alias",
       header: "Key Alias",
+      size: 150,
       cell: (info) => {
         const value = info.getValue() as string;
+        const width = info.cell.column.getSize();
         return (
-          <Tooltip title={value}>{value ? (value.length > 20 ? `${value.slice(0, 20)}...` : value) : "-"}</Tooltip>
+          <Tooltip title={value}>
+            <span className={`font-mono text-xs truncate block`} style={{ maxWidth: width, overflow: "hidden" }}>
+              {value ?? "-"}
+            </span>
+          </Tooltip>
         );
       },
     },
@@ -225,12 +157,14 @@ export function AllKeysTable({
       id: "key_name",
       accessorKey: "key_name",
       header: "Secret Key",
+      size: 120,
       cell: (info) => <span className="font-mono text-xs">{info.getValue() as string}</span>,
     },
     {
       id: "team_alias",
       accessorKey: "team_id",
       header: "Team Alias",
+      size: 120,
       cell: ({ row, getValue }) => {
         const teamId = getValue() as string;
         const team = teams?.find((t) => t.team_id === teamId);
@@ -241,6 +175,7 @@ export function AllKeysTable({
       id: "team_id",
       accessorKey: "team_id",
       header: "Team ID",
+      size: 120,
       cell: (info) => (
         <Tooltip title={info.getValue() as string}>
           {info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "-"}
@@ -251,21 +186,24 @@ export function AllKeysTable({
       id: "organization_id",
       accessorKey: "organization_id",
       header: "Organization ID",
+      size: 140,
       cell: (info) => (info.getValue() ? info.renderValue() : "-"),
     },
     {
       id: "user_email",
-      accessorKey: "user_id",
+      accessorKey: "user",
       header: "User Email",
+      size: 160,
       cell: (info) => {
-        const userId = info.getValue() as string;
-        const user = userList.find((u) => u.user_id === userId);
-        return user?.user_email ? (
-          <Tooltip title={user?.user_email}>
-            <span>{user?.user_email.slice(0, 20)}...</span>
+        const user = info.getValue() as any;
+        const value = user?.user_email;
+        const width = info.cell.column.getSize();
+        return (
+          <Tooltip title={value}>
+            <span className={`font-mono text-xs truncate block`} style={{ maxWidth: width, overflow: "hidden" }}>
+              {value ?? "-"}
+            </span>
           </Tooltip>
-        ) : (
-          "-"
         );
       },
     },
@@ -273,6 +211,7 @@ export function AllKeysTable({
       id: "user_id",
       accessorKey: "user_id",
       header: "User ID",
+      size: 120,
       cell: (info) => {
         const userId = info.getValue() as string | null;
         if (userId && userId.length > 15) {
@@ -289,6 +228,7 @@ export function AllKeysTable({
       id: "created_at",
       accessorKey: "created_at",
       header: "Created At",
+      size: 120,
       cell: (info) => {
         const value = info.getValue();
         return value ? new Date(value as string).toLocaleDateString() : "-";
@@ -298,6 +238,7 @@ export function AllKeysTable({
       id: "created_by",
       accessorKey: "created_by",
       header: "Created By",
+      size: 120,
       cell: (info) => {
         const value = info.getValue() as string | null;
         if (value && value.length > 15) {
@@ -314,6 +255,7 @@ export function AllKeysTable({
       id: "updated_at",
       accessorKey: "updated_at",
       header: "Updated At",
+      size: 120,
       cell: (info) => {
         const value = info.getValue();
         return value ? new Date(value as string).toLocaleDateString() : "Never";
@@ -323,6 +265,7 @@ export function AllKeysTable({
       id: "expires",
       accessorKey: "expires",
       header: "Expires",
+      size: 120,
       cell: (info) => {
         const value = info.getValue();
         return value ? new Date(value as string).toLocaleDateString() : "Never";
@@ -332,12 +275,14 @@ export function AllKeysTable({
       id: "spend",
       accessorKey: "spend",
       header: "Spend (USD)",
+      size: 100,
       cell: (info) => formatNumberWithCommas(info.getValue() as number, 4),
     },
     {
       id: "max_budget",
       accessorKey: "max_budget",
       header: "Budget (USD)",
+      size: 110,
       cell: (info) => {
         const maxBudget = info.getValue() as number | null;
         if (maxBudget === null) {
@@ -350,6 +295,7 @@ export function AllKeysTable({
       id: "budget_reset_at",
       accessorKey: "budget_reset_at",
       header: "Budget Reset",
+      size: 130,
       cell: (info) => {
         const value = info.getValue();
         return value ? new Date(value as string).toLocaleString() : "Never";
@@ -359,6 +305,7 @@ export function AllKeysTable({
       id: "models",
       accessorKey: "models",
       header: "Models",
+      size: 200,
       cell: (info) => {
         const models = info.getValue() as string[];
         return (
@@ -442,6 +389,7 @@ export function AllKeysTable({
     {
       id: "rate_limits",
       header: "Rate Limits",
+      size: 140,
       cell: ({ row }) => {
         const key = row.original;
         return (
@@ -527,8 +475,11 @@ export function AllKeysTable({
   const table = useReactTable({
     data: filteredKeys,
     columns: columns.filter((col) => col.id !== "expander"),
+    columnResizeMode: "onChange",
+    columnResizeDirection: "ltr",
     state: {
       sorting,
+      pagination: tablePagination,
     },
     onSortingChange: (updaterOrValue) => {
       const newSorting = typeof updaterOrValue === "function" ? updaterOrValue(sorting) : updaterOrValue;
@@ -547,10 +498,14 @@ export function AllKeysTable({
         onSortChange?.(sortBy, sortOrder);
       }
     },
+    onPaginationChange: setTablePagination,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
     enableSorting: true,
     manualSorting: false,
+    manualPagination: true,
+    pageCount: Math.ceil(totalCount / tablePagination.pageSize),
   });
 
   // Update local sorting state when currentSort prop changes
@@ -567,32 +522,12 @@ export function AllKeysTable({
 
   return (
     <div className="w-full h-full overflow-hidden">
-      {selectedKeyId ? (
+      {selectedKey ? (
         <KeyInfoView
-          keyId={selectedKeyId}
-          onClose={() => setSelectedKeyId(null)}
-          keyData={filteredKeys.find((k) => k.token === selectedKeyId)}
-          onKeyDataUpdate={(updatedKeyData) => {
-            setKeys((keys) =>
-              keys.map((key) => {
-                if (key.token === updatedKeyData.token) {
-                  return updateExistingKeys(key, updatedKeyData);
-                }
-                return key;
-              }),
-            );
-            if (refresh) refresh(); // Minimal fix: refresh the full key list after an update
-          }}
-          onDelete={() => {
-            setKeys((keys) => keys.filter((key) => key.token !== selectedKeyId));
-            if (refresh) refresh(); // Minimal fix: refresh the full key list after a delete
-          }}
-          accessToken={accessToken}
-          userID={userID}
-          userRole={userRole}
+          keyId={selectedKey.token}
+          onClose={() => setSelectedKey(null)}
+          keyData={selectedKey}
           teams={allTeams}
-          premiumUser={premiumUser}
-          setAccessToken={setAccessToken}
         />
       ) : (
         <div className="border-b py-4 flex-1 overflow-hidden">
@@ -610,26 +545,30 @@ export function AllKeysTable({
               Showing{" "}
               {isLoading
                 ? "..."
-                : `${(pagination.currentPage - 1) * pageSize + 1} - ${Math.min(pagination.currentPage * pageSize, pagination.totalCount)}`}{" "}
-              of {isLoading ? "..." : pagination.totalCount} results
+                : `${table.getState().pagination.pageIndex * table.getState().pagination.pageSize + 1} - ${Math.min(
+                    (table.getState().pagination.pageIndex + 1) * table.getState().pagination.pageSize,
+                    totalCount,
+                  )}`}{" "}
+              of {isLoading ? "..." : totalCount} results
             </span>
 
             <div className="inline-flex items-center gap-2">
               <span className="text-sm text-gray-700">
-                Page {isLoading ? "..." : pagination.currentPage} of {isLoading ? "..." : pagination.totalPages}
+                Page {isLoading ? "..." : table.getState().pagination.pageIndex + 1} of{" "}
+                {isLoading ? "..." : table.getPageCount()}
               </span>
 
               <button
-                onClick={() => onPageChange(pagination.currentPage - 1)}
-                disabled={isLoading || pagination.currentPage === 1}
+                onClick={() => table.previousPage()}
+                disabled={isLoading || !table.getCanPreviousPage()}
                 className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Previous
               </button>
 
               <button
-                onClick={() => onPageChange(pagination.currentPage + 1)}
-                disabled={isLoading || pagination.currentPage === pagination.totalPages}
+                onClick={() => table.nextPage()}
+                disabled={isLoading || !table.getCanNextPage()}
                 className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Next
@@ -639,18 +578,35 @@ export function AllKeysTable({
           <div className="h-[75vh] overflow-auto">
             <div className="rounded-lg custom-border relative">
               <div className="overflow-x-auto">
-                <Table className="[&_td]:py-0.5 [&_th]:py-1">
+                <Table className="[&_td]:py-0.5 [&_th]:py-1" style={{ width: table.getCenterTotalSize() }}>
                   <TableHead>
                     {table.getHeaderGroups().map((headerGroup) => (
                       <TableRow key={headerGroup.id}>
                         {headerGroup.headers.map((header) => (
                           <TableHeaderCell
                             key={header.id}
-                            className={`py-1 h-8 ${
+                            data-header-id={header.id}
+                            className={`py-1 h-8 relative hover:bg-gray-50 ${
                               header.id === "actions"
                                 ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
                                 : ""
                             }`}
+                            style={{
+                              width: header.getSize(),
+                              position: "relative",
+                            }}
+                            onMouseEnter={() => {
+                              const resizer = document.querySelector(`[data-header-id="${header.id}"] .resizer`);
+                              if (resizer) {
+                                (resizer as HTMLElement).style.opacity = "0.5";
+                              }
+                            }}
+                            onMouseLeave={() => {
+                              const resizer = document.querySelector(`[data-header-id="${header.id}"] .resizer`);
+                              if (resizer && !header.column.getIsResizing()) {
+                                (resizer as HTMLElement).style.opacity = "0";
+                              }
+                            }}
                             onClick={header.column.getToggleSortingHandler()}
                           >
                             <div className="flex items-center justify-between gap-2">
@@ -671,6 +627,24 @@ export function AllKeysTable({
                                   )}
                                 </div>
                               )}
+                              <div
+                                onDoubleClick={() => header.column.resetSize()}
+                                onMouseDown={header.getResizeHandler()}
+                                onTouchStart={header.getResizeHandler()}
+                                className={`resizer ${table.options.columnResizeDirection} ${header.column.getIsResizing() ? "isResizing" : ""}`}
+                                style={{
+                                  position: "absolute",
+                                  right: 0,
+                                  top: 0,
+                                  height: "100%",
+                                  width: "5px",
+                                  background: header.column.getIsResizing() ? "#3b82f6" : "transparent",
+                                  cursor: "col-resize",
+                                  userSelect: "none",
+                                  touchAction: "none",
+                                  opacity: header.column.getIsResizing() ? 1 : 0,
+                                }}
+                              />
                             </div>
                           </TableHeaderCell>
                         ))}
@@ -693,6 +667,7 @@ export function AllKeysTable({
                             <TableCell
                               key={cell.id}
                               style={{
+                                width: cell.column.getSize(),
                                 maxWidth: "8-x",
                                 whiteSpace: "pre-wrap",
                                 overflow: "hidden",
