@@ -294,32 +294,18 @@ class OpenTelemetry(CustomLogger):
             return
 
         from opentelemetry import metrics
-        from opentelemetry.sdk.metrics import Histogram, MeterProvider
+        from opentelemetry.sdk.metrics import MeterProvider
 
         def create_meter_provider():
-            from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
-                OTLPMetricExporter,
+            metric_reader = self._get_metric_reader()
+            if metric_reader:
+                return MeterProvider(
+                    metric_readers=[metric_reader], resource=_get_litellm_resource()
+                )
+            verbose_logger.warning(
+                "OpenTelemetry: No metric reader created. Metrics will not be exported."
             )
-            from opentelemetry.sdk.metrics.export import (
-                AggregationTemporality,
-                PeriodicExportingMetricReader,
-            )
-
-            normalized_endpoint = self._normalize_otel_endpoint(
-                self.config.endpoint, "metrics"
-            )
-            _metric_exporter = OTLPMetricExporter(
-                endpoint=normalized_endpoint,
-                headers=OpenTelemetry._get_headers_dictionary(self.config.headers),
-                preferred_temporality={Histogram: AggregationTemporality.DELTA},
-            )
-            _metric_reader = PeriodicExportingMetricReader(
-                _metric_exporter, export_interval_millis=10000
-            )
-
-            return MeterProvider(
-                metric_readers=[_metric_reader], resource=_get_litellm_resource()
-            )
+            return MeterProvider(resource=_get_litellm_resource())
 
         meter_provider = self._get_or_create_provider(
             provider=meter_provider,
@@ -383,7 +369,7 @@ class OpenTelemetry(CustomLogger):
                 )
             return provider
 
-        logger_provider = self._get_or_create_provider(
+        self._get_or_create_provider(
             provider=logger_provider,
             provider_name="LoggerProvider",
             get_existing_provider_fn=get_logger_provider,
@@ -991,6 +977,15 @@ class OpenTelemetry(CustomLogger):
     def _emit_semantic_logs(self, kwargs, response_obj, span: Span):
         if not self.config.enable_events:
             return
+
+        # NOTE: Semantic logs (gen_ai.content.prompt/completion events) have compatibility issues
+        # with OTEL SDK >= 1.39.0 due to breaking changes in PR #4676:
+        # - LogRecord moved from opentelemetry.sdk._logs to opentelemetry.sdk._logs._internal
+        # - LogRecord constructor no longer accepts 'resource' parameter (now inherited from LoggerProvider)
+        # - LogData class was removed entirely
+        # These logs work correctly in OTEL SDK < 1.39.0 but may fail in >= 1.39.0.
+        # See: https://github.com/open-telemetry/opentelemetry-python/pull/4676
+        # TODO: Refactor to use the proper OTEL Logs API instead of directly creating SDK LogRecords
 
         from opentelemetry._logs import SeverityNumber, get_logger, get_logger_provider
         from opentelemetry.sdk._logs import LogRecord as SdkLogRecord
@@ -1855,7 +1850,8 @@ class OpenTelemetry(CustomLogger):
             )
             return self.OTEL_EXPORTER
 
-        if self.OTEL_EXPORTER == "console":
+        otel_logs_exporter = os.getenv("OTEL_LOGS_EXPORTER")
+        if self.OTEL_EXPORTER == "console" or otel_logs_exporter == "console":
             from opentelemetry.sdk._logs.export import ConsoleLogExporter
 
             verbose_logger.debug(
@@ -1901,6 +1897,67 @@ class OpenTelemetry(CustomLogger):
             from opentelemetry.sdk._logs.export import ConsoleLogExporter
 
             return ConsoleLogExporter()
+
+    def _get_metric_reader(self):
+        """
+        Get the appropriate metric reader based on the configuration.
+        """
+        from opentelemetry.sdk.metrics import Histogram
+        from opentelemetry.sdk.metrics.export import (
+            AggregationTemporality,
+            ConsoleMetricExporter,
+            PeriodicExportingMetricReader,
+        )
+
+        verbose_logger.debug(
+            "OpenTelemetry Logger, initializing metric reader\nself.OTEL_EXPORTER: %s\nself.OTEL_ENDPOINT: %s\nself.OTEL_HEADERS: %s",
+            self.OTEL_EXPORTER,
+            self.OTEL_ENDPOINT,
+            self.OTEL_HEADERS,
+        )
+
+        _split_otel_headers = OpenTelemetry._get_headers_dictionary(self.OTEL_HEADERS)
+        normalized_endpoint = self._normalize_otel_endpoint(self.OTEL_ENDPOINT, "metrics")
+
+        if self.OTEL_EXPORTER == "console":
+            exporter = ConsoleMetricExporter()
+            return PeriodicExportingMetricReader(exporter, export_interval_millis=5000)
+
+        elif (
+            self.OTEL_EXPORTER == "otlp_http"
+            or self.OTEL_EXPORTER == "http/protobuf"
+            or self.OTEL_EXPORTER == "http/json"
+        ):
+            from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
+                OTLPMetricExporter,
+            )
+
+            exporter = OTLPMetricExporter(
+                endpoint=normalized_endpoint,
+                headers=_split_otel_headers,
+                preferred_temporality={Histogram: AggregationTemporality.DELTA},
+            )
+            return PeriodicExportingMetricReader(exporter, export_interval_millis=5000)
+
+        elif self.OTEL_EXPORTER == "otlp_grpc" or self.OTEL_EXPORTER == "grpc":
+            from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
+                OTLPMetricExporter,
+            )
+
+            exporter = OTLPMetricExporter(
+                endpoint=normalized_endpoint,
+                headers=_split_otel_headers,
+                preferred_temporality={Histogram: AggregationTemporality.DELTA},
+            )
+            return PeriodicExportingMetricReader(exporter, export_interval_millis=5000)
+
+        else:
+            verbose_logger.warning(
+                "OpenTelemetry: Unknown metric exporter '%s', defaulting to console. Supported: console, otlp_http, otlp_grpc",
+                self.OTEL_EXPORTER,
+            )
+            exporter = ConsoleMetricExporter()
+            return PeriodicExportingMetricReader(exporter, export_interval_millis=5000)
 
     def _normalize_otel_endpoint(
         self, endpoint: Optional[str], signal_type: str
