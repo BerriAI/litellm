@@ -1,9 +1,11 @@
 import { screen, waitFor } from "@testing-library/react";
-import { vi, it, expect } from "vitest";
+import { vi, it, expect, beforeEach, MockedFunction } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { VirtualKeysTable } from "./VirtualKeysTable";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { Organization } from "../networking";
+import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import { useFilterLogic } from "../key_team_helpers/filter_logic";
 
 // Mock network calls
 vi.mock("./networking", async (importOriginal) => {
@@ -37,6 +39,16 @@ vi.mock("./key_team_helpers/filter_helpers", () => ({
       organization_alias: "Test Organization",
     },
   ]),
+}));
+
+// Mock useKeys hook
+vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
+  useKeys: vi.fn(),
+}));
+
+// Mock useFilterLogic hook
+vi.mock("../key_team_helpers/filter_logic", () => ({
+  useFilterLogic: vi.fn(),
 }));
 
 const mockKey: KeyResponse = {
@@ -131,29 +143,55 @@ const mockOrganization: Organization = {
   members: [],
 };
 
+// Mock hook implementations
+const mockUseKeys = useKeys as MockedFunction<typeof useKeys>;
+const mockUseFilterLogic = useFilterLogic as MockedFunction<typeof useFilterLogic>;
+
+beforeEach(() => {
+  // Reset mocks before each test
+  vi.clearAllMocks();
+
+  // Setup default mock implementations
+  mockUseKeys.mockReturnValue({
+    data: {
+      keys: [mockKey],
+      total_count: 1,
+      current_page: 1,
+      total_pages: 1,
+    } as KeysResponse,
+    isPending: false,
+    refetch: vi.fn(),
+  } as any);
+
+  mockUseFilterLogic.mockReturnValue({
+    filters: {
+      "Team ID": "team-1",
+      "Organization ID": "org-1",
+      "Key Alias": "Test Key Alias",
+      "User ID": "user-1",
+      "User Email": "user@example.com",
+      "User Role": "user",
+      "Sort By": "created_at",
+      "Sort Order": "desc",
+    },
+    filteredKeys: [mockKey],
+    allKeyAliases: ["test-key-alias"],
+    allTeams: [mockTeam],
+    allOrganizations: [mockOrganization],
+    handleFilterChange: vi.fn(),
+    handleFilterReset: vi.fn(),
+  });
+});
+
 it("should render VirtualKeysTable component", () => {
   const mockProps = {
-    keys: [mockKey],
-    setKeys: vi.fn(),
-    isLoading: false,
-    pagination: {
-      currentPage: 1,
-      totalPages: 1,
-      totalCount: 1,
-    },
-    onPageChange: vi.fn(),
-    pageSize: 50,
     teams: [mockTeam],
-    selectedTeam: null,
-    setSelectedTeam: vi.fn(),
-    selectedKeyAlias: null,
-    setSelectedKeyAlias: vi.fn(),
-    accessToken: "test-token",
-    userID: "user-1",
-    userRole: "admin",
     organizations: [mockOrganization],
-    setCurrentOrg: vi.fn(),
-    premiumUser: false,
+    onSortChange: vi.fn(),
+    currentSort: {
+      sortBy: "created_at",
+      sortOrder: "desc" as const,
+    },
   };
 
   renderWithProviders(<VirtualKeysTable {...mockProps} />);
@@ -163,27 +201,13 @@ it("should render VirtualKeysTable component", () => {
 
 it("should display key information correctly", async () => {
   const mockProps = {
-    keys: [mockKey],
-    setKeys: vi.fn(),
-    isLoading: false,
-    pagination: {
-      currentPage: 1,
-      totalPages: 1,
-      totalCount: 1,
-    },
-    onPageChange: vi.fn(),
-    pageSize: 50,
     teams: [mockTeam],
-    selectedTeam: null,
-    setSelectedTeam: vi.fn(),
-    selectedKeyAlias: null,
-    setSelectedKeyAlias: vi.fn(),
-    accessToken: "test-token",
-    userID: "user-1",
-    userRole: "admin",
     organizations: [mockOrganization],
-    setCurrentOrg: vi.fn(),
-    premiumUser: false,
+    onSortChange: vi.fn(),
+    currentSort: {
+      sortBy: "created_at",
+      sortOrder: "desc" as const,
+    },
   };
 
   renderWithProviders(<VirtualKeysTable {...mockProps} />);
@@ -197,27 +221,13 @@ it("should display key information correctly", async () => {
 
 it("should display user email correctly", async () => {
   const mockProps = {
-    keys: [mockKey],
-    setKeys: vi.fn(),
-    isLoading: false,
-    pagination: {
-      currentPage: 1,
-      totalPages: 1,
-      totalCount: 1,
-    },
-    onPageChange: vi.fn(),
-    pageSize: 50,
     teams: [mockTeam],
-    selectedTeam: null,
-    setSelectedTeam: vi.fn(),
-    selectedKeyAlias: null,
-    setSelectedKeyAlias: vi.fn(),
-    accessToken: "test-token",
-    userID: "user-1",
-    userRole: "admin",
     organizations: [mockOrganization],
-    setCurrentOrg: vi.fn(),
-    premiumUser: false,
+    onSortChange: vi.fn(),
+    currentSort: {
+      sortBy: "created_at",
+      sortOrder: "desc" as const,
+    },
   };
 
   renderWithProviders(<VirtualKeysTable {...mockProps} />);
