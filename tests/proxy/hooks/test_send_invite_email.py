@@ -1,4 +1,3 @@
-
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
