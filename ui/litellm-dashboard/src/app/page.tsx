@@ -323,11 +323,8 @@ export default function CreateKeyPage() {
                   />
                 ) : page == "models" ? (
                   <OldModelDashboard
-                    userID={userID}
-                    userRole={userRole}
                     token={token}
                     keys={keys}
-                    accessToken={accessToken}
                     modelData={modelData}
                     setModelData={setModelData}
                     premiumUser={premiumUser}
