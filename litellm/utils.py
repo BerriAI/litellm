@@ -3148,6 +3148,21 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             drop_params=drop_params if drop_params is not None else False,
         )
 
+    elif custom_llm_provider == "ollama":
+        if 'dimensions' in non_default_params:
+            optional_params['dimensions']=non_default_params.pop('dimensions')
+        if len(non_default_params.keys()) > 0:
+            if (
+                litellm.drop_params is True or drop_params is True
+            ):  # drop the unsupported non-default values
+                keys = list(non_default_params.keys())
+                for k in keys:
+                    non_default_params.pop(k, None)
+            else:
+                raise UnsupportedParamsError(
+                    status_code=500,
+                    message=f"Setting {non_default_params} is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
+                )
     elif (
         custom_llm_provider != "openai"
         and custom_llm_provider != "azure"
