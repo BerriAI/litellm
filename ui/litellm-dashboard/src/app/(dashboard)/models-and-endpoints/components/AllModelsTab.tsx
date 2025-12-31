@@ -19,7 +19,6 @@ interface AllModelsTabProps {
   availableModelAccessGroups: string[];
   setSelectedModelId: (id: string) => void;
   setSelectedTeamId: (id: string) => void;
-  setEditModel: (edit: boolean) => void;
 }
 
 const AllModelsTab = ({
@@ -29,7 +28,6 @@ const AllModelsTab = ({
   availableModelAccessGroups,
   setSelectedModelId,
   setSelectedTeamId,
-  setEditModel,
 }: AllModelsTabProps) => {
   const { data: modelData } = useModelsInfo();
   const { userId, userRole, premiumUser } = useAuthorized();
@@ -359,7 +357,6 @@ const AllModelsTab = ({
                 getDisplayModelName,
                 () => {},
                 () => {},
-                setEditModel,
                 expandedRows,
                 setExpandedRows,
               )}
