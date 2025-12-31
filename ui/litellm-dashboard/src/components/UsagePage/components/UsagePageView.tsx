@@ -27,7 +27,7 @@ import {
   Text,
   Title,
 } from "@tremor/react";
-import { Alert, Badge } from "antd";
+import { Alert } from "antd";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
@@ -419,13 +419,11 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       <div className="flex items-end justify-between gap-6 mb-6">
         <div className="flex-1">
           <div className="flex items-end justify-between gap-6 mb-4 w-full">
-            <Badge color="blue" count="New">
-              <UsageViewSelect
-                value={usageView}
-                onChange={(value) => setUsageView(value)}
-                isAdmin={all_admin_roles.includes(userRole || "")}
-              />
-            </Badge>
+            <UsageViewSelect
+              value={usageView}
+              onChange={(value) => setUsageView(value)}
+              isAdmin={all_admin_roles.includes(userRole || "")}
+            />
             <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
           </div>
           {/* Your Usage Panel */}
