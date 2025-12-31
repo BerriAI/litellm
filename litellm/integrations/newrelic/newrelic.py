@@ -195,7 +195,7 @@ class NewRelicLogger(CustomLogger):
 
     def _check_and_emit_periodic_metric(self):
         """
-        Check if 23 hours have passed since last metric emission and re-emit if needed.
+        Check if 27 hours have passed since last metric emission and re-emit if needed.
 
         Uses a mutex to ensure only one thread emits the metric even if multiple
         requests are being processed concurrently.
@@ -206,15 +206,14 @@ class NewRelicLogger(CustomLogger):
         current_time = time.time()
         time_since_last_emission = current_time - _last_metric_emission_time
 
-        # 1 hour in seconds = 3600
-        if time_since_last_emission >= 3600:
+        if time_since_last_emission >= 97200:  # 27 hours = 97200 seconds
             # Acquire lock to ensure only one thread emits
             with _metric_lock:
                 # Double-check inside lock in case another thread just emitted
                 current_time = time.time()
                 time_since_last_emission = current_time - _last_metric_emission_time
 
-                if time_since_last_emission >= 82800:
+                if time_since_last_emission >= 97200:
                     self._emit_supportability_metric()
 
     def _should_record_content(self) -> bool:
@@ -295,9 +294,6 @@ class NewRelicLogger(CustomLogger):
         # If still not found, generate UUID and log warning per spec
         if not completion_id:
             completion_id = str(uuid.uuid4())
-            verbose_logger.warning(
-                "No completion ID found in request or response. Generated UUID."
-            )
 
         return completion_id
 
@@ -543,11 +539,6 @@ class NewRelicLogger(CustomLogger):
 
             if app and app.enabled:
                 app.record_custom_event("LlmChatCompletionSummary", event_data)
-            else:
-                verbose_logger.info("New Relic application is not enabled; skipping event recording.")
-
-            import pprint
-            verbose_logger.info(f"Recorded LlmChatCompletionSummary event: {pprint.pformat(event_data)}")
 
         except Exception as e:
             verbose_logger.warning(f"Failed to record New Relic summary event: {e}")
@@ -604,13 +595,6 @@ class NewRelicLogger(CustomLogger):
 
                 if app and app.enabled:
                     app.record_custom_event("LlmChatCompletionMessage", event_data)
-                else:
-                    verbose_logger.info("New Relic application is not enabled; skipping event recording.")
-
-            import pprint
-            verbose_logger.info(
-                f"Recorded {len(messages)} LlmChatCompletionMessage events: {pprint.pformat(messages)}"
-            )
 
         except Exception as e:
             verbose_logger.warning(f"Failed to record New Relic message events: {e}")
@@ -619,11 +603,7 @@ class NewRelicLogger(CustomLogger):
     def _record_error_metric(self):
         """Record error metric to New Relic."""
         try:
-            import newrelic.agent
-
             newrelic.agent.record_custom_metric("LLM/LiteLLM/Error", 1)
-            verbose_logger.info("Recorded LLM/LiteLLM/Error metric")
-
         except Exception as e:
             verbose_logger.warning(f"Failed to record New Relic error metric: {e}")
             self.handle_callback_failure("newrelic")
@@ -646,16 +626,16 @@ class NewRelicLogger(CustomLogger):
         # Check and emit periodic supportability metric if 23 hours have passed
         self._check_and_emit_periodic_metric()
 
-        import pprint
-        verbose_logger.info(f"newrelic._process_success called, kwargs=\n{pprint.pformat(kwargs)}, \nresponse_obj=\n{pprint.pformat(response_obj)}")
+        # import pprint
+        # verbose_logger.info(f"newrelic._process_success called, kwargs=\n{pprint.pformat(kwargs)}, \nresponse_obj=\n{pprint.pformat(response_obj)}")
 
         # Get trace context
         trace_id, span_id = self._get_trace_context(kwargs)
         if not trace_id:
-            verbose_logger.debug("No trace_id available, skipping New Relic event recording.")
+            # verbose_logger.debug("No trace_id available, skipping New Relic event recording.")
             return
 
-        verbose_logger.info(f"Trace ID: {trace_id}, Span ID: {span_id or '(none)'}")
+        # verbose_logger.info(f"Trace ID: {trace_id}, Span ID: {span_id or '(none)'}")
 
         # Generate unique request ID for this request (used as Summary event id)
         request_id = str(uuid.uuid4())
