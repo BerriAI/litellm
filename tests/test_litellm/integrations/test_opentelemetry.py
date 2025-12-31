@@ -199,6 +199,7 @@ class TestOpenTelemetryProviderInitialization(unittest.TestCase):
             "Existing TracerProvider should be respected and not overridden"
         )
 
+    @patch.dict(os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_METRICS": "true"}, clear=True)
     def test_init_metrics_respects_existing_meter_provider(self):
         """
         Unit test: _init_metrics() should respect existing MeterProvider.
@@ -209,28 +210,22 @@ class TestOpenTelemetryProviderInitialization(unittest.TestCase):
         from opentelemetry import metrics
         from opentelemetry.sdk.metrics import MeterProvider
 
-        # Setup: Enable metrics for this test
-        os.environ["LITELLM_OTEL_INTEGRATION_ENABLE_METRICS"] = "true"
+        # Create and set an existing MeterProvider
+        meter_provider = MeterProvider()
+        metrics.set_meter_provider(meter_provider)
+        existing_provider = metrics.get_meter_provider()
 
-        try:
-            # Create and set an existing MeterProvider
-            meter_provider = MeterProvider()
-            metrics.set_meter_provider(meter_provider)
-            existing_provider = metrics.get_meter_provider()
+        # Act: Initialize OpenTelemetry integration (should detect existing provider)
+        config = OpenTelemetryConfig.from_env()
+        otel_integration = OpenTelemetry(config=config)
 
-            # Act: Initialize OpenTelemetry integration (should detect existing provider)
-            config = OpenTelemetryConfig.from_env()
-            otel_integration = OpenTelemetry(config=config)
+        # Assert: The existing provider should still be active
+        current_provider = metrics.get_meter_provider()
+        assert current_provider is existing_provider, (
+            "Existing MeterProvider should be respected and not overridden"
+        )
 
-            # Assert: The existing provider should still be active
-            current_provider = metrics.get_meter_provider()
-            assert current_provider is existing_provider, (
-                "Existing MeterProvider should be respected and not overridden"
-            )
-        finally:
-            # Cleanup
-            os.environ.pop("LITELLM_OTEL_INTEGRATION_ENABLE_METRICS", None)
-
+    @patch.dict(os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS": "true"}, clear=True)
     def test_init_logs_respects_existing_logger_provider(self):
         """
         Unit test: _init_logs() should respect existing LoggerProvider.
@@ -241,27 +236,20 @@ class TestOpenTelemetryProviderInitialization(unittest.TestCase):
         from opentelemetry._logs import get_logger_provider, set_logger_provider
         from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
 
-        # Setup: Enable events for this test
-        os.environ["LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS"] = "true"
+        # Create and set an existing LoggerProvider
+        logger_provider = OTLoggerProvider()
+        set_logger_provider(logger_provider)
+        existing_provider = get_logger_provider()
 
-        try:
-            # Create and set an existing LoggerProvider
-            logger_provider = OTLoggerProvider()
-            set_logger_provider(logger_provider)
-            existing_provider = get_logger_provider()
+        # Act: Initialize OpenTelemetry integration (should detect existing provider)
+        config = OpenTelemetryConfig.from_env()
+        otel_integration = OpenTelemetry(config=config)
 
-            # Act: Initialize OpenTelemetry integration (should detect existing provider)
-            config = OpenTelemetryConfig.from_env()
-            otel_integration = OpenTelemetry(config=config)
-
-            # Assert: The existing provider should still be active
-            current_provider = get_logger_provider()
-            assert current_provider is existing_provider, (
-                "Existing LoggerProvider should be respected and not overridden"
-            )
-        finally:
-            # Cleanup
-            os.environ.pop("LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS", None)
+        # Assert: The existing provider should still be active
+        current_provider = get_logger_provider()
+        assert current_provider is existing_provider, (
+            "Existing LoggerProvider should be respected and not overridden"
+        )
 
 
 class TestOpenTelemetry(unittest.TestCase):
@@ -712,7 +700,6 @@ class TestOpenTelemetry(unittest.TestCase):
         self.assertEqual(attributes.get("extra.attr"), "extra-value")
 
 
-
     def test_handle_success_spans_only(self):
         # make sure neither events nor metrics is on
         os.environ.pop("LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS", None)
@@ -779,11 +766,8 @@ class TestOpenTelemetry(unittest.TestCase):
         logs = log_exporter.get_finished_logs()
         self.assertFalse(logs, "Did not expect any logs")
 
+    @patch.dict(os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_METRICS": "true"}, clear=True)
     def test_handle_success_spans_and_metrics(self):
-        # only metrics on
-        os.environ.pop("LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS", None)
-        os.environ["LITELLM_OTEL_INTEGRATION_ENABLE_METRICS"] = "true"
-
         # ─── build in‐memory OTEL providers/exporters ─────────────────────────────
         span_exporter = InMemorySpanExporter()
         tracer_provider = TracerProvider()
@@ -1411,6 +1395,23 @@ class TestOpenTelemetryProtocolSelection(unittest.TestCase):
                 "http://collector:4317/v1/traces", "logs"
             )
             self.assertEqual(normalized, "http://collector:4317/v1/logs")
+
+    def test_get_metric_reader_uses_http_exporter_for_http_protobuf(self):
+        """Test that http/protobuf protocol uses OTLPMetricExporterHTTP"""
+        from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
+            OTLPMetricExporter,
+        )
+        from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+
+        config = OpenTelemetryConfig(
+            exporter="http/protobuf", endpoint="http://collector:4318"
+        )
+        otel = OpenTelemetry(config=config)
+
+        reader = otel._get_metric_reader()
+
+        self.assertIsInstance(reader, PeriodicExportingMetricReader)
+        self.assertIsInstance(reader._exporter, OTLPMetricExporter)
 
 
 class TestOpenTelemetryExternalSpan(unittest.TestCase):
