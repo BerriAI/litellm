@@ -35,7 +35,7 @@ test.describe("Internal Users Search", () => {
       ),
       searchInput.fill("test@"),
     ]);
-
+    await page.waitForTimeout(5000);
     const filteredCount = await rows.count();
     await expect(filteredCount).toBeLessThan(initialCount);
 
