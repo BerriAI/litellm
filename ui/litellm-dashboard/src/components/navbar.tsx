@@ -1,7 +1,7 @@
 import Link from "next/link";
 import React, { useState, useEffect } from "react";
 import type { MenuProps } from "antd";
-import { Dropdown, Tooltip } from "antd";
+import { Dropdown, Switch, Tooltip } from "antd";
 import { getProxyBaseUrl } from "@/components/networking";
 import {
   UserOutlined,
@@ -13,8 +13,10 @@ import {
   MenuUnfoldOutlined,
 } from "@ant-design/icons";
 import { clearTokenCookies } from "@/utils/cookieUtils";
+import { getLocalStorageItem, setLocalStorageItem, removeLocalStorageItem } from "@/utils/localStorageUtils";
 import { fetchProxySettings } from "@/utils/proxyUtils";
 import { useTheme } from "@/contexts/ThemeContext";
+import { emitLocalStorageChange } from "@/utils/localStorageUtils";
 
 interface NavbarProps {
   userID: string | null;
@@ -44,6 +46,7 @@ const Navbar: React.FC<NavbarProps> = ({
   const baseUrl = getProxyBaseUrl();
   const [logoutUrl, setLogoutUrl] = useState("");
   const [version, setVersion] = useState("");
+  const [disableShowNewBadge, setDisableShowNewBadge] = useState(false);
   const { logoUrl } = useTheme();
 
   // Simple logo URL: use custom logo if available, otherwise default
@@ -78,6 +81,11 @@ const Navbar: React.FC<NavbarProps> = ({
 
     initializeProxySettings();
   }, [accessToken]);
+
+  useEffect(() => {
+    const storedValue = getLocalStorageItem("disableShowNewBadge");
+    setDisableShowNewBadge(storedValue === "true");
+  }, []);
 
   useEffect(() => {
     setLogoutUrl(proxySettings?.PROXY_LOGOUT_URL || "");
@@ -129,6 +137,28 @@ const Navbar: React.FC<NavbarProps> = ({
                 {userEmail || "Unknown"}
               </span>
             </div>
+            <div
+              className="flex items-center text-sm pt-2 mt-2 border-t border-gray-100"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <span className="text-gray-500 text-xs">Hide New Feature Indicators</span>
+              <Switch
+                className="ml-auto"
+                size="small"
+                checked={disableShowNewBadge}
+                onChange={(checked) => {
+                  setDisableShowNewBadge(checked);
+                  if (checked) {
+                    setLocalStorageItem("disableShowNewBadge", "true");
+                    emitLocalStorageChange("disableShowNewBadge");
+                  } else {
+                    removeLocalStorageItem("disableShowNewBadge");
+                    emitLocalStorageChange("disableShowNewBadge");
+                  }
+                }}
+                aria-label="Toggle hide new feature indicators"
+              />
+            </div>
           </div>
         </div>
       ),
@@ -148,11 +178,7 @@ const Navbar: React.FC<NavbarProps> = ({
     <nav className="bg-white border-b border-gray-200 sticky top-0 z-10">
       <div className="w-full">
         <div className="flex items-center h-14 px-4">
-          {" "}
-          {/* Increased height from h-12 to h-14 */}
-          {/* Left side with collapse toggle and logo */}
           <div className="flex items-center flex-shrink-0">
-            {/* Collapse/Expand Toggle Button - Larger */}
             {onToggleSidebar && (
               <button
                 onClick={onToggleSidebar}
@@ -167,9 +193,9 @@ const Navbar: React.FC<NavbarProps> = ({
               <Link href="/" className="flex items-center">
                 <div className="relative">
                   <img src={imageUrl} alt="LiteLLM Brand" className="h-10 w-auto" />
-                  <span 
+                  <span
                     className="absolute -top-1 -right-2 text-lg animate-bounce"
-                    style={{ animationDuration: '2s' }}
+                    style={{ animationDuration: "2s" }}
                     title="Happy Holidays!"
                   >
                     🎄
