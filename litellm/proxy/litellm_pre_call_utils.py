@@ -1534,8 +1534,6 @@ def _apply_vision_fallback_if_needed(
                             if isinstance(tc, dict) and tc.get("type") == "image":
                                 has_images = True
                                 break
-                    elif isinstance(tool_content, str) and ("base64" in tool_content or "data:image" in tool_content):
-                        has_images = True
                 if has_images:
                     break
         if _audio_or_image_in_message_content(msg):
