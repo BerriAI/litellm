@@ -1,6 +1,6 @@
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
-import { useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
+import { useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import AllModelsTab from "@/app/(dashboard)/models-and-endpoints/components/AllModelsTab";
 import ModelRetrySettingsTab from "@/app/(dashboard)/models-and-endpoints/components/ModelRetrySettingsTab";
@@ -17,7 +17,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Col, Grid, Icon, Tab, TabGroup, TabList, TabPanel, TabPanels, Text } from "@tremor/react";
 import type { UploadProps } from "antd";
 import { Form, Typography } from "antd";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import AddModelTab from "../../../components/add_model/add_model_tab";
 import HealthCheckComponent from "../../../components/model_dashboard/HealthCheckComponent";
 import ModelGroupAliasSettings from "../../../components/model_group_alias_settings";
