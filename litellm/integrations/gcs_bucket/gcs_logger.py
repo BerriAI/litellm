@@ -44,36 +44,16 @@ class ProductionGCSLogger(CustomLogger):
             correlation_id = data.get("correlation_id", str(uuid.uuid4()))
 
             if log_type == "success":
-                # Success logs: date={date}/department/team/user/{timestamp}_{correlation_id}.json
+                # Success logs: date={date}/{timestamp}_{correlation_id}.json
                 # Using hive-style partitioning for BigQuery cost optimization
-                user_data = data.get("user", {})
-                department = user_data.get("department") or "unknown_dept"
-                team = user_data.get("team_alias") or "unknown_team"
-                user_email = user_data.get("email", "unknown")
-                username = user_email.split("@")[0] if user_email else "unknown"
-
-                # Sanitize folder names (remove special characters)
-                department = department.replace("/", "_").replace(" ", "_")
-                team = team.replace("/", "_").replace(" ", "_")
-                username = username.replace("/", "_").replace(" ", "_")
-
+                # User/dept/team info is in JSON for querying
                 filename = f"{timestamp}_{correlation_id}.json"
-                gcs_path = f"success/date={date}/{department}/{team}/{username}/{filename}"
+                gcs_path = f"success/date={date}/{filename}"
             else:
-                # Error logs: date={date}/model/{timestamp}_{correlation_id}.json
+                # Error logs: date={date}/{timestamp}_{correlation_id}.json
                 # Using hive-style partitioning for BigQuery cost optimization
-                model_data = data.get("model", {})
-                model_name = (
-                    model_data.get("requested")
-                    or model_data.get("deployment")
-                    or "unknown_model"
-                )
-
-                # Sanitize model name
-                model_name = model_name.replace("/", "_").replace(" ", "_")
-
                 filename = f"{timestamp}_{correlation_id}.json"
-                gcs_path = f"failure/date={date}/{model_name}/{filename}"
+                gcs_path = f"failure/date={date}/{filename}"
 
             # Use async httpx to upload to GCS
             headers = await self.gcs_base.construct_request_headers(
