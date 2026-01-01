@@ -1,7 +1,7 @@
 "use client";
 import React, { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import ModelHubTable from "@/components/model_hub_table";
+import ModelHubTable from "@/components/AIHub/model_hub_table";
 
 export default function PublicModelHubTable() {
   const searchParams = useSearchParams()!;

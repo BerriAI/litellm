@@ -3,7 +3,7 @@ import { Modal, Form, Steps, Button, Checkbox } from "antd";
 import { Text, Title, Badge } from "@tremor/react";
 import { makeAgentsPublicCall } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
-import { AgentHubData } from "../agent_hub_table_columns";
+import { AgentHubData } from "@/components/AIHub/agent_hub_table_columns";
 
 const { Step } = Steps;
 

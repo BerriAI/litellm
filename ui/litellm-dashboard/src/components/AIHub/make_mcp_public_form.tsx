@@ -3,7 +3,7 @@ import { Modal, Form, Steps, Button, Checkbox } from "antd";
 import { Text, Title, Badge } from "@tremor/react";
 import { makeMCPPublicCall } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
-import { MCPServerData } from "../mcp_hub_table_columns";
+import { MCPServerData } from "@/components/AIHub/mcp_hub_table_columns";
 
 const { Step } = Steps;
 
