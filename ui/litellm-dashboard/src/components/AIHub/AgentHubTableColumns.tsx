@@ -28,7 +28,7 @@ export interface AgentHubData {
   [key: string]: any;
 }
 
-export const agentHubColumns = (
+export const getAgentHubTableColumns = (
   showModal: (agent: AgentHubData) => void,
   copyToClipboard: (text: string) => void,
   publicPage: boolean = false,
@@ -69,11 +69,7 @@ export const agentHubColumns = (
       cell: ({ row }) => {
         const agent = row.original;
 
-        return (
-          <Text className="text-xs line-clamp-2">
-            {agent.description || "-"}
-          </Text>
-        );
+        return <Text className="text-xs line-clamp-2">{agent.description || "-"}</Text>;
       },
       meta: {
         className: "hidden md:table-cell",
@@ -105,11 +101,7 @@ export const agentHubColumns = (
       cell: ({ row }) => {
         const agent = row.original;
 
-        return (
-          <Text className="text-xs">
-            {agent.protocolVersion || "-"}
-          </Text>
-        );
+        return <Text className="text-xs">{agent.protocolVersion || "-"}</Text>;
       },
       meta: {
         className: "hidden lg:table-cell",
@@ -135,9 +127,7 @@ export const agentHubColumns = (
                     {skill.name}
                   </Tag>
                 ))}
-                {skills.length > 2 && (
-                  <Text className="text-xs text-gray-500">+{skills.length - 2}</Text>
-                )}
+                {skills.length > 2 && <Text className="text-xs text-gray-500">+{skills.length - 2}</Text>}
               </div>
             )}
           </div>
@@ -240,4 +230,3 @@ export const agentHubColumns = (
 
   return allColumns;
 };
-

@@ -1,10 +1,10 @@
-import { agentHubColumns, AgentHubData } from "@/components/AIHub/agent_hub_table_columns";
-import MakeAgentPublicForm from "@/components/AIHub/forms/make_agent_public_form";
-import MakeMCPPublicForm from "@/components/AIHub/forms/make_mcp_public_form";
-import MakeModelPublicForm from "@/components/AIHub/forms/make_model_public_form";
+import { AgentHubData, getAgentHubTableColumns } from "@/components/AIHub/AgentHubTableColumns";
+import MakeAgentPublicForm from "@/components/AIHub/forms/MakeAgentPublicForm";
+import MakeMCPPublicForm from "@/components/AIHub/forms/MakeMCPPublicForm";
+import MakeModelPublicForm from "@/components/AIHub/forms/MakeModelPublicForm";
 import { mcpHubColumns, MCPServerData } from "@/components/mcp_hub_table_columns";
 import { modelHubColumns } from "@/components/model_hub_table_columns";
-import UsefulLinksManagement from "@/components/AIHub/useful_links_management";
+import UsefulLinksManagement from "@/components/AIHub/UsefulLinksManagement";
 import { ModelDataTable } from "@/components/model_dashboard/table";
 import ModelFilters from "@/components/model_filters";
 import NotificationsManager from "@/components/molecules/notifications_manager";
@@ -423,7 +423,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
 
                   {/* Agent Table */}
                   <ModelDataTable
-                    columns={agentHubColumns(showAgentModal, copyToClipboard, publicPage)}
+                    columns={getAgentHubTableColumns(showAgentModal, copyToClipboard, publicPage)}
                     data={agentHubData || []}
                     isLoading={agentLoading}
                     defaultSorting={[{ id: "name", desc: false }]}
