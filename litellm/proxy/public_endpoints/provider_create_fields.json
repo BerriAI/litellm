@@ -2887,7 +2887,9 @@
         "placeholder": null,
         "tooltip": "Your Watsonx.ai Project ID",
         "required": true,
-        "field_type": "text"
+        "field_type": "text",
+        "options": null,
+        "default_value": null
       },
       {
         "key": "space_id",
@@ -2895,7 +2897,9 @@
         "placeholder": null,
         "tooltip": "Optional: Watsonx.ai Deployment Space ID",
         "required": false,
-        "field_type": "text"
+        "field_type": "text",
+        "options": null,
+        "default_value": null
       }
     ],
     "default_model_placeholder": "watsonx/ibm/granite-3-3-8b-instruct"
