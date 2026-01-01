@@ -3449,7 +3449,7 @@ jobs:
             docker save litellm-docker-database:ci | gzip > workspace/litellm-docker-database.tar.gz
 
       - persist_to_workspace:
-          root: .
+          root: workspace
           paths:
             - litellm-docker-database.tar.gz
 
@@ -3466,7 +3466,7 @@ jobs:
       - run:
           name: Load Docker image
           command: |
-            gunzip -c litellm-docker-database.tar.gz | docker load
+            gunzip -c workspace/litellm-docker-database.tar.gz | docker load
             docker images | grep litellm-docker-database
       - run:
           name: Install Dependencies
