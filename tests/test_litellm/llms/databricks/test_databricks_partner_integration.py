@@ -122,10 +122,11 @@ class TestRedactSensitiveData:
 
     def test_redact_pat_token(self):
         """Databricks PAT tokens are redacted."""
+        test_token = "dapiTESTTOKENFAKEVALUEFORTESTINGPURPOSESONLY123"
         result = DatabricksBase.redact_sensitive_data(
-            "Using token dapi_fake_test_token_value"
+            f"Using token {test_token}"
         )
-        assert "dapi_fake_test_token_value" not in result
+        assert test_token not in result
         assert "[REDACTED_PAT]" in result
 
     def test_redact_client_secret(self):
@@ -348,16 +349,17 @@ class TestSDKPartnerTelemetry:
         }
 
         with patch(
-            "databricks.sdk.WorkspaceClient", return_value=mock_workspace_client
+            "litellm.llms.databricks.common_utils.WorkspaceClient", return_value=mock_workspace_client
         ):
-            with patch("databricks.sdk.useragent.with_partner") as mock_with_partner:
+            mock_useragent = MagicMock()
+            with patch("litellm.llms.databricks.common_utils.useragent", mock_useragent):
                 databricks_base._get_databricks_credentials(
                     api_key=None,
                     api_base=None,
                     headers=None,
                 )
 
-                mock_with_partner.assert_called_once_with("litellm")
+                mock_useragent.with_partner.assert_called_once_with("litellm")
 
 
 class TestUserAgentFromEnvironment:
@@ -593,9 +595,9 @@ class TestAuthenticationPriority:
         }
 
         with patch(
-            "databricks.sdk.WorkspaceClient", return_value=mock_workspace_client
+            "litellm.llms.databricks.common_utils.WorkspaceClient", return_value=mock_workspace_client
         ):
-            with patch("databricks.sdk.useragent.with_partner"):
+            with patch("litellm.llms.databricks.common_utils.useragent"):
                 api_base, headers = databricks_base.databricks_validate_environment(
                     api_key=None,
                     api_base=None,
