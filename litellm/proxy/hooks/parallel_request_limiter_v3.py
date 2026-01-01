@@ -28,7 +28,7 @@ from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import get_model_rate_limit_from_metadata
-from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
+from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject, ResponseAPIUsage
 from litellm.types.utils import ModelResponse, Usage
 
 if TYPE_CHECKING:
@@ -1250,6 +1250,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         if usage:
             if isinstance(usage, Usage):
+                # Chat completions API - uses prompt_tokens/completion_tokens
                 if rate_limit_type == "output":
                     total_tokens = usage.completion_tokens or 0
                 elif rate_limit_type == "input":
@@ -1268,12 +1269,21 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                             or 0
                         )
 
-            elif isinstance(usage, dict):
-                # Responses API usage comes as a dict
+            elif isinstance(usage, ResponseAPIUsage):
+                # Responses API - uses input_tokens/output_tokens
                 if rate_limit_type == "output":
-                    total_tokens = usage.get("completion_tokens", 0) or 0
+                    total_tokens = usage.output_tokens or 0
                 elif rate_limit_type == "input":
-                    total_tokens = usage.get("prompt_tokens", 0) or 0
+                    total_tokens = usage.input_tokens or 0
+                elif rate_limit_type == "total":
+                    total_tokens = usage.total_tokens or 0
+
+            elif isinstance(usage, dict):
+                # Fallback for dict-based usage (handles both API formats)
+                if rate_limit_type == "output":
+                    total_tokens = usage.get("completion_tokens", 0) or usage.get("output_tokens", 0) or 0
+                elif rate_limit_type == "input":
+                    total_tokens = usage.get("prompt_tokens", 0) or usage.get("input_tokens", 0) or 0
                 elif rate_limit_type == "total":
                     total_tokens = usage.get("total_tokens", 0) or 0
 
@@ -1282,6 +1292,21 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     prompt_details = usage.get("prompt_tokens_details") or {}
                     if isinstance(prompt_details, dict):
                         cached_tokens = prompt_details.get("cached_tokens", 0) or 0
+
+            else:
+                # Try to get total_tokens attribute for any other object type
+                verbose_proxy_logger.warning(
+                    f"_get_total_tokens_from_usage: Unknown usage type {type(usage)}, trying getattr"
+                )
+                if hasattr(usage, 'total_tokens'):
+                    total_tokens = getattr(usage, 'total_tokens', 0) or 0
+                elif hasattr(usage, 'output_tokens'):
+                    if rate_limit_type == "output":
+                        total_tokens = getattr(usage, 'output_tokens', 0) or 0
+                    elif rate_limit_type == "input":
+                        total_tokens = getattr(usage, 'input_tokens', 0) or 0
+                    elif rate_limit_type == "total":
+                        total_tokens = getattr(usage, 'total_tokens', 0) or 0
 
         # Subtract cached tokens for input/total (providers don't count them)
         if cached_tokens > 0:
@@ -1420,7 +1445,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             user_api_key_end_user_id = kwargs.get(
                 "user"
             ) or standard_logging_metadata.get("user_api_key_end_user_id")
-            model_group = get_model_group_from_litellm_kwargs(kwargs)
+            # Try to get model_group from multiple sources:
+            # 1. standard_logging_object top-level (where it's actually stored)
+            # 2. standard_logging_metadata (standard logging object metadata)
+            # 3. litellm_metadata in kwargs (direct from request metadata)
+            # 4. get_model_group_from_litellm_kwargs (fallback)
+            litellm_metadata = kwargs.get("litellm_metadata") or {}
+            model_group_from_std_top = standard_logging_object.get("model_group")
+            model_group_from_std_meta = standard_logging_metadata.get("model_group")
+            model_group_from_litellm = litellm_metadata.get("model_group")
+            model_group_from_kwargs = get_model_group_from_litellm_kwargs(kwargs)
+            model_group = model_group_from_std_top or model_group_from_std_meta or model_group_from_litellm or model_group_from_kwargs
 
             # Get total tokens from response
             total_tokens = 0
