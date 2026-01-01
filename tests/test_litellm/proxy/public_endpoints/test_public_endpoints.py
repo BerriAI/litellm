@@ -78,3 +78,36 @@ def test_get_litellm_model_cost_map_returns_cost_map():
     # Check for common cost fields that should be present
     assert "input_cost_per_token" in sample_model_data or "output_cost_per_token" in sample_model_data
 
+
+def test_get_provider_fields_includes_json_providers():
+    """Test that providers from providers.json are included in the provider fields response."""
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    client = TestClient(app_instance)
+
+    response = client.get("/public/providers/fields")
+
+    assert response.status_code == 200
+
+    response_data = response.json()
+
+    assert isinstance(response_data, list)
+
+    # List of expected providers from providers.json
+    expected_json_providers = ["Publicai", "Helicone", "Veniceai", "Xiaomi Mimo"]
+
+    # Check that at least some of these providers appear in the response
+    provider_display_names = [p.get("provider_display_name") for p in response_data]
+
+    found_providers = [p for p in expected_json_providers if p in provider_display_names]
+
+    assert len(found_providers) > 0, f"Expected at least one provider from providers.json to appear in response. Found providers: {provider_display_names}"
+
+    # Verify that the found providers have the expected minimal structure
+    for provider_name in found_providers:
+        provider_data = next(p for p in response_data if p.get("provider_display_name") == provider_name)
+        assert provider_data["provider"] == provider_name
+        assert provider_data["provider_display_name"] == provider_name
+        assert provider_data["credential_fields"] == []
+        assert provider_data["default_model_placeholder"] == "{model}"
+
