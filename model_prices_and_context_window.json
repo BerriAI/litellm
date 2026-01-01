@@ -18175,6 +18175,18 @@
         "supports_response_schema": false,
         "supports_tool_choice": true
     },
+    "groq/gemma-7b-it": {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "groq",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 8e-08,
+        "supports_function_calling": true,
+        "supports_response_schema": false,
+        "supports_tool_choice": true
+    },
     "groq/meta-llama/llama-guard-4-12b": {
         "input_cost_per_token": 2e-07,
         "litellm_provider": "groq",
