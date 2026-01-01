@@ -17,7 +17,26 @@ RUN apk add --no-cache bash gcc py3-pip python3 python3-dev openssl openssl-dev
 
 RUN python -m pip install build
 
-# Copy the current directory contents into the container at /app
+# ============================================
+# OPTIMIZATION: Install dependencies FIRST (before copying source code)
+# This allows Docker to cache the dependency layer
+# ============================================
+
+# Copy only dependency files first
+COPY requirements.txt pyproject.toml ./
+
+# Install dependencies as wheels (cached layer)
+RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
+
+# ensure pyjwt is used, not jwt
+RUN pip uninstall jwt -y || true
+RUN pip uninstall PyJWT -y || true
+RUN pip install PyJWT==2.9.0 --no-cache-dir
+
+# ============================================
+# Now copy the rest of the source code
+# Changes to source code will only invalidate layers below this point
+# ============================================
 COPY . .
 
 # Build Admin UI
@@ -32,14 +51,6 @@ RUN ls -1 dist/*.whl | head -1
 
 # Install the package
 RUN pip install dist/*.whl
-
-# install dependencies as wheels
-RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
-
-# ensure pyjwt is used, not jwt
-RUN pip uninstall jwt -y
-RUN pip uninstall PyJWT -y
-RUN pip install PyJWT==2.9.0 --no-cache-dir
 
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
@@ -67,16 +78,26 @@ RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile
     npm cache clean --force
 
 WORKDIR /app
-# Copy the current directory contents into the container at /app
-COPY . .
-RUN ls -la /app
 
-# Copy the built wheel from the builder stage to the runtime stage; assumes only one wheel file is present
-COPY --from=builder /app/dist/*.whl .
+# ============================================
+# OPTIMIZATION: Copy and install pre-built wheels FIRST
+# This layer is cached as long as requirements.txt doesn't change
+# ============================================
 COPY --from=builder /wheels/ /wheels/
 
-# Install the built wheel using pip; again using a wildcard if it's the only file
-RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
+# Install wheels (cached layer)
+RUN pip install /wheels/* --no-index --find-links=/wheels/ && rm -rf /wheels
+
+# ============================================
+# Now copy the application code and built wheel
+# ============================================
+COPY --from=builder /app/dist/*.whl .
+COPY . .
+
+RUN ls -la /app
+
+# Install the built application wheel
+RUN pip install *.whl --no-deps && rm -f *.whl
 
 # Replace the nodejs-wheel-binaries bundled node with the system node (fixes CVE-2025-55130)
 RUN NODEJS_WHEEL_NODE=$(find /usr/lib -path "*/nodejs_wheel/bin/node" 2>/dev/null) && \
