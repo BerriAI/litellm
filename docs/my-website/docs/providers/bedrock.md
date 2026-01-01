@@ -2208,6 +2208,180 @@ response = completion(
 | `aws_role_name` | `RoleArn` | The Amazon Resource Name (ARN) of the role to assume | [AssumeRole API](https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts.html#STS.Client.assume_role) |
 | `aws_session_name` | `RoleSessionName` | An identifier for the assumed role session | [AssumeRole API](https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts.html#STS.Client.assume_role) |
 
+### IAM Roles Anywhere (On-Premise / External Workloads)
+
+[IAM Roles Anywhere](https://docs.aws.amazon.com/rolesanywhere/latest/userguide/introduction.html) extends IAM roles to workloads **outside of AWS**, such as on-premise servers, edge devices, or other cloud environments. This eliminates the need for long-term AWS credentials (access keys) and provides the same temporary credential benefits as regular IAM roles.
+
+:::info
+
+**Key Difference**: Regular IAM Roles are for workloads running *within* AWS (EC2, Lambda, ECS, etc.), while IAM Roles Anywhere extends IAM Roles to workloads running *outside* AWS. Both use the same STS AssumeRole mechanism under the hood.
+
+:::
+
+#### How It Works
+
+1. **Trust Anchor**: You register a Certificate Authority (CA) with IAM Roles Anywhere
+2. **Profile**: You create a profile that maps certificates to an IAM role
+3. **Credential Helper**: The `aws_signing_helper` tool uses your certificate to obtain temporary AWS credentials
+4. **LiteLLM**: Uses the temporary credentials via boto3's credential chain
+
+#### Prerequisites
+
+1. Set up IAM Roles Anywhere in your AWS account ([AWS Setup Guide](https://docs.aws.amazon.com/rolesanywhere/latest/userguide/getting-started.html))
+2. Install the [AWS Signing Helper](https://docs.aws.amazon.com/rolesanywhere/latest/userguide/credential-helper.html) on your server
+3. Obtain a client certificate signed by your registered CA
+
+#### Option 1: Using Credential Process (Recommended)
+
+Configure AWS to use the signing helper as a credential process. This is the recommended approach as it automatically handles credential refresh.
+
+**Step 1**: Configure `~/.aws/config`
+
+```ini
+[profile litellm-roles-anywhere]
+credential_process = aws_signing_helper credential-process \
+    --certificate /path/to/certificate.pem \
+    --private-key /path/to/private-key.pem \
+    --trust-anchor-arn arn:aws:rolesanywhere:us-east-1:123456789012:trust-anchor/abc123 \
+    --profile-arn arn:aws:rolesanywhere:us-east-1:123456789012:profile/def456 \
+    --role-arn arn:aws:iam::123456789012:role/MyBedrockRole
+```
+
+**Step 2**: Use the profile with LiteLLM
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+    messages=[{"role": "user", "content": "Hello!"}],
+    aws_profile_name="litellm-roles-anywhere",  # 👈 Use the configured profile
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: bedrock-claude
+    litellm_params:
+      model: bedrock/anthropic.claude-3-sonnet-20240229-v1:0
+      aws_profile_name: "litellm-roles-anywhere"  # 👈 Use the configured profile
+```
+
+Or set the environment variable:
+
+```bash
+export AWS_PROFILE=litellm-roles-anywhere
+```
+
+</TabItem>
+</Tabs>
+
+#### Option 2: Using Environment Variables
+
+You can also run the signing helper to export credentials as environment variables:
+
+```bash
+# Get temporary credentials
+eval $(aws_signing_helper credential-process \
+    --certificate /path/to/certificate.pem \
+    --private-key /path/to/private-key.pem \
+    --trust-anchor-arn arn:aws:rolesanywhere:us-east-1:123456789012:trust-anchor/abc123 \
+    --profile-arn arn:aws:rolesanywhere:us-east-1:123456789012:profile/def456 \
+    --role-arn arn:aws:iam::123456789012:role/MyBedrockRole \
+    | jq -r '"export AWS_ACCESS_KEY_ID=\(.AccessKeyId)\nexport AWS_SECRET_ACCESS_KEY=\(.SecretAccessKey)\nexport AWS_SESSION_TOKEN=\(.SessionToken)"')
+
+# Set region
+export AWS_REGION_NAME=us-east-1
+
+# Now run LiteLLM - it will use the exported credentials
+litellm --config /path/to/config.yaml
+```
+
+#### Option 3: Systemd Service with Credential Refresh
+
+For production deployments, set up a systemd service that automatically refreshes credentials:
+
+```ini
+# /etc/systemd/system/litellm-credentials.service
+[Unit]
+Description=AWS Credentials Refresh for LiteLLM
+Before=litellm.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/refresh-aws-credentials.sh
+Environment="CERTIFICATE_PATH=/path/to/certificate.pem"
+Environment="PRIVATE_KEY_PATH=/path/to/private-key.pem"
+Environment="TRUST_ANCHOR_ARN=arn:aws:rolesanywhere:us-east-1:123456789012:trust-anchor/abc123"
+Environment="PROFILE_ARN=arn:aws:rolesanywhere:us-east-1:123456789012:profile/def456"
+Environment="ROLE_ARN=arn:aws:iam::123456789012:role/MyBedrockRole"
+
+[Install]
+WantedBy=multi-user.target
+```
+
+#### Required IAM Permissions
+
+The IAM role assumed via IAM Roles Anywhere needs the same Bedrock permissions as any other role:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+      ],
+      "Resource": "arn:aws:bedrock:*::foundation-model/*"
+    }
+  ]
+}
+```
+
+The role's trust policy must trust the IAM Roles Anywhere service:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "rolesanywhere.amazonaws.com"
+      },
+      "Action": [
+        "sts:AssumeRole",
+        "sts:TagSession",
+        "sts:SetSourceIdentity"
+      ],
+      "Condition": {
+        "ArnEquals": {
+          "aws:SourceArn": "arn:aws:rolesanywhere:us-east-1:123456789012:trust-anchor/abc123"
+        }
+      }
+    }
+  ]
+}
+```
+
+#### Benefits of IAM Roles Anywhere
+
+| Benefit | Description |
+|---------|-------------|
+| **No Long-Term Credentials** | Eliminates static access keys that can be leaked or stolen |
+| **Automatic Rotation** | Temporary credentials expire and are automatically refreshed |
+| **Centralized Access Control** | Manage access through IAM policies, same as AWS workloads |
+| **Audit Trail** | All API calls are logged in CloudTrail with the assumed role identity |
+| **Certificate-Based Auth** | Uses X.509 certificates for strong authentication |
+
 
 
 Make the bedrock completion call
