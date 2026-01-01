@@ -102,3 +102,6 @@ secret:
     - name: Test API key patterns
       match: test-api-key
 
+    - name: Short fake sk keys (1–9 digits only)
+      match: \bsk-\d{1,9}\b
+
