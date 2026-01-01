@@ -52,6 +52,7 @@ import { valueFormatterSpend } from "../utils/value_formatters";
 import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import TopKeyView from "./EntityUsage/TopKeyView";
 import { UsageOption, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
+import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 
 interface UsagePageProps {
   teams: Team[];
@@ -82,6 +83,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [allTags, setAllTags] = useState<EntityList[]>([]);
   const { data: customers = [] } = useCustomers();
   const { data: agentsResponse } = useAgents();
+  const { data: currentUser } = useCurrentUser();
+  console.log(`currentUser: ${JSON.stringify(currentUser)}`);
+  console.log(`currentUser max budget: ${currentUser?.max_budget}`);
   const [modelViewType, setModelViewType] = useState<"groups" | "individual">("groups");
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
@@ -477,7 +481,11 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                         )}
                       </Text>
 
-                      <ViewUserSpend userSpend={totalSpend} selectedTeam={null} userMaxBudget={null} />
+                      <ViewUserSpend
+                        userSpend={totalSpend}
+                        selectedTeam={null}
+                        userMaxBudget={currentUser?.max_budget || null}
+                      />
                     </Col>
 
                     <Col numColSpan={2}>
