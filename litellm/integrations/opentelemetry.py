@@ -48,6 +48,7 @@ else:
 LITELLM_TRACER_NAME = os.getenv("OTEL_TRACER_NAME", "litellm")
 LITELLM_METER_NAME = os.getenv("LITELLM_METER_NAME", "litellm")
 LITELLM_LOGGER_NAME = os.getenv("LITELLM_LOGGER_NAME", "litellm")
+LITELLM_PROXY_REQUEST_SPAN_NAME = "Received Proxy Server Request"
 # Remove the hardcoded LITELLM_RESOURCE dictionary - we'll create it properly later
 RAW_REQUEST_SPAN_NAME = "raw_gen_ai_request"
 LITELLM_REQUEST_SPAN_NAME = "litellm_request"
@@ -531,11 +532,6 @@ class OpenTelemetry(CustomLogger):
             # 3. Guardrail span
             self._create_guardrail_span(kwargs=kwargs, context=ctx)
 
-            # End the proxy request span (created by Proxy in create_litellm_proxy_request_started_span)
-            if parent_span is not None:
-                parent_span.set_status(Status(StatusCode.OK))
-                parent_span.end(end_time=self._to_ns(datetime.now()))
-
         return response
 
     #########################################################
@@ -637,6 +633,8 @@ class OpenTelemetry(CustomLogger):
             from opentelemetry.trace import Status, StatusCode
 
             span = None
+            # Only set attributes if the span is still recording (not closed)
+            # Note: parent_span is guaranteed to be not None here
             parent_span.set_status(Status(StatusCode.OK))
             self.set_attributes(parent_span, kwargs, response_obj)
             # Raw-request as direct child of parent_span
@@ -658,7 +656,12 @@ class OpenTelemetry(CustomLogger):
 
         # 6. Do NOT end parent span - it should be managed by its creator
         # External spans (from Langfuse, user code, HTTP headers, global context) must not be closed by LiteLLM
-        # Proxy-created spans are closed in async_post_call_failure_hook (line 508)
+        # However, proxy-created spans should be closed here
+        if (
+            parent_span is not None
+            and parent_span.name == LITELLM_PROXY_REQUEST_SPAN_NAME
+        ):
+            parent_span.end(end_time=self._to_ns(end_time))
 
     def _start_primary_span(
         self,
@@ -1120,16 +1123,24 @@ class OpenTelemetry(CustomLogger):
         else:
             # When parent span exists and USE_OTEL_LITELLM_REQUEST_SPAN=false,
             # record error on parent span (keeps hierarchy shallow)
-            parent_otel_span.set_status(Status(StatusCode.ERROR))
-            self.set_attributes(parent_otel_span, kwargs, response_obj)
-            self._record_exception_on_span(span=parent_otel_span, kwargs=kwargs)
+            # Only set attributes if the span is still recording (not closed)
+            # Note: parent_otel_span is guaranteed to be not None here
+            if parent_otel_span.is_recording():
+                parent_otel_span.set_status(Status(StatusCode.ERROR))
+                self.set_attributes(parent_otel_span, kwargs, response_obj)
+                self._record_exception_on_span(span=parent_otel_span, kwargs=kwargs)
 
         # Create span for guardrail information
         self._create_guardrail_span(kwargs=kwargs, context=_parent_context)
 
         # Do NOT end parent span - it should be managed by its creator
         # External spans (from Langfuse, user code, HTTP headers, global context) must not be closed by LiteLLM
-        # Proxy-created spans are closed in async_post_call_failure_hook (line 508)
+        # However, proxy-created spans should be closed here
+        if (
+            parent_otel_span is not None
+            and parent_otel_span.name == LITELLM_PROXY_REQUEST_SPAN_NAME
+        ):
+            parent_otel_span.end(end_time=self._to_ns(end_time))
 
     def _record_exception_on_span(self, span: Span, kwargs: dict):
         """
@@ -2043,7 +2054,7 @@ class OpenTelemetry(CustomLogger):
         """
 
         return self.tracer.start_span(
-            name="Received Proxy Server Request",
+            name=LITELLM_PROXY_REQUEST_SPAN_NAME,
             start_time=self._to_ns(start_time),
             context=self.get_traceparent_from_header(headers=headers),
             kind=self.span_kind.SERVER,
