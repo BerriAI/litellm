@@ -31,6 +31,10 @@ import httpx
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_llm import CustomLLM
+from litellm.types.llms.openai import (
+    ChatCompletionToolCallChunk,
+    ChatCompletionToolCallFunctionChunk,
+)
 from litellm.types.utils import (
     Choices,
     EmbeddingResponse,
@@ -52,17 +56,19 @@ class AttachmentProcessor:
 
     def _prepare_file_data(
         self, image_url: str, filename: Optional[str] = None
-    ) -> Optional[Tuple[str, Optional[Tuple[str, bytes, str]]]]:
+    ) -> Tuple[str, Optional[Tuple[str, bytes, str]], Optional[str]]:
         """
-        Prepare file data for upload. Returns (url_hash, file_data) or (url_hash, None) if cached.
-        file_data is (filename, content_bytes, content_type) or None if already cached.
+        Prepare file data for upload.
+        Returns (url_hash, file_data, download_url) where:
+        - file_data is (filename, content_bytes, content_type) or None if cached/need download
+        - download_url is set if we need to download from URL
         """
         url_hash = hashlib.sha256(image_url.encode()).hexdigest()
 
         # Check cache
         if url_hash in self.cache:
             verbose_logger.debug(f"Image found in cache: {url_hash[:16]}...")
-            return url_hash, None
+            return url_hash, None, None
 
         # Check for base64 data URL
         base64_match = re.search(r"data:(.+);base64,(.+)", image_url)
@@ -73,36 +79,39 @@ class AttachmentProcessor:
             content_bytes = base64.b64decode(image_data)
             verbose_logger.info("Decoded base64 image")
         else:
-            return url_hash, ("url", image_url, None)  # Signal to download
+            # Signal to download from URL
+            return url_hash, None, image_url
 
         ext = content_type.split("/")[-1].split(";")[0] or "jpg"
         final_filename = filename or f"{uuid.uuid4()}.{ext}"
 
-        return url_hash, (final_filename, content_bytes, content_type)
+        return url_hash, (final_filename, content_bytes, content_type), None
 
     async def upload_file(
         self, image_url: str, filename: Optional[str] = None
     ) -> Optional[str]:
         """Upload file to GigaChat and return file_id (async)."""
         try:
-            url_hash, file_data = self._prepare_file_data(image_url, filename)
+            url_hash, file_data, download_url = self._prepare_file_data(image_url, filename)
 
             # Return cached
-            if file_data is None:
-                return self.cache[url_hash]
+            if file_data is None and download_url is None:
+                return self.cache.get(url_hash)
 
             # Download if needed
-            if file_data[0] == "url":
-                verbose_logger.info(f"Downloading image from URL: {file_data[1][:80]}...")
+            if download_url is not None:
+                verbose_logger.info(f"Downloading image from URL: {download_url[:80]}...")
                 async with httpx.AsyncClient() as client:
-                    response = await client.get(file_data[1], timeout=30)
+                    response = await client.get(download_url, timeout=30)
                     response.raise_for_status()
                 content_type = response.headers.get("content-type", "image/jpeg")
                 content_bytes = response.content
                 ext = content_type.split("/")[-1].split(";")[0] or "jpg"
                 final_filename = filename or f"{uuid.uuid4()}.{ext}"
+            elif file_data is not None:
+                final_filename, content_bytes, _ = file_data
             else:
-                final_filename, content_bytes, content_type = file_data
+                return None
 
             verbose_logger.info(f"Uploading file to GigaChat: {final_filename}")
             file = await self.giga.aupload_file((final_filename, content_bytes))
@@ -120,22 +129,24 @@ class AttachmentProcessor:
     ) -> Optional[str]:
         """Upload file to GigaChat and return file_id (sync)."""
         try:
-            url_hash, file_data = self._prepare_file_data(image_url, filename)
+            url_hash, file_data, download_url = self._prepare_file_data(image_url, filename)
 
             # Return cached
-            if file_data is None:
-                return self.cache[url_hash]
+            if file_data is None and download_url is None:
+                return self.cache.get(url_hash)
 
             # Download if needed
-            if file_data[0] == "url":
-                response = httpx.get(file_data[1], timeout=30)
+            if download_url is not None:
+                response = httpx.get(download_url, timeout=30)
                 response.raise_for_status()
                 content_type = response.headers.get("content-type", "image/jpeg")
                 content_bytes = response.content
                 ext = content_type.split("/")[-1].split(";")[0] or "jpg"
                 final_filename = filename or f"{uuid.uuid4()}.{ext}"
+            elif file_data is not None:
+                final_filename, content_bytes, _ = file_data
             else:
-                final_filename, content_bytes, content_type = file_data
+                return None
 
             file = self.giga.upload_file((final_filename, content_bytes))
 
@@ -348,8 +359,8 @@ class GigaChatChatHandler(CustomLLM):
         is_async: bool = False,
     ) -> Tuple[List[str], List[str]]:
         """Process multimodal content parts (sync)."""
-        texts = []
-        attachments = []
+        texts: List[str] = []
+        attachments: List[str] = []
 
         for part in content_parts:
             part_type = part.get("type")
@@ -385,8 +396,8 @@ class GigaChatChatHandler(CustomLLM):
         attachment_processor: Optional[AttachmentProcessor],
     ) -> Tuple[List[str], List[str]]:
         """Process multimodal content parts (async)."""
-        texts = []
-        attachments = []
+        texts: List[str] = []
+        attachments: List[str] = []
 
         for part in content_parts:
             part_type = part.get("type")
@@ -429,9 +440,9 @@ class GigaChatChatHandler(CustomLLM):
 
     def _collapse_user_messages(self, messages: List[Dict]) -> List[Dict]:
         """Collapse consecutive user messages into one."""
-        collapsed = []
-        prev_user_msg = None
-        content_parts = []
+        collapsed: List[Dict] = []
+        prev_user_msg: Optional[Dict] = None
+        content_parts: List[str] = []
 
         for msg in messages:
             if msg.get("role") == "user" and prev_user_msg is not None:
@@ -652,7 +663,7 @@ class GigaChatChatHandler(CustomLLM):
         finish_reason = choice.get("finish_reason")
 
         text = delta.get("content", "")
-        tool_use = None
+        tool_use: Optional[ChatCompletionToolCallChunk] = None
 
         # Handle function_call in stream
         if finish_reason == "function_call" and delta.get("function_call"):
@@ -674,14 +685,15 @@ class GigaChatChatHandler(CustomLLM):
                 finish_reason = "tool_calls"
                 if isinstance(args, dict):
                     args = json.dumps(args, ensure_ascii=False)
-                tool_use = {
-                    "id": f"call_{uuid.uuid4().hex[:24]}",
-                    "type": "function",
-                    "function": {
-                        "name": func_call.get("name", ""),
-                        "arguments": args,
-                    }
-                }
+                tool_use = ChatCompletionToolCallChunk(
+                    id=f"call_{uuid.uuid4().hex[:24]}",
+                    type="function",
+                    function=ChatCompletionToolCallFunctionChunk(
+                        name=func_call.get("name", ""),
+                        arguments=args,
+                    ),
+                    index=0,
+                )
 
         return GenericStreamingChunk(
             text=text,
@@ -840,7 +852,7 @@ class GigaChatChatHandler(CustomLLM):
         for chunk in giga_client.stream(chat):
             yield self._transform_stream_chunk(chunk, model, response_id)
 
-    async def astreaming(
+    async def astreaming(  # type: ignore[override]
         self,
         model: str,
         messages: list,
@@ -859,7 +871,7 @@ class GigaChatChatHandler(CustomLLM):
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client=None,
     ) -> AsyncIterator[GenericStreamingChunk]:
-        """Async streaming."""
+        """Async streaming (yields chunks, so actual return is AsyncGenerator)."""
         response_id = uuid.uuid4().hex[:12]
 
         giga_client = self._get_client(api_key=api_key, api_base=api_base, timeout=timeout or 600)
