@@ -3488,7 +3488,7 @@ jobs:
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               --name litellm-docker-database \
               -v $(pwd)/litellm/proxy/example_config_yaml/simple_config.yaml:/app/config.yaml \
-              litellm-docker-database:latest \
+              litellm-docker-database:ci \
               --config /app/config.yaml \
               --port 4000 \
               --detailed_debug
