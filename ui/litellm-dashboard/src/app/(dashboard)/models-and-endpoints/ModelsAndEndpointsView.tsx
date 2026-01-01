@@ -17,7 +17,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Col, Grid, Icon, Tab, TabGroup, TabList, TabPanel, TabPanels, Text } from "@tremor/react";
 import type { UploadProps } from "antd";
 import { Form, Typography } from "antd";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import AddModelTab from "../../../components/add_model/add_model_tab";
 import HealthCheckComponent from "../../../components/model_dashboard/HealthCheckComponent";
 import ModelGroupAliasSettings from "../../../components/model_group_alias_settings";
@@ -44,28 +44,8 @@ interface GlobalRetryPolicyObject {
   [retryPolicyKey: string]: number;
 }
 
-interface GlobalExceptionActivityData {
-  sum_num_rate_limit_exceptions: number;
-  daily_data: { date: string; num_rate_limit_exceptions: number }[];
-}
-
-//["OpenAI", "Azure OpenAI", "Anthropic", "Gemini (Google AI Studio)", "Amazon Bedrock", "OpenAI-Compatible Endpoints (Groq, Together AI, Mistral AI, etc.)"]
-
-interface ProviderFields {
-  field_name: string;
-  field_type: string;
-  field_description: string;
-  field_value: string;
-}
-
-interface ProviderSettings {
-  name: string;
-  fields: ProviderFields[];
-}
-
 const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
   modelData = { data: [] },
-  keys,
   setModelData,
   premiumUser,
   teams,
@@ -73,10 +53,8 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
   const { accessToken, token, userRole, userId: userID } = useAuthorized();
   const [addModelForm] = Form.useForm();
   const [lastRefreshed, setLastRefreshed] = useState("");
-  const [providerModels, setProviderModels] = useState<Array<string>>([]); // Explicitly typing providerModels as a string array
+  const [providerModels, setProviderModels] = useState<Array<string>>([]);
   const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.Anthropic);
-  const [availableModelGroups, setAvailableModelGroups] = useState<Array<string>>([]);
-  const [availableModelAccessGroups, setAvailableModelAccessGroups] = useState<Array<string>>([]);
   const [selectedModelGroup, setSelectedModelGroup] = useState<string | null>(null);
 
   const [modelGroupRetryPolicy, setModelGroupRetryPolicy] = useState<RetryPolicyObject | null>(null);
@@ -93,7 +71,114 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
   const { data: modelCostMapData } = useModelCostMap();
   const { data: credentialsResponse } = useCredentials();
   const credentialsList = credentialsResponse?.credentials || [];
-  const { data: uiSettings } = useUISettings(accessToken || "");
+  const { data: uiSettings } = useUISettings();
+
+  const availableModelGroups = useMemo(() => {
+    if (!modelDataResponse?.data) return [];
+    const allModelGroups = new Set<string>();
+    for (const model of modelDataResponse.data) {
+      allModelGroups.add(model.model_name);
+    }
+    return Array.from(allModelGroups).sort();
+  }, [modelDataResponse?.data]);
+
+  const availableModelAccessGroups = useMemo(() => {
+    if (!modelDataResponse?.data) return [];
+    const allModelAccessGroups = new Set<string>();
+    for (const model of modelDataResponse.data) {
+      const modelInfo = model.model_info;
+      if (modelInfo?.access_groups) {
+        for (const group of modelInfo.access_groups) {
+          allModelAccessGroups.add(group);
+        }
+      }
+    }
+    return Array.from(allModelAccessGroups);
+  }, [modelDataResponse?.data]);
+
+  const allModelsOnProxy = useMemo<string[]>(() => {
+    return modelDataResponse?.data?.map((model: any) => model.model_name);
+  }, [modelDataResponse?.data]);
+
+  const getProviderFromModel = (model: string) => {
+    if (modelCostMapData !== null && modelCostMapData !== undefined) {
+      if (typeof modelCostMapData == "object" && model in modelCostMapData) {
+        return modelCostMapData[model]["litellm_provider"];
+      }
+    }
+    return "openai";
+  };
+
+  const processedModelData = useMemo(() => {
+    return modelDataResponse?.data?.map((model: any) => {
+      return {};
+    });
+  }, [modelDataResponse?.data]);
+
+  // loop through model data and edit each row
+  for (let i = 0; i < modelData.data.length; i++) {
+    let curr_model = modelData.data[i];
+    let litellm_model_name = curr_model?.litellm_params?.model;
+    let custom_llm_provider = curr_model?.litellm_params?.custom_llm_provider;
+    let model_info = curr_model?.model_info;
+
+    let provider = "";
+    let input_cost = "Undefined";
+    let output_cost = "Undefined";
+    let max_tokens = "Undefined";
+    let max_input_tokens = "Undefined";
+    let cleanedLitellmParams = {};
+
+    // Check if litellm_model_name is null or undefined
+    if (litellm_model_name) {
+      // Split litellm_model_name based on "/"
+      let splitModel = litellm_model_name.split("/");
+
+      // Get the first element in the split
+      let firstElement = splitModel[0];
+
+      // If there is only one element, default provider to openai
+      provider = custom_llm_provider;
+      if (!provider) {
+        provider = splitModel.length === 1 ? getProviderFromModel(litellm_model_name) : firstElement;
+      }
+    } else {
+      // litellm_model_name is null or undefined, default provider to openai
+      provider = "-";
+    }
+
+    if (model_info) {
+      input_cost = model_info?.input_cost_per_token;
+      output_cost = model_info?.output_cost_per_token;
+      max_tokens = model_info?.max_tokens;
+      max_input_tokens = model_info?.max_input_tokens;
+    }
+
+    if (curr_model?.litellm_params) {
+      cleanedLitellmParams = Object.fromEntries(
+        Object.entries(curr_model?.litellm_params).filter(([key]) => key !== "model" && key !== "api_base"),
+      );
+    }
+
+    modelData.data[i].provider = provider;
+    modelData.data[i].input_cost = input_cost;
+    modelData.data[i].output_cost = output_cost;
+    modelData.data[i].litellm_model_name = litellm_model_name;
+
+    // Convert Cost in terms of Cost per 1M tokens
+    if (modelData.data[i].input_cost) {
+      modelData.data[i].input_cost = (Number(modelData.data[i].input_cost) * 1000000).toFixed(2);
+    }
+
+    if (modelData.data[i].output_cost) {
+      modelData.data[i].output_cost = (Number(modelData.data[i].output_cost) * 1000000).toFixed(2);
+    }
+
+    modelData.data[i].max_tokens = max_tokens;
+    modelData.data[i].max_input_tokens = max_input_tokens;
+    modelData.data[i].api_base = curr_model?.litellm_params?.api_base;
+    modelData.data[i].cleanedLitellmParams = cleanedLitellmParams;
+  }
 
   const isProxyAdmin = userRole && isProxyAdminRole(userRole);
   const isInternalUser = userRole && internalUserRoles.includes(userRole);
@@ -176,31 +261,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
     const fetchData = async () => {
       try {
         setModelData(modelDataResponse);
-        let all_model_groups: Set<string> = new Set();
-        for (let i = 0; i < modelDataResponse.data.length; i++) {
-          const model = modelDataResponse.data[i];
-          all_model_groups.add(model.model_name);
-        }
-        let _array_model_groups = Array.from(all_model_groups);
-        _array_model_groups = _array_model_groups.sort();
-
-        setAvailableModelGroups(_array_model_groups);
-
-        let all_model_access_groups: Set<string> = new Set();
-        for (let i = 0; i < modelDataResponse.data.length; i++) {
-          const model = modelDataResponse.data[i];
-          let model_info: any | null = model.model_info;
-          if (model_info) {
-            let access_groups = model_info.access_groups;
-            if (access_groups) {
-              for (let j = 0; j < access_groups.length; j++) {
-                all_model_access_groups.add(access_groups[j]);
-              }
-            }
-          }
-        }
-
-        setAvailableModelAccessGroups(Array.from(all_model_access_groups));
 
         const routerSettingsInfo = await getCallbacksCall(accessToken, userID, userRole);
         let router_settings = routerSettingsInfo.router_settings;
@@ -227,92 +287,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
   if (!modelData || isLoadingModels) {
     return <div>Loading...</div>;
   }
-
-  let all_models_on_proxy: any[] = [];
-  let all_providers: string[] = [];
-
-  // loop through model data and edit each row
-  for (let i = 0; i < modelData.data.length; i++) {
-    let curr_model = modelData.data[i];
-    let litellm_model_name = curr_model?.litellm_params?.model;
-    let custom_llm_provider = curr_model?.litellm_params?.custom_llm_provider;
-    let model_info = curr_model?.model_info;
-
-    let provider = "";
-    let input_cost = "Undefined";
-    let output_cost = "Undefined";
-    let max_tokens = "Undefined";
-    let max_input_tokens = "Undefined";
-    let cleanedLitellmParams = {};
-
-    const getProviderFromModel = (model: string) => {
-      /**
-       * Use model map
-       * - check if model in model map
-       * - return it's litellm_provider, if so
-       */
-      if (modelCostMapData !== null && modelCostMapData !== undefined) {
-        if (typeof modelCostMapData == "object" && model in modelCostMapData) {
-          return modelCostMapData[model]["litellm_provider"];
-        }
-      }
-      return "openai";
-    };
-
-    // Check if litellm_model_name is null or undefined
-    if (litellm_model_name) {
-      // Split litellm_model_name based on "/"
-      let splitModel = litellm_model_name.split("/");
-
-      // Get the first element in the split
-      let firstElement = splitModel[0];
-
-      // If there is only one element, default provider to openai
-      provider = custom_llm_provider;
-      if (!provider) {
-        provider = splitModel.length === 1 ? getProviderFromModel(litellm_model_name) : firstElement;
-      }
-    } else {
-      // litellm_model_name is null or undefined, default provider to openai
-      provider = "-";
-    }
-
-    if (model_info) {
-      input_cost = model_info?.input_cost_per_token;
-      output_cost = model_info?.output_cost_per_token;
-      max_tokens = model_info?.max_tokens;
-      max_input_tokens = model_info?.max_input_tokens;
-    }
-
-    if (curr_model?.litellm_params) {
-      cleanedLitellmParams = Object.fromEntries(
-        Object.entries(curr_model?.litellm_params).filter(([key]) => key !== "model" && key !== "api_base"),
-      );
-    }
-
-    modelData.data[i].provider = provider;
-    modelData.data[i].input_cost = input_cost;
-    modelData.data[i].output_cost = output_cost;
-    modelData.data[i].litellm_model_name = litellm_model_name;
-    all_providers.push(provider);
-
-    // Convert Cost in terms of Cost per 1M tokens
-    if (modelData.data[i].input_cost) {
-      modelData.data[i].input_cost = (Number(modelData.data[i].input_cost) * 1000000).toFixed(2);
-    }
-
-    if (modelData.data[i].output_cost) {
-      modelData.data[i].output_cost = (Number(modelData.data[i].output_cost) * 1000000).toFixed(2);
-    }
-
-    modelData.data[i].max_tokens = max_tokens;
-    modelData.data[i].max_input_tokens = max_input_tokens;
-    modelData.data[i].api_base = curr_model?.litellm_params?.api_base;
-    modelData.data[i].cleanedLitellmParams = cleanedLitellmParams;
-
-    all_models_on_proxy.push(curr_model.model_name);
-  }
-  // when users click request access show pop up to allow them to request access
 
   if (userRole && userRole == "Admin Viewer") {
     const { Title, Paragraph } = Typography;
@@ -350,7 +324,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
           accessToken={accessToken}
           is_team_admin={userRole === "Admin"}
           is_proxy_admin={userRole === "Proxy Admin"}
-          userModels={all_models_on_proxy}
+          userModels={allModelsOnProxy}
           editTeam={false}
           onUpdate={handleRefreshClick}
           premiumUser={premiumUser}
@@ -385,24 +359,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
               userID={userID}
               userRole={userRole}
               onModelUpdate={(updatedModel) => {
-                // Handle model deletion
-                if (updatedModel.deleted) {
-                  const updatedModelData = {
-                    ...modelData,
-                    data: modelData.data.filter((model: any) => model.model_info.id !== updatedModel.model_info.id),
-                  };
-                  setModelData(updatedModelData);
-                } else {
-                  // Update the model in the modelData.data array
-                  const updatedModelData = {
-                    ...modelData,
-                    data: modelData.data.map((model: any) =>
-                      model.model_info.id === updatedModel.model_info.id ? updatedModel : model,
-                    ),
-                  };
-                  setModelData(updatedModelData);
-                }
-                // Invalidate cache and trigger a refresh to update UI
                 queryClient.invalidateQueries({ queryKey: ["models", "list"] });
                 handleRefreshClick();
               }}
@@ -478,7 +434,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
                   <HealthCheckComponent
                     accessToken={accessToken}
                     modelData={modelData}
-                    all_models_on_proxy={all_models_on_proxy}
+                    all_models_on_proxy={allModelsOnProxy}
                     getDisplayModelName={getDisplayModelName}
                     setSelectedModelId={setSelectedModelId}
                   />
