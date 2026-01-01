@@ -3462,7 +3462,7 @@ jobs:
       - checkout
       - setup_google_dns
       - attach_workspace:
-          at: ~/project
+          at: workspace
       - run:
           name: Load Docker image
           command: |
