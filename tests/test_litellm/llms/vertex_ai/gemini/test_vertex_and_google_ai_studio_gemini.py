@@ -200,6 +200,91 @@ def test_vertex_ai_response_schema_defs():
     }
 
 
+def test_vertex_ai_response_json_schema_opt_in():
+    """
+    Test that use_json_schema=True uses responseJsonSchema for Gemini 2.0+ models.
+
+    responseJsonSchema uses standard JSON Schema format:
+    - lowercase types (string, object, etc.)
+    - no propertyOrdering required
+    - supports additionalProperties
+    """
+    v = VertexGeminiConfig()
+
+    transformed_request = v.map_openai_params(
+        non_default_params={
+            "messages": [{"role": "user", "content": "Hello, world!"}],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "test_schema",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "age": {"type": "integer"},
+                        },
+                        "required": ["name"],
+                        "additionalProperties": False,
+                    },
+                },
+                "use_json_schema": True,  # Opt-in to responseJsonSchema
+            },
+        },
+        optional_params={},
+        model="gemini-2.0-flash",
+        drop_params=False,
+    )
+
+    # Should use response_json_schema, not response_schema
+    assert "response_json_schema" in transformed_request
+    assert "response_schema" not in transformed_request
+
+    # Types should be lowercase (standard JSON Schema format)
+    assert transformed_request["response_json_schema"]["type"] == "object"
+    assert transformed_request["response_json_schema"]["properties"]["name"]["type"] == "string"
+    assert transformed_request["response_json_schema"]["properties"]["age"]["type"] == "integer"
+
+    # Should NOT have propertyOrdering (not needed for responseJsonSchema)
+    assert "propertyOrdering" not in transformed_request["response_json_schema"]
+
+    # additionalProperties should be preserved (supported by responseJsonSchema)
+    assert transformed_request["response_json_schema"].get("additionalProperties") == False
+
+
+def test_vertex_ai_response_json_schema_fallback_for_old_models():
+    """
+    Test that use_json_schema=True falls back to responseSchema for older models.
+    """
+    v = VertexGeminiConfig()
+
+    transformed_request = v.map_openai_params(
+        non_default_params={
+            "messages": [{"role": "user", "content": "Hello, world!"}],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "test_schema",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                        },
+                    },
+                },
+                "use_json_schema": True,  # Opt-in, but model doesn't support it
+            },
+        },
+        optional_params={},
+        model="gemini-1.5-flash",  # Old model, doesn't support responseJsonSchema
+        drop_params=False,
+    )
+
+    # Should fall back to response_schema for older models
+    assert "response_schema" in transformed_request
+    assert "response_json_schema" not in transformed_request
+
+
 def test_vertex_ai_retain_property_ordering():
     v = VertexGeminiConfig()
     transformed_request = v.map_openai_params(
