@@ -82,7 +82,7 @@ async def test_execute_with_mcp_client_redacts_stack_trace(monkeypatch):
 
 
 def test_test_connection_requires_auth_dependency():
-    route = _get_route("/test/connection", "POST")
+    route = _get_route("/mcp-rest/test/connection", "POST")
     assert _route_has_dependency(route, user_api_key_auth)
 
 
