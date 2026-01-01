@@ -1,9 +1,9 @@
 import { agentHubColumns, AgentHubData } from "@/components/AIHub/agent_hub_table_columns";
-import MakeAgentPublicForm from "@/components/AIHub/make_agent_public_form";
-import MakeMCPPublicForm from "@/components/AIHub/make_mcp_public_form";
-import MakeModelPublicForm from "@/components/AIHub/make_model_public_form";
-import { mcpHubColumns, MCPServerData } from "@/components/AIHub/mcp_hub_table_columns";
-import { modelHubColumns } from "@/components/AIHub/model_hub_table_columns";
+import MakeAgentPublicForm from "@/components/AIHub/forms/make_agent_public_form";
+import MakeMCPPublicForm from "@/components/AIHub/forms/make_mcp_public_form";
+import MakeModelPublicForm from "@/components/AIHub/forms/make_model_public_form";
+import { mcpHubColumns, MCPServerData } from "@/components/mcp_hub_table_columns";
+import { modelHubColumns } from "@/components/model_hub_table_columns";
 import UsefulLinksManagement from "@/components/AIHub/useful_links_management";
 import { ModelDataTable } from "@/components/model_dashboard/table";
 import ModelFilters from "@/components/model_filters";
