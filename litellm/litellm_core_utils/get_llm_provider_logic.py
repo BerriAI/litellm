@@ -1,4 +1,5 @@
 from typing import Optional, Tuple
+from urllib.parse import urlparse
 
 import httpx
 
@@ -8,6 +9,10 @@ from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.secret_managers.main import get_secret, get_secret_str
 
 from ..types.router import LiteLLM_Params
+
+CODESTRAL_HOST = "codestral.mistral.ai"
+CODESTRAL_CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
+CODESTRAL_FIM_COMPLETIONS_PATH = "/v1/fim/completions"
 
 
 def _is_non_openai_azure_model(model: str) -> bool:
@@ -33,6 +38,35 @@ def _is_azure_claude_model(model: str) -> bool:
         return "claude" in model_lower or model_lower.startswith("claude")
     except Exception:
         return False
+
+
+def _parse_api_base_host_path(api_base: str) -> Tuple[Optional[str], str]:
+    normalized_api_base = api_base
+    if "://" not in normalized_api_base:
+        normalized_api_base = f"https://{normalized_api_base}"
+    try:
+        parsed = urlparse(normalized_api_base)
+    except Exception:
+        return None, ""
+    host = parsed.hostname.lower() if parsed.hostname else None
+    path = parsed.path or ""
+    return host, path
+
+
+def _get_codestral_provider_from_api_base(api_base: str) -> Optional[str]:
+    """
+    Codestral splits chat vs FIM by endpoint path; use api_base host/path to route.
+    """
+    host, path = _parse_api_base_host_path(api_base)
+    if host != CODESTRAL_HOST:
+        return None
+
+    normalized_path = path.rstrip("/").lower()
+    if normalized_path in ("", "/v1", CODESTRAL_CHAT_COMPLETIONS_PATH):
+        return "codestral"
+    if normalized_path == CODESTRAL_FIM_COMPLETIONS_PATH:
+        return "text-completion-codestral"
+    return None
 
 
 def handle_cohere_chat_model_custom_llm_provider(
@@ -196,7 +230,21 @@ def get_llm_provider(  # noqa: PLR0915
                 )
             return model, custom_llm_provider, dynamic_api_key, api_base
         # check if api base is a known openai compatible endpoint
-        if api_base:
+        if api_base and isinstance(api_base, str):
+            codestral_provider = _get_codestral_provider_from_api_base(api_base)
+            if codestral_provider:
+                # Codestral splits chat vs FIM across endpoints; infer provider from api_base path.
+                custom_llm_provider = codestral_provider
+                dynamic_api_key = get_secret_str("CODESTRAL_API_KEY")
+                if dynamic_api_key is not None and not isinstance(
+                    dynamic_api_key, str
+                ):
+                    raise Exception(
+                        "dynamic_api_key needs to be a string. dynamic_api_key={}".format(
+                            dynamic_api_key
+                        )
+                    )
+                return model, custom_llm_provider, dynamic_api_key, api_base
             for endpoint in litellm.openai_compatible_endpoints:
                 if endpoint in api_base:
                     if endpoint == "api.perplexity.ai":
@@ -229,12 +277,6 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://api.ai21.com/studio/v1":
                         custom_llm_provider = "ai21_chat"
                         dynamic_api_key = get_secret_str("AI21_API_KEY")
-                    elif endpoint == "https://codestral.mistral.ai/v1":
-                        custom_llm_provider = "codestral"
-                        dynamic_api_key = get_secret_str("CODESTRAL_API_KEY")
-                    elif endpoint == "https://codestral.mistral.ai/v1":
-                        custom_llm_provider = "text-completion-codestral"
-                        dynamic_api_key = get_secret_str("CODESTRAL_API_KEY")
                     elif endpoint == "app.empower.dev/api/v1":
                         custom_llm_provider = "empower"
                         dynamic_api_key = get_secret_str("EMPOWER_API_KEY")
