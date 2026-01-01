@@ -517,7 +517,6 @@ class OpenTelemetry(CustomLogger):
         response: LLMResponseTypes,
     ):
         from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-        from opentelemetry.trace import Status, StatusCode
 
         litellm_logging_obj = data.get("litellm_logging_obj")
 
