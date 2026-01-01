@@ -742,6 +742,7 @@ class TestProxySettingEndpoints:
     ):
         """Test updating UI settings with an allowlisted field"""
         from unittest.mock import AsyncMock, MagicMock
+        from litellm.proxy.ui_crud_endpoints import proxy_setting_endpoints
 
         class MockUser:
             def __init__(self, user_role):
@@ -750,10 +751,9 @@ class TestProxySettingEndpoints:
         async def mock_admin_auth():
             return MockUser(LitellmUserRoles.PROXY_ADMIN)
 
-        monkeypatch.setattr(
-            "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.user_api_key_auth",
-            mock_admin_auth,
-        )
+        app.dependency_overrides[
+            proxy_setting_endpoints.user_api_key_auth
+        ] = mock_admin_auth
         monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
@@ -774,12 +774,18 @@ class TestProxySettingEndpoints:
         create_data = call_args.kwargs["data"]["create"]
         stored_settings = json.loads(create_data["ui_settings"])
         assert stored_settings["disable_model_add_for_internal_users"] is True
+        
+        # Clean up dependency override
+        app.dependency_overrides.pop(
+            proxy_setting_endpoints.user_api_key_auth, None
+        )
 
     def test_update_ui_settings_ignores_non_allowlisted_value(
         self, mock_auth, monkeypatch
     ):
         """Test non-allowlisted UI settings are ignored on update"""
         from unittest.mock import AsyncMock, MagicMock
+        from litellm.proxy.ui_crud_endpoints import proxy_setting_endpoints
 
         class MockUser:
             def __init__(self, user_role):
@@ -788,10 +794,9 @@ class TestProxySettingEndpoints:
         async def mock_admin_auth():
             return MockUser(LitellmUserRoles.PROXY_ADMIN)
 
-        monkeypatch.setattr(
-            "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.user_api_key_auth",
-            mock_admin_auth,
-        )
+        app.dependency_overrides[
+            proxy_setting_endpoints.user_api_key_auth
+        ] = mock_admin_auth
         monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
@@ -815,6 +820,11 @@ class TestProxySettingEndpoints:
         stored_settings = json.loads(call_args.kwargs["data"]["create"]["ui_settings"])
         assert "unsupported_flag" not in stored_settings
         assert stored_settings["disable_model_add_for_internal_users"] is False
+        
+        # Clean up dependency override
+        app.dependency_overrides.pop(
+            proxy_setting_endpoints.user_api_key_auth, None
+        )
 
     def test_get_sso_settings_from_database(self, mock_proxy_config, mock_auth, monkeypatch):
         """Test getting SSO settings from the dedicated database table"""

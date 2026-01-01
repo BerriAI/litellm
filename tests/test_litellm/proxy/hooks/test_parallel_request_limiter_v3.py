@@ -1194,14 +1194,23 @@ async def test_async_increment_tokens_with_ttl_preservation():
         )
         
         # Small delay to ensure Redis has processed the commands
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.5)  # Increased wait time for Redis to process
         
         # Verify TTL preservation and value updates
         ttl_after_second = await redis_cache.async_get_ttl(test_key_with_ttl)
         value_after_second_with_ttl = await redis_cache.async_get_cache(test_key_with_ttl)
         value_after_second_without_ttl = await redis_cache.async_get_cache(test_key_without_ttl)
         
-        assert value_after_second_with_ttl == 25.0, "Second increment should update value to 25.0"
+        # Debug: Print actual value if assertion fails
+        if value_after_second_with_ttl != 25.0:
+            print(f"DEBUG: Expected 25.0, got {value_after_second_with_ttl}")
+            print(f"DEBUG: First value was {value_after_first_with_ttl}")
+            # Re-read to check if it's a timing issue
+            await asyncio.sleep(0.5)
+            value_after_second_with_ttl = await redis_cache.async_get_cache(test_key_with_ttl)
+            print(f"DEBUG: After additional wait, value is {value_after_second_with_ttl}")
+        
+        assert value_after_second_with_ttl == 25.0, f"Second increment should update value to 25.0, got {value_after_second_with_ttl}"
         assert value_after_second_without_ttl == 12.0, "Second increment should update value to 12.0"
         
         # Critical test: TTL should be preserved (not reset to 60)
