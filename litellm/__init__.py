@@ -553,6 +553,7 @@ docker_model_runner_models: Set = set()
 amazon_nova_models: Set = set()
 stability_models: Set = set()
 github_copilot_models: Set = set()
+minimax_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -801,6 +802,8 @@ def add_known_models():
             stability_models.add(key)
         elif value.get("litellm_provider") == "github_copilot":
             github_copilot_models.add(key)
+        elif value.get("litellm_provider") == "minimax":
+            minimax_models.add(key)
 
 
 add_known_models()
@@ -1005,6 +1008,7 @@ models_by_provider: dict = {
     "amazon_nova": amazon_nova_models,
     "stability": stability_models,
     "github_copilot": github_copilot_models,
+    "minimax": minimax_models,
 }
 
 # mapping for those models which have larger equivalents
