@@ -2008,8 +2008,10 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
             pip install apscheduler
+      - attach_workspace:
+          at: ~/project
       - run:
-          name: Load Docker image
+          name: Load Docker Database Image
           command: |
             gunzip -c litellm-docker-database.tar.gz | docker load
             docker images | grep litellm-docker-database
@@ -2277,8 +2279,10 @@ jobs:
       - run:
           name: Wait for PostgreSQL to be ready
           command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - attach_workspace:
+          at: ~/project
       - run:
-          name: Load Docker image
+          name: Load Docker Database Image
           command: |
             gunzip -c litellm-docker-database.tar.gz | docker load
             docker images | grep litellm-docker-database
@@ -2419,8 +2423,10 @@ jobs:
       - run:
           name: Wait for PostgreSQL to be ready
           command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - attach_workspace:
+          at: ~/project
       - run:
-          name: Load Docker image
+          name: Load Docker Database Image
           command: |
             gunzip -c litellm-docker-database.tar.gz | docker load
             docker images | grep litellm-docker-database
@@ -2582,8 +2588,10 @@ jobs:
       - run:
           name: Wait for PostgreSQL to be ready
           command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - attach_workspace:
+          at: ~/project
       - run:
-          name: Load Docker image
+          name: Load Docker Database Image
           command: |
             gunzip -c litellm-docker-database.tar.gz | docker load
             docker images | grep litellm-docker-database
@@ -2697,8 +2705,10 @@ jobs:
       - run:
           name: Wait for PostgreSQL to be ready
           command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - attach_workspace:
+          at: ~/project
       - run:
-          name: Load Docker image
+          name: Load Docker Database Image
           command: |
             gunzip -c litellm-docker-database.tar.gz | docker load
             docker images | grep litellm-docker-database
@@ -2835,8 +2845,10 @@ jobs:
       - run:
           name: Wait for PostgreSQL to be ready
           command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - attach_workspace:
+          at: ~/project
       - run:
-          name: Load Docker image
+          name: Load Docker Database Image
           command: |
             gunzip -c litellm-docker-database.tar.gz | docker load
             docker images | grep litellm-docker-database
@@ -3069,8 +3081,10 @@ jobs:
       - run:
           name: Wait for PostgreSQL to be ready
           command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - attach_workspace:
+          at: ~/project
       - run:
-          name: Load Docker image
+          name: Load Docker Database Image
           command: |
             gunzip -c litellm-docker-database.tar.gz | docker load
             docker images | grep litellm-docker-database
@@ -3475,7 +3489,7 @@ jobs:
       - attach_workspace:
           at: ~/project
       - run:
-          name: Load Docker image
+          name: Load Docker Database Image
           command: |
             gunzip -c litellm-docker-database.tar.gz | docker load
             docker images | grep litellm-docker-database
