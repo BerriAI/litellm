@@ -3421,6 +3421,38 @@ jobs:
               --coverage.reporter=html \
               --coverage.reportsDirectory=coverage/html
 
+  build_docker_database_image:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+
+      - run:
+          name: Upgrade Docker
+          command: |
+            curl -fsSL https://get.docker.com | sh
+            docker version
+
+      - run:
+          name: Build Docker image
+          command: |
+            docker build \
+              -t litellm-docker-database:ci \
+              -f docker/Dockerfile.database .
+
+      - run:
+          name: Save Docker image to workspace
+          command: |
+            mkdir -p workspace
+            docker save litellm-docker-database:ci | gzip > workspace/litellm-docker-database.tar.gz
+
+      - persist_to_workspace:
+          root: .
+          paths:
+            - litellm-docker-database.tar.gz
+
   e2e_ui_testing:
     machine:
       image: ubuntu-2204:2023.10.1
@@ -3432,53 +3464,18 @@ jobs:
       - attach_workspace:
           at: ~/project
       - run:
-          name: Upgrade Docker to v24.x (API 1.44+)
+          name: Load Docker image
           command: |
-            curl -fsSL https://get.docker.com | sh
-            sudo usermod -aG docker $USER
-            docker version
-      - run:
-          name: Install Python 3.9
-          command: |
-            curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
-            bash miniconda.sh -b -p $HOME/miniconda
-            export PATH="$HOME/miniconda/bin:$PATH"
-            conda init bash
-            source ~/.bashrc
-            conda create -n myenv python=3.9 -y
-            conda activate myenv
-            python --version
+            gunzip -c litellm-docker-database.tar.gz | docker load
+            docker images | grep litellm-docker-database
       - run:
           name: Install Dependencies
           command: |
             npm install -D @playwright/test
-            npm install @google-cloud/vertexai
-            pip install "pytest==7.3.1"
-            pip install "pytest-retry==1.6.3"
-            pip install "pytest-asyncio==0.21.1"
-            pip install aiohttp
-            pip install "openai==1.100.1"
-            python -m pip install --upgrade pip
-            pip install "pydantic==2.10.2"
-            pip install "pytest==7.3.1"
-            pip install "pytest-mock==3.12.0"
-            pip install "pytest-asyncio==0.21.1"
-            pip install "mypy==1.18.2"
-            pip install pyarrow
-            pip install numpydoc
-            pip install prisma
-            pip install fastapi
-            pip install jsonschema
-            pip install "httpx==0.24.1"
-            pip install "anyio==3.7.1"
-            pip install "asyncio==3.4.3"
       - run:
           name: Install Playwright Browsers
           command: |
             npx playwright install
-      - run:
-          name: Build Docker image
-          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
       - run:
           name: Run Docker container
           command: |
@@ -3490,9 +3487,9 @@ jobs:
               -e UI_USERNAME="admin" \
               -e UI_PASSWORD="gm" \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
-              --name my-app \
+              --name litellm-docker-database \
               -v $(pwd)/litellm/proxy/example_config_yaml/simple_config.yaml:/app/config.yaml \
-              my-app:latest \
+              litellm-docker-database:latest \
               --config /app/config.yaml \
               --port 4000 \
               --detailed_debug
@@ -3506,7 +3503,7 @@ jobs:
             sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
       - run:
           name: Start outputting logs
-          command: docker logs -f my-app
+          command: docker logs -f litellm-docker-database
           background: true
       - run:
           name: Wait for app to be ready
@@ -3710,6 +3707,7 @@ workflows:
       - e2e_ui_testing:
           requires:
             - ui_build
+            - build_docker_database_image
           filters:
             branches:
               only:
