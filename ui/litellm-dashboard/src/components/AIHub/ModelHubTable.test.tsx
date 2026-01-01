@@ -1,7 +1,7 @@
 import * as networking from "@/components/networking";
 import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import ModelHubTable from "./model_hub_table";
+import ModelHubTable from "./ModelHubTable";
 
 vi.mock("@/components/networking", () => ({
   getUiConfig: vi.fn(),
@@ -19,7 +19,7 @@ vi.mock("next/navigation", () => ({
   }),
 }));
 
-vi.mock("./public_model_hub", () => ({
+vi.mock("@/components/public_model_hub", () => ({
   default: () => <div>Public Model Hub</div>,
 }));
 
@@ -51,7 +51,12 @@ describe("ModelHubTable", () => {
     const getUiConfigMock = vi.mocked(networking.getUiConfig);
     const modelHubPublicModelsCallMock = vi.mocked(networking.modelHubPublicModelsCall);
 
-    getUiConfigMock.mockResolvedValue({ server_root_path: "/", proxy_base_url: "http://localhost:4000" });
+    getUiConfigMock.mockResolvedValue({
+      server_root_path: "/",
+      proxy_base_url: "http://localhost:4000",
+      auto_redirect_to_sso: false,
+      admin_ui_disabled: false,
+    });
     modelHubPublicModelsCallMock.mockResolvedValue([]);
 
     render(<ModelHubTable accessToken={null} publicPage={true} premiumUser={false} userRole={null} />);
