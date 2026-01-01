@@ -3704,6 +3704,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - build_docker_database_image:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - e2e_ui_testing:
           requires:
             - ui_build
