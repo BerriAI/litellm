@@ -348,11 +348,9 @@ class TestSDKPartnerTelemetry:
             "Authorization": "Bearer token"
         }
 
-        with patch(
-            "litellm.llms.databricks.common_utils.WorkspaceClient", return_value=mock_workspace_client
-        ):
-            mock_useragent = MagicMock()
-            with patch("litellm.llms.databricks.common_utils.useragent", mock_useragent):
+        mock_useragent = MagicMock()
+        with patch("databricks.sdk.WorkspaceClient", return_value=mock_workspace_client):
+            with patch("databricks.sdk.useragent", mock_useragent):
                 databricks_base._get_databricks_credentials(
                     api_key=None,
                     api_base=None,
@@ -594,10 +592,8 @@ class TestAuthenticationPriority:
             "Authorization": "Bearer sdk-token"
         }
 
-        with patch(
-            "litellm.llms.databricks.common_utils.WorkspaceClient", return_value=mock_workspace_client
-        ):
-            with patch("litellm.llms.databricks.common_utils.useragent"):
+        with patch("databricks.sdk.WorkspaceClient", return_value=mock_workspace_client):
+            with patch("databricks.sdk.useragent"):
                 api_base, headers = databricks_base.databricks_validate_environment(
                     api_key=None,
                     api_base=None,
