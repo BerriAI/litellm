@@ -2009,9 +2009,10 @@ jobs:
             pip install aiohttp
             pip install apscheduler
       - run:
-          name: Build Docker image
+          name: Load Docker image
           command: |
-            docker build -t myapp . -f ./docker/Dockerfile.database
+            gunzip -c litellm-docker-database.tar.gz | docker load
+            docker images | grep litellm-docker-database
       - run:
           name: Run Docker container
           command: |
@@ -2024,7 +2025,7 @@ jobs:
               -v $(pwd)/litellm/proxy/example_config_yaml/bad_schema.prisma:/app/litellm/proxy/schema.prisma \
               -v $(pwd)/litellm/proxy/example_config_yaml/disable_schema_update.yaml:/app/config.yaml \
               --name my-app \
-              myapp:latest \
+              litellm-docker-database:ci \
               --config /app/config.yaml \
               --port 4000
       - run:
@@ -2277,8 +2278,10 @@ jobs:
           name: Wait for PostgreSQL to be ready
           command: dockerize -wait tcp://localhost:5432 -timeout 1m
       - run:
-          name: Build Docker image
-          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
+          name: Load Docker image
+          command: |
+            gunzip -c litellm-docker-database.tar.gz | docker load
+            docker images | grep litellm-docker-database
       - run:
           name: Run Docker container
           command: |
@@ -2313,7 +2316,7 @@ jobs:
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/oai_misc_config.yaml:/app/config.yaml \
-              my-app:latest \
+              litellm-docker-database:ci \
               --config /app/config.yaml \
               --port 4000 \
               --detailed_debug \
@@ -2417,8 +2420,10 @@ jobs:
           name: Wait for PostgreSQL to be ready
           command: dockerize -wait tcp://localhost:5432 -timeout 1m
       - run:
-          name: Build Docker image
-          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
+          name: Load Docker image
+          command: |
+            gunzip -c litellm-docker-database.tar.gz | docker load
+            docker images | grep litellm-docker-database
       - run:
           name: Run Docker container
           # intentionally give bad redis credentials here
@@ -2451,7 +2456,7 @@ jobs:
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/otel_test_config.yaml:/app/config.yaml \
               -v $(pwd)/litellm/proxy/example_config_yaml/custom_guardrail.py:/app/custom_guardrail.py \
-              my-app:latest \
+              litellm-docker-database:ci \
               --config /app/config.yaml \
               --port 4000 \
               --detailed_debug \
@@ -2502,7 +2507,7 @@ jobs:
               --add-host host.docker.internal:host-gateway \
               --name my-app-3 \
               -v $(pwd)/litellm/proxy/example_config_yaml/enterprise_config.yaml:/app/config.yaml \
-              my-app:latest \
+              litellm-docker-database:ci \
               --config /app/config.yaml \
               --port 4000 \
               --detailed_debug
@@ -2578,8 +2583,10 @@ jobs:
           name: Wait for PostgreSQL to be ready
           command: dockerize -wait tcp://localhost:5432 -timeout 1m
       - run:
-          name: Build Docker image
-          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
+          name: Load Docker image
+          command: |
+            gunzip -c litellm-docker-database.tar.gz | docker load
+            docker images | grep litellm-docker-database
       - run:
           name: Run Docker container
           # intentionally give bad redis credentials here
@@ -2603,7 +2610,7 @@ jobs:
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/spend_tracking_config.yaml:/app/config.yaml \
-              my-app:latest \
+              litellm-docker-database:ci \
               --config /app/config.yaml \
               --port 4000 \
               --detailed_debug \
@@ -2691,8 +2698,10 @@ jobs:
           name: Wait for PostgreSQL to be ready
           command: dockerize -wait tcp://localhost:5432 -timeout 1m
       - run:
-          name: Build Docker image
-          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
+          name: Load Docker image
+          command: |
+            gunzip -c litellm-docker-database.tar.gz | docker load
+            docker images | grep litellm-docker-database
       - run:
           name: Run Docker container 1
           # intentionally give bad redis credentials here
@@ -2712,7 +2721,7 @@ jobs:
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/multi_instance_simple_config.yaml:/app/config.yaml \
-              my-app:latest \
+              litellm-docker-database:ci \
               --config /app/config.yaml \
               --port 4000 \
               --detailed_debug \
@@ -2733,7 +2742,7 @@ jobs:
               --add-host host.docker.internal:host-gateway \
               --name my-app-2 \
               -v $(pwd)/litellm/proxy/example_config_yaml/multi_instance_simple_config.yaml:/app/config.yaml \
-              my-app:latest \
+              litellm-docker-database:ci \
               --config /app/config.yaml \
               --port 4001 \
               --detailed_debug
@@ -2827,8 +2836,10 @@ jobs:
           name: Wait for PostgreSQL to be ready
           command: dockerize -wait tcp://localhost:5432 -timeout 1m
       - run:
-          name: Build Docker image
-          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
+          name: Load Docker image
+          command: |
+            gunzip -c litellm-docker-database.tar.gz | docker load
+            docker images | grep litellm-docker-database
       - run:
           name: Run Docker container
           # intentionally give bad redis credentials here
@@ -2843,7 +2854,7 @@ jobs:
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/store_model_db_config.yaml:/app/config.yaml \
-              my-app:latest \
+              litellm-docker-database:ci \
               --config /app/config.yaml \
               --port 4000 \
               --detailed_debug \
@@ -3058,10 +3069,11 @@ jobs:
       - run:
           name: Wait for PostgreSQL to be ready
           command: dockerize -wait tcp://localhost:5432 -timeout 1m
-      # Run pytest and generate JUnit XML report
       - run:
-          name: Build Docker image
-          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
+          name: Load Docker image
+          command: |
+            gunzip -c litellm-docker-database.tar.gz | docker load
+            docker images | grep litellm-docker-database
       - run:
           name: Run Docker container
           command: |
@@ -3083,7 +3095,7 @@ jobs:
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/pass_through_config.yaml:/app/config.yaml \
               -v $(pwd)/litellm/proxy/example_config_yaml/custom_auth_basic.py:/app/custom_auth_basic.py \
-              my-app:latest \
+              litellm-docker-database:ci \
               --config /app/config.yaml \
               --port 4000 \
               --detailed_debug \
@@ -3725,30 +3737,40 @@ workflows:
                 - main
                 - /litellm_.*/
       - e2e_openai_endpoints:
+          requires:
+            - build_docker_database_image
           filters:
             branches:
               only:
                 - main
                 - /litellm_.*/
       - proxy_logging_guardrails_model_info_tests:
+          requires:
+            - build_docker_database_image
           filters:
             branches:
               only:
                 - main
                 - /litellm_.*/
       - proxy_spend_accuracy_tests:
+          requires:
+            - build_docker_database_image
           filters:
             branches:
               only:
                 - main
                 - /litellm_.*/
       - proxy_multi_instance_tests:
+          requires:
+            - build_docker_database_image
           filters:
             branches:
               only:
                 - main
                 - /litellm_.*/
       - proxy_store_model_in_db_tests:
+          requires:
+            - build_docker_database_image
           filters:
             branches:
               only:
@@ -3761,6 +3783,8 @@ workflows:
                 - main
                 - /litellm_.*/
       - proxy_pass_through_endpoint_tests:
+          requires:
+            - build_docker_database_image
           filters:
             branches:
               only:
@@ -3899,6 +3923,8 @@ workflows:
             - litellm_assistants_api_testing
             - auth_ui_unit_tests
       - db_migration_disable_update_check:
+          requires:
+            - build_docker_database_image
           filters:
             branches:
               only:
