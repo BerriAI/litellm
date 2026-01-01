@@ -349,15 +349,26 @@ class TestSDKPartnerTelemetry:
         }
 
         mock_useragent = MagicMock()
-        with patch("databricks.sdk.WorkspaceClient", return_value=mock_workspace_client):
-            with patch("databricks.sdk.useragent", mock_useragent):
-                databricks_base._get_databricks_credentials(
-                    api_key=None,
-                    api_base=None,
-                    headers=None,
-                )
+        # Create a mock databricks.sdk module to simulate the SDK being available
+        # This allows us to test the partner telemetry registration without requiring
+        # the actual databricks-sdk package to be installed
+        mock_sdk_module = MagicMock()
+        mock_sdk_module.WorkspaceClient = MagicMock(return_value=mock_workspace_client)
+        mock_sdk_module.useragent = mock_useragent
+        
+        # Mock both databricks and databricks.sdk modules to ensure the import works
+        with patch.dict(sys.modules, {
+            "databricks": MagicMock(),
+            "databricks.sdk": mock_sdk_module
+        }):
+            databricks_base._get_databricks_credentials(
+                api_key=None,
+                api_base=None,
+                headers=None,
+            )
 
-                mock_useragent.with_partner.assert_called_once_with("litellm")
+            # Verify that partner telemetry registration was called correctly
+            mock_useragent.with_partner.assert_called_once_with("litellm")
 
 
 class TestUserAgentFromEnvironment:
@@ -592,17 +603,28 @@ class TestAuthenticationPriority:
             "Authorization": "Bearer sdk-token"
         }
 
-        with patch("databricks.sdk.WorkspaceClient", return_value=mock_workspace_client):
-            with patch("databricks.sdk.useragent"):
-                api_base, headers = databricks_base.databricks_validate_environment(
-                    api_key=None,
-                    api_base=None,
-                    endpoint_type="chat_completions",
-                    custom_endpoint=False,
-                    headers=None,
-                )
+        # Create a mock databricks.sdk module to simulate the SDK being available
+        # This allows us to test the SDK fallback authentication without requiring
+        # the actual databricks-sdk package to be installed
+        mock_sdk_module = MagicMock()
+        mock_sdk_module.WorkspaceClient = MagicMock(return_value=mock_workspace_client)
+        mock_sdk_module.useragent = MagicMock()
+        
+        # Mock both databricks and databricks.sdk modules to ensure the import works
+        with patch.dict(sys.modules, {
+            "databricks": MagicMock(),
+            "databricks.sdk": mock_sdk_module
+        }):
+            api_base, headers = databricks_base.databricks_validate_environment(
+                api_key=None,
+                api_base=None,
+                endpoint_type="chat_completions",
+                custom_endpoint=False,
+                headers=None,
+            )
 
-                assert "Authorization" in headers
+            # Verify that SDK authentication was used (headers contain Authorization)
+            assert "Authorization" in headers
 
 
 class TestEndpointURLConstruction:
