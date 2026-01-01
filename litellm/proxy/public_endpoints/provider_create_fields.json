@@ -2866,7 +2866,7 @@
         "label": "API Base",
         "placeholder": null,
         "tooltip": null,
-        "required": false,
+        "required": true,
         "field_type": "text",
         "options": null,
         "default_value": null
@@ -2876,13 +2876,29 @@
         "label": "API Key",
         "placeholder": null,
         "tooltip": null,
-        "required": false,
+        "required": true,
         "field_type": "password",
         "options": null,
         "default_value": null
+      },
+      {
+        "key": "project_id",
+        "label": "Project ID",
+        "placeholder": null,
+        "tooltip": "Your Watsonx.ai Project ID",
+        "required": true,
+        "field_type": "text"
+      },
+      {
+        "key": "space_id",
+        "label": "Deployment Space ID",
+        "placeholder": null,
+        "tooltip": "Optional: Watsonx.ai Deployment Space ID",
+        "required": false,
+        "field_type": "text"
       }
     ],
-    "default_model_placeholder": "gpt-3.5-turbo"
+    "default_model_placeholder": "watsonx/ibm/granite-3-3-8b-instruct"
   },
   {
     "provider": "WATSONX_TEXT",
