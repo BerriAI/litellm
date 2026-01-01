@@ -1064,7 +1064,8 @@ class TestProxyFunctionCalling:
             ("gemini/gemini-1.5-pro", "litellm_proxy/gemini/gemini-1.5-pro", True),
             ("gemini/gemini-1.5-flash", "litellm_proxy/gemini/gemini-1.5-flash", True),
             # Groq models (mixed support)
-            ("groq/gemma-7b-it", "litellm_proxy/groq/gemma-7b-it", True),
+            # Note: groq/gemma-7b-it is not in model_prices_and_context_window.json, so supports_function_calling returns False
+            ("groq/gemma-7b-it", "litellm_proxy/groq/gemma-7b-it", False),
             (
                 "groq/llama-3.3-70b-versatile",
                 "litellm_proxy/groq/llama-3.3-70b-versatile",
