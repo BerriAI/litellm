@@ -3443,13 +3443,12 @@ jobs:
               -f docker/Dockerfile.database .
 
       - run:
-          name: Save Docker image to workspace
+          name: Save Docker image to workspace root
           command: |
-            mkdir -p workspace
-            docker save litellm-docker-database:ci | gzip > workspace/litellm-docker-database.tar.gz
+            docker save litellm-docker-database:ci | gzip > litellm-docker-database.tar.gz
 
       - persist_to_workspace:
-          root: workspace
+          root: .
           paths:
             - litellm-docker-database.tar.gz
 
@@ -3462,11 +3461,11 @@ jobs:
       - checkout
       - setup_google_dns
       - attach_workspace:
-          at: workspace
+          at: ~/project
       - run:
           name: Load Docker image
           command: |
-            gunzip -c workspace/litellm-docker-database.tar.gz | docker load
+            gunzip -c litellm-docker-database.tar.gz | docker load
             docker images | grep litellm-docker-database
       - run:
           name: Install Dependencies
