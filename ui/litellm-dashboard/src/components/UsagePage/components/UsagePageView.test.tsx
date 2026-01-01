@@ -1,8 +1,9 @@
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { renderWithProviders } from "../../../../tests/test-utils";
 import type { Organization } from "../../networking";
 import * as networking from "../../networking";
 import NewUsagePage from "./UsagePageView";
@@ -332,7 +333,7 @@ describe("NewUsage", () => {
   });
 
   it("should render and fetch usage data on mount", async () => {
-    render(<NewUsagePage {...defaultProps} />);
+    renderWithProviders(<NewUsagePage {...defaultProps} />);
 
     // Wait for data to be fetched
     await waitFor(() => {
@@ -349,7 +350,7 @@ describe("NewUsage", () => {
   });
 
   it("should display usage metrics and charts", async () => {
-    render(<NewUsagePage {...defaultProps} />);
+    renderWithProviders(<NewUsagePage {...defaultProps} />);
 
     await waitFor(() => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
@@ -367,7 +368,7 @@ describe("NewUsage", () => {
   });
 
   it("should switch between usage views correctly", async () => {
-    render(<NewUsagePage {...defaultProps} />);
+    renderWithProviders(<NewUsagePage {...defaultProps} />);
 
     await waitFor(() => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
@@ -401,7 +402,7 @@ describe("NewUsage", () => {
   });
 
   it("should show organization usage banner and view for admins", async () => {
-    render(<NewUsagePage {...defaultProps} organizations={mockOrganizations} />);
+    renderWithProviders(<NewUsagePage {...defaultProps} organizations={mockOrganizations} />);
 
     await waitFor(() => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
@@ -426,7 +427,7 @@ describe("NewUsage", () => {
       error: null,
     } as any);
 
-    render(<NewUsagePage {...defaultProps} />);
+    renderWithProviders(<NewUsagePage {...defaultProps} />);
 
     await waitFor(() => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
@@ -450,7 +451,7 @@ describe("NewUsage", () => {
       error: null,
     } as any);
 
-    render(<NewUsagePage {...defaultProps} />);
+    renderWithProviders(<NewUsagePage {...defaultProps} />);
 
     await waitFor(() => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
