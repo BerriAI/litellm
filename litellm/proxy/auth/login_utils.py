@@ -69,7 +69,6 @@ async def expire_previous_ui_session_tokens(
             }
         )
 
-        print(f"ui_session_tokens: {ui_session_tokens}");
         if not ui_session_tokens:
             return
 
