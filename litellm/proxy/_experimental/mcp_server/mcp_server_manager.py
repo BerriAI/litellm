@@ -536,9 +536,12 @@ class MCPServerManager:
             client_secret=client_secret_value
             or getattr(mcp_server, "client_secret", None),
             scopes=resolved_scopes,
-            authorization_url=getattr(mcp_oauth_metadata, "authorization_url", None),
-            token_url=getattr(mcp_oauth_metadata, "token_url", None),
-            registration_url=getattr(mcp_oauth_metadata, "registration_url", None),
+            authorization_url=mcp_server.authorization_url
+            or getattr(mcp_oauth_metadata, "authorization_url", None),
+            token_url=mcp_server.token_url
+            or getattr(mcp_oauth_metadata, "token_url", None),
+            registration_url=mcp_server.registration_url
+            or getattr(mcp_oauth_metadata, "registration_url", None),
             command=getattr(mcp_server, "command", None),
             args=getattr(mcp_server, "args", None) or [],
             env=env_dict,
@@ -548,7 +551,7 @@ class MCPServerManager:
         )
         return new_server
 
-    async def add_update_server(self, mcp_server: LiteLLM_MCPServerTable):
+    async def add_server(self, mcp_server: LiteLLM_MCPServerTable):
         try:
             if mcp_server.server_id not in self.registry:
                 new_server = await self.build_mcp_server_from_table(mcp_server)
@@ -557,6 +560,17 @@ class MCPServerManager:
 
         except Exception as e:
             verbose_logger.debug(f"Failed to add MCP server: {str(e)}")
+            raise e
+
+    async def update_server(self, mcp_server: LiteLLM_MCPServerTable):
+        try:
+            if mcp_server.server_id in self.registry:
+                new_server = await self.build_mcp_server_from_table(mcp_server)
+                self.registry[mcp_server.server_id] = new_server
+                verbose_logger.debug(f"Updated MCP Server: {new_server.name}")
+
+        except Exception as e:
+            verbose_logger.debug(f"Failed to udpate MCP server: {str(e)}")
             raise e
 
     def get_all_mcp_server_ids(self) -> Set[str]:
@@ -2040,7 +2054,7 @@ class MCPServerManager:
             verbose_logger.debug(
                 f"Adding server to registry: {server.server_id} ({server.server_name})"
             )
-            await self.add_update_server(server)
+            await self.add_server(server)
 
         verbose_logger.debug(
             f"Registry now contains {len(self.get_registry())} servers"
@@ -2186,8 +2200,12 @@ class MCPServerManager:
                 async def _noop(session):
                     return "ok"
 
-                await client.run_with_session(_noop)
+                # Add timeout wrapper to prevent hanging
+                await asyncio.wait_for(client.run_with_session(_noop), timeout=10.0)
                 status = "healthy"
+            except asyncio.TimeoutError:
+                health_check_error = "Health check timed out after 10 seconds"
+                status = "unhealthy"
             except Exception as e:
                 health_check_error = str(e)
                 status = "unhealthy"
@@ -2216,19 +2234,23 @@ class MCPServerManager:
             command=getattr(server, "command", None),
             args=getattr(server, "args", None) or [],
             env=getattr(server, "env", None) or {},
+            authorization_url=server.authorization_url,
+            token_url=server.token_url,
+            registration_url=server.registration_url,
         )
 
     async def get_all_mcp_servers_with_health_and_teams(
         self,
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
-        include_health: bool = True,
+        server_ids: Optional[List[str]] = None,
     ) -> List[LiteLLM_MCPServerTable]:
         """
         Get all MCP servers that the user has access to, with health status and team information.
 
         Args:
             user_api_key_auth: User authentication info for access control
-            include_health: Whether to include health check information
+            server_ids: Optional list of server IDs to filter. If provided, only these servers
+                       will be checked (subject to access control). If None, all accessible servers are checked.
 
         Returns:
             List of MCP server objects with health and team data
@@ -2237,14 +2259,79 @@ class MCPServerManager:
         # Get allowed server IDs
         allowed_server_ids = await self.get_allowed_mcp_servers(user_api_key_auth)
 
+        # Filter by requested server_ids if provided
+        if server_ids:
+            # Only check servers that are both requested AND accessible
+            target_server_ids = [sid for sid in server_ids if sid in allowed_server_ids]
+        else:
+            # Check all accessible servers
+            target_server_ids = allowed_server_ids
+
         # Run health checks concurrently
-        tasks = [
-            self.health_check_server(server_id) for server_id in allowed_server_ids
-        ]
+        tasks = [self.health_check_server(server_id) for server_id in target_server_ids]
         results = await asyncio.gather(*tasks)
 
         # Filter out None results (servers that were not found)
         list_mcp_servers = [server for server in results if server is not None]
+
+        return list_mcp_servers
+
+    async def get_all_allowed_mcp_servers(
+        self,
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    ) -> List[LiteLLM_MCPServerTable]:
+        """
+        Get all MCP servers that the user has access to.
+
+        Args:
+            user_api_key_auth: User authentication info for access control
+
+        Returns:
+            List of MCP server objects without health status
+        """
+        from datetime import datetime
+
+        # Get allowed server IDs
+        allowed_server_ids = await self.get_allowed_mcp_servers(user_api_key_auth)
+
+        list_mcp_servers: List[LiteLLM_MCPServerTable] = []
+
+        for server_id in allowed_server_ids:
+            server = self.get_mcp_server_by_id(server_id)
+            if not server:
+                verbose_logger.warning(f"MCP Server {server_id} not found in registry")
+                continue
+
+            # Build LiteLLM_MCPServerTable without health check
+            mcp_server_table = LiteLLM_MCPServerTable(
+                server_id=server.server_id,
+                server_name=server.server_name,
+                alias=server.alias,
+                description=(
+                    server.mcp_info.get("description") if server.mcp_info else None
+                ),
+                url=server.url,
+                transport=server.transport,
+                auth_type=server.auth_type,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+                teams=[],
+                mcp_access_groups=server.access_groups or [],
+                allowed_tools=server.allowed_tools or [],
+                extra_headers=server.extra_headers or [],
+                mcp_info=server.mcp_info,
+                static_headers=server.static_headers,
+                status=None,  # No health check performed
+                last_health_check=None,  # No health check performed
+                health_check_error=None,
+                command=getattr(server, "command", None),
+                args=getattr(server, "args", None) or [],
+                env=getattr(server, "env", None) or {},
+                authorization_url=server.authorization_url,
+                token_url=server.token_url,
+                registration_url=server.registration_url,
+            )
+            list_mcp_servers.append(mcp_server_table)
 
         return list_mcp_servers
 

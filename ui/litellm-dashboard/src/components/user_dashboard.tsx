@@ -92,13 +92,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   const [teamSpend, setTeamSpend] = useState<number | null>(null);
   const [userModels, setUserModels] = useState<string[]>([]);
   const [proxySettings, setProxySettings] = useState<ProxySettings | null>(null);
-  const defaultTeam: TeamInterface = {
-    models: [],
-    team_alias: "Default Team",
-    team_id: null,
-  };
   const [selectedTeam, setSelectedTeam] = useState<any | null>(null);
-  const [selectedKeyAlias, setSelectedKeyAlias] = useState<string | null>(null);
   // check if window is not undefined
   if (typeof window !== "undefined") {
     window.addEventListener("beforeunload", function () {
@@ -352,14 +346,10 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
         <Col numColSpan={1} className="flex flex-col gap-2">
           <CreateKey
             key={selectedTeam ? selectedTeam.team_id : null}
-            userID={userID}
             team={selectedTeam as Team | null}
             teams={teams as Team[]}
-            userRole={userRole}
-            accessToken={accessToken}
             data={keys}
             addKey={addKey}
-            premiumUser={premiumUser}
           />
           <VirtualKeysTable teams={teams} organizations={organizations} />
         </Col>
