@@ -1,6 +1,6 @@
-import { describe, it, expect, vi } from "vitest";
-import { renderWithProviders, screen, waitFor } from "../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
+import { renderWithProviders, screen, waitFor } from "../../tests/test-utils";
 import Navbar from "./navbar";
 
 // Mock the hooks and utilities

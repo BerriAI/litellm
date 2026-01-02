@@ -1,6 +1,6 @@
+import { getProxyBaseUrl } from "@/components/networking";
 import { useQuery, UseQueryResult } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
-import { getProxyBaseUrl } from "@/components/networking";
 
 const healthReadinessKeys = createQueryKeys("healthReadiness");
 

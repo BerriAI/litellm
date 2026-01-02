@@ -1,23 +1,27 @@
-import Link from "next/link";
-import React, { useState, useEffect } from "react";
-import type { MenuProps } from "antd";
-import { Dropdown, Switch, Tooltip } from "antd";
+import { useHealthReadiness } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadiness";
 import { getProxyBaseUrl } from "@/components/networking";
+import { useTheme } from "@/contexts/ThemeContext";
+import { clearTokenCookies } from "@/utils/cookieUtils";
 import {
-  UserOutlined,
-  LogoutOutlined,
+  emitLocalStorageChange,
+  getLocalStorageItem,
+  removeLocalStorageItem,
+  setLocalStorageItem,
+} from "@/utils/localStorageUtils";
+import { fetchProxySettings } from "@/utils/proxyUtils";
+import {
   CrownOutlined,
+  LogoutOutlined,
   MailOutlined,
-  SafetyOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  SafetyOutlined,
+  UserOutlined,
 } from "@ant-design/icons";
-import { clearTokenCookies } from "@/utils/cookieUtils";
-import { getLocalStorageItem, setLocalStorageItem, removeLocalStorageItem } from "@/utils/localStorageUtils";
-import { fetchProxySettings } from "@/utils/proxyUtils";
-import { useTheme } from "@/contexts/ThemeContext";
-import { emitLocalStorageChange } from "@/utils/localStorageUtils";
-import { useHealthReadiness } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadiness";
+import type { MenuProps } from "antd";
+import { Dropdown, Switch, Tooltip } from "antd";
+import Link from "next/link";
+import React, { useEffect, useState } from "react";
 
 interface NavbarProps {
   userID: string | null;
