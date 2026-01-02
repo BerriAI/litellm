@@ -79,10 +79,12 @@ class LiteLLMDatabase:
             dus.updated_at,
             vt.team_id,
             vt.key_alias as api_key_alias,
-            tt.team_alias
+            tt.team_alias,
+            ut.user_email as user_email
         FROM "LiteLLM_DailyUserSpend" dus
         LEFT JOIN "LiteLLM_VerificationToken" vt ON dus.api_key = vt.token
         LEFT JOIN "LiteLLM_TeamTable" tt ON vt.team_id = tt.team_id
+        LEFT JOIN "LiteLLM_UserTable" ut ON dus.user_id = ut.user_id
         {where_clause}
         ORDER BY dus.date DESC, dus.created_at DESC
         """
