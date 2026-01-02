@@ -10,6 +10,28 @@ vi.mock("../../hooks/models/useModels", () => ({
   useModelsInfo: () => mockUseModelsInfo(),
 }));
 
+// Mock the useModelCostMap hook
+const mockUseModelCostMap = vi.fn(() => ({
+  data: {
+    "gpt-4": { litellm_provider: "openai" },
+    "gpt-3.5-turbo": { litellm_provider: "openai" },
+    "gpt-4-accessible": { litellm_provider: "openai" },
+    "gpt-3.5-turbo-blocked": { litellm_provider: "openai" },
+    "gpt-4-sales": { litellm_provider: "openai" },
+    "gpt-4-engineering": { litellm_provider: "openai" },
+    "gpt-4-personal": { litellm_provider: "openai" },
+    "gpt-4-team-only": { litellm_provider: "openai" },
+    "gpt-4-config": { litellm_provider: "openai" },
+    "gpt-4-db": { litellm_provider: "openai" },
+  },
+  isLoading: false,
+  error: null,
+})) as any;
+
+vi.mock("../../hooks/models/useModelCostMap", () => ({
+  useModelCostMap: () => mockUseModelCostMap(),
+}));
+
 // Mock the useTeams hook (react-query implementation)
 const mockUseTeams = vi.fn(() => ({
   data: [],
@@ -21,6 +43,13 @@ const mockUseTeams = vi.fn(() => ({
 vi.mock("../../hooks/teams/useTeams", () => ({
   useTeams: () => mockUseTeams(),
 }));
+
+// Helper function to create model cost map mock return value
+const createModelCostMapMock = (data: Record<string, any>) => ({
+  data,
+  isLoading: false,
+  error: null,
+});
 
 describe("AllModelsTab", () => {
   const mockSetSelectedModelGroup = vi.fn();
@@ -64,6 +93,8 @@ describe("AllModelsTab", () => {
       refetch: vi.fn(),
     });
 
+    mockUseModelCostMap.mockReturnValueOnce(createModelCostMapMock({}));
+
     render(<AllModelsTab {...defaultProps} />);
     expect(screen.getByText("Current Team:")).toBeInTheDocument();
   });
@@ -91,6 +122,13 @@ describe("AllModelsTab", () => {
       error: null,
       refetch: vi.fn(),
     });
+
+    mockUseModelCostMap.mockReturnValueOnce(
+      createModelCostMapMock({
+        "gpt-4-accessible": { litellm_provider: "openai" },
+        "gpt-3.5-turbo-blocked": { litellm_provider: "openai" },
+      }),
+    );
 
     const modelData = {
       data: [
@@ -146,6 +184,13 @@ describe("AllModelsTab", () => {
       refetch: vi.fn(),
     });
 
+    mockUseModelCostMap.mockReturnValueOnce(
+      createModelCostMapMock({
+        "gpt-4-sales": { litellm_provider: "openai" },
+        "gpt-4-engineering": { litellm_provider: "openai" },
+      }),
+    );
+
     const modelData = {
       data: [
         {
@@ -183,6 +228,13 @@ describe("AllModelsTab", () => {
       error: null,
       refetch: vi.fn(),
     });
+
+    mockUseModelCostMap.mockReturnValueOnce(
+      createModelCostMapMock({
+        "gpt-4-personal": { litellm_provider: "openai" },
+        "gpt-4-team-only": { litellm_provider: "openai" },
+      }),
+    );
 
     const modelData = {
       data: [
@@ -223,6 +275,13 @@ describe("AllModelsTab", () => {
       error: null,
       refetch: vi.fn(),
     });
+
+    mockUseModelCostMap.mockReturnValueOnce(
+      createModelCostMapMock({
+        "gpt-4-config": { litellm_provider: "openai" },
+        "gpt-4-db": { litellm_provider: "openai" },
+      }),
+    );
 
     const modelData = {
       data: [
@@ -276,6 +335,12 @@ describe("AllModelsTab", () => {
       error: null,
       refetch: vi.fn(),
     });
+
+    mockUseModelCostMap.mockReturnValueOnce(
+      createModelCostMapMock({
+        "gpt-4-config": { litellm_provider: "openai" },
+      }),
+    );
 
     const modelData = {
       data: [
