@@ -1058,7 +1058,7 @@ openai_video_generation_models = ["sora-2"]
 
 # timeout is lazy-loaded via __getattr__
 # get_llm_provider is lazy-loaded via __getattr__
-from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
+# remove_index_from_tool_calls is lazy-loaded via __getattr__
 
 # Import KeyManagementSettings here (before utils import) because _key_management_settings
 # is accessed during import time in secret_managers/main.py (via dd_tracing -> datadog -> _service_logger -> utils)
@@ -1507,6 +1507,7 @@ if TYPE_CHECKING:
     get_first_chars_messages: Callable[..., str]
     get_provider_fields: Callable[..., List]
     get_valid_models: Callable[..., list]
+    remove_index_from_tool_calls: Callable[..., None]
 
     # Response types - truly lazy loaded only (not in main.py or elsewhere)
     ModelResponseListIterator: Type[Any]
@@ -1658,6 +1659,17 @@ def __getattr__(name: str) -> Any:
             LoggingCallbackManager = __getattr__("LoggingCallbackManager")
             _globals["logging_callback_manager"] = LoggingCallbackManager()
         return _globals["logging_callback_manager"]
+    
+    # Lazy load _service_logger module
+    if name == "_service_logger":
+        from ._lazy_imports import _get_litellm_globals
+        _globals = _get_litellm_globals()
+        # Check if already cached
+        if "_service_logger" not in _globals:
+            # Import the module lazily
+            import litellm._service_logger
+            _globals["_service_logger"] = litellm._service_logger
+        return _globals["_service_logger"]
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
