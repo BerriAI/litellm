@@ -278,10 +278,11 @@ class GigaChatConfig(BaseConfig):
                 message["content"] = ""
 
             # Handle list content (multimodal) - extract text and images
-            if isinstance(message.get("content"), list):
+            content = message.get("content")
+            if isinstance(content, list):
                 texts = []
                 attachments = []
-                for part in message["content"]:
+                for part in content:
                     if isinstance(part, dict):
                         if part.get("type") == "text":
                             texts.append(part.get("text", ""))
@@ -432,8 +433,8 @@ class GigaChatConfig(BaseConfig):
         model_response.id = response_json.get("id", f"chatcmpl-{uuid.uuid4().hex[:12]}")
         model_response.created = response_json.get("created", int(time.time()))
         model_response.model = model
-        model_response.choices = choices
-        model_response.usage = usage
+        model_response.choices = choices  # type: ignore
+        setattr(model_response, "usage", usage)
 
         return model_response
 

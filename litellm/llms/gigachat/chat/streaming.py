@@ -36,7 +36,7 @@ class GigaChatModelResponseIterator:
                 text="",
                 tool_use=None,
                 is_finished=False,
-                finish_reason=None,
+                finish_reason="",
                 usage=None,
                 index=0,
             )
@@ -74,7 +74,7 @@ class GigaChatModelResponseIterator:
             text=text,
             tool_use=tool_use,
             is_finished=is_finished,
-            finish_reason=finish_reason,
+            finish_reason=finish_reason or "",
             usage=None,
             index=choice.get("index", 0),
         )
@@ -98,7 +98,7 @@ class GigaChatModelResponseIterator:
                         text="",
                         tool_use=None,
                         is_finished=False,
-                        finish_reason=None,
+                        finish_reason="",
                         usage=None,
                         index=0,
                     )
@@ -125,7 +125,7 @@ class GigaChatModelResponseIterator:
                         text="",
                         tool_use=None,
                         is_finished=False,
-                        finish_reason=None,
+                        finish_reason="",
                         usage=None,
                         index=0,
                     )

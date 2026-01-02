@@ -109,8 +109,10 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
         # Normalize input to list
         if isinstance(input, str):
             input_list = [input]
+        elif isinstance(input, list):
+            input_list = input
         else:
-            input_list = list(input)
+            input_list = [input]  # type: ignore
 
         # Remove gigachat/ prefix from model if present
         if model.startswith("gigachat/"):
