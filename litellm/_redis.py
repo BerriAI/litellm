@@ -311,6 +311,9 @@ def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
     sentinel_nodes = redis_kwargs.get("sentinel_nodes")
     sentinel_password = redis_kwargs.get("sentinel_password")
     service_name = redis_kwargs.get("service_name")
+    password = redis_kwargs.get("password")
+    ssl = redis_kwargs.get("ssl", False)
+    ssl_cert_reqs = redis_kwargs.get("ssl_cert_reqs")
 
     if not sentinel_nodes or not service_name:
         raise ValueError(
@@ -319,22 +322,42 @@ def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
 
     verbose_logger.debug("init_redis_sentinel: sentinel nodes are being initialized.")
 
+    # Prepare sentinel_kwargs for Sentinel authentication
+    sentinel_kwargs_dict = {}
+    if sentinel_password:
+        sentinel_kwargs_dict['password'] = sentinel_password
+    
+    # Add SSL configuration for Sentinel connections
+    if ssl:
+        sentinel_kwargs_dict['ssl'] = True
+        if ssl_cert_reqs is not None:
+            sentinel_kwargs_dict['ssl_cert_reqs'] = ssl_cert_reqs
+
     # Set up the Sentinel client
     sentinel = redis.Sentinel(
         sentinel_nodes,
         socket_timeout=REDIS_SOCKET_TIMEOUT,
-        password=sentinel_password,
+        sentinel_kwargs=sentinel_kwargs_dict,
     )
 
-    # Return the master instance for the given service
+    # Prepare kwargs for master connection
+    master_kwargs = {'password': password}
+    if ssl:
+        master_kwargs['ssl'] = True
+        if ssl_cert_reqs is not None:
+            master_kwargs['ssl_cert_reqs'] = ssl_cert_reqs
 
-    return sentinel.master_for(service_name)
+    # Return the master instance for the given service
+    return sentinel.master_for(service_name, **master_kwargs)
 
 
 def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
     sentinel_nodes = redis_kwargs.get("sentinel_nodes")
     sentinel_password = redis_kwargs.get("sentinel_password")
     service_name = redis_kwargs.get("service_name")
+    password = redis_kwargs.get("password")
+    ssl = redis_kwargs.get("ssl", False)
+    ssl_cert_reqs = redis_kwargs.get("ssl_cert_reqs")
 
     if not sentinel_nodes or not service_name:
         raise ValueError(
@@ -343,16 +366,33 @@ def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
 
     verbose_logger.debug("init_redis_sentinel: sentinel nodes are being initialized.")
 
+    # Prepare sentinel_kwargs for Sentinel authentication
+    sentinel_kwargs_dict = {}
+    if sentinel_password:
+        sentinel_kwargs_dict['password'] = sentinel_password
+    
+    # Add SSL configuration for Sentinel connections
+    if ssl:
+        sentinel_kwargs_dict['ssl'] = True
+        if ssl_cert_reqs is not None:
+            sentinel_kwargs_dict['ssl_cert_reqs'] = ssl_cert_reqs
+
     # Set up the Sentinel client
     sentinel = async_redis.Sentinel(
         sentinel_nodes,
         socket_timeout=REDIS_SOCKET_TIMEOUT,
-        password=sentinel_password,
+        sentinel_kwargs=sentinel_kwargs_dict,
     )
 
-    # Return the master instance for the given service
+    # Prepare kwargs for master connection
+    master_kwargs = {'password': password}
+    if ssl:
+        master_kwargs['ssl'] = True
+        if ssl_cert_reqs is not None:
+            master_kwargs['ssl_cert_reqs'] = ssl_cert_reqs
 
-    return sentinel.master_for(service_name)
+    # Return the master instance for the given service
+    return sentinel.master_for(service_name, **master_kwargs)
 
 
 def get_redis_client(**env_overrides):
@@ -559,4 +599,3 @@ def _pretty_print_redis_config(redis_kwargs: dict) -> None:
         verbose_logger.info(f"Redis configuration: {masked_redis_kwargs}")
     except Exception as e:
         verbose_logger.error(f"Error pretty printing Redis configuration: {e}")
-
