@@ -397,9 +397,8 @@ def get_logging_payload(  # noqa: PLR0915
     # Extract agent_id for A2A requests (set directly on model_call_details)
     agent_id: Optional[str] = kwargs.get("agent_id")
     custom_llm_provider = kwargs.get("custom_llm_provider")
-    model_name = reconstruct_model_name(
-        kwargs.get("model", ""), custom_llm_provider, metadata
-    )
+    raw_model = cast(str, kwargs.get("model") or "")
+    model_name = reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
 
     try:
         payload: SpendLogsPayload = SpendLogsPayload(
