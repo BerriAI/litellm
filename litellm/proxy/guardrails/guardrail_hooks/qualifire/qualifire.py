@@ -24,7 +24,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
-from litellm.types.utils import CallTypesLiteral
+from litellm.types.utils import CallTypesLiteral, GuardrailStatus
 
 GUARDRAIL_NAME = "qualifire"
 
@@ -160,7 +160,7 @@ class QualifireGuardrail(CustomGuardrail):
 
             # Handle tool calls if present
             tool_calls = msg.get("tool_calls")
-            if tool_calls:
+            if tool_calls and isinstance(tool_calls, list):
                 qualifire_tool_calls = []
                 for tc in tool_calls:
                     if isinstance(tc, dict):
@@ -229,7 +229,7 @@ class QualifireGuardrail(CustomGuardrail):
         Raises HTTPException if content is flagged and on_flagged is "block".
         """
         start_time = datetime.now()
-        status = "success"
+        status: GuardrailStatus = "success"
         qualifire_response: Optional[Dict] = None
 
         try:
@@ -321,7 +321,7 @@ class QualifireGuardrail(CustomGuardrail):
             evaluation_results = result.get("evaluationResults", []) or []
 
         for eval_result in evaluation_results:
-            results = []
+            results: List[Any] = []
             if isinstance(eval_result, dict):
                 results = eval_result.get("results", []) or []
             else:
