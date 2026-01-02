@@ -139,7 +139,7 @@ async def test_create_mcp_server_direct():
         mock_get_prisma.return_value = mock_prisma
 
         # Mock server manager
-        mock_manager.add_update_server = mock.AsyncMock()
+        mock_manager.add_server = mock.AsyncMock()
         mock_manager.reload_servers_from_database = mock.AsyncMock()
 
         # Set up test data
@@ -195,7 +195,7 @@ async def test_create_mcp_server_direct():
         # Verify mocks were called
         mock_get_server.assert_called_once_with(mock_prisma, server_id)
         mock_create.assert_called_once()
-        mock_manager.add_update_server.assert_called_once_with(expected_response)
+        mock_manager.add_server.assert_called_once_with(expected_response)
 
 
 @pytest.mark.asyncio
