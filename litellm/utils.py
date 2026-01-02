@@ -1454,7 +1454,6 @@ def client(original_function):  # noqa: PLR0915
             ):  # allow users to control returning cached responses from the completion function
                 # checking cache
                 verbose_logger.debug("INSIDE CHECKING SYNC CACHE")
-                CachingHandlerResponse = _get_cached_caching_handler_response()
                 caching_handler_response: "CachingHandlerResponse" = (
                     _llm_caching_handler._sync_get_cache(
                         model=model or "",
@@ -1686,7 +1685,6 @@ def client(original_function):  # noqa: PLR0915
             print_verbose(
                 f"ASYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache'): {kwargs.get('cache', None)}"
             )
-            CachingHandlerResponse = _get_cached_caching_handler_response()
             _caching_handler_response: "Optional[CachingHandlerResponse]" = (
                 await _llm_caching_handler._async_get_cache(
                     model=model or "",
