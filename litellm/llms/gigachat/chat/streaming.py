@@ -4,7 +4,7 @@ GigaChat Streaming Response Handler
 
 import json
 import uuid
-from typing import Any, List, Optional
+from typing import Any, Optional
 
 from litellm.types.llms.openai import ChatCompletionToolCallChunk, ChatCompletionToolCallFunctionChunk
 from litellm.types.utils import GenericStreamingChunk

@@ -11,7 +11,6 @@ from typing import List, Optional, Tuple, Union
 import httpx
 
 from litellm import LlmProviders
-from litellm._logging import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj

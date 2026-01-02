@@ -16,7 +16,7 @@ import httpx
 from litellm._logging import verbose_logger
 
 from .authenticator import get_access_token, get_access_token_async
-from .common_utils import GIGACHAT_BASE_URL, GigaChatError
+from .common_utils import GIGACHAT_BASE_URL
 
 
 class GigaChatFileHandler:
