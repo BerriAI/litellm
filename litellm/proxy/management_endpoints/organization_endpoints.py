@@ -24,8 +24,11 @@ from litellm.proxy.management_endpoints.budget_management_endpoints import (
     new_budget,
     update_budget,
 )
-from litellm.proxy.management_endpoints.common_utils import _set_object_metadata_field
-from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.proxy.management_endpoints.common_utils import (
+    _set_object_metadata_field,
+    _user_has_admin_view,
+)
 from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
 )
@@ -34,11 +37,10 @@ from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,
 )
 from litellm.proxy.utils import PrismaClient
-from litellm.utils import _update_dictionary
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
-from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.utils import _update_dictionary
 
 router = APIRouter()
 
