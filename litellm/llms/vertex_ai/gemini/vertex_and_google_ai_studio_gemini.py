@@ -552,24 +552,46 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     "Invalid tool={}. Use `litellm.set_verbose` or `litellm --detailed_debug` to see raw request."
                 )
 
-        # Only include function_declarations if there are actual functions
-        _tools = Tools()
+# Build list of Tool objects - each Tool should contain exactly one type
+        # per Vertex AI API spec: "A Tool object should contain exactly one type of Tool"
+        _tools_list: List[Tools] = []
+
+        # Function declarations can be grouped together in one Tool
         if gtool_func_declarations:
-            _tools["function_declarations"] = gtool_func_declarations
+            func_tool = Tools()
+            func_tool["function_declarations"] = gtool_func_declarations
+            _tools_list.append(func_tool)
+
+        # Each special tool type must be in its own Tool object
         if googleSearch is not None:
-            _tools[VertexToolName.GOOGLE_SEARCH.value] = googleSearch
+            search_tool = Tools()
+            search_tool[VertexToolName.GOOGLE_SEARCH.value] = googleSearch
+            _tools_list.append(search_tool)
         if googleSearchRetrieval is not None:
-            _tools[VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value] = googleSearchRetrieval
+            retrieval_tool = Tools()
+            retrieval_tool[VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value] = googleSearchRetrieval
+            _tools_list.append(retrieval_tool)
         if enterpriseWebSearch is not None:
-            _tools[VertexToolName.ENTERPRISE_WEB_SEARCH.value] = enterpriseWebSearch
+            enterprise_tool = Tools()
+            enterprise_tool[VertexToolName.ENTERPRISE_WEB_SEARCH.value] = enterpriseWebSearch
+            _tools_list.append(enterprise_tool)
         if code_execution is not None:
-            _tools[VertexToolName.CODE_EXECUTION.value] = code_execution
+            code_tool = Tools()
+            code_tool[VertexToolName.CODE_EXECUTION.value] = code_execution
+            _tools_list.append(code_tool)
         if urlContext is not None:
-            _tools[VertexToolName.URL_CONTEXT.value] = urlContext
+            url_tool = Tools()
+            url_tool[VertexToolName.URL_CONTEXT.value] = urlContext
+            _tools_list.append(url_tool)
         if googleMaps is not None:
-            _tools[VertexToolName.GOOGLE_MAPS.value] = googleMaps
+            maps_tool = Tools()
+            maps_tool[VertexToolName.GOOGLE_MAPS.value] = googleMaps
+            _tools_list.append(maps_tool)
         if computerUse is not None:
-            _tools[VertexToolName.COMPUTER_USE.value] = computerUse
+            computer_tool = Tools()
+            computer_tool[VertexToolName.COMPUTER_USE.value] = computerUse
+            _tools_list.append(computer_tool)
+
 
         # Add retrieval config to toolConfig if googleMaps has location data
         if google_maps_retrieval_config is not None:
@@ -579,7 +601,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 "retrievalConfig"
             ] = google_maps_retrieval_config
 
-        return [_tools]
+        return _tools_list
 
     def _map_response_schema(self, value: dict) -> dict:
         old_schema = deepcopy(value)
