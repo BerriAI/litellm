@@ -22,6 +22,7 @@
         "headers": {
             "Content-Type": "application/json"
         },
-        "environment_variables": ["SUMOLOGIC_WEBHOOK_URL"]
+        "environment_variables": ["SUMOLOGIC_WEBHOOK_URL"],
+        "log_format": "ndjson"
     }
 }
