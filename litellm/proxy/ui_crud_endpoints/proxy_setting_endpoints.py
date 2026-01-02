@@ -22,11 +22,17 @@ class IPAddress(BaseModel):
 
 class UIThemeConfig(BaseModel):
     """Configuration for UI theme customization"""
-    
+
     # Logo configuration
     logo_url: Optional[str] = Field(
         default=None,
         description="URL or path to custom logo image. Can be a local file path or HTTP/HTTPS URL"
+    )
+
+    # Favicon configuration
+    favicon_url: Optional[str] = Field(
+        default=None,
+        description="URL or path to custom favicon image. Can be a local file path or HTTP/HTTPS URL"
     )
 
 
@@ -648,7 +654,7 @@ async def get_ui_theme_settings():
 async def update_ui_theme_settings(theme_config: UIThemeConfig):
     """
     Update UI theme configuration.
-    Updates logo settings for the admin UI.
+    Updates logo and favicon settings for the admin UI.
     """
     from litellm.proxy.proxy_server import proxy_config, store_model_in_db
     import os
@@ -671,31 +677,66 @@ async def update_ui_theme_settings(theme_config: UIThemeConfig):
     if "environment_variables" not in config:
         config["environment_variables"] = {}
 
-    # Convert theme config to dict
-    theme_data = theme_config.model_dump(exclude_none=True)
-    
+    # Convert theme config to dict - use exclude_unset to only get explicitly provided fields
+    # This allows us to distinguish between fields not provided vs fields set to None
+    theme_data = theme_config.model_dump(exclude_unset=True)
+
     # Store UI theme config in litellm_settings (where it's retrieved from)
     if "litellm_settings" not in config:
         config["litellm_settings"] = {}
-    config["litellm_settings"]["ui_theme_config"] = theme_data
+
+    # Get existing ui_theme_config or create empty dict
+    existing_theme_config = config["litellm_settings"].get("ui_theme_config", {})
+
+    # Merge new values with existing config (only update provided fields)
+    merged_theme_config = existing_theme_config.copy()
     
-    # Update UI_LOGO_PATH environment variable if logo_url is provided
-    # If logo_url is empty string, None, or null, remove the environment variable to use default
-    logo_url = theme_data.get("logo_url")
-    verbose_proxy_logger.debug(f"Updating logo_url: {logo_url}")
+    # Handle explicit null values to remove fields (must check before updating)
+    for key, value in theme_data.items():
+        if value is None:
+            # Remove the field if it exists
+            merged_theme_config.pop(key, None)
+        else:
+            # Update with non-None values
+            merged_theme_config[key] = value
+
+    config["litellm_settings"]["ui_theme_config"] = merged_theme_config
     
-    if logo_url and isinstance(logo_url, str) and logo_url.strip():  # Check if logo_url exists and is not empty/whitespace
-        config["environment_variables"]["UI_LOGO_PATH"] = logo_url
-        os.environ["UI_LOGO_PATH"] = logo_url
-        verbose_proxy_logger.debug(f"Set UI_LOGO_PATH to: {logo_url}")
-    else:
-        # Remove the environment variable to restore default logo
-        if "UI_LOGO_PATH" in config.get("environment_variables", {}):
-            del config["environment_variables"]["UI_LOGO_PATH"]
-            verbose_proxy_logger.debug("Removed UI_LOGO_PATH from config")
-        if "UI_LOGO_PATH" in os.environ:
-            del os.environ["UI_LOGO_PATH"]
-            verbose_proxy_logger.debug("Removed UI_LOGO_PATH from environment")
+    # Update UI_LOGO_PATH environment variable only if logo_url was explicitly provided in the request
+    if "logo_url" in theme_data:
+        logo_url = theme_data["logo_url"]
+        verbose_proxy_logger.debug(f"Updating logo_url: {logo_url}")
+
+        if logo_url and isinstance(logo_url, str) and logo_url.strip():  # Check if logo_url is a valid non-empty string
+            config["environment_variables"]["UI_LOGO_PATH"] = logo_url
+            os.environ["UI_LOGO_PATH"] = logo_url
+            verbose_proxy_logger.debug(f"Set UI_LOGO_PATH to: {logo_url}")
+        else:
+            # Remove the environment variable to restore default logo (when explicitly set to None/empty)
+            if "UI_LOGO_PATH" in config.get("environment_variables", {}):
+                del config["environment_variables"]["UI_LOGO_PATH"]
+                verbose_proxy_logger.debug("Removed UI_LOGO_PATH from config")
+            if "UI_LOGO_PATH" in os.environ:
+                del os.environ["UI_LOGO_PATH"]
+                verbose_proxy_logger.debug("Removed UI_LOGO_PATH from environment")
+
+    # Update UI_FAVICON_PATH environment variable only if favicon_url was explicitly provided in the request
+    if "favicon_url" in theme_data:
+        favicon_url = theme_data["favicon_url"]
+        verbose_proxy_logger.debug(f"Updating favicon_url: {favicon_url}")
+
+        if favicon_url and isinstance(favicon_url, str) and favicon_url.strip():  # Check if favicon_url is a valid non-empty string
+            config["environment_variables"]["UI_FAVICON_PATH"] = favicon_url
+            os.environ["UI_FAVICON_PATH"] = favicon_url
+            verbose_proxy_logger.debug(f"Set UI_FAVICON_PATH to: {favicon_url}")
+        else:
+            # Remove the environment variable to restore default favicon (when explicitly set to None/empty)
+            if "UI_FAVICON_PATH" in config.get("environment_variables", {}):
+                del config["environment_variables"]["UI_FAVICON_PATH"]
+                verbose_proxy_logger.debug("Removed UI_FAVICON_PATH from config")
+            if "UI_FAVICON_PATH" in os.environ:
+                del os.environ["UI_FAVICON_PATH"]
+                verbose_proxy_logger.debug("Removed UI_FAVICON_PATH from environment")
 
     # Handle environment variable encryption if needed
     stored_config = config.copy()
@@ -709,9 +750,9 @@ async def update_ui_theme_settings(theme_config: UIThemeConfig):
     await proxy_config.save_config(new_config=stored_config)
 
     return {
-        "message": "Logo settings updated successfully.",
+        "message": "UI theme settings updated successfully.",
         "status": "success",
-        "theme_config": theme_data,
+        "theme_config": merged_theme_config,
     }
 
 
