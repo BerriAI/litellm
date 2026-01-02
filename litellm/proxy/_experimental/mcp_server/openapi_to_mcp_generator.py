@@ -3,7 +3,9 @@ This module is used to generate MCP tools from OpenAPI specs.
 """
 
 import json
+from pathlib import PurePosixPath
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
 import httpx
 
@@ -15,6 +17,29 @@ from litellm.proxy._experimental.mcp_server.tool_registry import (
 # Store the base URL and headers globally
 BASE_URL = ""
 HEADERS: Dict[str, str] = {}
+
+
+def _sanitize_path_parameter_value(param_value: Any, param_name: str) -> str:
+    """Ensure path params cannot introduce directory traversal."""
+    if param_value is None:
+        return ""
+
+    value_str = str(param_value)
+    if value_str == "":
+        return ""
+
+    normalized_value = value_str.replace("\\", "/")
+    if "/" in normalized_value:
+        raise ValueError(
+            f"Path parameter '{param_name}' must not contain path separators"
+        )
+
+    if any(part in {".", ".."} for part in PurePosixPath(normalized_value).parts):
+        raise ValueError(
+            f"Path parameter '{param_name}' cannot include '.' or '..' segments"
+        )
+
+    return quote(value_str, safe="")
 
 
 def load_openapi_spec(filepath: str) -> Dict[str, Any]:
@@ -142,7 +167,12 @@ async def tool_function({params_str}) -> str:
     for param_name in path_param_names:
         param_value = locals().get(param_name, "")
         if param_value:
-            url = url.replace("{{" + param_name + "}}", str(param_value))
+            # url = url.replace("{{" + param_name + "}}", str(param_value))
+            try:
+                safe_value = _sanitize_path_parameter_value(param_value, param_name)
+            except ValueError as exc:
+                return "Invalid path parameter: " + str(exc)
+            url = url.replace("{{" + param_name + "}}", safe_value)
     
     # Build query params
     query_param_names = {query_params}
@@ -192,6 +222,7 @@ async def tool_function({params_str}) -> str:
         "base_url": base_url,
         "path": path,
         "method": method,
+        "_sanitize_path_parameter_value": _sanitize_path_parameter_value,
     }
     exec(func_code, local_vars)
 
