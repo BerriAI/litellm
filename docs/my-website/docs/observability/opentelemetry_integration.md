@@ -73,21 +73,6 @@ OTEL_HEADERS="authorization=Bearer <project-api-key>"
 
 </TabItem>
 
-<TabItem value="levo" label="Log to Levo AI">
-
-[Contact Levo support](mailto:support@levo.ai) to get your OpenTelemetry collector endpoint URL and organization ID.
-
-```shell
-export OTEL_EXPORTER_OTLP_ENDPOINT="<your-levo-collector-url>"
-export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
-export OTEL_SERVICE_NAME="litellm-proxy"
-export OTEL_EXPORTER_OTLP_HEADERS="x-levo-organization-id=<your-org-id>,x-levo-workspace-id=<your-workspace-id>"
-```
-
-For detailed setup instructions, see the [Levo AI Integration Guide](./levo_integration).
-
-</TabItem>
-
 </Tabs>
 
 Use just 1 line of code, to instantly log your LLM responses **across all providers** with OpenTelemetry:

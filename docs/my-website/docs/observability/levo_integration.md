@@ -21,7 +21,7 @@ import TabItem from '@theme/TabItem';
 
 ## Quick Start
 
-Send all your LLM requests and responses to Levo for monitoring and analysis using LiteLLM's built-in OpenTelemetry support.
+Send all your LLM requests and responses to Levo for monitoring and analysis using LiteLLM's built-in Levo integration.
 
 ### What You'll Get
 
@@ -36,31 +36,32 @@ Send all your LLM requests and responses to Levo for monitoring and analysis usi
 **1. Install OpenTelemetry dependencies:**
 
 ```bash
-pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp
+pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-http opentelemetry-exporter-otlp-proto-grpc
 ```
 
-**2. Enable OpenTelemetry in your LiteLLM config:**
+**2. Enable Levo callback in your LiteLLM config:**
 
 Add to your `litellm_config.yaml`:
 
 ```yaml
 litellm_settings:
-  callbacks: ["otel"]
-  turn_off_message_logging: false  # Required to capture request/response data
+  callbacks: ["levo"]
 ```
 
 **3. Configure environment variables:**
 
-[Contact Levo support](mailto:support@levo.ai) to get your OpenTelemetry collector endpoint URL and your Levo organization ID.
+[Contact Levo support](mailto:support@levo.ai) to get your collector endpoint URL, API key, organization ID, and workspace ID.
 
-Set these environment variables:
+Set these required environment variables:
 
 ```bash
-export OTEL_EXPORTER_OTLP_ENDPOINT="<your-levo-collector-url>"
-export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
-export OTEL_SERVICE_NAME="litellm-proxy"
-export OTEL_EXPORTER_OTLP_HEADERS="x-levo-organization-id=<your-levo-org-id>,x-levo-workspace-id=<your-workspace-id>"
+export LEVOAI_API_KEY="<your-levo-api-key>"
+export LEVOAI_ORG_ID="<your-levo-org-id>"
+export LEVOAI_WORKSPACE_ID="<your-workspace-id>"
+export LEVOAI_COLLECTOR_URL="<your-levo-collector-url>"
 ```
+
+**Note:** The collector URL should be the full endpoint URL provided by Levo support. It will be used exactly as provided.
 
 **4. Start LiteLLM:**
 
@@ -84,32 +85,46 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
     }'
 ```
 
-### Customizing Service Name
-
-You can customize how your service appears in Levo:
-
-```bash
-export OTEL_SERVICE_NAME="my-litellm-service"
-export OTEL_RESOURCE_ATTRIBUTES="service.name=my-litellm-service"
-```
-
 ## What Data is Captured
 
 | Feature | Details |
 |---------|---------|
 | **What is logged** | OpenTelemetry Trace Data (OTLP format) |
 | **Events** | Success + Failure |
-| **Format** | OTLP (OpenTelemetry Protocol) - see [OpenTelemetry Integration](./opentelemetry_integration) for details |
+| **Format** | OTLP (OpenTelemetry Protocol) |
+| **Headers** | Automatically includes `Authorization: Bearer {LEVOAI_API_KEY}`, `x-levo-organization-id`, and `x-levo-workspace-id` |
+
+## Configuration Reference
+
+### Required Environment Variables
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `LEVOAI_API_KEY` | Your Levo API key | `levo_abc123...` |
+| `LEVOAI_ORG_ID` | Your Levo organization ID | `org-123456` |
+| `LEVOAI_WORKSPACE_ID` | Your Levo workspace ID | `workspace-789` |
+| `LEVOAI_COLLECTOR_URL` | Full collector endpoint URL from Levo support | `https://collector.levo.ai/v1/traces` |
+
+### Optional Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `LEVOAI_ENV_NAME` | Environment name for tagging traces | `None` |
+
+**Note:** The collector URL is used exactly as provided by Levo support. No path manipulation is performed.
 
 ## Troubleshooting
 
 ### Not seeing traces in Levo?
 
-1. **Verify OpenTelemetry is enabled**: Check LiteLLM startup logs for `initializing callbacks=['otel']`
+1. **Verify Levo callback is enabled**: Check LiteLLM startup logs for `initializing callbacks=['levo']`
 
-2. **Check environment variables**: Ensure `OTEL_EXPORTER_OTLP_ENDPOINT` is set correctly:
+2. **Check required environment variables**: Ensure all required variables are set:
    ```bash
-   echo $OTEL_EXPORTER_OTLP_ENDPOINT
+   echo $LEVOAI_API_KEY
+   echo $LEVOAI_ORG_ID
+   echo $LEVOAI_WORKSPACE_ID
+   echo $LEVOAI_COLLECTOR_URL
    ```
 
 3. **Verify collector connectivity**: Test if your collector is reachable:
@@ -117,19 +132,29 @@ export OTEL_RESOURCE_ATTRIBUTES="service.name=my-litellm-service"
    curl <your-collector-url>/health
    ```
 
-4. **Enable debug logging**:
+4. **Check for initialization errors**: Look for errors in LiteLLM startup logs. Common issues:
+   - Missing OpenTelemetry packages: Install with `pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-http opentelemetry-exporter-otlp-proto-grpc`
+   - Missing required environment variables: All four required variables must be set
+   - Invalid collector URL: Ensure the URL is correct and reachable
+
+5. **Enable debug logging**:
    ```bash
-   export OTEL_LOG_LEVEL="DEBUG"
-   export OTEL_DEBUG="True"
    export LITELLM_LOG="DEBUG"
    ```
 
-5. **Wait for async export**: OTLP sends traces asynchronously. Wait 10-15 seconds after making requests before checking Levo.
+6. **Wait for async export**: OTLP sends traces asynchronously. Wait 10-15 seconds after making requests before checking Levo.
+
+### Common Errors
+
+**Error: "LEVOAI_COLLECTOR_URL environment variable is required"**
+- Solution: Set the `LEVOAI_COLLECTOR_URL` environment variable with your collector endpoint URL from Levo support.
+
+**Error: "No module named 'opentelemetry'"**
+- Solution: Install OpenTelemetry packages: `pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-http opentelemetry-exporter-otlp-proto-grpc`
 
 ## Additional Resources
 
 - [Levo Documentation](https://docs.levo.ai)
-- [LiteLLM OpenTelemetry Integration](./opentelemetry_integration)
 - [OpenTelemetry Specification](https://opentelemetry.io/docs/specs/otel/)
 
 ## Need Help?
