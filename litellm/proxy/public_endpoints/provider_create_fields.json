@@ -2893,7 +2893,7 @@
         "key": "api_base",
         "label": "API Base",
         "placeholder": null,
-        "tooltip": null,
+        "tooltip": "Base URL of your WatsonX instance",
         "required": false,
         "field_type": "text",
         "options": null,
@@ -2903,14 +2903,54 @@
         "key": "api_key",
         "label": "API Key",
         "placeholder": null,
-        "tooltip": null,
+        "tooltip": "IBM Cloud API key. Required if not using Token or Zen API Key",
         "required": false,
         "field_type": "password",
         "options": null,
         "default_value": null
+      },
+      {
+        "key": "token",
+        "label": "IAM Token",
+        "placeholder": null,
+        "tooltip": "Pre-generated IAM bearer token. Use instead of API Key if you manage tokens externally",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "zen_api_key",
+        "label": "Zen API Key",
+        "placeholder": null,
+        "tooltip": "Zen API Key for Cloud Pak for Data deployments. Use instead of API Key for on-premises",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "project_id",
+        "label": "Project ID",
+        "placeholder": null,
+        "tooltip": "Optional: Your Watsonx.ai Project ID",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "space_id",
+        "label": "Deployment Space ID",
+        "placeholder": null,
+        "tooltip": "Optional: Watsonx.ai Deployment Space ID",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
       }
     ],
-    "default_model_placeholder": "gpt-3.5-turbo"
+    "default_model_placeholder": "watsonx/ibm/granite-3-3-8b-instruct"
   },
   {
     "provider": "WATSONX_TEXT",
