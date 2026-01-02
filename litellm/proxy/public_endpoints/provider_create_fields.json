@@ -2865,8 +2865,8 @@
         "key": "api_base",
         "label": "API Base",
         "placeholder": null,
-        "tooltip": null,
-        "required": true,
+        "tooltip": "Base URL of your WatsonX instance",
+        "required": false,
         "field_type": "text",
         "options": null,
         "default_value": null
@@ -2875,8 +2875,28 @@
         "key": "api_key",
         "label": "API Key",
         "placeholder": null,
-        "tooltip": null,
-        "required": true,
+        "tooltip": "IBM Cloud API key. Required if not using Token or Zen API Key",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "token",
+        "label": "IAM Token",
+        "placeholder": null,
+        "tooltip": "Pre-generated IAM bearer token. Use instead of API Key if you manage tokens externally",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "zen_api_key",
+        "label": "Zen API Key",
+        "placeholder": null,
+        "tooltip": "Zen API Key for Cloud Pak for Data deployments. Use instead of API Key for on-premises",
+        "required": false,
         "field_type": "password",
         "options": null,
         "default_value": null
@@ -2885,8 +2905,8 @@
         "key": "project_id",
         "label": "Project ID",
         "placeholder": null,
-        "tooltip": "Your Watsonx.ai Project ID",
-        "required": true,
+        "tooltip": "Optional: Your Watsonx.ai Project ID",
+        "required": false,
         "field_type": "text",
         "options": null,
         "default_value": null

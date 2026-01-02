@@ -80,7 +80,7 @@ def test_get_litellm_model_cost_map_returns_cost_map():
 
 
 def test_watsonx_provider_fields():
-    """Test that Watsonx provider has project_id and space_id fields."""
+    """Test that Watsonx provider has all required credential fields including multiple auth options."""
     app = FastAPI()
     app.include_router(router)
     client = TestClient(app)
@@ -92,6 +92,12 @@ def test_watsonx_provider_fields():
     assert watsonx is not None
 
     field_keys = [f["key"] for f in watsonx["credential_fields"]]
+    # Core fields
+    assert "api_base" in field_keys
     assert "project_id" in field_keys
     assert "space_id" in field_keys
+    # Multiple auth methods supported
+    assert "api_key" in field_keys
+    assert "token" in field_keys
+    assert "zen_api_key" in field_keys
 
