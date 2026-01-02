@@ -415,3 +415,180 @@ async def test_sync_callback_not_affected_by_atexit():
 
             # Callback should be invoked immediately, not queued for atexit
             assert callback_invoked_immediately, "Sync callback should be invoked immediately"
+
+
+@pytest.mark.asyncio
+async def test_json_serialization_with_non_serializable_objects():
+    """
+    Test that PostHog logger handles non-JSON-serializable objects correctly
+    using safe_dumps for serialization.
+    
+    This test verifies that:
+    1. Datetime objects are serialized correctly
+    2. Custom class instances are handled gracefully
+    3. Circular references are detected and handled
+    4. Complex nested structures work
+    """
+    from unittest.mock import Mock, patch
+    from datetime import datetime
+    
+    posthog_logger = PostHogLogger()
+    
+    # Create a payload with non-JSON-serializable objects
+    standard_payload = create_standard_logging_payload()
+    
+    # Add datetime object and other non-serializable objects to messages
+    # Use cast to bypass TypedDict strictness for test purposes
+    messages_with_non_serializable = [
+        cast(dict, {
+            "role": "user", 
+            "content": "Hello",
+            "timestamp": datetime(2024, 1, 1, 12, 0, 0),  # datetime object
+            "metadata": {
+                "custom_class": type('CustomClass', (), {'value': 123})(),  # custom class instance
+                "set_data": {1, 2, 3},  # set (not JSON serializable)
+            }
+        })
+    ]
+    standard_payload["messages"] = messages_with_non_serializable  # type: ignore
+    
+    # Add circular reference in response (test safe_dumps circular detection)
+    response_choice: dict = {"message": {"content": "Hi"}}
+    response_choice["self_ref"] = response_choice  # circular reference
+    standard_payload["response"] = {"choices": [response_choice]}  # type: ignore
+    
+    kwargs = {"standard_logging_object": standard_payload}
+    
+    # Test sync path - should not raise exception
+    with patch.object(posthog_logger.sync_client, 'post') as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = "OK"
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+        
+        # Should not raise TypeError or other serialization errors
+        posthog_logger.log_success_event(kwargs, None, 0.0, 0.0)
+        
+        # Verify POST was called (means serialization succeeded)
+        assert mock_post.called, "HTTP POST should be called"
+        
+        # Verify the content was serialized (check that safe_dumps was used)
+        call_args = mock_post.call_args
+        json_payload = call_args.kwargs['content']
+        assert isinstance(json_payload, str), "Payload should be a JSON string"
+        assert len(json_payload) > 0, "Payload should not be empty"
+        
+        # Verify datetime was converted (safe_dumps converts non-serializable to strings)
+        assert "2024" in json_payload or "datetime" in json_payload.lower()
+
+
+@pytest.mark.asyncio
+async def test_async_json_serialization_with_non_serializable_objects():
+    """
+    Test that async PostHog logger handles non-JSON-serializable objects
+    correctly using safe_dumps in async_send_batch.
+    """
+    from unittest.mock import Mock, patch, AsyncMock
+    from datetime import datetime
+    
+    posthog_logger = PostHogLogger()
+    
+    # Create a payload with non-JSON-serializable objects
+    standard_payload = create_standard_logging_payload()
+    messages_with_datetime = [
+        cast(dict, {
+            "role": "user",
+            "content": "Test async serialization",
+            "timestamp": datetime(2024, 2, 1, 10, 30, 0),
+        })
+    ]
+    standard_payload["messages"] = messages_with_datetime  # type: ignore
+    
+    kwargs = {"standard_logging_object": standard_payload}
+    event_payload = posthog_logger.create_posthog_event_payload(kwargs)
+    
+    # Add event to queue
+    posthog_logger.log_queue.append({
+        "event": event_payload,
+        "api_key": "test_key",
+        "api_url": "https://app.posthog.com"
+    })
+    
+    # Mock async client
+    with patch.object(posthog_logger.async_client, 'post') as mock_post:
+        mock_response = AsyncMock()
+        mock_response.status_code = 200
+        mock_response.text = "OK"
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+        
+        # Should not raise serialization errors
+        await posthog_logger.async_send_batch()
+        
+        # Verify POST was called
+        assert mock_post.called, "Async HTTP POST should be called"
+        
+        # Verify serialization succeeded
+        call_args = mock_post.call_args
+        json_payload = call_args.kwargs['content']
+        assert isinstance(json_payload, str), "Async payload should be a JSON string"
+        assert len(json_payload) > 0, "Async payload should not be empty"
+
+
+@pytest.mark.asyncio
+async def test_atexit_json_serialization_with_non_serializable_objects():
+    """
+    Test that _flush_on_exit handles non-JSON-serializable objects correctly
+    using safe_dumps.
+    """
+    from unittest.mock import Mock, patch
+    from datetime import datetime
+    
+    posthog_logger = PostHogLogger()
+    
+    # Create a payload with non-JSON-serializable objects
+    standard_payload = create_standard_logging_payload()
+    messages_with_complex_data = [
+        cast(dict, {
+            "role": "user",
+            "content": "Test atexit serialization",
+            "timestamp": datetime(2024, 3, 1, 15, 45, 0),
+            "complex_data": {
+                "tuple_data": (1, 2, 3),  # tuple not directly JSON serializable
+                "frozenset_data": frozenset([1, 2, 3]),  # frozenset
+            }
+        })
+    ]
+    standard_payload["messages"] = messages_with_complex_data  # type: ignore
+    
+    kwargs = {"standard_logging_object": standard_payload}
+    event_payload = posthog_logger.create_posthog_event_payload(kwargs)
+    
+    # Add event to queue
+    posthog_logger.log_queue.append({
+        "event": event_payload,
+        "api_key": "test_key",
+        "api_url": "https://app.posthog.com"
+    })
+    
+    # Mock sync client for atexit flush
+    with patch.object(posthog_logger.sync_client, 'post') as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = "OK"
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+        
+        # Should not raise serialization errors
+        posthog_logger._flush_on_exit()
+        
+        # Verify POST was called
+        assert mock_post.called, "Atexit HTTP POST should be called"
+        assert len(posthog_logger.log_queue) == 0, "Queue should be empty after flush"
+        
+        # Verify serialization succeeded
+        call_args = mock_post.call_args
+        json_payload = call_args.kwargs['content']
+        assert isinstance(json_payload, str), "Atexit payload should be a JSON string"
+        assert len(json_payload) > 0, "Atexit payload should not be empty"
