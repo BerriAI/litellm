@@ -209,6 +209,9 @@ if MCP_AVAILABLE:
             command=payload.command,
             args=payload.args,
             env=payload.env,
+            authorization_url=payload.authorization_url,
+            token_url=payload.token_url,
+            registration_url=payload.registration_url,
         )
 
     def get_prisma_client_or_throw(message: str):
@@ -448,7 +451,7 @@ if MCP_AVAILABLE:
         exists = does_mcp_server_exist(mcp_server_records, server_id)
 
         if exists:
-            await global_mcp_server_manager.add_update_server(mcp_server)
+            await global_mcp_server_manager.add_server(mcp_server)
             return _redact_mcp_credentials(mcp_server)
         else:
             raise HTTPException(
@@ -522,7 +525,7 @@ if MCP_AVAILABLE:
                 payload,
                 touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
             )
-            await global_mcp_server_manager.add_update_server(new_mcp_server)
+            await global_mcp_server_manager.add_server(new_mcp_server)
 
             # Ensure registry is up to date by reloading from database
             await global_mcp_server_manager.reload_servers_from_database()
@@ -803,7 +806,7 @@ if MCP_AVAILABLE:
                     "error": f"MCP Server not found, passed server_id={payload.server_id}"
                 },
             )
-        await global_mcp_server_manager.add_update_server(mcp_server_record_updated)
+        await global_mcp_server_manager.update_server(mcp_server_record_updated)
 
         # Ensure registry is up to date by reloading from database
         await global_mcp_server_manager.reload_servers_from_database()

@@ -536,9 +536,12 @@ class MCPServerManager:
             client_secret=client_secret_value
             or getattr(mcp_server, "client_secret", None),
             scopes=resolved_scopes,
-            authorization_url=getattr(mcp_oauth_metadata, "authorization_url", None),
-            token_url=getattr(mcp_oauth_metadata, "token_url", None),
-            registration_url=getattr(mcp_oauth_metadata, "registration_url", None),
+            authorization_url=mcp_server.authorization_url
+            or getattr(mcp_oauth_metadata, "authorization_url", None),
+            token_url=mcp_server.token_url
+            or getattr(mcp_oauth_metadata, "token_url", None),
+            registration_url=mcp_server.registration_url
+            or getattr(mcp_oauth_metadata, "registration_url", None),
             command=getattr(mcp_server, "command", None),
             args=getattr(mcp_server, "args", None) or [],
             env=env_dict,
@@ -548,7 +551,7 @@ class MCPServerManager:
         )
         return new_server
 
-    async def add_update_server(self, mcp_server: LiteLLM_MCPServerTable):
+    async def add_server(self, mcp_server: LiteLLM_MCPServerTable):
         try:
             if mcp_server.server_id not in self.registry:
                 new_server = await self.build_mcp_server_from_table(mcp_server)
@@ -557,6 +560,17 @@ class MCPServerManager:
 
         except Exception as e:
             verbose_logger.debug(f"Failed to add MCP server: {str(e)}")
+            raise e
+
+    async def update_server(self, mcp_server: LiteLLM_MCPServerTable):
+        try:
+            if mcp_server.server_id in self.registry:
+                new_server = await self.build_mcp_server_from_table(mcp_server)
+                self.registry[mcp_server.server_id] = new_server
+                verbose_logger.debug(f"Updated MCP Server: {new_server.name}")
+
+        except Exception as e:
+            verbose_logger.debug(f"Failed to udpate MCP server: {str(e)}")
             raise e
 
     def get_all_mcp_server_ids(self) -> Set[str]:
@@ -2040,7 +2054,7 @@ class MCPServerManager:
             verbose_logger.debug(
                 f"Adding server to registry: {server.server_id} ({server.server_name})"
             )
-            await self.add_update_server(server)
+            await self.add_server(server)
 
         verbose_logger.debug(
             f"Registry now contains {len(self.get_registry())} servers"
@@ -2220,6 +2234,9 @@ class MCPServerManager:
             command=getattr(server, "command", None),
             args=getattr(server, "args", None) or [],
             env=getattr(server, "env", None) or {},
+            authorization_url=server.authorization_url,
+            token_url=server.token_url,
+            registration_url=server.registration_url,
         )
 
     async def get_all_mcp_servers_with_health_and_teams(
@@ -2310,6 +2327,9 @@ class MCPServerManager:
                 command=getattr(server, "command", None),
                 args=getattr(server, "args", None) or [],
                 env=getattr(server, "env", None) or {},
+                authorization_url=server.authorization_url,
+                token_url=server.token_url,
+                registration_url=server.registration_url,
             )
             list_mcp_servers.append(mcp_server_table)
 
