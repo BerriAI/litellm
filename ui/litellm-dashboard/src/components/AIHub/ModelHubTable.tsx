@@ -1,20 +1,13 @@
-import { CopyOutlined } from "@ant-design/icons";
-import { Badge, Button, Card, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
-import { Modal } from "antd";
-import { Copy } from "lucide-react";
-import { useRouter } from "next/navigation";
-import React, { useCallback, useEffect, useState } from "react";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { isAdminRole } from "../utils/roles";
-import { agentHubColumns, AgentHubData } from "./agent_hub_table_columns";
-import MakeAgentPublicForm from "./make_agent_public_form";
-import MakeMCPPublicForm from "./make_mcp_public_form";
-import MakeModelPublicForm from "./make_model_public_form";
-import { mcpHubColumns, MCPServerData } from "./mcp_hub_table_columns";
-import { ModelDataTable } from "./model_dashboard/table";
-import ModelFilters from "./model_filters";
-import { modelHubColumns } from "./model_hub_table_columns";
-import NotificationsManager from "./molecules/notifications_manager";
+import { AgentHubData, getAgentHubTableColumns } from "@/components/AIHub/AgentHubTableColumns";
+import MakeAgentPublicForm from "@/components/AIHub/forms/MakeAgentPublicForm";
+import MakeMCPPublicForm from "@/components/AIHub/forms/MakeMCPPublicForm";
+import MakeModelPublicForm from "@/components/AIHub/forms/MakeModelPublicForm";
+import { mcpHubColumns, MCPServerData } from "@/components/mcp_hub_table_columns";
+import { modelHubColumns } from "@/components/model_hub_table_columns";
+import UsefulLinksManagement from "@/components/AIHub/UsefulLinksManagement";
+import { ModelDataTable } from "@/components/model_dashboard/table";
+import ModelFilters from "@/components/model_filters";
+import NotificationsManager from "@/components/molecules/notifications_manager";
 import {
   fetchMCPServers,
   getAgentsList,
@@ -23,9 +16,16 @@ import {
   getUiConfig,
   modelHubCall,
   modelHubPublicModelsCall,
-} from "./networking";
-import PublicModelHub from "./public_model_hub";
-import UsefulLinksManagement from "./useful_links_management";
+} from "@/components/networking";
+import PublicModelHub from "@/components/public_model_hub";
+import { isAdminRole } from "@/utils/roles";
+import { CopyOutlined } from "@ant-design/icons";
+import { Badge, Button, Card, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
+import { Modal } from "antd";
+import { Copy } from "lucide-react";
+import { useRouter } from "next/navigation";
+import React, { useCallback, useEffect, useState } from "react";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 
 interface ModelHubTableProps {
   accessToken: string | null;
@@ -423,7 +423,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
 
                   {/* Agent Table */}
                   <ModelDataTable
-                    columns={agentHubColumns(showAgentModal, copyToClipboard, publicPage)}
+                    columns={getAgentHubTableColumns(showAgentModal, copyToClipboard, publicPage)}
                     data={agentHubData || []}
                     isLoading={agentLoading}
                     defaultSorting={[{ id: "name", desc: false }]}
