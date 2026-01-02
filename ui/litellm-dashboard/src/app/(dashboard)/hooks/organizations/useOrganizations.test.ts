@@ -11,17 +11,6 @@ vi.mock("@/components/networking", () => ({
   organizationListCall: vi.fn(),
 }));
 
-// Mock the queryKeysFactory - we'll mock the specific return value
-vi.mock("../common/queryKeysFactory", () => ({
-  createQueryKeys: vi.fn((resource: string) => ({
-    all: [resource],
-    lists: () => [resource, "list"],
-    list: (params?: any) => [resource, "list", { params }],
-    details: () => [resource, "detail"],
-    detail: (uid: string) => [resource, "detail", uid],
-  })),
-}));
-
 // Mock useAuthorized hook - we can override this in individual tests
 const mockUseAuthorized = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
