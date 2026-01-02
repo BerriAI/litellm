@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from "react";
 import { Modal } from "antd";
 import { PlusCircleIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
-import { isAdminRole } from "../utils/roles";
-import { getPublicModelHubInfo, updateUsefulLinksCall, getProxyBaseUrl } from "./networking";
+import { isAdminRole } from "@/utils/roles";
+import { getPublicModelHubInfo, updateUsefulLinksCall, getProxyBaseUrl } from "../networking";
 import { Card, Title, Text, Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
-import NotificationsManager from "./molecules/notifications_manager";
-import TableIconActionButton from "./common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
+import NotificationsManager from "@/components/molecules/notifications_manager";
+import TableIconActionButton from "@/components/common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 
 interface UsefulLinksManagementProps {
   accessToken: string | null;

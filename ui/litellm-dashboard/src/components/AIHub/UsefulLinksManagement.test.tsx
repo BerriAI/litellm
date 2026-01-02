@@ -2,17 +2,17 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Modal } from "antd";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import UsefulLinksManagement from "./useful_links_management";
-import NotificationsManager from "./molecules/notifications_manager";
-import { getPublicModelHubInfo, updateUsefulLinksCall, getProxyBaseUrl } from "./networking";
+import UsefulLinksManagement from "./UsefulLinksManagement";
+import NotificationsManager from "@/components/molecules/notifications_manager";
+import { getPublicModelHubInfo, updateUsefulLinksCall, getProxyBaseUrl } from "@/components/networking";
 
-vi.mock("./networking", () => ({
+vi.mock("@/components/networking", () => ({
   getPublicModelHubInfo: vi.fn(),
   updateUsefulLinksCall: vi.fn(),
   getProxyBaseUrl: vi.fn(),
 }));
 
-vi.mock("./molecules/notifications_manager", () => ({
+vi.mock("@/components/molecules/notifications_manager", () => ({
   __esModule: true,
   default: {
     success: vi.fn(),
