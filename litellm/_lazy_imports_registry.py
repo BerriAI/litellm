@@ -290,6 +290,7 @@ TYPES_NAMES = (
 # LLM provider logic names that support lazy loading via _lazy_import_llm_provider_logic
 LLM_PROVIDER_LOGIC_NAMES = (
     "get_llm_provider",
+    "remove_index_from_tool_calls",
 )
 
 # Import maps for registry pattern - reduces repetition
@@ -393,6 +394,7 @@ _TYPES_IMPORT_MAP = {
 
 _LLM_PROVIDER_LOGIC_IMPORT_MAP = {
     "get_llm_provider": ("litellm.litellm_core_utils.get_llm_provider_logic", "get_llm_provider"),
+    "remove_index_from_tool_calls": ("litellm.litellm_core_utils.core_helpers", "remove_index_from_tool_calls"),
 }
 
 _LLM_CONFIGS_IMPORT_MAP = {
