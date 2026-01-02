@@ -1,22 +1,27 @@
-import Link from "next/link";
-import React, { useState, useEffect } from "react";
-import type { MenuProps } from "antd";
-import { Dropdown, Switch, Tooltip } from "antd";
+import { useHealthReadiness } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadiness";
 import { getProxyBaseUrl } from "@/components/networking";
+import { useTheme } from "@/contexts/ThemeContext";
+import { clearTokenCookies } from "@/utils/cookieUtils";
 import {
-  UserOutlined,
-  LogoutOutlined,
+  emitLocalStorageChange,
+  getLocalStorageItem,
+  removeLocalStorageItem,
+  setLocalStorageItem,
+} from "@/utils/localStorageUtils";
+import { fetchProxySettings } from "@/utils/proxyUtils";
+import {
   CrownOutlined,
+  LogoutOutlined,
   MailOutlined,
-  SafetyOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  SafetyOutlined,
+  UserOutlined,
 } from "@ant-design/icons";
-import { clearTokenCookies } from "@/utils/cookieUtils";
-import { getLocalStorageItem, setLocalStorageItem, removeLocalStorageItem } from "@/utils/localStorageUtils";
-import { fetchProxySettings } from "@/utils/proxyUtils";
-import { useTheme } from "@/contexts/ThemeContext";
-import { emitLocalStorageChange } from "@/utils/localStorageUtils";
+import type { MenuProps } from "antd";
+import { Dropdown, Switch, Tooltip } from "antd";
+import Link from "next/link";
+import React, { useEffect, useState } from "react";
 
 interface NavbarProps {
   userID: string | null;
@@ -44,29 +49,15 @@ const Navbar: React.FC<NavbarProps> = ({
   onToggleSidebar,
 }) => {
   const baseUrl = getProxyBaseUrl();
+  console.log("baseUrl", baseUrl);
   const [logoutUrl, setLogoutUrl] = useState("");
-  const [version, setVersion] = useState("");
   const [disableShowNewBadge, setDisableShowNewBadge] = useState(false);
   const { logoUrl } = useTheme();
+  const { data: healthData } = useHealthReadiness();
+  const version = healthData?.litellm_version;
 
   // Simple logo URL: use custom logo if available, otherwise default
   const imageUrl = logoUrl || `${baseUrl}/get_image`;
-
-  useEffect(() => {
-    const fetchVersion = async () => {
-      try {
-        const response = await fetch(`${baseUrl}/health/readiness`);
-        const data = await response.json();
-        if (data.litellm_version) {
-          setVersion(data.litellm_version);
-        }
-      } catch (error) {
-        console.error("Failed to fetch version:", error);
-      }
-    };
-
-    fetchVersion();
-  }, [baseUrl]);
 
   useEffect(() => {
     const initializeProxySettings = async () => {
@@ -190,7 +181,7 @@ const Navbar: React.FC<NavbarProps> = ({
             )}
 
             <div className="flex items-center">
-              <Link href="/" className="flex items-center">
+              <Link href={baseUrl ? baseUrl : "/"} className="flex items-center">
                 <div className="relative">
                   <img src={imageUrl} alt="LiteLLM Brand" className="h-10 w-auto" />
                   <span

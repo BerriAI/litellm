@@ -27,6 +27,10 @@ vi.mock("./networking", async (importOriginal) => {
   };
 });
 
+vi.mock("./navbar", () => ({
+  default: vi.fn(() => <div data-testid="navbar">Navbar Component</div>),
+}));
+
 beforeAll(() => {
   Object.defineProperty(window, "matchMedia", {
     writable: true,
