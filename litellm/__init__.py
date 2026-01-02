@@ -1057,7 +1057,7 @@ openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 openai_video_generation_models = ["sora-2"]
 
 # timeout is lazy-loaded via __getattr__
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+# get_llm_provider is lazy-loaded via __getattr__
 from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
 
 # Import KeyManagementSettings here (before utils import) because _key_management_settings
@@ -1507,6 +1507,7 @@ if TYPE_CHECKING:
     get_first_chars_messages: Callable[..., str]
     get_provider_fields: Callable[..., List]
     get_valid_models: Callable[..., list]
+    get_llm_provider: Callable[..., Tuple[str, str, Optional[str], Optional[str]]]
 
     # Response types - truly lazy loaded only (not in main.py or elsewhere)
     ModelResponseListIterator: Type[Any]
