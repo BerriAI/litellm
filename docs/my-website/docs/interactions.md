@@ -8,7 +8,7 @@ import TabItem from '@theme/TabItem';
 | Logging | ✅ | Works across all integrations |
 | Streaming | ✅ | |
 | Loadbalancing | ✅ | Between supported models |
-| Supported Providers | `gemini` | [Google Interactions API](https://ai.google.dev/gemini-api/docs/interactions) |
+| Supported LLM providers | **All LiteLLM supported providers** | `openai`, `anthropic`, `bedrock`, `vertex_ai`, `gemini`, `azure`, `azure_ai` etc. |
 
 ## **LiteLLM Python SDK Usage**
 
@@ -207,8 +207,63 @@ for chunk in client.interactions.create_stream(
 }
 ```
 
+## **Calling non-Interactions API endpoints (`/interactions` to `/responses` Bridge)**
+
+LiteLLM allows you to call non-Interactions API models via a bridge to LiteLLM's `/responses` endpoint. This is useful for calling OpenAI, Anthropic, and other providers that don't natively support the Interactions API.
+
+#### Python SDK Usage
+
+```python showLineNumbers title="SDK Usage"
+import litellm
+import os
+
+# Set API key
+os.environ["OPENAI_API_KEY"] = "your-openai-api-key"
+
+# Non-streaming interaction
+response = litellm.interactions.create(
+    model="gpt-4o",
+    input="Tell me a short joke about programming."
+)
+
+print(response.outputs[-1].text)
+```
+
+#### LiteLLM Proxy Usage
+
+**Setup Config:**
+
+```yaml showLineNumbers title="Example Configuration"
+model_list:
+- model_name: openai-model
+  litellm_params:
+    model: gpt-4o
+    api_key: os.environ/OPENAI_API_KEY
+```
+
+**Start Proxy:**
+
+```bash showLineNumbers title="Start LiteLLM Proxy"
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+**Make Request:**
+
+```bash showLineNumbers title="non-Interactions API Model Request"
+curl http://localhost:4000/v1beta/interactions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "openai-model",
+    "input": "Tell me a short joke about programming."
+  }'
+```
+
 ## **Supported Providers**
 
 | Provider | Link to Usage |
 |----------|---------------|
 | Google AI Studio | [Usage](#quick-start) |
+| All other LiteLLM providers | [Bridge Usage](#calling-non-interactions-api-endpoints-interactions-to-responses-bridge) |

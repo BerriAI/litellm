@@ -34,7 +34,6 @@ from inspect import iscoroutine
 from io import StringIO
 from os.path import abspath, dirname, join
 
-import aiohttp
 import dotenv
 import httpx
 import openai
@@ -48,21 +47,16 @@ from tiktoken import Encoding
 from tokenizers import Tokenizer
 
 import litellm
-import litellm._service_logger  # for storing API inputs, outputs, and metadata
+
 import litellm.litellm_core_utils
-import litellm.litellm_core_utils.audio_utils.utils
+# audio_utils.utils is lazy-loaded - only imported when needed for transcription calls
 import litellm.litellm_core_utils.json_validation_rule
-import litellm.llms
-import litellm.llms.gemini
 from litellm._lazy_imports import (
     _get_default_encoding,
     _get_modified_max_tokens,
     _get_token_counter_new,
 )
 from litellm._uuid import uuid
-from litellm.caching._internal_lru_cache import lru_cache_wrapper
-from litellm.caching.caching import DualCache
-from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
 from litellm.constants import (
     DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
     DEFAULT_EMBEDDING_PARAM_VALUES,
@@ -77,8 +71,6 @@ from litellm.constants import (
     OPENAI_EMBEDDING_PARAMS,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
-from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.vector_store_integrations.base_vector_store import (
     BaseVectorStore,
 )
@@ -157,6 +149,82 @@ from litellm.router_utils.get_retry_from_policy import (
     reset_retry_policy,
 )
 from litellm.secret_managers.main import get_secret
+
+_CachingHandlerResponse = None
+_LLMCachingHandler = None
+_CustomGuardrail = None
+_CustomLogger = None
+
+
+def _get_cached_custom_logger():
+    """
+    Get cached CustomLogger class.
+    Lazy imports on first call to avoid loading custom_logger at import time.
+    Subsequent calls use cached class for better performance.
+    """
+    global _CustomLogger
+    if _CustomLogger is None:
+        from litellm.integrations.custom_logger import CustomLogger
+        _CustomLogger = CustomLogger
+    return _CustomLogger
+
+
+def _get_cached_custom_guardrail():
+    """
+    Get cached CustomGuardrail class.
+    Lazy imports on first call to avoid loading custom_guardrail at import time.
+    Subsequent calls use cached class for better performance.
+    """
+    global _CustomGuardrail
+    if _CustomGuardrail is None:
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+        _CustomGuardrail = CustomGuardrail
+    return _CustomGuardrail
+
+
+def _get_cached_caching_handler_response():
+    """
+    Get cached CachingHandlerResponse class.
+    Lazy imports on first call to avoid loading caching_handler at import time.
+    Subsequent calls use cached class for better performance.
+    """
+    global _CachingHandlerResponse
+    if _CachingHandlerResponse is None:
+        from litellm.caching.caching_handler import CachingHandlerResponse
+        _CachingHandlerResponse = CachingHandlerResponse
+    return _CachingHandlerResponse
+
+
+def _get_cached_llm_caching_handler():
+    """
+    Get cached LLMCachingHandler class.
+    Lazy imports on first call to avoid loading caching_handler at import time.
+    Subsequent calls use cached class for better performance.
+    """
+    global _LLMCachingHandler
+    if _LLMCachingHandler is None:
+        from litellm.caching.caching_handler import LLMCachingHandler
+        _LLMCachingHandler = LLMCachingHandler
+    return _LLMCachingHandler
+
+
+# Cached lazy import for audio_utils.utils
+# Module-level cache to avoid repeated imports while preserving memory benefits
+_audio_utils_module = None
+
+
+def _get_cached_audio_utils():
+    """
+    Get cached audio_utils.utils module.
+    Lazy imports on first call to avoid loading audio_utils.utils at import time.
+    Subsequent calls use cached module for better performance.
+    """
+    global _audio_utils_module
+    if _audio_utils_module is None:
+        import litellm.litellm_core_utils.audio_utils.utils
+        _audio_utils_module = litellm.litellm_core_utils.audio_utils.utils
+    return _audio_utils_module
+
 from litellm.types.llms.anthropic import (
     ANTHROPIC_API_ONLY_HEADERS,
     AnthropicThinkingParam,
@@ -270,6 +338,8 @@ from litellm.llms.base_llm.base_utils import (
 if TYPE_CHECKING:
     # Heavy types that are only needed for type checking; avoid importing
     # their modules at runtime during `litellm` import.
+    from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
+    from litellm.integrations.custom_logger import CustomLogger
     from litellm.llms.base_llm.files.transformation import BaseFilesConfig
     from litellm.proxy._types import AllowedModelRegion
 
@@ -483,7 +553,7 @@ def _add_custom_logger_callback_to_specific_event(
 
 
 def _custom_logger_class_exists_in_success_callbacks(
-    callback_class: CustomLogger,
+    callback_class: "CustomLogger",
 ) -> bool:
     """
     Returns True if an instance of the custom logger exists in litellm.success_callback or litellm._async_success_callback
@@ -499,7 +569,7 @@ def _custom_logger_class_exists_in_success_callbacks(
 
 
 def _custom_logger_class_exists_in_failure_callbacks(
-    callback_class: CustomLogger,
+    callback_class: "CustomLogger",
 ) -> bool:
     """
     Returns True if an instance of the custom logger exists in litellm.failure_callback or litellm._async_failure_callback
@@ -532,6 +602,7 @@ def get_applied_guardrails(kwargs: Dict[str, Any]) -> List[str]:
 
     request_guardrails = get_request_guardrails(kwargs)
     applied_guardrails = []
+    CustomGuardrail = _get_cached_custom_guardrail()
     for callback in litellm.callbacks:
         if callback is not None and isinstance(callback, CustomGuardrail):
             if callback.guardrail_name is not None:
@@ -556,12 +627,117 @@ def load_credentials_from_list(kwargs: dict):
 
 
 def get_dynamic_callbacks(
-    dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]],
+    dynamic_callbacks: Optional[List[Union[str, Callable, "CustomLogger"]]],
 ) -> List:
     returned_callbacks = litellm.callbacks.copy()
     if dynamic_callbacks:
         returned_callbacks.extend(dynamic_callbacks)  # type: ignore
     return returned_callbacks
+
+
+def _is_gemini_model(model: Optional[str], custom_llm_provider: Optional[str]) -> bool:
+    """
+    Check if the target model is a Gemini or Vertex AI Gemini model.
+    """
+    if custom_llm_provider in ["gemini", "vertex_ai", "vertex_ai_beta"]:
+        # For vertex_ai, check if it's actually a Gemini model
+        if custom_llm_provider in ["vertex_ai", "vertex_ai_beta"]:
+            return model is not None and "gemini" in model.lower()
+        return True
+    
+    # Check if model name contains gemini
+    return model is not None and "gemini" in model.lower()
+
+
+def _remove_thought_signature_from_id(tool_call_id: str, separator: str) -> str:
+    """
+    Remove thought signature from a tool call ID.
+    """
+    if separator in tool_call_id:
+        return tool_call_id.split(separator, 1)[0]
+    return tool_call_id
+
+
+def _process_assistant_message_tool_calls(
+    msg_copy: dict, thought_signature_separator: str
+) -> dict:
+    """
+    Process assistant message to remove thought signatures from tool call IDs.
+    """
+    role = msg_copy.get("role")
+    tool_calls = msg_copy.get("tool_calls")
+    
+    if role == "assistant" and isinstance(tool_calls, list):
+        new_tool_calls = []
+        for tc in tool_calls:
+            # Handle both dict and Pydantic model tool calls
+            if hasattr(tc, "model_dump"):
+                # It's a Pydantic model, convert to dict
+                tc_dict = tc.model_dump()
+            elif isinstance(tc, dict):
+                tc_dict = tc.copy()
+            else:
+                new_tool_calls.append(tc)
+                continue
+            
+            # Remove thought signature from ID if present
+            if isinstance(tc_dict.get("id"), str):
+                if thought_signature_separator in tc_dict["id"]:
+                    tc_dict["id"] = _remove_thought_signature_from_id(
+                        tc_dict["id"], thought_signature_separator
+                    )
+            
+            new_tool_calls.append(tc_dict)
+        msg_copy["tool_calls"] = new_tool_calls
+    
+    return msg_copy
+
+
+def _process_tool_message_id(msg_copy: dict, thought_signature_separator: str) -> dict:
+    """
+    Process tool message to remove thought signature from tool_call_id.
+    """
+    if msg_copy.get("role") == "tool" and isinstance(
+        msg_copy.get("tool_call_id"), str
+    ):
+        if thought_signature_separator in msg_copy["tool_call_id"]:
+            msg_copy["tool_call_id"] = _remove_thought_signature_from_id(
+                msg_copy["tool_call_id"], thought_signature_separator
+            )
+    
+    return msg_copy
+
+
+def _remove_thought_signatures_from_messages(
+    messages: List, thought_signature_separator: str
+) -> List:
+    """
+    Remove thought signatures from tool call IDs in all messages.
+    """
+    processed_messages = []
+    
+    for msg in messages:
+        # Handle Pydantic models (convert to dict)
+        if hasattr(msg, "model_dump"):
+            msg_dict = msg.model_dump()
+        elif isinstance(msg, dict):
+            msg_dict = msg.copy()
+        else:
+            # Unknown type, keep as is
+            processed_messages.append(msg)
+            continue
+        
+        # Process assistant messages with tool_calls
+        msg_dict = _process_assistant_message_tool_calls(
+            msg_dict, thought_signature_separator
+        )
+        
+        # Process tool messages with tool_call_id
+        msg_dict = _process_tool_message_id(msg_dict, thought_signature_separator)
+        
+        processed_messages.append(msg_dict)
+    
+    return processed_messages
 
 
 def function_setup(  # noqa: PLR0915
@@ -585,9 +761,9 @@ def function_setup(  # noqa: PLR0915
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
         ## DYNAMIC CALLBACKS ##
-        dynamic_callbacks: Optional[
-            List[Union[str, Callable, CustomLogger]]
-        ] = kwargs.pop("callbacks", None)
+        dynamic_callbacks: Optional[List[Union[str, Callable, "CustomLogger"]]] = (
+            kwargs.pop("callbacks", None)
+        )
         all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
 
         if len(all_callbacks) > 0:
@@ -686,16 +862,16 @@ def function_setup(  # noqa: PLR0915
                 litellm.failure_callback.pop(index)
         ### DYNAMIC CALLBACKS ###
         dynamic_success_callbacks: Optional[
-            List[Union[str, Callable, CustomLogger]]
+            List[Union[str, Callable, "CustomLogger"]]
         ] = None
         dynamic_async_success_callbacks: Optional[
-            List[Union[str, Callable, CustomLogger]]
+            List[Union[str, Callable, "CustomLogger"]]
         ] = None
         dynamic_failure_callbacks: Optional[
-            List[Union[str, Callable, CustomLogger]]
+            List[Union[str, Callable, "CustomLogger"]]
         ] = None
         dynamic_async_failure_callbacks: Optional[
-            List[Union[str, Callable, CustomLogger]]
+            List[Union[str, Callable, "CustomLogger"]]
         ] = None
         if kwargs.get("success_callback", None) is not None and isinstance(
             kwargs["success_callback"], list
@@ -774,6 +950,58 @@ def function_setup(  # noqa: PLR0915
                     input=buffer.getvalue(),
                     model=model,
                 )
+            
+            ### REMOVE THOUGHT SIGNATURES FROM TOOL CALL IDS FOR NON-GEMINI MODELS ###
+            # Gemini models embed thought signatures in tool call IDs. When sending
+            # messages with tool calls to non-Gemini providers, we need to remove these
+            # signatures to ensure compatibility.
+            if isinstance(messages, list) and len(messages) > 0:
+                try:
+                    from litellm.litellm_core_utils.get_llm_provider_logic import (
+                        get_llm_provider,
+                    )
+                    from litellm.litellm_core_utils.prompt_templates.factory import (
+                        THOUGHT_SIGNATURE_SEPARATOR,
+                    )
+
+                    # Get custom_llm_provider to determine target provider
+                    custom_llm_provider = kwargs.get("custom_llm_provider")
+                    
+                    # If custom_llm_provider not in kwargs, try to determine it from the model
+                    if not custom_llm_provider and model:
+                        try:
+                            _, custom_llm_provider, _, _ = get_llm_provider(
+                                model=model,
+                                custom_llm_provider=custom_llm_provider,
+                            )
+                        except Exception:
+                            # If we can't determine the provider, skip this processing
+                            pass
+                    
+                    # Only process if target is NOT a Gemini model
+                    if not _is_gemini_model(model, custom_llm_provider):
+                        verbose_logger.debug(
+                            "Removing thought signatures from tool call IDs for non-Gemini model"
+                        )
+                        
+                        # Process messages to remove thought signatures
+                        processed_messages = _remove_thought_signatures_from_messages(
+                            messages, THOUGHT_SIGNATURE_SEPARATOR
+                        )
+                        
+                        # Update messages in kwargs or args
+                        if "messages" in kwargs:
+                            kwargs["messages"] = processed_messages
+                        elif len(args) > 1:
+                            args_list = list(args)
+                            args_list[1] = processed_messages
+                            args = tuple(args_list)
+
+                except Exception as e:
+                    # Log the error but don't fail the request
+                    verbose_logger.warning(
+                        f"Error removing thought signatures from tool call IDs: {str(e)}"
+                    )
         elif (
             call_type == CallTypes.embedding.value
             or call_type == CallTypes.aembedding.value
@@ -803,7 +1031,9 @@ def function_setup(  # noqa: PLR0915
             or call_type == CallTypes.transcription.value
         ):
             _file_obj: FileTypes = args[1] if len(args) > 1 else kwargs["file"]
-            file_checksum = litellm.litellm_core_utils.audio_utils.utils.get_audio_file_content_hash(
+            # Lazy import audio_utils.utils only when needed for transcription calls
+            audio_utils = _get_cached_audio_utils()
+            file_checksum = audio_utils.get_audio_file_content_hash(
                 file_obj=_file_obj
             )
             if "metadata" in kwargs:
@@ -960,6 +1190,7 @@ async def async_pre_call_deployment_hook(kwargs: Dict[str, Any], call_type: str)
 
     modified_kwargs = kwargs.copy()
 
+    CustomLogger = _get_cached_custom_logger()
     for callback in litellm.callbacks:
         if isinstance(callback, CustomLogger):
             result = await callback.async_pre_call_deployment_hook(
@@ -982,6 +1213,7 @@ async def async_post_call_success_deployment_hook(
     except ValueError:
         typed_call_type = None  # unknown call type
 
+    CustomLogger = _get_cached_custom_logger()
     for callback in litellm.callbacks:
         if isinstance(callback, CustomLogger):
             result = await callback.async_post_call_success_deployment_hook(
@@ -1161,7 +1393,8 @@ def client(original_function):  # noqa: PLR0915
             ## LOAD CREDENTIALS
             load_credentials_from_list(kwargs)
             kwargs["litellm_logging_obj"] = logging_obj
-            _llm_caching_handler: LLMCachingHandler = LLMCachingHandler(
+            LLMCachingHandler = _get_cached_llm_caching_handler()
+            _llm_caching_handler: "LLMCachingHandler" = LLMCachingHandler(
                 original_function=original_function,
                 request_kwargs=kwargs,
                 start_time=start_time,
@@ -1216,7 +1449,7 @@ def client(original_function):  # noqa: PLR0915
             ):  # allow users to control returning cached responses from the completion function
                 # checking cache
                 verbose_logger.debug("INSIDE CHECKING SYNC CACHE")
-                caching_handler_response: CachingHandlerResponse = (
+                caching_handler_response: "CachingHandlerResponse" = (
                     _llm_caching_handler._sync_get_cache(
                         model=model or "",
                         original_function=original_function,
@@ -1414,7 +1647,8 @@ def client(original_function):  # noqa: PLR0915
         logging_obj: Optional[LiteLLMLoggingObject] = kwargs.get(
             "litellm_logging_obj", None
         )
-        _llm_caching_handler: LLMCachingHandler = LLMCachingHandler(
+        LLMCachingHandler = _get_cached_llm_caching_handler()
+        _llm_caching_handler: "LLMCachingHandler" = LLMCachingHandler(
             original_function=original_function,
             request_kwargs=kwargs,
             start_time=start_time,
@@ -1453,16 +1687,16 @@ def client(original_function):  # noqa: PLR0915
             print_verbose(
                 f"ASYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache'): {kwargs.get('cache', None)}"
             )
-            _caching_handler_response: Optional[
-                CachingHandlerResponse
-            ] = await _llm_caching_handler._async_get_cache(
-                model=model or "",
-                original_function=original_function,
-                logging_obj=logging_obj,
-                start_time=start_time,
-                call_type=call_type,
-                kwargs=kwargs,
-                args=args,
+            _caching_handler_response: "Optional[CachingHandlerResponse]" = (
+                await _llm_caching_handler._async_get_cache(
+                    model=model or "",
+                    original_function=original_function,
+                    logging_obj=logging_obj,
+                    start_time=start_time,
+                    call_type=call_type,
+                    kwargs=kwargs,
+                    args=args,
+                )
             )
 
             if _caching_handler_response is not None:
@@ -2380,14 +2614,27 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
     elif isinstance(model_cost, str):
         loaded_model_cost = litellm.get_model_cost_map(url=model_cost)
 
+    # Providers that trigger side effects (e.g., OAuth flows) when get_model_info is called
+    # Skip get_model_info for these providers during model registration
+    _skip_get_model_info_providers = {
+        LlmProviders.GITHUB_COPILOT.value,
+    }
+
     for key, value in loaded_model_cost.items():
         ## get model info ##
-        try:
-            existing_model: dict = cast(dict, get_model_info(model=key))
-            model_cost_key = existing_model["key"]
-        except Exception:
-            existing_model = {}
+        provider = value.get("litellm_provider", "")
+        if provider in _skip_get_model_info_providers or any(
+            key.startswith(f"{p}/") for p in _skip_get_model_info_providers
+        ):
+            existing_model = litellm.model_cost.get(key, {})
             model_cost_key = key
+        else:
+            try:
+                existing_model = cast(dict, get_model_info(model=key))
+                model_cost_key = existing_model["key"]
+            except Exception:
+                existing_model = {}
+                model_cost_key = key
         ## override / add new keys to the existing model cost dictionary
         updated_dictionary = _update_dictionary(existing_model, value)
         litellm.model_cost.setdefault(model_cost_key, {}).update(updated_dictionary)
@@ -2994,6 +3241,21 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             drop_params=drop_params if drop_params is not None else False,
         )
 
+    elif custom_llm_provider == "ollama":
+        if 'dimensions' in non_default_params:
+            optional_params['dimensions']=non_default_params.pop('dimensions')
+        if len(non_default_params.keys()) > 0:
+            if (
+                litellm.drop_params is True or drop_params is True
+            ):  # drop the unsupported non-default values
+                keys = list(non_default_params.keys())
+                for k in keys:
+                    non_default_params.pop(k, None)
+            else:
+                raise UnsupportedParamsError(
+                    status_code=500,
+                    message=f"Setting {non_default_params} is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
+                )
     elif (
         custom_llm_provider != "openai"
         and custom_llm_provider != "azure"
@@ -5061,6 +5323,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 input_cost_per_second=_model_info.get("input_cost_per_second", None),
                 input_cost_per_audio_token=_model_info.get(
                     "input_cost_per_audio_token", None
+                ),
+                input_cost_per_image_token=_model_info.get(
+                    "input_cost_per_image_token", None
                 ),
                 input_cost_per_token_batches=_model_info.get(
                     "input_cost_per_token_batches"
@@ -7268,6 +7533,8 @@ class ProviderConfigManager:
             return litellm.IBMWatsonXAIConfig()
         elif litellm.LlmProviders.EMPOWER == provider:
             return litellm.EmpowerChatConfig()
+        elif litellm.LlmProviders.MINIMAX == provider:            
+            return litellm.MinimaxChatConfig()
         elif litellm.LlmProviders.GITHUB == provider:
             return litellm.GithubChatConfig()
         elif litellm.LlmProviders.COMPACTIFAI == provider:
@@ -7545,6 +7812,12 @@ class ProviderConfigManager:
                 )
 
                 return AzureAnthropicMessagesConfig()
+        elif litellm.LlmProviders.MINIMAX == provider:
+            from litellm.llms.minimax.messages.transformation import (
+                MinimaxMessagesConfig,
+            )
+
+            return MinimaxMessagesConfig()
         return None
 
     @staticmethod
@@ -8140,6 +8413,18 @@ class ProviderConfigManager:
             )
 
             return VertexAITextToSpeechConfig()
+        elif litellm.LlmProviders.MINIMAX == provider:
+            from litellm.llms.minimax.text_to_speech.transformation import (
+                MinimaxTextToSpeechConfig,
+            )
+
+            return MinimaxTextToSpeechConfig()
+        elif litellm.LlmProviders.AWS_POLLY == provider:
+            from litellm.llms.aws_polly.text_to_speech.transformation import (
+                AWSPollyTextToSpeechConfig,
+            )
+
+            return AWSPollyTextToSpeechConfig()
         return None
 
     @staticmethod

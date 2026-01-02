@@ -1148,7 +1148,7 @@ class TestBedrockLLMProxyRoute:
             mock_user_api_key_dict.allowed_model_region = None
 
             mock_proxy_logging_obj = Mock()
-            mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+            mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
             endpoint = "model/test-model/converse"
             model = "test-model"
@@ -1291,7 +1291,7 @@ class TestBedrockLLMProxyRoute:
             mock_user_api_key_dict = Mock()
             mock_user_api_key_dict.api_key = "test-key"
             mock_proxy_logging_obj = Mock()
-            mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+            mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
             with patch(
                 "litellm.passthrough.main.llm_passthrough_route",

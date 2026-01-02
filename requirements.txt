@@ -13,14 +13,14 @@ uvloop==0.21.0 # uvicorn dep, gives us much better performance under load
 boto3==1.36.0 # aws bedrock/sagemaker calls
 redis==5.2.1 # redis caching
 prisma==0.11.0 # for db
-nodejs-bin==18.4.0a4 ## required by prisma for migrations, prevents runtime download
+nodejs-wheel-binaries==24.12.0 ## required by prisma for migrations, prevents runtime download (updated from nodejs-bin for security fixes)
 mangum==0.17.0 # for aws lambda functions
 pynacl==1.5.0 # for encrypting keys
 google-cloud-aiplatform==1.47.0 # for vertex ai calls
 google-cloud-iam==2.19.1 # for GCP IAM Redis authentication
 google-genai==1.22.0
 anthropic[vertex]==0.54.0
-mcp==1.21.2 ; python_version >= "3.10"    # for MCP server
+mcp==1.23.0 ; python_version >= "3.10"    # for MCP server
 google-generativeai==0.5.0 # for vertex ai calls
 async_generator==1.10.0 # for async ollama calls
 langfuse==2.59.7 # for langfuse self-hosted logging
@@ -29,7 +29,7 @@ ddtrace==2.19.0      # for advanced DD tracing / profiling
 orjson==3.11.2 # fast /embedding responses
 polars==1.31.0 # for data processing
 apscheduler==3.10.4 # for resetting budget in background
-fastapi-sso==0.16.0 # admin UI, SSO
+fastapi-sso==0.19.0 # admin UI, SSO
 pyjwt[crypto]==2.10.1 ; python_version >= "3.9"
 python-multipart==0.0.18 # admin UI
 Pillow==11.0.0

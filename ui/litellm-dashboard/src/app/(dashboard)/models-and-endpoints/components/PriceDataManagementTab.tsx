@@ -1,15 +1,12 @@
 import { TabPanel, Text, Title } from "@tremor/react";
 import PriceDataReload from "@/components/price_data_reload";
-import { modelCostMap } from "@/components/networking";
 import React from "react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { useModelCostMap } from "../../hooks/models/useModelCostMap";
 
-interface PriceDataManagementPanelProps {
-  setModelMap: (data: any) => void;
-}
-
-const PriceDataManagementTab = ({ setModelMap }: PriceDataManagementPanelProps) => {
+const PriceDataManagementTab = () => {
   const { accessToken } = useAuthorized();
+  const { refetch: refetchModelCostMap } = useModelCostMap();
 
   return (
     <TabPanel>
@@ -23,12 +20,7 @@ const PriceDataManagementTab = ({ setModelMap }: PriceDataManagementPanelProps) 
         <PriceDataReload
           accessToken={accessToken}
           onReloadSuccess={() => {
-            // Refresh the model map after successful reload
-            const fetchModelMap = async () => {
-              const data = await modelCostMap();
-              setModelMap(data);
-            };
-            fetchModelMap();
+            refetchModelCostMap();
           }}
           buttonText="Reload Price Data"
           size="middle"

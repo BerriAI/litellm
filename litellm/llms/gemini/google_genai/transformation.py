@@ -312,7 +312,9 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         )
 
         request_dict = cast(dict, typed_generate_content_request)
-
+        
+        if system_instruction is not None:
+            request_dict["systemInstruction"] = system_instruction
         return request_dict
 
     def transform_generate_content_response(

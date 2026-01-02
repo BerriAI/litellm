@@ -53,17 +53,39 @@ pip install litellm==1.80.11
 - **Azure Sentinel Logging** - [New logging integration for Azure Sentinel](../../docs/observability/azure_sentinel)
 - **Guardrails Load Balancing** - [Load balance between multiple guardrail providers](../../docs/proxy/guardrails)
 - **Email Budget Alerts** - [Send email notifications when budgets are reached](../../docs/proxy/email)
+- **Cloudzero Integration on UI** - Setup your Cloudzero Integration Directly on the UI
+
+---
+
+### Cloudzero Integration on UI
+
+<Image
+img={require('../../img/ui_cloudzero.png')}
+style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+Users can now configure their Cloudzero Integration directly on the UI.
+
+---
+### Performance: 50% Reduction in Memory Usage and Import Latency for the LiteLLM SDK
+
+We've completely restructured `litellm.__init__.py` to defer heavy imports until they're actually needed, implementing lazy loading for **109 components**.
+
+This refactoring includes **41 provider config classes**, **40 utility functions**, cache implementations (Redis, DualCache, InMemoryCache), HTTP handlers, logging, types, and other heavy dependencies. Heavy libraries like tiktoken and boto3 are now loaded on-demand rather than eagerly at import time.
+
+This makes LiteLLM especially beneficial for serverless functions, Lambda deployments, and containerized environments where cold start times and memory footprint matter.
 
 ---
 
 ## New Providers and Endpoints
 
-### New Providers (4 new providers)
+### New Providers (5 new providers)
 
 | Provider | Supported LiteLLM Endpoints | Description |
 | -------- | ------------------- | ----------- |
 | [Stability AI](../../docs/providers/stability) | `/images/generations`, `/images/edits` | Stable Diffusion 3, SD3.5, image editing and generation |
 | Venice.ai | `/chat/completions`, `/messages`, `/responses` | Venice.ai API integration via providers.json |
+| [Pydantic AI Agents](../../docs/providers/pydantic_ai_agent) | `/a2a` | Pydantic AI agents for A2A protocol workflows |
 | [VertexAI Agent Engine](../../docs/providers/vertex_ai_agent_engine) | `/a2a` | Google Vertex AI Agent Engine for agentic workflows |
 | [LinkUp Search](../../docs/search/linkup) | `/search` | LinkUp web search API integration |
 

@@ -1,14 +1,17 @@
+import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
+import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { Team } from "@/components/key_team_helpers/key_list";
 import { ModelDataTable } from "@/components/model_dashboard/table";
 import { columns } from "@/components/molecules/models/columns";
 import { getDisplayModelName } from "@/components/view_model/model_name_display";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { PaginationState, Table as TableInstance } from "@tanstack/react-table";
+import { PaginationState } from "@tanstack/react-table";
 import { Grid, Select, SelectItem, TabPanel, Text } from "@tremor/react";
-import { useEffect, useMemo, useRef, useState } from "react";
-
+import { useEffect, useMemo, useState } from "react";
+import { useModelsInfo } from "../../hooks/models/useModels";
+import { transformModelData } from "../utils/modelDataTransformer";
+import { Skeleton } from "antd";
 type ModelViewMode = "all" | "current_team";
 
 interface AllModelsTabProps {
@@ -18,8 +21,6 @@ interface AllModelsTabProps {
   availableModelAccessGroups: string[];
   setSelectedModelId: (id: string) => void;
   setSelectedTeamId: (id: string) => void;
-  setEditModel: (edit: boolean) => void;
-  modelData: any;
 }
 
 const AllModelsTab = ({
@@ -29,11 +30,25 @@ const AllModelsTab = ({
   availableModelAccessGroups,
   setSelectedModelId,
   setSelectedTeamId,
-  setEditModel,
-  modelData,
 }: AllModelsTabProps) => {
+  const { data: rawModelData, isLoading: isLoadingModelsInfo } = useModelsInfo();
+  const { data: modelCostMapData, isLoading: isLoadingModelCostMap } = useModelCostMap();
   const { userId, userRole, premiumUser } = useAuthorized();
-  const { teams } = useTeams();
+  const { data: teams } = useTeams();
+
+  const getProviderFromModel = (model: string) => {
+    if (modelCostMapData !== null && modelCostMapData !== undefined) {
+      if (typeof modelCostMapData == "object" && model in modelCostMapData) {
+        return modelCostMapData[model]["litellm_provider"];
+      }
+    }
+    return "openai";
+  };
+
+  const modelData = useMemo(() => {
+    if (!rawModelData) return { data: [] };
+    return transformModelData(rawModelData, getProviderFromModel);
+  }, [rawModelData, modelCostMapData]);
 
   const [modelNameSearch, setModelNameSearch] = useState<string>("");
   const [modelViewMode, setModelViewMode] = useState<ModelViewMode>("current_team");
@@ -45,7 +60,8 @@ const AllModelsTab = ({
     pageIndex: 0,
     pageSize: 50,
   });
-  const tableRef = useRef<TableInstance<any>>(null);
+
+  const isLoading = isLoadingModelsInfo || isLoadingModelCostMap;
 
   const filteredData = useMemo(() => {
     if (!modelData || !modelData.data || modelData.data.length === 0) {
@@ -88,12 +104,6 @@ const AllModelsTab = ({
     });
   }, [modelData, modelNameSearch, selectedModelGroup, selectedModelAccessGroupFilter, currentTeam, modelViewMode]);
 
-  const paginatedData = useMemo(() => {
-    const startIndex = pagination.pageIndex * pagination.pageSize;
-    const endIndex = startIndex + pagination.pageSize;
-    return filteredData.slice(startIndex, endIndex);
-  }, [filteredData, pagination.pageIndex, pagination.pageSize]);
-
   useEffect(() => {
     setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
   }, [modelNameSearch, selectedModelGroup, selectedModelAccessGroupFilter, currentTeam, modelViewMode]);
@@ -117,63 +127,71 @@ const AllModelsTab = ({
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-4">
                   <Text className="text-lg font-semibold text-gray-900">Current Team:</Text>
-                  <Select
-                    className="w-80"
-                    defaultValue="personal"
-                    value={currentTeam === "personal" ? "personal" : currentTeam.team_id}
-                    onValueChange={(value) => {
-                      if (value === "personal") {
-                        setCurrentTeam("personal");
-                      } else {
-                        const team = teams?.find((t) => t.team_id === value);
-                        if (team) setCurrentTeam(team);
-                      }
-                    }}
-                  >
-                    <SelectItem value="personal">
-                      <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                        <span className="font-medium">Personal</span>
-                      </div>
-                    </SelectItem>
-                    {teams
-                      ?.filter((team) => team.team_id)
-                      .map((team) => (
-                        <SelectItem key={team.team_id} value={team.team_id}>
-                          <div className="flex items-center gap-2">
-                            <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                            <span className="font-medium">
-                              {team.team_alias
-                                ? `${team.team_alias.slice(0, 30)}...`
-                                : `Team ${team.team_id.slice(0, 30)}...`}
-                            </span>
-                          </div>
-                        </SelectItem>
-                      ))}
-                  </Select>
+                  {isLoading ? (
+                    <Skeleton.Input active style={{ width: 320, height: 36 }} />
+                  ) : (
+                    <Select
+                      className="w-80"
+                      defaultValue="personal"
+                      value={currentTeam === "personal" ? "personal" : currentTeam.team_id}
+                      onValueChange={(value) => {
+                        if (value === "personal") {
+                          setCurrentTeam("personal");
+                        } else {
+                          const team = teams?.find((t) => t.team_id === value);
+                          if (team) setCurrentTeam(team);
+                        }
+                      }}
+                    >
+                      <SelectItem value="personal">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                          <span className="font-medium">Personal</span>
+                        </div>
+                      </SelectItem>
+                      {teams
+                        ?.filter((team) => team.team_id)
+                        .map((team) => (
+                          <SelectItem key={team.team_id} value={team.team_id}>
+                            <div className="flex items-center gap-2">
+                              <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                              <span className="font-medium">
+                                {team.team_alias
+                                  ? `${team.team_alias.slice(0, 30)}...`
+                                  : `Team ${team.team_id.slice(0, 30)}...`}
+                              </span>
+                            </div>
+                          </SelectItem>
+                        ))}
+                    </Select>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-4">
                   <Text className="text-lg font-semibold text-gray-900">View:</Text>
-                  <Select
-                    className="w-64"
-                    defaultValue="current_team"
-                    value={modelViewMode}
-                    onValueChange={(value) => setModelViewMode(value as "current_team" | "all")}
-                  >
-                    <SelectItem value="current_team">
-                      <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
-                        <span className="font-medium">Current Team Models</span>
-                      </div>
-                    </SelectItem>
-                    <SelectItem value="all">
-                      <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 bg-gray-500 rounded-full"></div>
-                        <span className="font-medium">All Available Models</span>
-                      </div>
-                    </SelectItem>
-                  </Select>
+                  {isLoading ? (
+                    <Skeleton.Input active style={{ width: 256, height: 36 }} />
+                  ) : (
+                    <Select
+                      className="w-64"
+                      defaultValue="current_team"
+                      value={modelViewMode}
+                      onValueChange={(value) => setModelViewMode(value as "current_team" | "all")}
+                    >
+                      <SelectItem value="current_team">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
+                          <span className="font-medium">Current Team Models</span>
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="all">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 bg-gray-500 rounded-full"></div>
+                          <span className="font-medium">All Available Models</span>
+                        </div>
+                      </SelectItem>
+                    </Select>
+                  )}
                 </div>
               </div>
 
@@ -311,18 +329,23 @@ const AllModelsTab = ({
 
                 {/* Results Count and Pagination Controls */}
                 <div className="flex justify-between items-center">
-                  <span className="text-sm text-gray-700">
-                    {filteredData.length > 0
-                      ? `Showing ${pagination.pageIndex * pagination.pageSize + 1} - ${Math.min(
-                          (pagination.pageIndex + 1) * pagination.pageSize,
-                          filteredData.length,
-                        )} of ${filteredData.length} results`
-                      : "Showing 0 results"}
-                  </span>
+                  {isLoading ? (
+                    <Skeleton.Input active style={{ width: 184, height: 20 }} />
+                  ) : (
+                    <span className="text-sm text-gray-700">
+                      {filteredData.length > 0
+                        ? `Showing ${pagination.pageIndex * pagination.pageSize + 1} - ${Math.min(
+                            (pagination.pageIndex + 1) * pagination.pageSize,
+                            filteredData.length,
+                          )} of ${filteredData.length} results`
+                        : "Showing 0 results"}
+                    </span>
+                  )}
 
-                  {/* Pagination Controls */}
-                  {filteredData.length > pagination.pageSize && (
-                    <div className="flex items-center space-x-2">
+                  <div className="flex items-center space-x-2">
+                    {isLoading ? (
+                      <Skeleton.Button active style={{ width: 84, height: 30 }} />
+                    ) : (
                       <button
                         onClick={() =>
                           setPagination((prev: PaginationState) => ({ ...prev, pageIndex: prev.pageIndex - 1 }))
@@ -336,7 +359,11 @@ const AllModelsTab = ({
                       >
                         Previous
                       </button>
+                    )}
 
+                    {isLoading ? (
+                      <Skeleton.Button active style={{ width: 56, height: 30 }} />
+                    ) : (
                       <button
                         onClick={() =>
                           setPagination((prev: PaginationState) => ({ ...prev, pageIndex: prev.pageIndex + 1 }))
@@ -350,8 +377,8 @@ const AllModelsTab = ({
                       >
                         Next
                       </button>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
@@ -366,13 +393,14 @@ const AllModelsTab = ({
                 getDisplayModelName,
                 () => {},
                 () => {},
-                setEditModel,
                 expandedRows,
                 setExpandedRows,
               )}
-              data={paginatedData}
+              data={filteredData}
               isLoading={false}
-              table={tableRef}
+              pagination={pagination}
+              onPaginationChange={setPagination}
+              enablePagination={true}
             />
           </div>
         </div>
