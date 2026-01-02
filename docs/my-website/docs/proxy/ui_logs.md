@@ -53,6 +53,17 @@ general_settings:
   disable_spend_logs: True   # Disable writing spend logs to DB
 ```
 
+## Store Proxy-Modified Responses in Spend Logs
+
+By default the spend log records the upstream LLM response (before any proxy guardrails or rewrites). Opt in to storing the proxy-mutated response with:
+
+```yaml
+general_settings:
+  spend_logs_store_proxy_response: true
+```
+
+When set to `true`, UI logs show the final post-guardrail response seen by end users. Set to `false` to keep logging the raw LLM response.
+
 ## Automatically Deleting Old Spend Logs
 
 If you're storing spend logs, it might be a good idea to delete them regularly to keep the database fast.
