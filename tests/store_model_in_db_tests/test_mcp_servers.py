@@ -379,7 +379,7 @@ async def test_edit_mcp_server_redacts_credentials():
         mock_prisma = mock.Mock()
         mock_get_prisma.return_value = mock_prisma
 
-        mock_manager.add_update_server = mock.AsyncMock()
+        mock_manager.update_server = mock.AsyncMock()
         mock_manager.reload_servers_from_database = mock.AsyncMock()
 
         server_id = str(uuid.uuid4())
