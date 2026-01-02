@@ -249,6 +249,30 @@
             "/v1/images/generations"
         ]
     },
+    "aiml/google/imagen-4.0-ultra-generate-001": {
+        "litellm_provider": "aiml",
+        "metadata": {
+            "notes": "Imagen 4.0 Ultra Generate API - Photorealistic image generation with precise text rendering"
+        },
+        "mode": "image_generation",
+        "output_cost_per_image": 0.063,
+        "source": "https://docs.aimlapi.com/api-references/image-models/google/imagen-4-ultra-generate",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "aiml/google/nano-banana-pro": {
+        "litellm_provider": "aiml",
+        "metadata": {
+            "notes": "Gemini 3 Pro Image (Nano Banana Pro) - Advanced text-to-image generation with reasoning and 4K resolution support"
+        },
+        "mode": "image_generation",
+        "output_cost_per_image": 0.1575,
+        "source": "https://docs.aimlapi.com/api-references/image-models/google/gemini-3-pro-image-preview",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
     "amazon.nova-canvas-v1:0": {
         "litellm_provider": "bedrock",
         "max_input_tokens": 2600,
@@ -3506,6 +3530,40 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_service_tier": true,
+        "supports_vision": true
+    },
+    "azure/gpt-5.2-chat": {
+        "cache_read_input_token_cost": 1.75e-07,
+        "cache_read_input_token_cost_priority": 3.5e-07,
+        "input_cost_per_token": 1.75e-06,
+        "input_cost_per_token_priority": 3.5e-06,
+        "litellm_provider": "azure",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 1.4e-05,
+        "output_cost_per_token_priority": 2.8e-05,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "azure/gpt-5.2-chat-2025-12-11": {
