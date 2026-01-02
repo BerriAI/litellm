@@ -1,5 +1,6 @@
 import { MessageType } from "./types";
 import { EndpointType } from "./mode_endpoint_mapping";
+import { MCPServer } from "../../mcp_tools/types";
 
 interface CodeGenMetadata {
   tags?: string[];
@@ -16,7 +17,9 @@ interface GenerateCodeParams {
   selectedTags: string[];
   selectedVectorStores: string[];
   selectedGuardrails: string[];
-  selectedMCPTools: string[];
+  selectedMCPServers: string[];
+  mcpServers?: MCPServer[];
+  mcpServerToolRestrictions?: Record<string, string[]>;
   selectedVoice?: string;
   endpointType: string;
   selectedModel: string | undefined;
@@ -37,7 +40,9 @@ export const generateCodeSnippet = (params: GenerateCodeParams): string => {
     selectedTags,
     selectedVectorStores,
     selectedGuardrails,
-    selectedMCPTools,
+    selectedMCPServers,
+    mcpServers,
+    mcpServerToolRestrictions,
     selectedVoice,
     endpointType,
     selectedModel,
