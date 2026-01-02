@@ -997,9 +997,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
             traceId,
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-            selectedMCPServers, // Pass the selected servers array
-            mcpServers,
-            mcpServerToolRestrictions,
           );
         } else if (endpointType === EndpointType.EMBEDDINGS) {
           await makeOpenAIEmbeddingsRequest(
