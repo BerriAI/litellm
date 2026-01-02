@@ -8,7 +8,7 @@ import { Alert, Card, Skeleton, Space, Switch, Typography } from "antd";
 
 export default function UISettings() {
   const { accessToken } = useAuthorized();
-  const { data, isLoading, isError, error } = useUISettings(accessToken);
+  const { data, isLoading, isError, error } = useUISettings();
   const { mutate: updateSettings, isPending: isUpdating, error: updateError } = useUpdateUISettings(accessToken);
 
   const schema = data?.field_schema;
