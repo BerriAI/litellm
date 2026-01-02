@@ -48,9 +48,9 @@ from tiktoken import Encoding
 from tokenizers import Tokenizer
 
 import litellm
-import litellm._service_logger  # for storing API inputs, outputs, and metadata
+
 import litellm.litellm_core_utils
-import litellm.litellm_core_utils.audio_utils.utils
+# audio_utils.utils is lazy-loaded - only imported when needed for transcription calls
 import litellm.litellm_core_utils.json_validation_rule
 import litellm.llms
 import litellm.llms.gemini
@@ -157,6 +157,24 @@ from litellm.router_utils.get_retry_from_policy import (
     reset_retry_policy,
 )
 from litellm.secret_managers.main import get_secret
+
+# Cached lazy import for audio_utils.utils
+# Module-level cache to avoid repeated imports while preserving memory benefits
+_audio_utils_module = None
+
+
+def _get_cached_audio_utils():
+    """
+    Get cached audio_utils.utils module.
+    Lazy imports on first call to avoid loading audio_utils.utils at import time.
+    Subsequent calls use cached module for better performance.
+    """
+    global _audio_utils_module
+    if _audio_utils_module is None:
+        import litellm.litellm_core_utils.audio_utils.utils
+        _audio_utils_module = litellm.litellm_core_utils.audio_utils.utils
+    return _audio_utils_module
+
 from litellm.types.llms.anthropic import (
     ANTHROPIC_API_ONLY_HEADERS,
     AnthropicThinkingParam,
@@ -965,7 +983,9 @@ def function_setup(  # noqa: PLR0915
             or call_type == CallTypes.transcription.value
         ):
             _file_obj: FileTypes = args[1] if len(args) > 1 else kwargs["file"]
-            file_checksum = litellm.litellm_core_utils.audio_utils.utils.get_audio_file_content_hash(
+            # Lazy import audio_utils.utils only when needed for transcription calls
+            audio_utils = _get_cached_audio_utils()
+            file_checksum = audio_utils.get_audio_file_content_hash(
                 file_obj=_file_obj
             )
             if "metadata" in kwargs:
