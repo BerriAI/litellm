@@ -164,11 +164,20 @@ class QualifireGuardrail(CustomGuardrail):
                 for tc in tool_calls:
                     if isinstance(tc, dict):
                         function_info = tc.get("function", {})
+                        # Arguments can be a string (JSON) or dict
+                        args = function_info.get("arguments", {})
+                        if isinstance(args, str):
+                            import json
+
+                            try:
+                                args = json.loads(args)
+                            except json.JSONDecodeError:
+                                args = {}
                         qualifire_tool_calls.append(
                             LLMToolCall(
-                                id=tc.get("id", ""),
-                                name=function_info.get("name", ""),
-                                arguments=function_info.get("arguments", {}),
+                                id=tc.get("id") or "",
+                                name=function_info.get("name") or "",
+                                arguments=args if isinstance(args, dict) else {},
                             )
                         )
                 if qualifire_tool_calls:
@@ -279,7 +288,7 @@ class QualifireGuardrail(CustomGuardrail):
                     )
 
         except HTTPException:
-            status = "failure"
+            status = "guardrail_intervened"
             raise
         except Exception as e:
             status = "guardrail_failed_to_respond"
@@ -334,18 +343,7 @@ class QualifireGuardrail(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         cache: Any,
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Optional[Union[Exception, str, dict]]:
         """
         Run Qualifire evaluation before the LLM call.
@@ -383,13 +381,7 @@ class QualifireGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "completion",
-            "moderation",
-            "responses",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ):
         """
         Run Qualifire evaluation during the LLM call (in parallel).

@@ -226,8 +226,8 @@ class TestQualifireGuardrailCheckIfFlagged:
 
         assert guardrail._check_if_flagged(mock_result) is True
 
-    def test_check_if_flagged_returns_true_for_non_completed_status(self):
-        """Test that _check_if_flagged returns True for non-completed status."""
+    def test_check_if_flagged_returns_false_when_no_flagged_items(self):
+        """Test that _check_if_flagged returns False when no items are flagged."""
         from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import (
             QualifireGuardrail,
         )
@@ -237,11 +237,18 @@ class TestQualifireGuardrailCheckIfFlagged:
             guardrail_name="test_guardrail",
         )
 
-        mock_result = MagicMock()
-        mock_result.status = "failed"
-        mock_result.evaluationResults = []
+        # Result with evaluation results but nothing flagged
+        mock_inner_result = MagicMock()
+        mock_inner_result.flagged = False
 
-        assert guardrail._check_if_flagged(mock_result) is True
+        mock_eval_result = MagicMock()
+        mock_eval_result.results = [mock_inner_result]
+
+        mock_result = MagicMock()
+        mock_result.status = "success"
+        mock_result.evaluationResults = [mock_eval_result]
+
+        assert guardrail._check_if_flagged(mock_result) is False
 
 
 class TestQualifireGuardrailShouldRun:
