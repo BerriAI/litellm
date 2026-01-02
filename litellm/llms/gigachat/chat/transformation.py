@@ -302,8 +302,9 @@ class GigaChatConfig(BaseConfig):
                     message["attachments"] = attachments
 
             # Transform tool_calls to function_call
-            if "tool_calls" in message and message["tool_calls"]:
-                tool_call = message["tool_calls"][0]
+            tool_calls = message.get("tool_calls")
+            if tool_calls and isinstance(tool_calls, list) and len(tool_calls) > 0:
+                tool_call = tool_calls[0]
                 func = tool_call.get("function", {})
                 args = func.get("arguments", "{}")
                 if isinstance(args, str):
