@@ -885,6 +885,7 @@ async def get_file(
             response = await managed_files_obj.afile_retrieve(
                 file_id=file_id,
                 litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                llm_router=llm_router,
             )
         else:
             response = await litellm.afile_retrieve(
