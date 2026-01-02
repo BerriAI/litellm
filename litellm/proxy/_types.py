@@ -843,6 +843,15 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     aliases: Optional[dict] = {}
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
+    @model_validator(mode="after")
+    def validate_budget_values(self) -> "GenerateRequestBase":
+        """Validate that budget values are not negative"""
+        if self.max_budget is not None and self.max_budget < 0:
+            raise ValueError(
+                f"max_budget cannot be negative. Received: {self.max_budget}"
+            )
+        return self
+
 
 class AllowedVectorStoreIndexItem(LiteLLMPydanticObjectBase):
     index_name: str
@@ -891,6 +900,15 @@ class GenerateKeyRequest(KeyRequestBase):
         description="How often to rotate this key (e.g., '30d', '90d'). Required if auto_rotate=True",
     )
     organization_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_soft_budget(self) -> "GenerateKeyRequest":
+        """Validate that soft_budget is not negative"""
+        if self.soft_budget is not None and self.soft_budget < 0:
+            raise ValueError(
+                f"soft_budget cannot be negative. Received: {self.soft_budget}"
+            )
+        return self
 
 
 class GenerateKeyResponse(KeyRequestBase):
@@ -1206,6 +1224,15 @@ class NewUserRequestTeam(LiteLLMPydanticObjectBase):
     max_budget_in_team: Optional[float] = None
     user_role: Literal["user", "admin"] = "user"
 
+    @model_validator(mode="after")
+    def validate_budget_values(self) -> "NewUserRequestTeam":
+        """Validate that budget values are not negative"""
+        if self.max_budget_in_team is not None and self.max_budget_in_team < 0:
+            raise ValueError(
+                f"max_budget_in_team cannot be negative. Received: {self.max_budget_in_team}"
+            )
+        return self
+
 
 class NewUserRequest(GenerateRequestBase):
     max_budget: Optional[float] = None
@@ -1316,6 +1343,19 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
         default=None,
         description="Datetime when the budget is reset",
     )
+
+    @model_validator(mode="after")
+    def validate_budget_values(self) -> "BudgetNewRequest":
+        """Validate that budget values are not negative"""
+        if self.max_budget is not None and self.max_budget < 0:
+            raise ValueError(
+                f"max_budget cannot be negative. Received: {self.max_budget}"
+            )
+        if self.soft_budget is not None and self.soft_budget < 0:
+            raise ValueError(
+                f"soft_budget cannot be negative. Received: {self.soft_budget}"
+            )
+        return self
 
 
 class BudgetRequest(LiteLLMPydanticObjectBase):
@@ -1446,6 +1486,15 @@ class TeamBase(LiteLLMPydanticObjectBase):
     models: list = []
     blocked: bool = False
 
+    @model_validator(mode="after")
+    def validate_budget_values(self) -> "TeamBase":
+        """Validate that budget values are not negative"""
+        if self.max_budget is not None and self.max_budget < 0:
+            raise ValueError(
+                f"max_budget cannot be negative. Received: {self.max_budget}"
+            )
+        return self
+
 
 class NewTeamRequest(TeamBase):
     model_aliases: Optional[dict] = None
@@ -1477,6 +1526,15 @@ class NewTeamRequest(TeamBase):
     allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
 
     model_config = ConfigDict(protected_namespaces=())
+
+    @model_validator(mode="after")
+    def validate_team_member_budget(self) -> "NewTeamRequest":
+        """Validate that team_member_budget is not negative"""
+        if self.team_member_budget is not None and self.team_member_budget < 0:
+            raise ValueError(
+                f"team_member_budget cannot be negative. Received: {self.team_member_budget}"
+            )
+        return self
 
 
 class GlobalEndUsersSpend(LiteLLMPydanticObjectBase):
@@ -1526,6 +1584,19 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     model_rpm_limit: Optional[Dict[str, int]] = None
     model_tpm_limit: Optional[Dict[str, int]] = None
     allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
+
+    @model_validator(mode="after")
+    def validate_budget_values(self) -> "UpdateTeamRequest":
+        """Validate that budget values are not negative"""
+        if self.max_budget is not None and self.max_budget < 0:
+            raise ValueError(
+                f"max_budget cannot be negative. Received: {self.max_budget}"
+            )
+        if self.team_member_budget is not None and self.team_member_budget < 0:
+            raise ValueError(
+                f"team_member_budget cannot be negative. Received: {self.team_member_budget}"
+            )
+        return self
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
@@ -1711,6 +1782,19 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     budget_duration: Optional[str] = None
 
     model_config = ConfigDict(protected_namespaces=())
+
+    @model_validator(mode="after")
+    def validate_budget_values(self) -> "LiteLLM_BudgetTable":
+        """Validate that budget values are not negative"""
+        if self.max_budget is not None and self.max_budget < 0:
+            raise ValueError(
+                f"max_budget cannot be negative. Received: {self.max_budget}"
+            )
+        if self.soft_budget is not None and self.soft_budget < 0:
+            raise ValueError(
+                f"soft_budget cannot be negative. Received: {self.soft_budget}"
+            )
+        return self
 
 
 class LiteLLM_BudgetTableFull(LiteLLM_BudgetTable):

@@ -3958,3 +3958,75 @@ async def test_update_team_guardrails_with_org_id():
             assert "include" in first_call_kwargs
             assert "teams" in first_call_kwargs["include"]
             assert first_call_kwargs["include"]["teams"] is True
+
+
+@pytest.mark.asyncio
+async def test_new_team_negative_max_budget():
+    """
+    Test that NewTeamRequest rejects negative max_budget values.
+    
+    This prevents the issue where negative budgets would always trigger
+    budget exceeded errors.
+    """
+    from litellm.proxy._types import NewTeamRequest
+    
+    with pytest.raises(ValueError) as exc_info:
+        NewTeamRequest(team_alias="test-team", max_budget=-7.0)
+    
+    assert "max_budget cannot be negative" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_new_team_negative_team_member_budget():
+    """
+    Test that NewTeamRequest rejects negative team_member_budget values.
+    """
+    from litellm.proxy._types import NewTeamRequest
+    
+    with pytest.raises(ValueError) as exc_info:
+        NewTeamRequest(team_alias="test-team", team_member_budget=-10.0)
+    
+    assert "team_member_budget cannot be negative" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_update_team_negative_max_budget():
+    """
+    Test that UpdateTeamRequest rejects negative max_budget values.
+    """
+    from litellm.proxy._types import UpdateTeamRequest
+    
+    with pytest.raises(ValueError) as exc_info:
+        UpdateTeamRequest(team_id="test-team-id", max_budget=-5.0)
+    
+    assert "max_budget cannot be negative" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_update_team_negative_team_member_budget():
+    """
+    Test that UpdateTeamRequest rejects negative team_member_budget values.
+    """
+    from litellm.proxy._types import UpdateTeamRequest
+    
+    with pytest.raises(ValueError) as exc_info:
+        UpdateTeamRequest(team_id="test-team-id", team_member_budget=-15.0)
+    
+    assert "team_member_budget cannot be negative" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_new_team_positive_budgets_accepted():
+    """
+    Test that NewTeamRequest accepts positive budget values.
+    """
+    from litellm.proxy._types import NewTeamRequest
+    
+    # Should not raise any errors
+    request = NewTeamRequest(
+        team_alias="test-team", 
+        max_budget=100.0, 
+        team_member_budget=50.0
+    )
+    assert request.max_budget == 100.0
+    assert request.team_member_budget == 50.0
