@@ -1232,6 +1232,25 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 thinking_blocks.append(block)
         return thinking_blocks
 
+    def _extract_thought_signatures_from_parts(
+        self, parts: List[HttpxPartType]
+    ) -> Optional[List[str]]:
+        """Extract thoughtSignature values from parts.
+
+        Per Google's docs, thoughtSignature is returned for multi-turn context preservation
+        and can appear on parts even without thought: true (e.g., regular text responses,
+        function calls). This method extracts all thoughtSignature values from parts.
+
+        Returns:
+            List of thoughtSignature strings if any are found, None otherwise
+        """
+        signatures: List[str] = []
+        for part in parts:
+            signature = part.get("thoughtSignature")
+            if signature is not None:
+                signatures.append(signature)
+        return signatures if signatures else None
+
     def _extract_image_response_from_parts(
         self, parts: List[HttpxPartType]
     ) -> Optional[List[ImageURLListItem]]:
@@ -1642,6 +1661,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         from litellm.types.utils import Delta, StreamingChoices
 
         annotations = chat_completion_message.get("annotations")  # type: ignore
+        provider_specific_fields = chat_completion_message.get("provider_specific_fields")  # type: ignore
         # create a streaming choice object
         choice = StreamingChoices(
             finish_reason=VertexGeminiConfig._check_finish_reason(
@@ -1655,6 +1675,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 images=image_response,
                 function_call=functions,
                 annotations=annotations,  # type: ignore
+                provider_specific_fields=provider_specific_fields,
             ),
             logprobs=chat_completion_logprobs,
             enhancements=None,
@@ -1833,6 +1854,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     )
                 )
 
+                # Extract thoughtSignatures from parts (can exist without thought: true)
+                thought_signatures = (
+                    VertexGeminiConfig()._extract_thought_signatures_from_parts(
+                        parts=candidate["content"]["parts"]
+                    )
+                )
+
                 if audio_response is not None:
                     cast(Dict[str, Any], chat_completion_message)[
                         "audio"
@@ -1897,6 +1925,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     if reasoning_content_parts:
                         reasoning_content = "\n".join(reasoning_content_parts)
                         chat_completion_message["reasoning_content"] = reasoning_content
+
+            # Store thoughtSignatures in provider_specific_fields
+            if thought_signatures is not None:
+                if "provider_specific_fields" not in chat_completion_message:
+                    chat_completion_message["provider_specific_fields"] = {}
+                chat_completion_message["provider_specific_fields"]["thought_signatures"] = thought_signatures  # type: ignore
 
             if isinstance(model_response, ModelResponseStream):
                 choice = VertexGeminiConfig._create_streaming_choice(
