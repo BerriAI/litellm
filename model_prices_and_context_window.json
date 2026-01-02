@@ -22605,6 +22605,53 @@
         "supports_vision": true,
         "supports_web_search": true
     },
+    "openrouter/google/gemini-3-flash-preview": {
+      "cache_read_input_token_cost": 5e-08,
+      "input_cost_per_audio_token": 1e-06,
+      "input_cost_per_token": 5e-07,
+      "litellm_provider": "openrouter",
+      "max_audio_length_hours": 8.4,
+      "max_audio_per_prompt": 1,
+      "max_images_per_prompt": 3000,
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 65535,
+      "max_pdf_size_mb": 30,
+      "max_tokens": 65535,
+      "max_video_length": 1,
+      "max_videos_per_prompt": 10,
+      "mode": "chat",
+      "output_cost_per_reasoning_token": 3e-06,
+      "output_cost_per_token": 3e-06,
+      "rpm": 2000,
+      "source": "https://ai.google.dev/pricing/gemini-3",
+      "supported_endpoints": [
+        "/v1/chat/completions",
+        "/v1/completions",
+        "/v1/batch"
+      ],
+      "supported_modalities": [
+        "text",
+        "image",
+        "audio",
+        "video"
+      ],
+      "supported_output_modalities": [
+        "text"
+      ],
+      "supports_audio_output": false,
+      "supports_function_calling": true,
+      "supports_parallel_function_calling": true,
+      "supports_pdf_input": true,
+      "supports_prompt_caching": true,
+      "supports_reasoning": true,
+      "supports_response_schema": true,
+      "supports_system_messages": true,
+      "supports_tool_choice": true,
+      "supports_url_context": true,
+      "supports_vision": true,
+      "supports_web_search": true,
+      "tpm": 800000
+    },
     "openrouter/google/gemini-pro-1.5": {
         "input_cost_per_image": 0.00265,
         "input_cost_per_token": 2.5e-06,
