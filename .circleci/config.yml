@@ -1980,6 +1980,7 @@ jobs:
       - run: python ./tests/code_coverage_tests/check_unsafe_enterprise_import.py
       - run: python ./tests/code_coverage_tests/ban_copy_deepcopy_kwargs.py
       - run: python ./tests/code_coverage_tests/check_fastuuid_usage.py
+      - run: python ./tests/code_coverage_tests/memory_test.py
       - run: helm lint ./deploy/charts/litellm-helm
 
   db_migration_disable_update_check:
