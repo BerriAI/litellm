@@ -1376,24 +1376,9 @@ def client(original_function):  # noqa: PLR0915
                     # AuthenticationError (401), BadRequestError (400), etc. should NOT be retried by default
                     # Only retry: 408, 409, 429, 500+ errors
                     # However, if explicit retry_policy is provided, respect the policy decision
-                    _status_code = getattr(e, "status_code", 0)
-                    if _retry_policy_provided:
-                        # Retry policy explicitly provided - trust it (it already determined num_retries)
-                        _should_retry_error = (
-                            isinstance(e, openai.APIError)
-                            or isinstance(e, openai.Timeout)
-                            or isinstance(e, openai.APIConnectionError)
-                        )
-                    else:
-                        # No retry policy - use _should_retry to exclude non-retryable errors like AuthenticationError
-                        _should_retry_error = (
-                            (
-                                isinstance(e, openai.APIError)
-                                and litellm._should_retry(_status_code)
-                            )
-                            or isinstance(e, openai.Timeout)
-                            or isinstance(e, openai.APIConnectionError)
-                        )
+                    _should_retry_error, _status_code = _is_retryable_exception(
+                        e, _retry_policy_provided
+                    )
                     if _should_retry_error:
                         verbose_logger.debug(
                             f"Retrying request after {type(e).__name__} (status_code={_status_code})"
@@ -1653,24 +1638,9 @@ def client(original_function):  # noqa: PLR0915
                     # AuthenticationError (401), BadRequestError (400), etc. should NOT be retried by default
                     # Only retry: 408, 409, 429, 500+ errors
                     # However, if explicit retry_policy is provided, respect the policy decision
-                    _status_code = getattr(e, "status_code", 0)
-                    if _retry_policy_provided:
-                        # Retry policy explicitly provided - trust it (it already determined num_retries)
-                        _should_retry_error = (
-                            isinstance(e, openai.APIError)
-                            or isinstance(e, openai.Timeout)
-                            or isinstance(e, openai.APIConnectionError)
-                        )
-                    else:
-                        # No retry policy - use _should_retry to exclude non-retryable errors like AuthenticationError
-                        _should_retry_error = (
-                            (
-                                isinstance(e, openai.APIError)
-                                and litellm._should_retry(_status_code)
-                            )
-                            or isinstance(e, openai.Timeout)
-                            or isinstance(e, openai.APIConnectionError)
-                        )
+                    _should_retry_error, _status_code = _is_retryable_exception(
+                        e, _retry_policy_provided
+                    )
                     if _should_retry_error:
                         try:
                             verbose_logger.debug(
@@ -5972,6 +5942,48 @@ def _should_retry(status_code: int):
         return True
 
     return False
+
+
+def _is_retryable_exception(
+    exception: Exception,
+    retry_policy_provided: bool,
+) -> bool:
+    """
+    Determine if an exception should trigger a retry.
+
+    Args:
+        exception: The exception that was raised
+        retry_policy_provided: Whether an explicit retry_policy was provided by the user
+
+    Returns:
+        Tuple of (should_retry: bool, status_code: int) - whether to retry and the exception's status code.
+
+    Notes:
+        - Timeout and APIConnectionError inherit from APIError but don't have status_code.
+          When these occur, getattr(e, "status_code", 0) returns 0, and _should_retry(0)
+          returns False. The separate OR checks ensure these transient errors are always retried.
+        - AuthenticationError (401), BadRequestError (400), etc. should NOT be retried by default.
+        - Only retry: 408, 409, 429, 500+ errors.
+        - If explicit retry_policy is provided, respect the policy decision.
+    """
+    status_code = getattr(exception, "status_code", 0)
+
+    if retry_policy_provided:
+        # Retry policy explicitly provided - trust it (it already determined num_retries)
+        should_retry = (
+            isinstance(exception, openai.APIError)
+            or isinstance(exception, openai.Timeout)
+            or isinstance(exception, openai.APIConnectionError)
+        )
+    else:
+        # No retry policy - use _should_retry to exclude non-retryable errors like AuthenticationError
+        should_retry = (
+            (isinstance(exception, openai.APIError) and _should_retry(status_code))
+            or isinstance(exception, openai.Timeout)
+            or isinstance(exception, openai.APIConnectionError)
+        )
+
+    return should_retry, status_code
 
 
 def _get_retry_after_from_exception_header(
