@@ -3522,26 +3522,25 @@ async def test_list_keys_with_expand_user():
 @pytest.mark.asyncio
 async def test_generate_key_negative_max_budget():
     """
-    Test that GenerateKeyRequest rejects negative max_budget values.
+    Test that GenerateKeyRequest model allows negative max_budget values.
+    Validation is done at API level, not model level.
     
-    This prevents the issue where negative budgets would always trigger
-    budget exceeded errors.
+    This prevents GET requests from breaking when they receive data with negative budgets.
     """
-    with pytest.raises(ValueError) as exc_info:
-        GenerateKeyRequest(max_budget=-7.0)
-    
-    assert "max_budget cannot be negative" in str(exc_info.value)
+    # Should not raise any errors at model level
+    request = GenerateKeyRequest(max_budget=-7.0)
+    assert request.max_budget == -7.0
 
 
 @pytest.mark.asyncio
 async def test_generate_key_negative_soft_budget():
     """
-    Test that GenerateKeyRequest rejects negative soft_budget values.
+    Test that GenerateKeyRequest model allows negative soft_budget values.
+    Validation is done at API level, not model level.
     """
-    with pytest.raises(ValueError) as exc_info:
-        GenerateKeyRequest(soft_budget=-10.0)
-    
-    assert "soft_budget cannot be negative" in str(exc_info.value)
+    # Should not raise any errors at model level
+    request = GenerateKeyRequest(soft_budget=-10.0)
+    assert request.soft_budget == -10.0
 
 
 @pytest.mark.asyncio
@@ -3558,9 +3557,9 @@ async def test_generate_key_positive_budgets_accepted():
 @pytest.mark.asyncio
 async def test_update_key_negative_max_budget():
     """
-    Test that UpdateKeyRequest rejects negative max_budget values.
+    Test that UpdateKeyRequest model allows negative max_budget values.
+    Validation is done at API level, not model level.
     """
-    with pytest.raises(ValueError) as exc_info:
-        UpdateKeyRequest(key="test-key", max_budget=-5.0)
-    
-    assert "max_budget cannot be negative" in str(exc_info.value)
+    # Should not raise any errors at model level
+    request = UpdateKeyRequest(key="test-key", max_budget=-5.0)
+    assert request.max_budget == -5.0

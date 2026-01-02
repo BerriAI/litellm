@@ -180,10 +180,10 @@ async def test_new_budget_negative_max_budget(client_and_mocks):
         "max_budget": -7.0,
     }
     resp = client.post("/budget/new", json=payload)
-    assert resp.status_code == 422, resp.text
+    assert resp.status_code == 400, resp.text
     
     detail = resp.json()["detail"]
-    assert any("max_budget cannot be negative" in str(error) for error in detail)
+    assert "max_budget cannot be negative" in str(detail)
 
 
 @pytest.mark.asyncio
@@ -198,10 +198,10 @@ async def test_new_budget_negative_soft_budget(client_and_mocks):
         "soft_budget": -10.0,
     }
     resp = client.post("/budget/new", json=payload)
-    assert resp.status_code == 422, resp.text
+    assert resp.status_code == 400, resp.text
     
     detail = resp.json()["detail"]
-    assert any("soft_budget cannot be negative" in str(error) for error in detail)
+    assert "soft_budget cannot be negative" in str(detail)
 
 
 @pytest.mark.asyncio
@@ -216,10 +216,10 @@ async def test_update_budget_negative_max_budget(client_and_mocks):
         "max_budget": -5.0,
     }
     resp = client.post("/budget/update", json=payload)
-    assert resp.status_code == 422, resp.text
+    assert resp.status_code == 400, resp.text
     
     detail = resp.json()["detail"]
-    assert any("max_budget cannot be negative" in str(error) for error in detail)
+    assert "max_budget cannot be negative" in str(detail)
 
 
 @pytest.mark.asyncio
@@ -234,7 +234,7 @@ async def test_update_budget_negative_soft_budget(client_and_mocks):
         "soft_budget": -15.0,
     }
     resp = client.post("/budget/update", json=payload)
-    assert resp.status_code == 422, resp.text
+    assert resp.status_code == 400, resp.text
     
     detail = resp.json()["detail"]
-    assert any("soft_budget cannot be negative" in str(error) for error in detail)
+    assert "soft_budget cannot be negative" in str(detail)
