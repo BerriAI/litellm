@@ -1044,6 +1044,37 @@ def convert_prefix_message_to_non_prefix_messages(
     return new_messages
 
 
+def _strip_leading_thinking_tags_from_content(content: Optional[str]) -> Optional[str]:
+    """
+    Strip leading thinking tags from content.
+
+    Some providers (e.g., Together AI with DeepSeek) return reasoning_content
+    as a separate field but still leave the <think> tag in the content field.
+
+    Args:
+        content: The content string that may have leading thinking tags
+
+    Returns:
+        The content with leading thinking tags stripped
+    """
+    if not content:
+        return content
+
+    # Strip leading <think>, <thinking>, or <budget:thinking> opening tags
+    # Also handles whitespace/newlines after the tag
+    cleaned = re.sub(
+        r"^<(?:think|thinking|budget:thinking)>\s*", "", content, count=1
+    )
+
+    # Strip leading closing tags </think>, </thinking>, </budget:thinking>
+    # This handles cases where reasoning was extracted but closing tag remains
+    cleaned = re.sub(
+        r"^</(?:think|thinking|budget:thinking)>\s*", "", cleaned, count=1
+    )
+
+    return cleaned
+
+
 def _extract_reasoning_content(message: dict) -> Tuple[Optional[str], Optional[str]]:
     """
     Extract reasoning content and main content from a message.
@@ -1056,9 +1087,13 @@ def _extract_reasoning_content(message: dict) -> Tuple[Optional[str], Optional[s
     """
     message_content = message.get("content")
     if "reasoning_content" in message:
-        return message["reasoning_content"], message["content"]
+        # Clean content that may still have thinking tags (e.g., Together AI + DeepSeek)
+        cleaned_content = _strip_leading_thinking_tags_from_content(message_content)
+        return message["reasoning_content"], cleaned_content
     elif "reasoning" in message:
-        return message["reasoning"], message["content"]
+        # Clean content that may still have thinking tags
+        cleaned_content = _strip_leading_thinking_tags_from_content(message_content)
+        return message["reasoning"], cleaned_content
     elif isinstance(message_content, str):
         return _parse_content_for_reasoning(message_content)
     return None, message_content
