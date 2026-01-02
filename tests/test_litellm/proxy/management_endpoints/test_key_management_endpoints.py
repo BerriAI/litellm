@@ -3517,3 +3517,50 @@ async def test_list_keys_with_expand_user():
         "user_email": "user2@example.com",
         "user_alias": "User Two",
     }
+
+
+@pytest.mark.asyncio
+async def test_generate_key_negative_max_budget():
+    """
+    Test that GenerateKeyRequest rejects negative max_budget values.
+    
+    This prevents the issue where negative budgets would always trigger
+    budget exceeded errors.
+    """
+    with pytest.raises(ValueError) as exc_info:
+        GenerateKeyRequest(max_budget=-7.0)
+    
+    assert "max_budget cannot be negative" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_generate_key_negative_soft_budget():
+    """
+    Test that GenerateKeyRequest rejects negative soft_budget values.
+    """
+    with pytest.raises(ValueError) as exc_info:
+        GenerateKeyRequest(soft_budget=-10.0)
+    
+    assert "soft_budget cannot be negative" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_generate_key_positive_budgets_accepted():
+    """
+    Test that GenerateKeyRequest accepts positive budget values.
+    """
+    # Should not raise any errors
+    request = GenerateKeyRequest(max_budget=100.0, soft_budget=50.0)
+    assert request.max_budget == 100.0
+    assert request.soft_budget == 50.0
+
+
+@pytest.mark.asyncio
+async def test_update_key_negative_max_budget():
+    """
+    Test that UpdateKeyRequest rejects negative max_budget values.
+    """
+    with pytest.raises(ValueError) as exc_info:
+        UpdateKeyRequest(key="test-key", max_budget=-5.0)
+    
+    assert "max_budget cannot be negative" in str(exc_info.value)
