@@ -34,7 +34,6 @@ from inspect import iscoroutine
 from io import StringIO
 from os.path import abspath, dirname, join
 
-import aiohttp
 import dotenv
 import httpx
 import openai
@@ -52,17 +51,12 @@ import litellm
 import litellm.litellm_core_utils
 # audio_utils.utils is lazy-loaded - only imported when needed for transcription calls
 import litellm.litellm_core_utils.json_validation_rule
-import litellm.llms
-import litellm.llms.gemini
 from litellm._lazy_imports import (
     _get_default_encoding,
     _get_modified_max_tokens,
     _get_token_counter_new,
 )
 from litellm._uuid import uuid
-from litellm.caching._internal_lru_cache import lru_cache_wrapper
-from litellm.caching.caching import DualCache
-from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
 from litellm.constants import (
     DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
     DEFAULT_EMBEDDING_PARAM_VALUES,
@@ -77,8 +71,6 @@ from litellm.constants import (
     OPENAI_EMBEDDING_PARAMS,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
-from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.vector_store_integrations.base_vector_store import (
     BaseVectorStore,
 )
@@ -157,6 +149,64 @@ from litellm.router_utils.get_retry_from_policy import (
     reset_retry_policy,
 )
 from litellm.secret_managers.main import get_secret
+
+_CachingHandlerResponse = None
+_LLMCachingHandler = None
+_CustomGuardrail = None
+_CustomLogger = None
+
+
+def _get_cached_custom_logger():
+    """
+    Get cached CustomLogger class.
+    Lazy imports on first call to avoid loading custom_logger at import time.
+    Subsequent calls use cached class for better performance.
+    """
+    global _CustomLogger
+    if _CustomLogger is None:
+        from litellm.integrations.custom_logger import CustomLogger
+        _CustomLogger = CustomLogger
+    return _CustomLogger
+
+
+def _get_cached_custom_guardrail():
+    """
+    Get cached CustomGuardrail class.
+    Lazy imports on first call to avoid loading custom_guardrail at import time.
+    Subsequent calls use cached class for better performance.
+    """
+    global _CustomGuardrail
+    if _CustomGuardrail is None:
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+        _CustomGuardrail = CustomGuardrail
+    return _CustomGuardrail
+
+
+def _get_cached_caching_handler_response():
+    """
+    Get cached CachingHandlerResponse class.
+    Lazy imports on first call to avoid loading caching_handler at import time.
+    Subsequent calls use cached class for better performance.
+    """
+    global _CachingHandlerResponse
+    if _CachingHandlerResponse is None:
+        from litellm.caching.caching_handler import CachingHandlerResponse
+        _CachingHandlerResponse = CachingHandlerResponse
+    return _CachingHandlerResponse
+
+
+def _get_cached_llm_caching_handler():
+    """
+    Get cached LLMCachingHandler class.
+    Lazy imports on first call to avoid loading caching_handler at import time.
+    Subsequent calls use cached class for better performance.
+    """
+    global _LLMCachingHandler
+    if _LLMCachingHandler is None:
+        from litellm.caching.caching_handler import LLMCachingHandler
+        _LLMCachingHandler = LLMCachingHandler
+    return _LLMCachingHandler
+
 
 # Cached lazy import for audio_utils.utils
 # Module-level cache to avoid repeated imports while preserving memory benefits
@@ -292,6 +342,8 @@ from litellm.llms.base_llm.base_utils import (
 if TYPE_CHECKING:
     # Heavy types that are only needed for type checking; avoid importing
     # their modules at runtime during `litellm` import.
+    from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
+    from litellm.integrations.custom_logger import CustomLogger
     from litellm.llms.base_llm.files.transformation import BaseFilesConfig
     from litellm.proxy._types import AllowedModelRegion
 
@@ -505,7 +557,7 @@ def _add_custom_logger_callback_to_specific_event(
 
 
 def _custom_logger_class_exists_in_success_callbacks(
-    callback_class: CustomLogger,
+    callback_class: "CustomLogger",
 ) -> bool:
     """
     Returns True if an instance of the custom logger exists in litellm.success_callback or litellm._async_success_callback
@@ -521,7 +573,7 @@ def _custom_logger_class_exists_in_success_callbacks(
 
 
 def _custom_logger_class_exists_in_failure_callbacks(
-    callback_class: CustomLogger,
+    callback_class: "CustomLogger",
 ) -> bool:
     """
     Returns True if an instance of the custom logger exists in litellm.failure_callback or litellm._async_failure_callback
@@ -554,6 +606,7 @@ def get_applied_guardrails(kwargs: Dict[str, Any]) -> List[str]:
 
     request_guardrails = get_request_guardrails(kwargs)
     applied_guardrails = []
+    CustomGuardrail = _get_cached_custom_guardrail()
     for callback in litellm.callbacks:
         if callback is not None and isinstance(callback, CustomGuardrail):
             if callback.guardrail_name is not None:
@@ -578,7 +631,7 @@ def load_credentials_from_list(kwargs: dict):
 
 
 def get_dynamic_callbacks(
-    dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]],
+    dynamic_callbacks: Optional[List[Union[str, Callable, "CustomLogger"]]],
 ) -> List:
     returned_callbacks = litellm.callbacks.copy()
     if dynamic_callbacks:
@@ -712,7 +765,7 @@ def function_setup(  # noqa: PLR0915
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
         ## DYNAMIC CALLBACKS ##
-        dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]] = (
+        dynamic_callbacks: Optional[List[Union[str, Callable, "CustomLogger"]]] = (
             kwargs.pop("callbacks", None)
         )
         all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
@@ -813,16 +866,16 @@ def function_setup(  # noqa: PLR0915
                 litellm.failure_callback.pop(index)
         ### DYNAMIC CALLBACKS ###
         dynamic_success_callbacks: Optional[
-            List[Union[str, Callable, CustomLogger]]
+            List[Union[str, Callable, "CustomLogger"]]
         ] = None
         dynamic_async_success_callbacks: Optional[
-            List[Union[str, Callable, CustomLogger]]
+            List[Union[str, Callable, "CustomLogger"]]
         ] = None
         dynamic_failure_callbacks: Optional[
-            List[Union[str, Callable, CustomLogger]]
+            List[Union[str, Callable, "CustomLogger"]]
         ] = None
         dynamic_async_failure_callbacks: Optional[
-            List[Union[str, Callable, CustomLogger]]
+            List[Union[str, Callable, "CustomLogger"]]
         ] = None
         if kwargs.get("success_callback", None) is not None and isinstance(
             kwargs["success_callback"], list
@@ -1142,6 +1195,7 @@ async def async_pre_call_deployment_hook(kwargs: Dict[str, Any], call_type: str)
 
     modified_kwargs = kwargs.copy()
 
+    CustomLogger = _get_cached_custom_logger()
     for callback in litellm.callbacks:
         if isinstance(callback, CustomLogger):
             result = await callback.async_pre_call_deployment_hook(
@@ -1164,6 +1218,7 @@ async def async_post_call_success_deployment_hook(
     except ValueError:
         typed_call_type = None  # unknown call type
 
+    CustomLogger = _get_cached_custom_logger()
     for callback in litellm.callbacks:
         if isinstance(callback, CustomLogger):
             result = await callback.async_post_call_success_deployment_hook(
@@ -1343,7 +1398,8 @@ def client(original_function):  # noqa: PLR0915
             ## LOAD CREDENTIALS
             load_credentials_from_list(kwargs)
             kwargs["litellm_logging_obj"] = logging_obj
-            _llm_caching_handler: LLMCachingHandler = LLMCachingHandler(
+            LLMCachingHandler = _get_cached_llm_caching_handler()
+            _llm_caching_handler: "LLMCachingHandler" = LLMCachingHandler(
                 original_function=original_function,
                 request_kwargs=kwargs,
                 start_time=start_time,
@@ -1398,7 +1454,7 @@ def client(original_function):  # noqa: PLR0915
             ):  # allow users to control returning cached responses from the completion function
                 # checking cache
                 verbose_logger.debug("INSIDE CHECKING SYNC CACHE")
-                caching_handler_response: CachingHandlerResponse = (
+                caching_handler_response: "CachingHandlerResponse" = (
                     _llm_caching_handler._sync_get_cache(
                         model=model or "",
                         original_function=original_function,
@@ -1589,7 +1645,8 @@ def client(original_function):  # noqa: PLR0915
         logging_obj: Optional[LiteLLMLoggingObject] = kwargs.get(
             "litellm_logging_obj", None
         )
-        _llm_caching_handler: LLMCachingHandler = LLMCachingHandler(
+        LLMCachingHandler = _get_cached_llm_caching_handler()
+        _llm_caching_handler: "LLMCachingHandler" = LLMCachingHandler(
             original_function=original_function,
             request_kwargs=kwargs,
             start_time=start_time,
@@ -1628,7 +1685,7 @@ def client(original_function):  # noqa: PLR0915
             print_verbose(
                 f"ASYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache'): {kwargs.get('cache', None)}"
             )
-            _caching_handler_response: Optional[CachingHandlerResponse] = (
+            _caching_handler_response: "Optional[CachingHandlerResponse]" = (
                 await _llm_caching_handler._async_get_cache(
                     model=model or "",
                     original_function=original_function,
