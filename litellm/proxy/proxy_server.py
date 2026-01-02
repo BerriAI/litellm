@@ -4626,7 +4626,7 @@ class ProxyStartupEvent:
                 verbose_proxy_logger.info("Batch cost check job scheduled successfully")
 
             except Exception as e:
-                verbose_proxy_logger.error(f"Failed to setup batch cost checking: {e}")
+                verbose_proxy_logger.debug(f"Failed to setup batch cost checking: {e}")
                 verbose_proxy_logger.debug(
                     "Checking batch cost for LiteLLM Managed Files is an Enterprise Feature. Skipping..."
                 )
@@ -4657,7 +4657,7 @@ class ProxyStartupEvent:
                 verbose_proxy_logger.info("Responses cost check job scheduled successfully")
 
             except Exception as e:
-                verbose_proxy_logger.error(f"Failed to setup responses cost checking: {e}")
+                verbose_proxy_logger.debug(f"Failed to setup responses cost checking: {e}")
                 verbose_proxy_logger.debug(
                     "Checking responses cost for LiteLLM Managed Files is an Enterprise Feature. Skipping..."
                 )
