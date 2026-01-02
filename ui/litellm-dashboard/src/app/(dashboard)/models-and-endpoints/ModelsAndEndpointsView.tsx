@@ -11,6 +11,7 @@ import CredentialsPanel from "@/components/model_add/credentials";
 import { getCallbacksCall, setCallbacksCall } from "@/components/networking";
 import { Providers, getPlaceholder, getProviderModels } from "@/components/provider_info_helpers";
 import { getDisplayModelName } from "@/components/view_model/model_name_display";
+import { transformModelData } from "./utils/modelDataTransformer";
 import { all_admin_roles, internalUserRoles, isProxyAdminRole, isUserTeamAdminForAnyTeam } from "@/utils/roles";
 import { RefreshIcon } from "@heroicons/react/outline";
 import { useQueryClient } from "@tanstack/react-query";
@@ -44,12 +45,7 @@ interface GlobalRetryPolicyObject {
   [retryPolicyKey: string]: number;
 }
 
-const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
-  modelData = { data: [] },
-  setModelData,
-  premiumUser,
-  teams,
-}) => {
+const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, teams }) => {
   const { accessToken, token, userRole, userId: userID } = useAuthorized();
   const [addModelForm] = Form.useForm();
   const [lastRefreshed, setLastRefreshed] = useState("");
@@ -68,10 +64,10 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
 
   const queryClient = useQueryClient();
   const { data: modelDataResponse, isLoading: isLoadingModels, refetch: refetchModels } = useModelsInfo();
-  const { data: modelCostMapData } = useModelCostMap();
-  const { data: credentialsResponse } = useCredentials();
+  const { data: modelCostMapData, isLoading: isLoadingModelCostMap } = useModelCostMap();
+  const { data: credentialsResponse, isLoading: isLoadingCredentials } = useCredentials();
   const credentialsList = credentialsResponse?.credentials || [];
-  const { data: uiSettings } = useUISettings();
+  const { data: uiSettings, isLoading: isLoadingUISettings } = useUISettings();
 
   const availableModelGroups = useMemo(() => {
     if (!modelDataResponse?.data) return [];
@@ -110,75 +106,9 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
   };
 
   const processedModelData = useMemo(() => {
-    return modelDataResponse?.data?.map((model: any) => {
-      return {};
-    });
-  }, [modelDataResponse?.data]);
-
-  // loop through model data and edit each row
-  for (let i = 0; i < modelData.data.length; i++) {
-    let curr_model = modelData.data[i];
-    let litellm_model_name = curr_model?.litellm_params?.model;
-    let custom_llm_provider = curr_model?.litellm_params?.custom_llm_provider;
-    let model_info = curr_model?.model_info;
-
-    let provider = "";
-    let input_cost = "Undefined";
-    let output_cost = "Undefined";
-    let max_tokens = "Undefined";
-    let max_input_tokens = "Undefined";
-    let cleanedLitellmParams = {};
-
-    // Check if litellm_model_name is null or undefined
-    if (litellm_model_name) {
-      // Split litellm_model_name based on "/"
-      let splitModel = litellm_model_name.split("/");
-
-      // Get the first element in the split
-      let firstElement = splitModel[0];
-
-      // If there is only one element, default provider to openai
-      provider = custom_llm_provider;
-      if (!provider) {
-        provider = splitModel.length === 1 ? getProviderFromModel(litellm_model_name) : firstElement;
-      }
-    } else {
-      // litellm_model_name is null or undefined, default provider to openai
-      provider = "-";
-    }
-
-    if (model_info) {
-      input_cost = model_info?.input_cost_per_token;
-      output_cost = model_info?.output_cost_per_token;
-      max_tokens = model_info?.max_tokens;
-      max_input_tokens = model_info?.max_input_tokens;
-    }
-
-    if (curr_model?.litellm_params) {
-      cleanedLitellmParams = Object.fromEntries(
-        Object.entries(curr_model?.litellm_params).filter(([key]) => key !== "model" && key !== "api_base"),
-      );
-    }
-
-    modelData.data[i].provider = provider;
-    modelData.data[i].input_cost = input_cost;
-    modelData.data[i].output_cost = output_cost;
-    modelData.data[i].litellm_model_name = litellm_model_name;
-
-    // Convert Cost in terms of Cost per 1M tokens
-    if (modelData.data[i].input_cost) {
-      modelData.data[i].input_cost = (Number(modelData.data[i].input_cost) * 1000000).toFixed(2);
-    }
-
-    if (modelData.data[i].output_cost) {
-      modelData.data[i].output_cost = (Number(modelData.data[i].output_cost) * 1000000).toFixed(2);
-    }
-
-    modelData.data[i].max_tokens = max_tokens;
-    modelData.data[i].max_input_tokens = max_input_tokens;
-    modelData.data[i].api_base = curr_model?.litellm_params?.api_base;
-    modelData.data[i].cleanedLitellmParams = cleanedLitellmParams;
-  }
+    if (!modelDataResponse?.data) return { data: [] };
+    return transformModelData(modelDataResponse, getProviderFromModel);
+  }, [modelDataResponse?.data, getProviderFromModel]);
 
   const isProxyAdmin = userRole && isProxyAdminRole(userRole);
   const isInternalUser = userRole && internalUserRoles.includes(userRole);
@@ -260,8 +190,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
     }
     const fetchData = async () => {
       try {
-        setModelData(modelDataResponse);
-
         const routerSettingsInfo = await getCallbacksCall(accessToken, userID, userRole);
         let router_settings = routerSettingsInfo.router_settings;
 
@@ -284,9 +212,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
     }
   }, [accessToken, token, userRole, userID, modelDataResponse]);
 
-  if (!modelData || isLoadingModels) {
-    return <div>Loading...</div>;
-  }
+  const isLoading = isLoadingModels || isLoadingModelCostMap || isLoadingCredentials || isLoadingUISettings;
 
   if (userRole && userRole == "Admin Viewer") {
     const { Title, Paragraph } = Typography;
@@ -348,13 +274,13 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
               )}
             </div>
           </div>
-          {selectedModelId ? (
+          {selectedModelId && !isLoading ? (
             <ModelInfoView
               modelId={selectedModelId}
               onClose={() => {
                 setSelectedModelId(null);
               }}
-              modelData={modelData.data.find((model: any) => model.model_info.id === selectedModelId)}
+              modelData={processedModelData.data.find((model: any) => model.model_info.id === selectedModelId)}
               accessToken={accessToken}
               userID={userID}
               userRole={userRole}
@@ -426,14 +352,14 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
                     accessToken={accessToken}
                     userRole={userRole}
                     userID={userID}
-                    modelData={modelData}
+                    modelData={processedModelData}
                     premiumUser={premiumUser}
                   />
                 </TabPanel>
                 <TabPanel>
                   <HealthCheckComponent
                     accessToken={accessToken}
-                    modelData={modelData}
+                    modelData={processedModelData}
                     all_models_on_proxy={allModelsOnProxy}
                     getDisplayModelName={getDisplayModelName}
                     setSelectedModelId={setSelectedModelId}

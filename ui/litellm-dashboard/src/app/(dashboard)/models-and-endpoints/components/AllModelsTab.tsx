@@ -1,9 +1,11 @@
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { Team } from "@/components/key_team_helpers/key_list";
 import { ModelDataTable } from "@/components/model_dashboard/table";
 import { columns } from "@/components/molecules/models/columns";
 import { getDisplayModelName } from "@/components/view_model/model_name_display";
+import { transformModelData } from "../utils/modelDataTransformer";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { PaginationState } from "@tanstack/react-table";
 import { Grid, Select, SelectItem, TabPanel, Text } from "@tremor/react";
@@ -29,9 +31,24 @@ const AllModelsTab = ({
   setSelectedModelId,
   setSelectedTeamId,
 }: AllModelsTabProps) => {
-  const { data: modelData } = useModelsInfo();
+  const { data: rawModelData } = useModelsInfo();
+  const { data: modelCostMapData } = useModelCostMap();
   const { userId, userRole, premiumUser } = useAuthorized();
   const { data: teams } = useTeams();
+
+  const getProviderFromModel = (model: string) => {
+    if (modelCostMapData !== null && modelCostMapData !== undefined) {
+      if (typeof modelCostMapData == "object" && model in modelCostMapData) {
+        return modelCostMapData[model]["litellm_provider"];
+      }
+    }
+    return "openai";
+  };
+
+  const modelData = useMemo(() => {
+    if (!rawModelData) return { data: [] };
+    return transformModelData(rawModelData, getProviderFromModel);
+  }, [rawModelData, modelCostMapData]);
 
   const [modelNameSearch, setModelNameSearch] = useState<string>("");
   const [modelViewMode, setModelViewMode] = useState<ModelViewMode>("current_team");
