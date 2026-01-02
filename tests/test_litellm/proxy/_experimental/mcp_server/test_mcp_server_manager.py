@@ -65,7 +65,7 @@ class TestMCPServerManager:
             updated_at=datetime.now(),
         )
 
-        await manager.add_update_server(stdio_server)
+        await manager.add_server(stdio_server)
 
         # Verify server was added
         assert "stdio-server-1" in manager.registry
@@ -1364,7 +1364,7 @@ class TestMCPServerManager:
                 "env": {},
             },
         )
-        await manager.add_update_server(server)
+        await manager.add_server(server)
         assert server.server_id in manager.get_registry()
 
     @pytest.mark.asyncio

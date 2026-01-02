@@ -957,7 +957,7 @@ class TestUpdateMCPServer:
             "litellm.proxy.management_endpoints.mcp_management_endpoints.update_mcp_server",
             AsyncMock(return_value=updated_server),
         ) as update_mock, patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.add_update_server",
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.add_server",
             AsyncMock(),
         ), patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.reload_servers_from_database",
