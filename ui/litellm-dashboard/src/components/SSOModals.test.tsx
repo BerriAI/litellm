@@ -1,8 +1,7 @@
-import { render, fireEvent, waitFor, screen, act } from "@testing-library/react";
-import { describe, expect, it, beforeAll, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Form } from "antd";
+import { describe, expect, it, vi } from "vitest";
 import SSOModals from "./SSOModals";
-import React from "react";
 
 // Mock the networking functions
 vi.mock("./networking", () => ({
@@ -15,8 +14,8 @@ vi.mock("./shared/errorUtils", () => ({
   parseErrorMessage: vi.fn((error) => error?.message || "An error occurred"),
 }));
 
-import { getSSOSettings, updateSSOSettings } from "./networking";
 import NotificationsManager from "./molecules/notifications_manager";
+import { getSSOSettings, updateSSOSettings } from "./networking";
 
 describe("SSOModals", () => {
   it("should render the SSOModals component", () => {
