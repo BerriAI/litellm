@@ -45,13 +45,14 @@ from litellm.responses.litellm_completion_transformation.transformation import (
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolParam,
+    ResponsesAPIStreamEvents,
 )
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
     OutputFunctionToolCall,
     OutputText,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import GenericGuardrailAPIInputs, ModelResponse
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -113,7 +114,12 @@ class OpenAIResponsesHandler(BaseTranslation):
                 logging_obj=litellm_logging_obj,
             )
             guardrailed_texts = guardrailed_inputs.get("texts", [])
+            guardrailed_tools = guardrailed_inputs.get("tools")
             data["input"] = guardrailed_texts[0] if guardrailed_texts else input_data
+            if guardrailed_tools is not None:
+                data["tools"] = self._convert_chat_completion_tools_to_responses_tools(
+                    cast(List[ChatCompletionToolParam], guardrailed_tools)
+                )
             verbose_proxy_logger.debug("OpenAI Responses API: Processed string input")
             return data
 
@@ -158,6 +164,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             )
 
             guardrailed_texts = guardrailed_inputs.get("texts", [])
+            guardrailed_tools = guardrailed_inputs.get("tools")
 
             # Step 3: Map guardrail responses back to original input structure
             await self._apply_guardrail_responses_to_input(
@@ -165,6 +172,11 @@ class OpenAIResponsesHandler(BaseTranslation):
                 responses=guardrailed_texts,
                 task_mappings=task_mappings,
             )
+
+            if guardrailed_tools is not None:
+                data["tools"] = self._convert_chat_completion_tools_to_responses_tools(
+                    cast(List[ChatCompletionToolParam], guardrailed_tools)
+                )
 
         verbose_proxy_logger.debug(
             "OpenAI Responses API: Processed input messages: %s", input_data
@@ -187,13 +199,156 @@ class OpenAIResponsesHandler(BaseTranslation):
             # Transform Responses API tools to Chat Completion tools
             (
                 transformed_tools,
-                _,
+                web_search_options,
             ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
                 tools  # type: ignore
             )
             tools_to_check.extend(
                 cast(List[ChatCompletionToolParam], transformed_tools)
             )
+            if web_search_options is not None:
+                # For guardrail checks we surface web_search as an explicit tool entry.
+                tools_to_check.append(
+                    cast(ChatCompletionToolParam, {"type": "web_search"})
+                )
+
+
+    def _convert_chat_completion_tools_to_responses_tools(
+        self, chat_completion_tools: List[ChatCompletionToolParam]
+    ) -> List[Dict[str, Any]]:
+        """Convert Chat Completion-style tools back to Responses API definitions."""
+
+        transformation_handler = LiteLLMResponsesTransformationHandler()
+        responses_tools = transformation_handler._convert_tools_to_responses_format(
+            cast(List[Dict[str, Any]], chat_completion_tools)
+        )
+        return cast(List[Dict[str, Any]], responses_tools)
+
+    def _convert_chat_completion_tool_calls_to_responses_tool_calls(
+        self, tool_calls: List[ChatCompletionToolCallChunk]
+    ) -> List[ResponseFunctionToolCall]:
+        """Convert Chat Completion tool calls to Responses API function call objects."""
+
+        if not tool_calls:
+            return []
+
+        normalized_tool_calls: List[Dict[str, Any]] = []
+        for tool_call in tool_calls:
+            if isinstance(tool_call, dict):
+                normalized_tool_calls.append(cast(Dict[str, Any], tool_call))
+                continue
+
+            function_payload: Dict[str, Any] = {}
+            function_object = getattr(tool_call, "function", {})
+            if isinstance(function_object, dict):
+                function_payload = function_object
+            elif hasattr(function_object, "model_dump"):
+                function_payload = cast(Dict[str, Any], function_object.model_dump())
+            else:
+                function_payload = cast(Dict[str, Any], getattr(function_object, "__dict__", {}))
+
+            normalized_tool_calls.append(
+                {
+                    "id": getattr(tool_call, "id", None),
+                    "type": getattr(tool_call, "type", "function"),
+                    "function": function_payload,
+                }
+            )
+
+        chat_completion_response = ModelResponse(
+            choices=[
+                {
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": normalized_tool_calls,
+                    },
+                }
+            ]
+        )
+
+        return LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
+            chat_completion_response=chat_completion_response
+        )
+
+    def _apply_guardrail_tool_calls_to_response_output(
+        self,
+        response: Any,
+        guardrail_tool_calls: List[ChatCompletionToolCallChunk],
+    ) -> None:
+        """Replace response output tool-call items using guardrail-modified tool calls."""
+
+        converted_tool_calls = self._convert_chat_completion_tool_calls_to_responses_tool_calls(
+            guardrail_tool_calls
+        )
+        output_items = self._get_response_output(response)
+        if output_items is None:
+            return
+
+        filtered_output_items = []
+        for output_item in output_items:
+            if not self._is_tool_call_output_item(output_item):
+                filtered_output_items.append(output_item)
+
+        filtered_output_items.extend(converted_tool_calls)
+        if isinstance(response, dict):
+            response["output"] = filtered_output_items
+        else:
+            response.output = filtered_output_items
+
+    def _apply_guardrail_tool_calls_to_stream_chunk(
+        self,
+        chunk: Any,
+        guardrail_tool_calls: List[ChatCompletionToolCallChunk],
+    ) -> None:
+        """Update streaming chunk tool call payload with guardrail output."""
+
+        converted_tool_calls = self._convert_chat_completion_tool_calls_to_responses_tool_calls(
+            guardrail_tool_calls
+        )
+
+        serialized_tool_call = (
+            self._serialize_response_tool_call(converted_tool_calls[0], as_dict=True)
+            if converted_tool_calls
+            else {}
+        )
+
+        # Handle both dict and Pydantic model chunks
+        if isinstance(chunk, dict):
+            chunk["item"] = serialized_tool_call
+        elif hasattr(chunk, "item"):
+            setattr(chunk, "item", serialized_tool_call)
+        else:
+            verbose_proxy_logger.warning(
+                "Cannot set item on chunk of type %s", type(chunk)
+            )
+
+    def _get_response_output(self, response: Any) -> Optional[List[Any]]:
+        if isinstance(response, dict):
+            return response.get("output")
+        if hasattr(response, "output"):
+            return getattr(response, "output")
+        return None
+
+    def _serialize_response_tool_call(
+        self, tool_call: ResponseFunctionToolCall, as_dict: bool
+    ) -> Any:
+        if as_dict:
+            if hasattr(tool_call, "model_dump"):
+                return tool_call.model_dump(exclude_none=True)
+            return cast(Dict[str, Any], dict(tool_call))
+        return tool_call
+
+    def _is_tool_call_output_item(self, output_item: Any) -> bool:
+        if isinstance(output_item, (ResponseFunctionToolCall, OutputFunctionToolCall)):
+            return True
+        if isinstance(output_item, BaseModel):
+            return getattr(output_item, "type", None) == "function_call"
+        if isinstance(output_item, dict):
+            return output_item.get("type") == "function_call"
+        return False
 
     def _extract_input_text_and_images(
         self,
@@ -353,6 +508,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             )
 
             guardrailed_texts = guardrailed_inputs.get("texts", [])
+            guardrailed_tool_calls = guardrailed_inputs.get("tool_calls")
 
             # Step 3: Map guardrail responses back to original response structure
             await self._apply_guardrail_responses_to_output(
@@ -361,11 +517,46 @@ class OpenAIResponsesHandler(BaseTranslation):
                 task_mappings=task_mappings,
             )
 
+            if guardrailed_tool_calls is not None:
+                self._apply_guardrail_tool_calls_to_response_output(
+                    response=response,
+                    guardrail_tool_calls=cast(
+                        List[ChatCompletionToolCallChunk], guardrailed_tool_calls
+                    ),
+                )
+
         verbose_proxy_logger.debug(
             "OpenAI Responses API: Processed output response: %s", response
         )
 
         return response
+
+    def _convert_streaming_tool_calls_to_dicts(
+        self, tool_calls: List[Any]
+    ) -> List[ChatCompletionToolCallChunk]:
+        """
+        Convert streaming tool calls (ChatCompletionDeltaToolCall) to dict format.
+
+        ChatCompletionDeltaToolCall objects from streaming responses need to be
+        converted to dicts so they can be processed by guardrails.
+
+        Args:
+            tool_calls: List of ChatCompletionDeltaToolCall objects
+
+        Returns:
+            List of tool calls as ChatCompletionToolCallChunk dicts
+        """
+        converted: List[ChatCompletionToolCallChunk] = []
+        for tc in tool_calls:
+            if hasattr(tc, "model_dump"):
+                converted.append(cast(ChatCompletionToolCallChunk, tc.model_dump()))
+            elif hasattr(tc, "__dict__"):
+                converted.append(cast(ChatCompletionToolCallChunk, dict(tc.__dict__)))
+            else:
+                verbose_proxy_logger.warning(
+                    "Unexpected tool call type in streaming response: %s", type(tc)
+                )
+        return converted
 
     async def process_output_streaming_response(
         self,
@@ -388,16 +579,24 @@ class OpenAIResponsesHandler(BaseTranslation):
 
             tool_calls = model_response_stream.choices[0].delta.tool_calls
             if tool_calls:
-                _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
-                    inputs={
-                        "tool_calls": cast(
-                            List[ChatCompletionToolCallChunk], tool_calls
-                        )
-                    },
+                tool_calls_as_dicts = self._convert_streaming_tool_calls_to_dicts(
+                    tool_calls
+                )
+
+                guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+                    inputs={"tool_calls": tool_calls_as_dicts},
                     request_data={},
                     input_type="response",
                     logging_obj=litellm_logging_obj,
                 )
+                guardrailed_tool_calls = guardrailed_inputs.get("tool_calls")
+                if guardrailed_tool_calls is not None:
+                    self._apply_guardrail_tool_calls_to_stream_chunk(
+                        chunk=final_chunk,
+                        guardrail_tool_calls=cast(
+                            List[ChatCompletionToolCallChunk], guardrailed_tool_calls
+                        ),
+                    )
                 return responses_so_far
         elif final_chunk.get("type") == "response.completed":
             # convert openai response to model response
@@ -408,22 +607,37 @@ class OpenAIResponsesHandler(BaseTranslation):
                 handle_raw_dict_callback=None,
             )
 
+            if not model_response_choices:
+                return responses_so_far
+
             tool_calls = model_response_choices[0].message.tool_calls
             text = model_response_choices[0].message.content
             guardrail_inputs = GenericGuardrailAPIInputs()
             if text:
                 guardrail_inputs["texts"] = [text]
             if tool_calls:
-                guardrail_inputs["tool_calls"] = cast(
-                    List[ChatCompletionToolCallChunk], tool_calls
+                tool_calls_as_dicts = self._convert_streaming_tool_calls_to_dicts(
+                    tool_calls
                 )
+                guardrail_inputs["tool_calls"] = tool_calls_as_dicts
             if tool_calls:
-                _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+                guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                     inputs=guardrail_inputs,
                     request_data={},
                     input_type="response",
                     logging_obj=litellm_logging_obj,
                 )
+                guardrailed_tool_calls = guardrailed_inputs.get("tool_calls")
+                if guardrailed_tool_calls is not None:
+                    response_payload = final_chunk.get("response")
+                    if response_payload is not None:
+                        self._apply_guardrail_tool_calls_to_response_output(
+                            response=response_payload,
+                            guardrail_tool_calls=cast(
+                                List[ChatCompletionToolCallChunk],
+                                guardrailed_tool_calls,
+                            ),
+                        )
                 return responses_so_far
         # model_response_stream = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(final_chunk)
         # tool_calls = model_response_stream.choices[0].tool_calls
@@ -451,6 +665,27 @@ class OpenAIResponsesHandler(BaseTranslation):
         Get the string so far from the responses so far.
         """
         return "".join([response.get("text", "") for response in responses_so_far])
+
+    def is_stream_item_complete(self, responses_so_far: List[Any]) -> bool:
+        """
+        Check if a streaming item has completed.
+
+        For OpenAI Responses API, an item is complete when we receive
+        a chunk with type "response.output_item.done" or "response.completed".
+
+        Args:
+            responses_so_far: List of streaming responses received so far
+
+        Returns:
+            bool: True if the last chunk indicates an item has completed, False otherwise
+        """
+        if not responses_so_far:
+            return False
+
+        final_chunk = responses_so_far[-1]
+
+        chunk_type = final_chunk.get("type")
+        return chunk_type in (ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE, ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, ResponsesAPIStreamEvents.RESPONSE_COMPLETED)
 
     def _has_text_content(self, response: "ResponsesAPIResponse") -> bool:
         """
@@ -589,9 +824,9 @@ class OpenAIResponsesHandler(BaseTranslation):
             else:
                 continue
 
+            task_mappings.append((output_idx, int(content_idx)))
             if text_content:
                 texts_to_check.append(text_content)
-                task_mappings.append((output_idx, int(content_idx)))
 
     async def _apply_guardrail_responses_to_output(
         self,
@@ -606,13 +841,56 @@ class OpenAIResponsesHandler(BaseTranslation):
         """
         # Handle both dict and Pydantic object responses
         if isinstance(response, dict):
-            response_output = response.get("output", [])
+            response_output = cast(List[Any], response.get("output", []))
         elif hasattr(response, "output"):
-            response_output = response.output or []
+            response_output = cast(List[Any], response.output or [])
         else:
             return
 
+        # If task_mappings is empty but we have responses, create new output items
+        # This happens when response.output only contains tool calls but guardrail returns text
+        if not task_mappings and responses:
+            verbose_proxy_logger.debug(
+                "OpenAI Responses API: task_mappings is empty but responses exist. Creating new output items."
+            )
+            if isinstance(response, dict):
+                for idx, guardrail_response in enumerate(responses):
+                    new_output_item = {
+                        "type": "message",
+                        "id": f"msg_guardrail_{idx + 1}",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": guardrail_response}],
+                    }
+                    response_output.append(new_output_item)
+                response["output"] = response_output
+            else:
+                for idx, guardrail_response in enumerate(responses):
+                    new_output_item = GenericResponseOutputItem(
+                        type="message",
+                        id=f"msg_guardrail_{idx + 1}",
+                        status="completed",
+                        role="assistant",
+                        content=[
+                            OutputText(
+                                type="output_text",
+                                text=guardrail_response,
+                                annotations=None,
+                            )
+                        ],
+                    )
+                    response_output.append(new_output_item)
+                response.output = response_output
+            return
+
         for task_idx, guardrail_response in enumerate(responses):
+            if task_idx >= len(task_mappings):
+                verbose_proxy_logger.warning(
+                    "OpenAI Responses API: task_idx %d exceeds task_mappings length %d. Skipping remaining responses.",
+                    task_idx,
+                    len(task_mappings),
+                )
+                break
             mapping = task_mappings[task_idx]
             output_idx = cast(int, mapping[0])
             content_idx = cast(int, mapping[1])

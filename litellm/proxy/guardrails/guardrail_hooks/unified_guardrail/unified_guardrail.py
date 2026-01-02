@@ -274,6 +274,8 @@ class UnifiedLLMGuardrails(CustomLogger):
                 yield item
             return
 
+        run_guardrails_on_stream_item_complete = guardrail_to_apply.run_guardrails_on_stream_item_complete
+
         event_type: GuardrailEventHooks = GuardrailEventHooks.post_call
         if (
             guardrail_to_apply.should_run_guardrail(
@@ -328,19 +330,34 @@ class UnifiedLLMGuardrails(CustomLogger):
                 yield item
                 continue
 
-            # Process chunk based on sampling rate
-            if chunk_counter % sampling_rate == 0:
+            # Check if we should process this chunk
+            should_process = False
+            endpoint_translation = None
 
+            # Process based on sampling rate
+            if chunk_counter % sampling_rate == 0:
+                should_process = True
                 verbose_proxy_logger.debug(
                     "Processing streaming chunk %s (sampling_rate=%s) with guardrail %s",
                     chunk_counter,
                     sampling_rate,
                     guardrail_to_apply.guardrail_name,
                 )
-
+            # Or if run_guardrails_on_stream_item_complete is enabled and item is complete
+            elif run_guardrails_on_stream_item_complete:
                 endpoint_translation = endpoint_guardrail_translation_mappings[
                     CallTypes(call_type)
                 ]()
+                if endpoint_translation.is_stream_item_complete(responses_so_far):
+                    should_process = True
+
+            # Process chunk if conditions are met
+            if should_process:
+                # Reuse endpoint_translation if already created for completion check
+                if endpoint_translation is None:
+                    endpoint_translation = endpoint_guardrail_translation_mappings[
+                        CallTypes(call_type)
+                    ]()
 
                 processed_items = (
                     await endpoint_translation.process_output_streaming_response(
