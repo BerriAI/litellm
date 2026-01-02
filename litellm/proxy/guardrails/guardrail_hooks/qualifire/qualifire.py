@@ -7,7 +7,7 @@
 
 import os
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Type, Union
+from typing import Any, Dict, List, Optional, Type, Union
 
 from fastapi import HTTPException
 
@@ -23,6 +23,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import CallTypesLiteral
 
 GUARDRAIL_NAME = "qualifire"
 
@@ -59,8 +60,16 @@ class QualifireGuardrail(CustomGuardrail):
             assertions: Custom assertions to validate against the output
             on_flagged: Action when content is flagged: "block" or "monitor"
         """
-        self.qualifire_api_key = api_key or get_secret_str("QUALIFIRE_API_KEY") or os.environ.get("QUALIFIRE_API_KEY")
-        self.qualifire_api_base = api_base or get_secret_str("QUALIFIRE_BASE_URL") or os.environ.get("QUALIFIRE_BASE_URL")
+        self.qualifire_api_key = (
+            api_key
+            or get_secret_str("QUALIFIRE_API_KEY")
+            or os.environ.get("QUALIFIRE_API_KEY")
+        )
+        self.qualifire_api_base = (
+            api_base
+            or get_secret_str("QUALIFIRE_BASE_URL")
+            or os.environ.get("QUALIFIRE_BASE_URL")
+        )
         self.evaluation_id = evaluation_id
         self.prompt_injections = prompt_injections
         self.hallucinations_check = hallucinations_check
@@ -80,15 +89,17 @@ class QualifireGuardrail(CustomGuardrail):
 
     def _has_any_check_enabled(self) -> bool:
         """Check if any evaluation check is explicitly enabled."""
-        return any([
-            self.prompt_injections,
-            self.hallucinations_check,
-            self.grounding_check,
-            self.pii_check,
-            self.content_moderation_check,
-            self.tool_selection_quality_check,
-            self.assertions,
-        ])
+        return any(
+            [
+                self.prompt_injections,
+                self.hallucinations_check,
+                self.grounding_check,
+                self.pii_check,
+                self.content_moderation_check,
+                self.tool_selection_quality_check,
+                self.assertions,
+            ]
+        )
 
     def _get_client(self):
         """Lazy initialization of Qualifire client."""
@@ -290,21 +301,28 @@ class QualifireGuardrail(CustomGuardrail):
     def _check_if_flagged(self, result: Any) -> bool:
         """
         Check if the Qualifire evaluation result indicates flagged content.
-        """
-        # Check overall status
-        status = getattr(result, "status", None)
-        if status and status != "completed":
-            return True
 
+        Returns True only if there are explicitly flagged items in the evaluation results.
+        A high score (close to 100) indicates GOOD content, low score indicates problems.
+        """
         # Check evaluation results for any flagged items
-        evaluation_results = getattr(result, "evaluationResults", []) or []
+        evaluation_results = getattr(result, "evaluationResults", None) or []
+        if isinstance(result, dict):
+            evaluation_results = result.get("evaluationResults", []) or []
+
         for eval_result in evaluation_results:
-            results = getattr(eval_result, "results", []) or []
+            results = []
             if isinstance(eval_result, dict):
-                results = eval_result.get("results", [])
+                results = eval_result.get("results", []) or []
+            else:
+                results = getattr(eval_result, "results", []) or []
 
             for r in results:
-                flagged = r.get("flagged") if isinstance(r, dict) else getattr(r, "flagged", False)
+                flagged = (
+                    r.get("flagged")
+                    if isinstance(r, dict)
+                    else getattr(r, "flagged", False)
+                )
                 if flagged:
                     return True
 
@@ -367,10 +385,7 @@ class QualifireGuardrail(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         call_type: Literal[
             "completion",
-            "embeddings",
-            "image_generation",
             "moderation",
-            "audio_transcription",
             "responses",
             "mcp_call",
             "anthropic_messages",
