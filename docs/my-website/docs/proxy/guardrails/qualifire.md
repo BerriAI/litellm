@@ -50,7 +50,7 @@ guardrails:
     litellm_params:
       guardrail: qualifire
       mode: "pre_call"
-      on_flagged: "monitor"  # Log violations but don't block
+      on_flagged: "monitor" # Log violations but don't block
       api_key: os.environ/QUALIFIRE_API_KEY
       prompt_injections: true
 ```
@@ -139,7 +139,7 @@ guardrails:
       guardrail: qualifire
       mode: "during_call"
       api_key: os.environ/QUALIFIRE_API_KEY
-      evaluation_id: eval_abc123  # Your evaluation ID from Qualifire dashboard
+      evaluation_id: eval_abc123 # Your evaluation ID from Qualifire dashboard
 ```
 
 When `evaluation_id` is provided, LiteLLM will use `invoke_evaluation()` instead of `evaluate()`, running the pre-configured evaluation from your dashboard.
@@ -148,15 +148,15 @@ When `evaluation_id` is provided, LiteLLM will use `invoke_evaluation()` instead
 
 Qualifire supports the following evaluation checks:
 
-| Check | Parameter | Description |
-|-------|-----------|-------------|
-| Prompt Injections | `prompt_injections: true` | Identify prompt injection attempts |
-| Hallucinations | `hallucinations_check: true` | Detect factual inaccuracies or hallucinations |
-| Grounding | `grounding_check: true` | Verify output is grounded in provided context |
-| PII Detection | `pii_check: true` | Detect personally identifiable information |
-| Content Moderation | `content_moderation_check: true` | Check for harmful content (harassment, hate speech, etc.) |
-| Tool Selection Quality | `tool_selection_quality_check: true` | Evaluate quality of tool/function calls |
-| Custom Assertions | `assertions: [...]` | Custom assertions to validate against the output |
+| Check                  | Parameter                            | Description                                               |
+| ---------------------- | ------------------------------------ | --------------------------------------------------------- |
+| Prompt Injections      | `prompt_injections: true`            | Identify prompt injection attempts                        |
+| Hallucinations         | `hallucinations_check: true`         | Detect factual inaccuracies or hallucinations             |
+| Grounding              | `grounding_check: true`              | Verify output is grounded in provided context             |
+| PII Detection          | `pii_check: true`                    | Detect personally identifiable information                |
+| Content Moderation     | `content_moderation_check: true`     | Check for harmful content (harassment, hate speech, etc.) |
+| Tool Selection Quality | `tool_selection_quality_check: true` | Evaluate quality of tool/function calls                   |
+| Custom Assertions      | `assertions: [...]`                  | Custom assertions to validate against the output          |
 
 ### Example with Multiple Checks
 
@@ -198,7 +198,7 @@ guardrails:
       guardrail: qualifire
       mode: "during_call"
       api_key: os.environ/QUALIFIRE_API_KEY
-      api_base: os.environ/QUALIFIRE_BASE_URL  # optional
+      api_base: os.environ/QUALIFIRE_BASE_URL # optional
       ### OPTIONAL ###
       # evaluation_id: "eval_abc123"  # Pre-configured evaluation ID
       # prompt_injections: true  # Default if no evaluation_id and no other checks
@@ -213,19 +213,19 @@ guardrails:
 
 ### Parameter Reference
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `api_key` | `str` | `QUALIFIRE_API_KEY` env var | Your Qualifire API key |
-| `api_base` | `str` | `None` | Custom API base URL (optional) |
-| `evaluation_id` | `str` | `None` | Pre-configured evaluation ID from Qualifire dashboard |
-| `prompt_injections` | `bool` | `true` (if no other checks) | Enable prompt injection detection |
-| `hallucinations_check` | `bool` | `None` | Enable hallucination detection |
-| `grounding_check` | `bool` | `None` | Enable grounding verification |
-| `pii_check` | `bool` | `None` | Enable PII detection |
-| `content_moderation_check` | `bool` | `None` | Enable content moderation |
-| `tool_selection_quality_check` | `bool` | `None` | Enable tool selection quality check |
-| `assertions` | `List[str]` | `None` | Custom assertions to validate |
-| `on_flagged` | `str` | `"block"` | Action when content is flagged: `"block"` or `"monitor"` |
+| Parameter                      | Type        | Default                     | Description                                              |
+| ------------------------------ | ----------- | --------------------------- | -------------------------------------------------------- |
+| `api_key`                      | `str`       | `QUALIFIRE_API_KEY` env var | Your Qualifire API key                                   |
+| `api_base`                     | `str`       | `None`                      | Custom API base URL (optional)                           |
+| `evaluation_id`                | `str`       | `None`                      | Pre-configured evaluation ID from Qualifire dashboard    |
+| `prompt_injections`            | `bool`      | `true` (if no other checks) | Enable prompt injection detection                        |
+| `hallucinations_check`         | `bool`      | `None`                      | Enable hallucination detection                           |
+| `grounding_check`              | `bool`      | `None`                      | Enable grounding verification                            |
+| `pii_check`                    | `bool`      | `None`                      | Enable PII detection                                     |
+| `content_moderation_check`     | `bool`      | `None`                      | Enable content moderation                                |
+| `tool_selection_quality_check` | `bool`      | `None`                      | Enable tool selection quality check                      |
+| `assertions`                   | `List[str]` | `None`                      | Custom assertions to validate                            |
+| `on_flagged`                   | `str`       | `"block"`                   | Action when content is flagged: `"block"` or `"monitor"` |
 
 ### Default Behavior
 
@@ -252,9 +252,9 @@ This evaluates whether the LLM selected the appropriate tools and provided corre
 
 ## Environment Variables
 
-| Variable | Description |
-|----------|-------------|
-| `QUALIFIRE_API_KEY` | Your Qualifire API key |
+| Variable             | Description                    |
+| -------------------- | ------------------------------ |
+| `QUALIFIRE_API_KEY`  | Your Qualifire API key         |
 | `QUALIFIRE_BASE_URL` | Custom API base URL (optional) |
 
 ## Links
