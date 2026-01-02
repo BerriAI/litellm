@@ -1,7 +1,12 @@
 """
-GigaChat Chat Completion Handler
+GigaChat Chat Module
 """
 
-from litellm.llms.gigachat.chat.handler import GigaChatChatHandler, gigachat_chat_handler
+from .transformation import GigaChatConfig, gigachat_chat_config
+from .streaming import GigaChatModelResponseIterator
 
-__all__ = ["GigaChatChatHandler", "gigachat_chat_handler"]
+__all__ = [
+    "GigaChatConfig",
+    "gigachat_chat_config",
+    "GigaChatModelResponseIterator",
+]

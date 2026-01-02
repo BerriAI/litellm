@@ -2144,10 +2144,6 @@ def completion(  # type: ignore # noqa: PLR0915
             )
         elif custom_llm_provider == "gigachat":
             # GigaChat - Sber AI's LLM (Russia)
-            from litellm.llms.gigachat.chat.handler import gigachat_chat_handler
-            from litellm.llms.custom_llm import custom_chat_llm_router
-
-            # set API KEY
             api_key = (
                 api_key
                 or litellm.api_key
@@ -2158,37 +2154,36 @@ def completion(  # type: ignore # noqa: PLR0915
 
             headers = headers or litellm.headers or {}
 
-            ## ROUTE LLM CALL ##
-            handler_fn = custom_chat_llm_router(
-                async_fn=acompletion, stream=stream, custom_llm=gigachat_chat_handler
-            )
-
-            ## CALL FUNCTION
-            response = handler_fn(
-                model=model,
-                messages=messages,
-                headers=headers,
-                model_response=model_response,
-                print_verbose=print_verbose,
-                api_key=api_key,
-                api_base=api_base,
-                acompletion=acompletion,
-                logging_obj=logging,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                logger_fn=logger_fn,
-                timeout=timeout,
-                custom_prompt_dict=custom_prompt_dict,
-                client=client,
-                encoding=_get_encoding(),
-            )
-            if stream is True:
-                return CustomStreamWrapper(
-                    completion_stream=response,
+            ## COMPLETION CALL
+            try:
+                response = base_llm_http_handler.completion(
                     model=model,
-                    custom_llm_provider=custom_llm_provider,
+                    messages=messages,
+                    headers=headers,
+                    model_response=model_response,
+                    api_key=api_key,
+                    api_base=api_base,
+                    acompletion=acompletion,
                     logging_obj=logging,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    shared_session=shared_session,
+                    timeout=timeout,
+                    client=client,
+                    custom_llm_provider=custom_llm_provider,
+                    encoding=_get_encoding(),
+                    stream=stream,
+                    provider_config=provider_config,
                 )
+            except Exception as e:
+                ## LOGGING - log the original exception returned
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=str(e),
+                    additional_args={"headers": headers},
+                )
+                raise e
 
         elif custom_llm_provider == "sap":
             headers = headers or litellm.headers
@@ -5259,6 +5254,28 @@ def embedding(  # noqa: PLR0915
             )
         elif custom_llm_provider == "snowflake":
             api_key = api_key or get_secret_str("SNOWFLAKE_JWT")
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params={},
+            )
+        elif custom_llm_provider == "gigachat":
+            api_key = (
+                api_key
+                or litellm.api_key
+                or litellm.gigachat_key
+                or get_secret_str("GIGACHAT_CREDENTIALS")
+                or get_secret_str("GIGACHAT_API_KEY")
+            )
             response = base_llm_http_handler.embedding(
                 model=model,
                 input=input,

@@ -13,6 +13,14 @@ Supports:
 API Documentation: https://developers.sber.ru/docs/ru/gigachat/api/overview
 """
 
-from litellm.llms.gigachat.chat.handler import GigaChatChatHandler, gigachat_chat_handler
+from .chat.transformation import GigaChatConfig, gigachat_chat_config
+from .embedding.transformation import GigaChatEmbeddingConfig, gigachat_embedding_config
+from .common_utils import GigaChatError
 
-__all__ = ["GigaChatChatHandler", "gigachat_chat_handler"]
+__all__ = [
+    "GigaChatConfig",
+    "gigachat_chat_config",
+    "GigaChatEmbeddingConfig",
+    "gigachat_embedding_config",
+    "GigaChatError",
+]

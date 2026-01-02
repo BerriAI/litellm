@@ -26,36 +26,19 @@ GigaChat is Sber AI's large language model, Russia's leading LLM provider.
 
 ## API Key
 
-GigaChat uses OAuth authentication. You can provide credentials in several ways:
+GigaChat uses OAuth authentication. Set your credentials as environment variables:
 
 ```python
-# Option 1: Set credentials as environment variable
+import os
+
+# Required: Set credentials (base64-encoded client_id:client_secret)
 os.environ['GIGACHAT_CREDENTIALS'] = "your-credentials-here"
 
-# Option 2: Set scope (default is GIGACHAT_API_PERS for personal use)
+# Optional: Set scope (default is GIGACHAT_API_PERS for personal use)
 os.environ['GIGACHAT_SCOPE'] = "GIGACHAT_API_PERS"  # or GIGACHAT_API_B2B for business
-
-# Option 3: Disable SSL verification if needed (for corporate networks)
-os.environ['GIGACHAT_VERIFY_SSL_CERTS'] = "False"
 ```
 
-### API Key Formats
-
-LiteLLM supports several API key formats for GigaChat:
-
-```python
-# Standard credentials
-api_key = "your-credentials"
-
-# Credentials with scope
-api_key = "giga-cred-your-credentials:GIGACHAT_API_B2B"
-
-# Pre-obtained JWT token
-api_key = "giga-auth-your-jwt-token"
-
-# Username and password
-api_key = "giga-user-username:password"
-```
+Get your credentials at: https://developers.sber.ru/studio/
 
 ## Sample Usage
 
@@ -156,6 +139,8 @@ print(response)  # Returns JSON: {"name": "John", "age": 30}
 ```
 
 ## Sample Usage - Image Input
+
+GigaChat supports image input via base64 or URL:
 
 ```python
 from litellm import completion
@@ -264,23 +249,13 @@ print(response)
 | gigachat/GigaChat-Max | Maximum capability model |
 | gigachat/GigaChat-2-Max | Latest maximum capability model |
 | gigachat/Embeddings | Text embeddings model |
-| gigachat/Embeddings-2 | Embeddings version 2 |
 
 :::note
 Available models may vary depending on your API access level (personal or business).
-Use `litellm.get_model_list(provider="gigachat")` to get the current list of available models.
 :::
 
 ## Limitations
 
 - Only one function call per request (GigaChat API limitation)
-- Maximum 2 images per message, 10 images total per conversation
-- SSL certificate verification is disabled by default (can be enabled via `GIGACHAT_VERIFY_SSL_CERTS=True`)
-
-## Requirements
-
-Install the GigaChat SDK:
-
-```bash
-pip install gigachat
-```
+- Maximum 1 image per message, 10 images total per conversation
+- GigaChat API uses self-signed SSL certificates (SSL verification is disabled automatically)
