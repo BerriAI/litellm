@@ -381,6 +381,9 @@ class LoggingWorker:
                 except Exception:
                     # Suppress errors during cleanup
                     pass
+                finally:
+                    # Clear reference to prevent memory leaks
+                    task = None
                 self._queue.task_done()  # If you're using join() elsewhere
             except asyncio.QueueEmpty:
                 break
@@ -456,6 +459,9 @@ class LoggingWorker:
                 except Exception:
                     # Silent failure to not break user's program
                     pass
+                finally:
+                    # Clear reference to prevent memory leaks
+                    task = None
 
             self._safe_log("info", f"[LoggingWorker] atexit: Successfully flushed {processed} events!")
 
