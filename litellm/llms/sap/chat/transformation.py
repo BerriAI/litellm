@@ -203,9 +203,13 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         headers: dict,
     ) -> dict:
         supported_params = self.get_supported_openai_params(model)
+        # Include extra params that passed validation (e.g., thinking_config for Gemini models via allowed_openai_params)
+        extra_params = [k for k in optional_params if k not in supported_params and k not in {"tools", "model_version"}]
+        supported_params = supported_params + extra_params
         model_params = {
             k: v for k, v in optional_params.items() if k in supported_params
         }
+
         model_version = optional_params.pop("model_version", "latest")
         template = []
         for message in messages:
