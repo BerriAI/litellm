@@ -99,9 +99,6 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
 from litellm.litellm_core_utils.rules import Rules
-from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
-from litellm.llms.base_llm.search.transformation import BaseSearchConfig
-from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -340,6 +337,9 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.google_genai.transformation import (
         BaseGoogleGenAIGenerateContentConfig,
     )
+    from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
+    from litellm.llms.base_llm.search.transformation import BaseSearchConfig
+    from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
 
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig
@@ -8924,5 +8924,35 @@ def __getattr__(name: str) -> Any:  # noqa: PLR0915
             )
             _globals["BaseGoogleGenAIGenerateContentConfig"] = _BaseGoogleGenAIGenerateContentConfig
         return _globals["BaseGoogleGenAIGenerateContentConfig"]
+    
+    # Lazy load BaseOCRConfig to avoid loading at module import time
+    if name == "BaseOCRConfig":
+        # Check if already cached
+        if "BaseOCRConfig" not in _globals:
+            from litellm.llms.base_llm.ocr.transformation import (
+                BaseOCRConfig as _BaseOCRConfig,
+            )
+            _globals["BaseOCRConfig"] = _BaseOCRConfig
+        return _globals["BaseOCRConfig"]
+    
+    # Lazy load BaseSearchConfig to avoid loading at module import time
+    if name == "BaseSearchConfig":
+        # Check if already cached
+        if "BaseSearchConfig" not in _globals:
+            from litellm.llms.base_llm.search.transformation import (
+                BaseSearchConfig as _BaseSearchConfig,
+            )
+            _globals["BaseSearchConfig"] = _BaseSearchConfig
+        return _globals["BaseSearchConfig"]
+    
+    # Lazy load BaseTextToSpeechConfig to avoid loading at module import time
+    if name == "BaseTextToSpeechConfig":
+        # Check if already cached
+        if "BaseTextToSpeechConfig" not in _globals:
+            from litellm.llms.base_llm.text_to_speech.transformation import (
+                BaseTextToSpeechConfig as _BaseTextToSpeechConfig,
+            )
+            _globals["BaseTextToSpeechConfig"] = _BaseTextToSpeechConfig
+        return _globals["BaseTextToSpeechConfig"]
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
