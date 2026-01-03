@@ -122,6 +122,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "azure_sentinel",
     "gcs_pubsub",
     "agentops",
+    "neatlogs",
     "anthropic_cache_control_hook",
     "generic_api",
     "resend_email",
