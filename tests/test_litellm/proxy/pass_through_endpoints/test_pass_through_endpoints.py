@@ -1886,6 +1886,90 @@ async def test_bedrock_router_passthrough_metadata_initialization():
         assert result == mock_response
 
 
+def test_init_kwargs_preserves_metadata_in_body():
+    """
+    Test that _init_kwargs_for_pass_through_endpoint preserves the metadata field in the request body.
+
+    This test verifies the fix for the bug where the metadata field was being removed (popped)
+    from the request body when it should be preserved for forwarding to target endpoints.
+    Providers like Anthropic need the metadata field for features like prompt caching.
+
+    The fix ensures metadata is copied (using .get()) instead of popped, so it remains
+    in _parsed_body for forwarding while also being available in litellm_params.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        HttpPassThroughEndpointHelpers,
+    )
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        PassthroughStandardLoggingPayload,
+    )
+
+    # Create mock request
+    mock_request = MagicMock(spec=Request)
+    mock_request.headers = Headers({})
+
+    # Create mock user API key dict with all required fields
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_user_api_key_dict.api_key = "test-api-key"
+    mock_user_api_key_dict.key_alias = "test-alias"
+    mock_user_api_key_dict.user_email = "test@example.com"
+    mock_user_api_key_dict.user_id = "test-user-id"
+    mock_user_api_key_dict.team_id = "test-team-id"
+    mock_user_api_key_dict.org_id = "test-org-id"
+    mock_user_api_key_dict.team_alias = "test-team-alias"
+    mock_user_api_key_dict.end_user_id = "test-end-user-id"
+    mock_user_api_key_dict.request_route = "/api/endpoint"
+    mock_user_api_key_dict.spend = 0.0
+    mock_user_api_key_dict.max_budget = None
+    mock_user_api_key_dict.budget_reset_at = None
+    mock_user_api_key_dict.metadata = {}
+
+    # Create passthrough logging payload
+    passthrough_logging_payload = PassthroughStandardLoggingPayload(
+        url="http://example.com/api",
+        request_body={},
+        request_method="POST",
+    )
+
+    # Create mock logging object (without spec to allow setting arbitrary attributes)
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.model_call_details = {}
+
+    # Create request body with metadata (simulating Anthropic request with prompt caching)
+    _parsed_body = {
+        "model": "claude-3-opus-20240229",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {"user_id": "client-user-123", "cache_control": {"type": "ephemeral"}},
+        "max_tokens": 1024,
+    }
+
+    # Store original metadata for comparison
+    original_metadata = _parsed_body["metadata"].copy()
+
+    # Call the method
+    result = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request,
+        user_api_key_dict=mock_user_api_key_dict,
+        passthrough_logging_payload=passthrough_logging_payload,
+        logging_obj=mock_logging_obj,
+        _parsed_body=_parsed_body,
+    )
+
+    # KEY ASSERTION: metadata should still be in _parsed_body after extraction
+    # This is the bug fix - metadata was being popped before, now it's preserved
+    assert "metadata" in _parsed_body, "metadata field should be preserved in _parsed_body for forwarding to target endpoint"
+    assert _parsed_body["metadata"] == original_metadata, "metadata content should be unchanged"
+
+    # Verify other fields are still present
+    assert "model" in _parsed_body
+    assert "messages" in _parsed_body
+    assert "max_tokens" in _parsed_body
+
+
 @pytest.mark.asyncio
 async def test_add_litellm_data_to_request_adds_headers_to_metadata():
     """

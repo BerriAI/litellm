@@ -484,7 +484,12 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         litellm_params_in_body = {}
         for k in all_litellm_params:
             if k in _parsed_body:
-                litellm_params_in_body[k] = _parsed_body.pop(k, None)
+                # For 'metadata' field, copy it instead of popping to preserve it in the request body
+                # This ensures client metadata is forwarded to the target endpoint
+                if k == "metadata":
+                    litellm_params_in_body[k] = _parsed_body.get(k, None)
+                else:
+                    litellm_params_in_body[k] = _parsed_body.pop(k, None)
 
         _metadata = dict(
             StandardLoggingUserAPIKeyMetadata(
