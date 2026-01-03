@@ -2,12 +2,15 @@
 
 import { useSSOSettings, type SSOSettingsValues } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { Badge, Button, Card, Descriptions, Space, Typography } from "antd";
-import { Shield, Trash2 } from "lucide-react";
+import { Button, Card, Descriptions, Space, Typography } from "antd";
+import { Edit, Shield, Trash2 } from "lucide-react";
 import { useState } from "react";
 import AddSSOSettingsModal from "./Modals/AddSSOSettingsModal";
 import DeleteSSOSettingsModal from "./Modals/DeleteSSOSettingsModal";
+import EditSSOSettingsModal from "./Modals/EditSSOSettingsModal";
+import RedactableField from "./RedactableField";
 import SSOSettingsEmptyPlaceholder from "./SSOSettingsEmptyPlaceholder";
+import { ssoProviderDisplayNames, ssoProviderLogoMap } from "./constants";
 
 const { Title, Text } = Typography;
 
@@ -16,6 +19,7 @@ export default function SSOSettings() {
   const { accessToken } = useAuthorized();
   const [isDeleteModalVisible, setIsDeleteModalVisible] = useState(false);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
+  const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const isSSOConfigured =
     Boolean(ssoSettings?.values.google_client_id) ||
     Boolean(ssoSettings?.values.microsoft_client_id) ||
@@ -39,12 +43,6 @@ export default function SSOSettings() {
     }
   }
 
-  const renderRedactedValue = (value?: string | null) => (
-    <span className="font-mono text-gray-600">
-      {value ? "••••••••••••••••••••••••••••••••" : <span className="text-gray-400 italic">Not configured</span>}
-    </span>
-  );
-
   const renderEndpointValue = (value?: string | null) => (
     <span className="font-mono text-gray-600 text-sm break-all">
       {value || <span className="text-gray-400 italic">Not configured</span>}
@@ -67,44 +65,44 @@ export default function SSOSettings() {
 
   const providerConfigs = {
     google: {
-      providerText: "Google OAuth",
+      providerText: ssoProviderDisplayNames.google,
       fields: [
         {
-          label: "Client ID (Redacted)",
-          render: (values: SSOSettingsValues) => renderRedactedValue(values.google_client_id),
+          label: "Client ID",
+          render: (values: SSOSettingsValues) => <RedactableField value={values.google_client_id} />,
         },
         {
-          label: "Client Secret (Redacted)",
-          render: (values: SSOSettingsValues) => renderRedactedValue(values.google_client_secret),
+          label: "Client Secret",
+          render: (values: SSOSettingsValues) => <RedactableField value={values.google_client_secret} />,
         },
         { label: "Proxy Base URL", render: (values: SSOSettingsValues) => renderSimpleValue(values.proxy_base_url) },
       ],
     },
     microsoft: {
-      providerText: "Microsoft OAuth",
+      providerText: ssoProviderDisplayNames.microsoft,
       fields: [
         {
-          label: "Client ID (Redacted)",
-          render: (values: SSOSettingsValues) => renderRedactedValue(values.microsoft_client_id),
+          label: "Client ID",
+          render: (values: SSOSettingsValues) => <RedactableField value={values.microsoft_client_id} />,
         },
         {
-          label: "Client Secret (Redacted)",
-          render: (values: SSOSettingsValues) => renderRedactedValue(values.microsoft_client_secret),
+          label: "Client Secret",
+          render: (values: SSOSettingsValues) => <RedactableField value={values.microsoft_client_secret} />,
         },
         { label: "Tenant", render: (values: any) => renderSimpleValue(values.microsoft_tenant) },
         { label: "Proxy Base URL", render: (values: SSOSettingsValues) => renderSimpleValue(values.proxy_base_url) },
       ],
     },
     okta: {
-      providerText: "Okta/Auth0",
+      providerText: ssoProviderDisplayNames.okta,
       fields: [
         {
-          label: "Client ID (Redacted)",
-          render: (values: SSOSettingsValues) => renderRedactedValue(values.generic_client_id),
+          label: "Client ID",
+          render: (values: SSOSettingsValues) => <RedactableField value={values.generic_client_id} />,
         },
         {
-          label: "Client Secret (Redacted)",
-          render: (values: SSOSettingsValues) => renderRedactedValue(values.generic_client_secret),
+          label: "Client Secret",
+          render: (values: SSOSettingsValues) => <RedactableField value={values.generic_client_secret} />,
         },
         {
           label: "Authorization Endpoint",
@@ -122,15 +120,15 @@ export default function SSOSettings() {
       ],
     },
     generic: {
-      providerText: "Generic OAuth",
+      providerText: ssoProviderDisplayNames.generic,
       fields: [
         {
-          label: "Client ID (Redacted)",
-          render: (values: SSOSettingsValues) => renderRedactedValue(values.generic_client_id),
+          label: "Client ID",
+          render: (values: SSOSettingsValues) => <RedactableField value={values.generic_client_id} />,
         },
         {
-          label: "Client Secret (Redacted)",
-          render: (values: SSOSettingsValues) => renderRedactedValue(values.generic_client_secret),
+          label: "Client Secret",
+          render: (values: SSOSettingsValues) => <RedactableField value={values.generic_client_secret} />,
         },
         {
           label: "Authorization Endpoint",
@@ -160,7 +158,16 @@ export default function SSOSettings() {
     return (
       <Descriptions bordered {...descriptionsConfig}>
         <Descriptions.Item label="Provider">
-          <Badge status="success" text={config.providerText} />
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            {ssoProviderLogoMap[selectedProvider] && (
+              <img
+                src={ssoProviderLogoMap[selectedProvider]}
+                alt={selectedProvider}
+                style={{ height: 24, width: 24, objectFit: "contain" }}
+              />
+            )}
+            <span>{config.providerText}</span>
+          </div>
         </Descriptions.Item>
         {config.fields.map((field, index) => (
           <Descriptions.Item key={index} label={field.label}>
@@ -186,9 +193,14 @@ export default function SSOSettings() {
 
           <div className="flex items-center gap-3">
             {isSSOConfigured && (
-              <Button danger icon={<Trash2 className="w-4 h-4" />} onClick={() => setIsDeleteModalVisible(true)}>
-                Delete SSO Settings
-              </Button>
+              <>
+                <Button icon={<Edit className="w-4 h-4" />} onClick={() => setIsEditModalVisible(true)}>
+                  Edit SSO Settings
+                </Button>
+                <Button danger icon={<Trash2 className="w-4 h-4" />} onClick={() => setIsDeleteModalVisible(true)}>
+                  Delete SSO Settings
+                </Button>
+              </>
             )}
           </div>
         </div>
@@ -214,7 +226,15 @@ export default function SSOSettings() {
           setIsAddModalVisible(false);
           refetch();
         }}
-        accessToken={accessToken}
+      />
+
+      <EditSSOSettingsModal
+        isVisible={isEditModalVisible}
+        onCancel={() => setIsEditModalVisible(false)}
+        onSuccess={() => {
+          setIsEditModalVisible(false);
+          refetch();
+        }}
       />
     </Card>
   );
