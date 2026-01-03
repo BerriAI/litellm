@@ -2,15 +2,15 @@
 
 import { useSSOSettings, type SSOSettingsValues } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { Badge, Button, Card, Descriptions, Space, Typography } from "antd";
-import { Shield, Trash2, Edit } from "lucide-react";
+import { Button, Card, Descriptions, Space, Typography } from "antd";
+import { Edit, Shield, Trash2 } from "lucide-react";
 import { useState } from "react";
 import AddSSOSettingsModal from "./Modals/AddSSOSettingsModal";
 import DeleteSSOSettingsModal from "./Modals/DeleteSSOSettingsModal";
 import EditSSOSettingsModal from "./Modals/EditSSOSettingsModal";
-import SSOSettingsEmptyPlaceholder from "./SSOSettingsEmptyPlaceholder";
 import RedactableField from "./RedactableField";
-import { ssoProviderLogoMap, ssoProviderDisplayNames } from "./constants";
+import SSOSettingsEmptyPlaceholder from "./SSOSettingsEmptyPlaceholder";
+import { ssoProviderDisplayNames, ssoProviderLogoMap } from "./constants";
 
 const { Title, Text } = Typography;
 
