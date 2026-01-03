@@ -99,9 +99,6 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
 from litellm.litellm_core_utils.rules import Rules
-from litellm.llms.base_llm.google_genai.transformation import (
-    BaseGoogleGenAIGenerateContentConfig,
-)
 from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
 from litellm.llms.base_llm.search.transformation import BaseSearchConfig
 from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
@@ -340,6 +337,9 @@ if TYPE_CHECKING:
         redact_message_input_output_from_logging,
     )
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.llms.base_llm.google_genai.transformation import (
+        BaseGoogleGenAIGenerateContentConfig,
+    )
 
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig
@@ -8914,5 +8914,15 @@ def __getattr__(name: str) -> Any:  # noqa: PLR0915
             )
             _globals["CustomStreamWrapper"] = _CustomStreamWrapper
         return _globals["CustomStreamWrapper"]
+    
+    # Lazy load BaseGoogleGenAIGenerateContentConfig to avoid loading at module import time
+    if name == "BaseGoogleGenAIGenerateContentConfig":
+        # Check if already cached
+        if "BaseGoogleGenAIGenerateContentConfig" not in _globals:
+            from litellm.llms.base_llm.google_genai.transformation import (
+                BaseGoogleGenAIGenerateContentConfig as _BaseGoogleGenAIGenerateContentConfig,
+            )
+            _globals["BaseGoogleGenAIGenerateContentConfig"] = _BaseGoogleGenAIGenerateContentConfig
+        return _globals["BaseGoogleGenAIGenerateContentConfig"]
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
