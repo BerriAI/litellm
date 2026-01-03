@@ -7050,6 +7050,7 @@ def _get_base_model_from_metadata(model_call_details=None):
 
         # Also check litellm_metadata (used by Responses API and other generic API calls)
         litellm_metadata = litellm_params.get("litellm_metadata", {})
+        _get_base_model_from_litellm_call_metadata = getattr(sys.modules[__name__], '_get_base_model_from_litellm_call_metadata')
         return _get_base_model_from_litellm_call_metadata(metadata=litellm_metadata)
     return None
 
