@@ -8452,8 +8452,8 @@ def get_end_user_id_for_cost_tracking(
 
     service_type: "litellm_logging" or "prometheus" - used to allow prometheus only disable cost tracking.
     """
+    get_litellm_metadata_from_kwargs = getattr(sys.modules[__name__], 'get_litellm_metadata_from_kwargs')
     _metadata = cast(
-        get_litellm_metadata_from_kwargs = getattr(sys.modules[__name__], 'get_litellm_metadata_from_kwargs')
         dict, get_litellm_metadata_from_kwargs(dict(litellm_params=litellm_params))
     )
 
