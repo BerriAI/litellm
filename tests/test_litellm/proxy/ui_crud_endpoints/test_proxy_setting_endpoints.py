@@ -666,6 +666,113 @@ class TestProxySettingEndpoints:
         assert "UI_LOGO_PATH" in updated_config["environment_variables"]
         assert mock_proxy_config["save_call_count"]() == 1
 
+    def test_update_favicon_url_by_itself(self, mock_proxy_config, mock_auth, monkeypatch):
+        """Test updating favicon_url by itself should successfully save"""
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        new_theme = {"favicon_url": "https://example.com/favicon.ico"}
+
+        response = client.patch("/update/ui_theme_settings", json=new_theme)
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["status"] == "success"
+        assert data["theme_config"]["favicon_url"] == "https://example.com/favicon.ico"
+
+        # Verify config was updated
+        updated_config = mock_proxy_config["config"]
+        assert "UI_FAVICON_PATH" in updated_config["environment_variables"]
+        assert updated_config["environment_variables"]["UI_FAVICON_PATH"] == "https://example.com/favicon.ico"
+        
+        # Verify favicon_url is stored in litellm_settings
+        assert "litellm_settings" in updated_config
+        assert "ui_theme_config" in updated_config["litellm_settings"]
+        assert updated_config["litellm_settings"]["ui_theme_config"]["favicon_url"] == "https://example.com/favicon.ico"
+        
+        assert mock_proxy_config["save_call_count"]() == 1
+
+    def test_update_favicon_url_with_existing_logo_url(self, mock_proxy_config, mock_auth, monkeypatch):
+        """Test updating favicon_url when logo_url exists should not modify logo_url"""
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        # First, set up an existing logo_url
+        initial_config = mock_proxy_config["config"]
+        if "litellm_settings" not in initial_config:
+            initial_config["litellm_settings"] = {}
+        if "ui_theme_config" not in initial_config["litellm_settings"]:
+            initial_config["litellm_settings"]["ui_theme_config"] = {}
+        
+        initial_config["litellm_settings"]["ui_theme_config"]["logo_url"] = "https://example.com/existing-logo.png"
+        initial_config["environment_variables"]["UI_LOGO_PATH"] = "https://example.com/existing-logo.png"
+
+        # Now update only favicon_url
+        new_theme = {"favicon_url": "https://example.com/new-favicon.ico"}
+
+        response = client.patch("/update/ui_theme_settings", json=new_theme)
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["status"] == "success"
+        assert data["theme_config"]["favicon_url"] == "https://example.com/new-favicon.ico"
+        # Verify logo_url is still present and unchanged
+        assert data["theme_config"]["logo_url"] == "https://example.com/existing-logo.png"
+
+        # Verify both are in config
+        updated_config = mock_proxy_config["config"]
+        assert "UI_FAVICON_PATH" in updated_config["environment_variables"]
+        assert updated_config["environment_variables"]["UI_FAVICON_PATH"] == "https://example.com/new-favicon.ico"
+        assert "UI_LOGO_PATH" in updated_config["environment_variables"]
+        assert updated_config["environment_variables"]["UI_LOGO_PATH"] == "https://example.com/existing-logo.png"
+        
+        # Verify both are in litellm_settings
+        assert updated_config["litellm_settings"]["ui_theme_config"]["favicon_url"] == "https://example.com/new-favicon.ico"
+        assert updated_config["litellm_settings"]["ui_theme_config"]["logo_url"] == "https://example.com/existing-logo.png"
+
+    def test_remove_favicon_url_with_existing_logo_url(self, mock_proxy_config, mock_auth, monkeypatch):
+        """Test removing favicon_url should not modify logo_url"""
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        # First, set up both logo_url and favicon_url
+        initial_config = mock_proxy_config["config"]
+        if "litellm_settings" not in initial_config:
+            initial_config["litellm_settings"] = {}
+        if "ui_theme_config" not in initial_config["litellm_settings"]:
+            initial_config["litellm_settings"]["ui_theme_config"] = {}
+        
+        initial_config["litellm_settings"]["ui_theme_config"]["logo_url"] = "https://example.com/existing-logo.png"
+        initial_config["litellm_settings"]["ui_theme_config"]["favicon_url"] = "https://example.com/existing-favicon.ico"
+        initial_config["environment_variables"]["UI_LOGO_PATH"] = "https://example.com/existing-logo.png"
+        initial_config["environment_variables"]["UI_FAVICON_PATH"] = "https://example.com/existing-favicon.ico"
+
+        # Now remove favicon_url by setting it to null
+        new_theme = {"favicon_url": None}
+
+        response = client.patch("/update/ui_theme_settings", json=new_theme)
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["status"] == "success"
+        # Verify favicon_url is removed
+        assert "favicon_url" not in data["theme_config"]
+        # Verify logo_url is still present and unchanged
+        assert data["theme_config"]["logo_url"] == "https://example.com/existing-logo.png"
+
+        # Verify favicon_url is removed from config but logo_url remains
+        updated_config = mock_proxy_config["config"]
+        assert "UI_FAVICON_PATH" not in updated_config.get("environment_variables", {})
+        assert "UI_LOGO_PATH" in updated_config["environment_variables"]
+        assert updated_config["environment_variables"]["UI_LOGO_PATH"] == "https://example.com/existing-logo.png"
+        
+        # Verify favicon_url is removed from litellm_settings but logo_url remains
+        assert "favicon_url" not in updated_config["litellm_settings"]["ui_theme_config"]
+        assert updated_config["litellm_settings"]["ui_theme_config"]["logo_url"] == "https://example.com/existing-logo.png"
+
     def test_get_ui_settings(self, mock_auth, monkeypatch):
         """Test retrieving UI settings with allowlist sanitization"""
         from unittest.mock import AsyncMock, MagicMock

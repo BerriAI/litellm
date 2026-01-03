@@ -8982,7 +8982,7 @@ async def invitation_info(
     invitation_id: str, user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)
 ):
     """
-    Allow admin to create invite links, to onboard new users to Admin UI.
+    Allow admin to create invite links, to onboard new users to Admin UI
 
     ```
     curl -X POST 'http://localhost:4000/invitation/new' \
