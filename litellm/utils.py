@@ -340,7 +340,6 @@ if TYPE_CHECKING:
     from litellm.llms.bedrock.common_utils import BedrockModelInfo
     from litellm.llms.cohere.common_utils import CohereModelInfo
     from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
-    from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig
