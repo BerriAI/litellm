@@ -5,7 +5,11 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Required, TypedDict
 
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk, ChatCompletionToolParam
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionToolCallChunk,
+    ChatCompletionToolParam,
+)
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionToolCallChunk,
@@ -22,6 +26,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolPermissionGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
+    QualifireGuardrailConfigModel,
 )
 
 """
@@ -67,6 +74,7 @@ class SupportedGuardrailIntegrations(Enum):
     ONYX = "onyx"
     PROMPT_SECURITY = "prompt_security"
     GENERIC_GUARDRAIL_API = "generic_guardrail_api"
+    QUALIFIRE = "qualifire"
 
 
 class Role(Enum):
@@ -302,9 +310,7 @@ class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
             "'output' runs on model → user traffic, and 'both' applies to both."
         ),
     )
-    presidio_score_thresholds: Optional[
-        Dict[Union[PiiEntityType, str], float]
-    ] = Field(
+    presidio_score_thresholds: Optional[Dict[Union[PiiEntityType, str], float]] = Field(
         default=None,
         description=(
             "Optional per-entity minimum confidence scores for Presidio detections. "
@@ -665,6 +671,7 @@ class LitellmParams(
     BaseLitellmParams,
     EnkryptAIGuardrailConfigs,
     IBMGuardrailsBaseConfigModel,
+    QualifireGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(
