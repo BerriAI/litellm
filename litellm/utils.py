@@ -945,6 +945,7 @@ def function_setup(  # noqa: PLR0915
             elif kwargs.get("messages", None):
                 messages = kwargs["messages"]
             ### PRE-CALL RULES ###
+            Rules = getattr(sys.modules[__name__], 'Rules')
             if (
                 Rules.has_pre_call_rules()
                 and isinstance(messages, list)
@@ -1345,6 +1346,7 @@ def post_call_processing(
 
 
 def client(original_function):  # noqa: PLR0915
+    Rules = getattr(sys.modules[__name__], 'Rules')
     rules_obj = Rules()
 
     @wraps(original_function)
@@ -1907,6 +1909,7 @@ def client(original_function):  # noqa: PLR0915
             setattr(e, "timeout", timeout)
             raise e
 
+    get_coroutine_checker = getattr(sys.modules[__name__], 'get_coroutine_checker')
     is_coroutine = get_coroutine_checker().is_async_callable(original_function)
 
     # Return the appropriate wrapper based on the original function type
