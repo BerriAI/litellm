@@ -27,7 +27,14 @@ export interface SSOSettingsValues {
   proxy_base_url: string | null;
   user_email: string | null;
   ui_access_mode: string | null;
-  role_mappings: string | null;
+  role_mappings: {
+    provider: string;
+    group_claim: string;
+    default_role: "internal_user" | "internal_user_viewer" | "proxy_admin" | "proxy_admin_viewer";
+    roles: {
+      [key: string]: string[];
+    };
+  };
 }
 
 export interface SSOSettingsResponse {
