@@ -1007,3 +1007,232 @@ def test_multiple_tool_calls_in_single_choice():
     assert tool_calls[2]["function"]["name"] == "get_horoscope"
 
     print("✓ Multiple tool calls are correctly grouped in a single choice")
+
+
+def test_transform_response_preserves_annotations():
+    """
+    Test that transform_response preserves annotations from Responses API output.
+
+    This is a regression test for issue #18378 where annotations/citations were
+    stripped when bridging Responses API to Chat Completions format.
+
+    OpenAI Responses API returns URL citations as annotations on output_text blocks,
+    and these should be preserved in the Chat Completion message.
+    """
+    from unittest.mock import Mock
+
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+    from openai.types.responses.response_output_text import AnnotationURLCitation
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import (
+        InputTokensDetails,
+        OutputTokensDetails,
+        ResponseAPIUsage,
+        ResponsesAPIResponse,
+    )
+    from litellm.types.utils import ModelResponse, Usage
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Create annotation with URL citation
+    annotation = AnnotationURLCitation(
+        type="url_citation",
+        start_index=0,
+        end_index=50,
+        url="https://www.example.org/article",
+        title="Example Article Title",
+    )
+
+    # Create output text with annotations
+    output_text = ResponseOutputText(
+        annotations=[annotation],
+        text="According to the article, the answer is 42.",
+        type="output_text",
+        logprobs=[],
+    )
+
+    # Create output message
+    output_message = ResponseOutputMessage(
+        id="msg_test",
+        content=[output_text],
+        role="assistant",
+        status="completed",
+        type="message",
+    )
+
+    # Create usage
+    usage = ResponseAPIUsage(
+        input_tokens=20,
+        input_tokens_details=InputTokensDetails(cached_tokens=0),
+        output_tokens=30,
+        output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
+        total_tokens=50,
+    )
+
+    # Create ResponsesAPIResponse
+    raw_response = ResponsesAPIResponse(
+        id="resp_test_annotations",
+        created_at=1234567890,
+        error=None,
+        incomplete_details=None,
+        instructions=None,
+        metadata={},
+        model="gpt-5.1",
+        object="response",
+        output=[output_message],
+        parallel_tool_calls=True,
+        temperature=1.0,
+        tool_choice="auto",
+        tools=[],
+        top_p=1.0,
+        max_output_tokens=None,
+        previous_response_id=None,
+        reasoning=None,
+        status="completed",
+        text=None,
+        truncation="disabled",
+        usage=usage,
+        user=None,
+        store=True,
+        background=False,
+    )
+
+    model_response = ModelResponse(
+        id="chatcmpl-test",
+        created=1234567890,
+        model=None,
+        object="chat.completion",
+        choices=[],
+        usage=Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
+    )
+
+    logging_obj = Mock()
+
+    result = handler.transform_response(
+        model="gpt-5.1",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=logging_obj,
+        request_data={"model": "gpt-5.1"},
+        messages=[{"role": "user", "content": "Search for the answer"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    # Verify the response has the content
+    assert len(result.choices) == 1
+    choice = result.choices[0]
+    assert choice.message.content == "According to the article, the answer is 42."
+
+    # Verify annotations are preserved
+    annotations = choice.message.annotations
+    assert annotations is not None, "annotations should not be None"
+    assert len(annotations) == 1, f"Expected 1 annotation, got {len(annotations)}"
+
+    ann = annotations[0]
+    assert ann["type"] == "url_citation"
+    assert ann["start_index"] == 0
+    assert ann["end_index"] == 50
+    assert ann["url"] == "https://www.example.org/article"
+    assert ann["title"] == "Example Article Title"
+
+    print("✓ Annotations are correctly preserved when bridging Responses -> Chat Completion")
+
+
+def test_transform_response_handles_dict_annotations():
+    """
+    Test that transform_response handles annotations that are already dicts.
+    """
+    from unittest.mock import Mock
+
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import (
+        InputTokensDetails,
+        OutputTokensDetails,
+        ResponseAPIUsage,
+        ResponsesAPIResponse,
+    )
+    from litellm.types.utils import ModelResponse, Usage
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Create output text with dict annotations (as might come from raw API response)
+    output_text = ResponseOutputText(
+        annotations=[
+            {
+                "type": "url_citation",
+                "start_index": 10,
+                "end_index": 100,
+                "url": "https://example.com",
+                "title": "Test",
+            }
+        ],
+        text="Some text with citation.",
+        type="output_text",
+        logprobs=[],
+    )
+
+    output_message = ResponseOutputMessage(
+        id="msg_dict_test",
+        content=[output_text],
+        role="assistant",
+        status="completed",
+        type="message",
+    )
+
+    usage = ResponseAPIUsage(
+        input_tokens=10,
+        input_tokens_details=InputTokensDetails(cached_tokens=0),
+        output_tokens=20,
+        output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
+        total_tokens=30,
+    )
+
+    raw_response = ResponsesAPIResponse(
+        id="resp_dict_test",
+        created_at=1234567890,
+        error=None,
+        model="gpt-5.1",
+        object="response",
+        output=[output_message],
+        usage=usage,
+        status="completed",
+    )
+
+    model_response = ModelResponse(
+        id="chatcmpl-dict-test",
+        created=1234567890,
+        model=None,
+        object="chat.completion",
+        choices=[],
+        usage=Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
+    )
+
+    result = handler.transform_response(
+        model="gpt-5.1",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=Mock(),
+        request_data={"model": "gpt-5.1"},
+        messages=[{"role": "user", "content": "test"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    # Verify annotations are preserved
+    annotations = result.choices[0].message.annotations
+    assert annotations is not None
+    assert len(annotations) == 1
+    assert annotations[0]["type"] == "url_citation"
+    assert annotations[0]["url"] == "https://example.com"
+
+    print("✓ Dict annotations are correctly handled")
