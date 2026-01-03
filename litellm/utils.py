@@ -1163,6 +1163,8 @@ def _get_wrapper_num_retries(
     if num_retries is None:
         num_retries = litellm.num_retries
     if kwargs.get("retry_policy", None):
+        get_num_retries_from_retry_policy = getattr(sys.modules[__name__], 'get_num_retries_from_retry_policy')
+        reset_retry_policy = getattr(sys.modules[__name__], 'reset_retry_policy')
         retry_policy_num_retries = get_num_retries_from_retry_policy(
             exception=exception,
             retry_policy=kwargs.get("retry_policy"),
@@ -1534,6 +1536,7 @@ def client(original_function):  # noqa: PLR0915
                     )
                 else:
                     # RETURN RESULT
+                    update_response_metadata = getattr(sys.modules[__name__], 'update_response_metadata')
                     update_response_metadata(
                         result=result,
                         logging_obj=logging_obj,
@@ -1577,6 +1580,7 @@ def client(original_function):  # noqa: PLR0915
             # Copy the current context to propagate it to the background thread
             # This is essential for OpenTelemetry span context propagation
             ctx = contextvars.copy_context()
+            executor = getattr(sys.modules[__name__], 'executor')
             executor.submit(
                 ctx.run,
                 logging_obj.success_handler,
@@ -1585,6 +1589,7 @@ def client(original_function):  # noqa: PLR0915
                 end_time,
             )
             # RETURN RESULT
+            update_response_metadata = getattr(sys.modules[__name__], 'update_response_metadata')
             update_response_metadata(
                 result=result,
                 logging_obj=logging_obj,
@@ -1601,6 +1606,8 @@ def client(original_function):  # noqa: PLR0915
                     kwargs.get("num_retries", None) or litellm.num_retries or None
                 )
                 if kwargs.get("retry_policy", None):
+                    get_num_retries_from_retry_policy = getattr(sys.modules[__name__], 'get_num_retries_from_retry_policy')
+                    reset_retry_policy = getattr(sys.modules[__name__], 'reset_retry_policy')
                     num_retries = get_num_retries_from_retry_policy(
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
@@ -1772,6 +1779,7 @@ def client(original_function):  # noqa: PLR0915
                         chunks, messages=kwargs.get("messages", None)
                     )
                 else:
+                    update_response_metadata = getattr(sys.modules[__name__], 'update_response_metadata')
                     update_response_metadata(
                         result=result,
                         logging_obj=logging_obj,
@@ -1836,6 +1844,7 @@ def client(original_function):  # noqa: PLR0915
                     end_time=end_time,
                 )
 
+            update_response_metadata = getattr(sys.modules[__name__], 'update_response_metadata')
             update_response_metadata(
                 result=result,
                 logging_obj=logging_obj,
@@ -4455,6 +4464,8 @@ def get_optional_params(  # noqa: PLR0915
 
     # Apply nested drops from additional_drop_params
     if additional_drop_params:
+        is_nested_path = getattr(sys.modules[__name__], 'is_nested_path')
+        delete_nested_value = getattr(sys.modules[__name__], 'delete_nested_value')
         nested_paths = [p for p in additional_drop_params if is_nested_path(p)]
         for path in nested_paths:
             optional_params = delete_nested_value(optional_params, path)
@@ -4504,6 +4515,7 @@ def add_provider_specific_params_to_optional_params(
             else:
                 processed_extra_body = initial_extra_body
 
+            _ensure_extra_body_is_safe = getattr(sys.modules[__name__], '_ensure_extra_body_is_safe')
             optional_params["extra_body"] = _ensure_extra_body_is_safe(
                 extra_body=processed_extra_body
             )
