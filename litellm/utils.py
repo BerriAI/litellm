@@ -91,33 +91,12 @@ from litellm.litellm_core_utils.get_litellm_params import (
     _get_base_model_from_litellm_call_metadata,
     get_litellm_params,
 )
-from litellm.litellm_core_utils.get_llm_provider_logic import (
-    _is_non_openai_azure_model,
-    get_llm_provider,
-)
-from litellm.litellm_core_utils.get_supported_openai_params import (
-    get_supported_openai_params,
-)
 from litellm.litellm_core_utils.llm_request_utils import _ensure_extra_body_is_safe
-from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-    LiteLLMResponseObjectHandler,
-    _handle_invalid_parallel_tool_calls,
-    convert_to_model_response_object,
-    convert_to_streaming_response,
-    convert_to_streaming_response_async,
-)
-from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.llm_response_utils.get_formatted_prompt import (
     get_formatted_prompt,
 )
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
-)
-from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
-    ResponseMetadata,
-)
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    _parse_content_for_reasoning,
 )
 from litellm.litellm_core_utils.redact_messages import (
     LiteLLMLoggingObject,
@@ -2262,6 +2241,7 @@ def supports_response_schema(
     """
     ## GET LLM PROVIDER ##
     try:
+        get_llm_provider = getattr(sys.modules[__name__], 'get_llm_provider')
         model, custom_llm_provider, _, _ = get_llm_provider(
             model=model, custom_llm_provider=custom_llm_provider
         )
@@ -2959,6 +2939,9 @@ def get_optional_params_embeddings(  # noqa: PLR0915
     additional_drop_params: Optional[List[str]] = None,
     **kwargs,
 ):
+    # Lazy load get_supported_openai_params
+    get_supported_openai_params = getattr(sys.modules[__name__], 'get_supported_openai_params')
+    
     # retrieve all parameters passed to the function
     passed_params = locals()
     custom_llm_provider = passed_params.pop("custom_llm_provider", None)
@@ -3761,6 +3744,7 @@ def get_optional_params(  # noqa: PLR0915
                     message=f"{custom_llm_provider} does not support parameters: {list(unsupported_params.keys())}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n. \n If you want to use these params dynamically send allowed_openai_params={list(unsupported_params.keys())} in your request.",
                 )
 
+    get_supported_openai_params = getattr(sys.modules[__name__], 'get_supported_openai_params')
     supported_params = get_supported_openai_params(
         model=model, custom_llm_provider=custom_llm_provider
     )
@@ -4898,6 +4882,7 @@ def get_max_tokens(model: str) -> Optional[int]:
                 return litellm.model_cost[model]["max_output_tokens"]
             elif "max_tokens" in litellm.model_cost[model]:
                 return litellm.model_cost[model]["max_tokens"]
+        get_llm_provider = getattr(sys.modules[__name__], 'get_llm_provider')
         model, custom_llm_provider, _, _ = get_llm_provider(model=model)
         if custom_llm_provider == "huggingface":
             max_tokens = _get_max_position_embeddings(model_name=model)
@@ -5018,6 +5003,7 @@ def _get_potential_model_names(
     if custom_llm_provider is None:
         # Get custom_llm_provider
         try:
+            get_llm_provider = getattr(sys.modules[__name__], 'get_llm_provider')
             split_model, custom_llm_provider, _, _ = get_llm_provider(model=model)
         except Exception:
             split_model = model
@@ -5740,6 +5726,7 @@ def validate_environment(  # noqa: PLR0915
         }
     ## EXTRACT LLM PROVIDER - if model name provided
     try:
+        get_llm_provider = getattr(sys.modules[__name__], 'get_llm_provider')
         _, custom_llm_provider, _, _ = get_llm_provider(model=model)
     except Exception:
         custom_llm_provider = None
@@ -6302,6 +6289,7 @@ def register_prompt_template(
     complete_model = model
     potential_models = [complete_model]
     try:
+        get_llm_provider = getattr(sys.modules[__name__], 'get_llm_provider')
         model = get_llm_provider(model=model)[0]
         potential_models.append(model)
     except Exception:
@@ -6387,6 +6375,7 @@ class TextCompletionStreamWrapper:
         except StopIteration:
             raise StopIteration
         except Exception as e:
+            exception_type = getattr(sys.modules[__name__], 'exception_type')
             raise exception_type(
                 model=self.model,
                 custom_llm_provider=self.custom_llm_provider or "",
@@ -8767,5 +8756,110 @@ def __getattr__(name: str) -> Any:
             )
             _globals["_get_response_headers"] = __get_response_headers
         return _globals["_get_response_headers"]
+    
+    # Lazy load get_llm_provider_logic functions to avoid loading at module import time
+    if name == "get_llm_provider":
+        # Check if already cached
+        if "get_llm_provider" not in _globals:
+            from litellm.litellm_core_utils.get_llm_provider_logic import (
+                get_llm_provider as _get_llm_provider,
+            )
+            _globals["get_llm_provider"] = _get_llm_provider
+        return _globals["get_llm_provider"]
+    
+    if name == "_is_non_openai_azure_model":
+        # Check if already cached
+        if "_is_non_openai_azure_model" not in _globals:
+            from litellm.litellm_core_utils.get_llm_provider_logic import (
+                _is_non_openai_azure_model as __is_non_openai_azure_model,
+            )
+            _globals["_is_non_openai_azure_model"] = __is_non_openai_azure_model
+        return _globals["_is_non_openai_azure_model"]
+    
+    # Lazy load get_supported_openai_params to avoid loading at module import time
+    if name == "get_supported_openai_params":
+        # Check if already cached
+        if "get_supported_openai_params" not in _globals:
+            from litellm.litellm_core_utils.get_supported_openai_params import (
+                get_supported_openai_params as _get_supported_openai_params,
+            )
+            _globals["get_supported_openai_params"] = _get_supported_openai_params
+        return _globals["get_supported_openai_params"]
+    
+    # Lazy load convert_dict_to_response functions to avoid loading at module import time
+    if name == "LiteLLMResponseObjectHandler":
+        # Check if already cached
+        if "LiteLLMResponseObjectHandler" not in _globals:
+            from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+                LiteLLMResponseObjectHandler as _LiteLLMResponseObjectHandler,
+            )
+            _globals["LiteLLMResponseObjectHandler"] = _LiteLLMResponseObjectHandler
+        return _globals["LiteLLMResponseObjectHandler"]
+    
+    if name == "_handle_invalid_parallel_tool_calls":
+        # Check if already cached
+        if "_handle_invalid_parallel_tool_calls" not in _globals:
+            from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+                _handle_invalid_parallel_tool_calls as __handle_invalid_parallel_tool_calls,
+            )
+            _globals["_handle_invalid_parallel_tool_calls"] = __handle_invalid_parallel_tool_calls
+        return _globals["_handle_invalid_parallel_tool_calls"]
+    
+    if name == "convert_to_model_response_object":
+        # Check if already cached
+        if "convert_to_model_response_object" not in _globals:
+            from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+                convert_to_model_response_object as _convert_to_model_response_object,
+            )
+            _globals["convert_to_model_response_object"] = _convert_to_model_response_object
+        return _globals["convert_to_model_response_object"]
+    
+    if name == "convert_to_streaming_response":
+        # Check if already cached
+        if "convert_to_streaming_response" not in _globals:
+            from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+                convert_to_streaming_response as _convert_to_streaming_response,
+            )
+            _globals["convert_to_streaming_response"] = _convert_to_streaming_response
+        return _globals["convert_to_streaming_response"]
+    
+    if name == "convert_to_streaming_response_async":
+        # Check if already cached
+        if "convert_to_streaming_response_async" not in _globals:
+            from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+                convert_to_streaming_response_async as _convert_to_streaming_response_async,
+            )
+            _globals["convert_to_streaming_response_async"] = _convert_to_streaming_response_async
+        return _globals["convert_to_streaming_response_async"]
+    
+    # Lazy load get_api_base to avoid loading at module import time
+    if name == "get_api_base":
+        # Check if already cached
+        if "get_api_base" not in _globals:
+            from litellm.litellm_core_utils.llm_response_utils.get_api_base import (
+                get_api_base as _get_api_base,
+            )
+            _globals["get_api_base"] = _get_api_base
+        return _globals["get_api_base"]
+    
+    # Lazy load ResponseMetadata to avoid loading at module import time
+    if name == "ResponseMetadata":
+        # Check if already cached
+        if "ResponseMetadata" not in _globals:
+            from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+                ResponseMetadata as _ResponseMetadata,
+            )
+            _globals["ResponseMetadata"] = _ResponseMetadata
+        return _globals["ResponseMetadata"]
+    
+    # Lazy load _parse_content_for_reasoning to avoid loading at module import time
+    if name == "_parse_content_for_reasoning":
+        # Check if already cached
+        if "_parse_content_for_reasoning" not in _globals:
+            from litellm.litellm_core_utils.prompt_templates.common_utils import (
+                _parse_content_for_reasoning as __parse_content_for_reasoning,
+            )
+            _globals["_parse_content_for_reasoning"] = __parse_content_for_reasoning
+        return _globals["_parse_content_for_reasoning"]
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
