@@ -55,6 +55,7 @@ import {
   getSSOSettings,
 } from "./networking";
 import UISettings from "./Settings/AdminSettings/UISettings/UISettings";
+import SSOSettings from "./Settings/AdminSettings/SSOSettings/SSOSettings";
 
 const AdminPanel: React.FC<AdminPanelProps> = ({
   searchParams,
@@ -496,11 +497,15 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
       <Paragraph>Go to &apos;Internal Users&apos; page to add other admins.</Paragraph>
       <TabGroup>
         <TabList>
+          <Tab>SSO Settings</Tab>
           <Tab>Security Settings</Tab>
           <Tab>SCIM</Tab>
           <Tab>UI Settings</Tab>
         </TabList>
         <TabPanels>
+          <TabPanel>
+            <SSOSettings />
+          </TabPanel>
           <TabPanel>
             <Card>
               <Title level={4}> ✨ Security Settings</Title>
