@@ -1078,6 +1078,7 @@ def function_setup(  # noqa: PLR0915
             call_type=call_type,
         ):
             stream = True
+        get_litellm_logging_class = getattr(sys.modules[__name__], 'get_litellm_logging_class')
         logging_obj = get_litellm_logging_class()(  # Victim for object pool
             model=model,  # type: ignore
             messages=messages,
