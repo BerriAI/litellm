@@ -98,22 +98,8 @@ from litellm.litellm_core_utils.llm_response_utils.get_formatted_prompt import (
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
-from litellm.litellm_core_utils.redact_messages import (
-    LiteLLMLoggingObject,
-    redact_message_input_output_from_logging,
-)
 from litellm.litellm_core_utils.rules import Rules
-from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-from litellm.llms.base_llm.google_genai.transformation import (
-    BaseGoogleGenAIGenerateContentConfig,
-)
-from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
-from litellm.llms.base_llm.search.transformation import BaseSearchConfig
-from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
-from litellm.llms.bedrock.common_utils import BedrockModelInfo
-from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 from litellm.router_utils.get_retry_from_policy import (
     get_num_retries_from_retry_policy,
     reset_retry_policy,
@@ -340,6 +326,20 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
         _parse_content_for_reasoning,
     )
+    from litellm.litellm_core_utils.redact_messages import (
+        LiteLLMLoggingObject,
+        redact_message_input_output_from_logging,
+    )
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.llms.base_llm.google_genai.transformation import (
+        BaseGoogleGenAIGenerateContentConfig,
+    )
+    from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
+    from litellm.llms.base_llm.search.transformation import BaseSearchConfig
+    from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+    from litellm.llms.cohere.common_utils import CohereModelInfo
+    from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig
@@ -4023,6 +4023,7 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "bedrock":
+        BedrockModelInfo = getattr(sys.modules[__name__], 'BedrockModelInfo')
         bedrock_route = BedrockModelInfo.get_bedrock_route(model)
         bedrock_base_model = BedrockModelInfo.get_base_model(model)
         if bedrock_route == "converse" or bedrock_route == "converse_like":
@@ -7440,6 +7441,7 @@ class ProviderConfigManager:
             litellm.LlmProviders.COHERE_CHAT == provider
             or litellm.LlmProviders.COHERE == provider
         ):
+            CohereModelInfo = getattr(sys.modules[__name__], 'CohereModelInfo')
             route = CohereModelInfo.get_cohere_route(model)
             if route == "v2":
                 return litellm.CohereV2ChatConfig()
@@ -8290,6 +8292,7 @@ class ProviderConfigManager:
 
             return get_vertex_ai_ocr_config(model=model)
         
+        MistralOCRConfig = getattr(sys.modules[__name__], 'MistralOCRConfig')
         PROVIDER_TO_CONFIG_MAP = {
             litellm.LlmProviders.MISTRAL: MistralOCRConfig,
         }
@@ -8885,5 +8888,104 @@ def __getattr__(name: str) -> Any:  # noqa: PLR0915
             )
             _globals["_parse_content_for_reasoning"] = __parse_content_for_reasoning
         return _globals["_parse_content_for_reasoning"]
+    
+    # Lazy load redact_messages to avoid loading at module import time
+    if name == "LiteLLMLoggingObject":
+        # Check if already cached
+        if "LiteLLMLoggingObject" not in _globals:
+            from litellm.litellm_core_utils.redact_messages import (
+                LiteLLMLoggingObject as _LiteLLMLoggingObject,
+            )
+            _globals["LiteLLMLoggingObject"] = _LiteLLMLoggingObject
+        return _globals["LiteLLMLoggingObject"]
+    
+    if name == "redact_message_input_output_from_logging":
+        # Check if already cached
+        if "redact_message_input_output_from_logging" not in _globals:
+            from litellm.litellm_core_utils.redact_messages import (
+                redact_message_input_output_from_logging as _redact_message_input_output_from_logging,
+            )
+            _globals["redact_message_input_output_from_logging"] = _redact_message_input_output_from_logging
+        return _globals["redact_message_input_output_from_logging"]
+    
+    # Lazy load CustomStreamWrapper to avoid loading at module import time
+    if name == "CustomStreamWrapper":
+        # Check if already cached
+        if "CustomStreamWrapper" not in _globals:
+            from litellm.litellm_core_utils.streaming_handler import (
+                CustomStreamWrapper as _CustomStreamWrapper,
+            )
+            _globals["CustomStreamWrapper"] = _CustomStreamWrapper
+        return _globals["CustomStreamWrapper"]
+    
+    # Lazy load BaseGoogleGenAIGenerateContentConfig to avoid loading at module import time
+    if name == "BaseGoogleGenAIGenerateContentConfig":
+        # Check if already cached
+        if "BaseGoogleGenAIGenerateContentConfig" not in _globals:
+            from litellm.llms.base_llm.google_genai.transformation import (
+                BaseGoogleGenAIGenerateContentConfig as _BaseGoogleGenAIGenerateContentConfig,
+            )
+            _globals["BaseGoogleGenAIGenerateContentConfig"] = _BaseGoogleGenAIGenerateContentConfig
+        return _globals["BaseGoogleGenAIGenerateContentConfig"]
+    
+    # Lazy load BaseOCRConfig to avoid loading at module import time
+    if name == "BaseOCRConfig":
+        # Check if already cached
+        if "BaseOCRConfig" not in _globals:
+            from litellm.llms.base_llm.ocr.transformation import (
+                BaseOCRConfig as _BaseOCRConfig,
+            )
+            _globals["BaseOCRConfig"] = _BaseOCRConfig
+        return _globals["BaseOCRConfig"]
+    
+    # Lazy load BaseSearchConfig to avoid loading at module import time
+    if name == "BaseSearchConfig":
+        # Check if already cached
+        if "BaseSearchConfig" not in _globals:
+            from litellm.llms.base_llm.search.transformation import (
+                BaseSearchConfig as _BaseSearchConfig,
+            )
+            _globals["BaseSearchConfig"] = _BaseSearchConfig
+        return _globals["BaseSearchConfig"]
+    
+    # Lazy load BaseTextToSpeechConfig to avoid loading at module import time
+    if name == "BaseTextToSpeechConfig":
+        # Check if already cached
+        if "BaseTextToSpeechConfig" not in _globals:
+            from litellm.llms.base_llm.text_to_speech.transformation import (
+                BaseTextToSpeechConfig as _BaseTextToSpeechConfig,
+            )
+            _globals["BaseTextToSpeechConfig"] = _BaseTextToSpeechConfig
+        return _globals["BaseTextToSpeechConfig"]
+    
+    # Lazy load BedrockModelInfo to avoid loading at module import time
+    if name == "BedrockModelInfo":
+        # Check if already cached
+        if "BedrockModelInfo" not in _globals:
+            from litellm.llms.bedrock.common_utils import (
+                BedrockModelInfo as _BedrockModelInfo,
+            )
+            _globals["BedrockModelInfo"] = _BedrockModelInfo
+        return _globals["BedrockModelInfo"]
+    
+    # Lazy load CohereModelInfo to avoid loading at module import time
+    if name == "CohereModelInfo":
+        # Check if already cached
+        if "CohereModelInfo" not in _globals:
+            from litellm.llms.cohere.common_utils import (
+                CohereModelInfo as _CohereModelInfo,
+            )
+            _globals["CohereModelInfo"] = _CohereModelInfo
+        return _globals["CohereModelInfo"]
+    
+    # Lazy load MistralOCRConfig to avoid loading at module import time
+    if name == "MistralOCRConfig":
+        # Check if already cached
+        if "MistralOCRConfig" not in _globals:
+            from litellm.llms.mistral.ocr.transformation import (
+                MistralOCRConfig as _MistralOCRConfig,
+            )
+            _globals["MistralOCRConfig"] = _MistralOCRConfig
+        return _globals["MistralOCRConfig"]
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
