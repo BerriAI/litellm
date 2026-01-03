@@ -17,7 +17,7 @@ describe("AddSSOSettingsModal", () => {
     const onCancel = vi.fn();
     const onSuccess = vi.fn();
 
-    render(<AddSSOSettingsModal isVisible={true} onCancel={onCancel} onSuccess={onSuccess} accessToken="test-token" />);
+    render(<AddSSOSettingsModal isVisible={true} onCancel={onCancel} onSuccess={onSuccess} />);
 
     expect(screen.getByText("SSO Provider")).toBeInTheDocument();
     expect(screen.getByText("Cancel")).toBeInTheDocument();
