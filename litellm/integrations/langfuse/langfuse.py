@@ -739,6 +739,27 @@ class LangFuseLogger:
                         _usage_obj.get("cache_read_input_tokens") or 0
                     )
 
+                    # Check prompt_tokens_details.cached_tokens (used by Gemini and other providers)
+                    # If present, use it as cache_read_input_tokens
+                    # See: https://github.com/BerriAI/litellm/issues/18520
+                    if hasattr(_usage_obj, "prompt_tokens_details"):
+                        prompt_tokens_details = getattr(
+                            _usage_obj, "prompt_tokens_details", None
+                        )
+                        if (
+                            prompt_tokens_details is not None
+                            and hasattr(prompt_tokens_details, "cached_tokens")
+                        ):
+                            cached_tokens = getattr(
+                                prompt_tokens_details, "cached_tokens", None
+                            )
+                            if (
+                                cached_tokens is not None
+                                and isinstance(cached_tokens, (int, float))
+                                and cached_tokens > 0
+                            ):
+                                cache_read_input_tokens = cached_tokens
+
                     usage = {
                         "prompt_tokens": prompt_tokens,
                         "completion_tokens": completion_tokens,
