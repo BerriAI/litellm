@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from "react";
-import { Modal } from "antd";
-import { PlusCircleIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
-import { isAdminRole } from "@/utils/roles";
-import { getPublicModelHubInfo, updateUsefulLinksCall, getProxyBaseUrl } from "../networking";
-import { Card, Title, Text, Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
-import NotificationsManager from "@/components/molecules/notifications_manager";
 import TableIconActionButton from "@/components/common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
+import NotificationsManager from "@/components/molecules/notifications_manager";
+import { isAdminRole } from "@/utils/roles";
+import { ChevronDownIcon, ChevronRightIcon, ExternalLinkIcon, PlusCircleIcon } from "@heroicons/react/outline";
+import { Card, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Text, Title } from "@tremor/react";
+import Link from "next/link";
+import React, { useEffect, useState } from "react";
+import { getProxyBaseUrl, getPublicModelHubInfo, updateUsefulLinksCall } from "../networking";
 
 interface UsefulLinksManagementProps {
   accessToken: string | null;
@@ -102,32 +102,6 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
       });
 
       await updateUsefulLinksCall(accessToken, linksObject);
-      // show success modal with public model hub link
-      Modal.success({
-        title: "Links Saved Successfully",
-        content: (
-          <div className="py-4">
-            <p className="text-gray-600 mb-4">
-              Your useful links have been saved and are now visible on the public model hub.
-            </p>
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-              <p className="text-sm text-blue-800 mb-2 font-medium">View your updated model hub:</p>
-              <a
-                href={`${getProxyBaseUrl()}/ui/model_hub_table`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center text-blue-600 hover:text-blue-800 underline text-sm font-medium"
-              >
-                Open Public Model Hub →
-              </a>
-            </div>
-          </div>
-        ),
-        width: 500,
-        okText: "Close",
-        maskClosable: true,
-        keyboard: true,
-      });
 
       return true;
     } catch (error) {
@@ -319,29 +293,41 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
           </div>
           <div className="flex items-center justify-between mb-2">
             <Text className="text-sm font-medium text-gray-700">Manage Existing Links</Text>
-            {!isRearranging ? (
-              <button
-                onClick={handleStartRearranging}
-                className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded hover:bg-purple-100 flex items-center"
+            <div className="flex items-center space-x-2">
+              <Link
+                href={`${getProxyBaseUrl()}/ui/model_hub_table`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs bg-blue-50 text-blue-600 px-3 py-1.5 rounded hover:bg-blue-100 flex items-center"
+                title="Open Public Model Hub"
               >
-                Rearrange Order
-              </button>
-            ) : (
-              <div className="flex space-x-2">
+                Public Model Hub
+                <ExternalLinkIcon className="w-4 h-4 ml-1" />
+              </Link>
+              {!isRearranging ? (
                 <button
-                  onClick={handleSaveRearranging}
-                  className="text-xs bg-green-600 text-white px-3 py-1.5 rounded hover:bg-green-700"
+                  onClick={handleStartRearranging}
+                  className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded hover:bg-purple-100 flex items-center"
                 >
-                  Save Order
+                  Rearrange Order
                 </button>
-                <button
-                  onClick={handleCancelRearranging}
-                  className="text-xs bg-gray-50 text-gray-600 px-3 py-1.5 rounded hover:bg-gray-100"
-                >
-                  Cancel
-                </button>
-              </div>
-            )}
+              ) : (
+                <div className="flex space-x-2">
+                  <button
+                    onClick={handleSaveRearranging}
+                    className="text-xs bg-green-600 text-white px-3 py-1.5 rounded hover:bg-green-700"
+                  >
+                    Save Order
+                  </button>
+                  <button
+                    onClick={handleCancelRearranging}
+                    className="text-xs bg-gray-50 text-gray-600 px-3 py-1.5 rounded hover:bg-gray-100"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
           <div className="rounded-lg custom-border relative">
             <div className="overflow-x-auto">
