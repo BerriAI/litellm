@@ -72,39 +72,7 @@ from litellm.constants import (
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
 
-# Import cached imports utilities
-from litellm.litellm_core_utils.cached_imports import (
-    get_coroutine_checker,
-    get_litellm_logging_class,
-    get_set_callbacks,
-)
-from litellm.litellm_core_utils.core_helpers import (
-    get_litellm_metadata_from_kwargs,
-    map_finish_reason,
-    process_response_headers,
-)
-from litellm.litellm_core_utils.dot_notation_indexing import (
-    delete_nested_value,
-    is_nested_path,
-)
-from litellm.litellm_core_utils.get_litellm_params import (
-    _get_base_model_from_litellm_call_metadata,
-    get_litellm_params,
-)
-from litellm.litellm_core_utils.llm_request_utils import _ensure_extra_body_is_safe
-from litellm.litellm_core_utils.llm_response_utils.get_formatted_prompt import (
-    get_formatted_prompt,
-)
-from litellm.litellm_core_utils.llm_response_utils.get_headers import (
-    get_response_headers,
-)
-from litellm.litellm_core_utils.rules import Rules
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.router_utils.get_retry_from_policy import (
-    get_num_retries_from_retry_policy,
-    reset_retry_policy,
-)
-from litellm.secret_managers.main import get_secret
+
 
 _CachingHandlerResponse = None
 _LLMCachingHandler = None
@@ -280,16 +248,7 @@ from typing import (
 
 from openai import OpenAIError as OriginalError
 
-from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
-    update_response_metadata,
-)
-from litellm.litellm_core_utils.thread_pool_executor import executor
-from litellm.llms.base_llm.anthropic_messages.transformation import (
-    BaseAnthropicMessagesConfig,
-)
-from litellm.llms.base_llm.audio_transcription.transformation import (
-    BaseAudioTranscriptionConfig,
-)
+# These are lazy loaded via __getattr__
 from litellm.llms.base_llm.base_utils import (
     BaseLLMModelInfo,
     type_to_response_format_param,
@@ -340,6 +299,49 @@ if TYPE_CHECKING:
     from litellm.llms.bedrock.common_utils import BedrockModelInfo
     from litellm.llms.cohere.common_utils import CohereModelInfo
     from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
+    # Type stubs for lazy-loaded functions and classes
+    from litellm.litellm_core_utils.cached_imports import (
+        get_coroutine_checker,
+        get_litellm_logging_class,
+        get_set_callbacks,
+    )
+    from litellm.litellm_core_utils.core_helpers import (
+        get_litellm_metadata_from_kwargs,
+        map_finish_reason,
+        process_response_headers,
+    )
+    from litellm.litellm_core_utils.dot_notation_indexing import (
+        delete_nested_value,
+        is_nested_path,
+    )
+    from litellm.litellm_core_utils.get_litellm_params import (
+        _get_base_model_from_litellm_call_metadata,
+        get_litellm_params,
+    )
+    from litellm.litellm_core_utils.llm_request_utils import _ensure_extra_body_is_safe
+    from litellm.litellm_core_utils.llm_response_utils.get_formatted_prompt import (
+        get_formatted_prompt,
+    )
+    from litellm.litellm_core_utils.llm_response_utils.get_headers import (
+        get_response_headers,
+    )
+    from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+        update_response_metadata,
+    )
+    from litellm.litellm_core_utils.rules import Rules
+    from litellm.litellm_core_utils.thread_pool_executor import executor
+    from litellm.llms.base_llm.anthropic_messages.transformation import (
+        BaseAnthropicMessagesConfig,
+    )
+    from litellm.llms.base_llm.audio_transcription.transformation import (
+        BaseAudioTranscriptionConfig,
+    )
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+    from litellm.router_utils.get_retry_from_policy import (
+        get_num_retries_from_retry_policy,
+        reset_retry_policy,
+    )
+    from litellm.secret_managers.main import get_secret
 
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig
@@ -8987,5 +8989,223 @@ def __getattr__(name: str) -> Any:  # noqa: PLR0915
             )
             _globals["MistralOCRConfig"] = _MistralOCRConfig
         return _globals["MistralOCRConfig"]
+    
+    # Lazy load Rules to avoid loading at module import time
+    if name == "Rules":
+        # Check if already cached
+        if "Rules" not in _globals:
+            from litellm.litellm_core_utils.rules import Rules as _Rules
+            _globals["Rules"] = _Rules
+        return _globals["Rules"]
+    
+    # Lazy load AsyncHTTPHandler and HTTPHandler to avoid loading at module import time
+    if name == "AsyncHTTPHandler":
+        # Check if already cached
+        if "AsyncHTTPHandler" not in _globals:
+            from litellm.llms.custom_httpx.http_handler import (
+                AsyncHTTPHandler as _AsyncHTTPHandler,
+            )
+            _globals["AsyncHTTPHandler"] = _AsyncHTTPHandler
+        return _globals["AsyncHTTPHandler"]
+    
+    if name == "HTTPHandler":
+        # Check if already cached
+        if "HTTPHandler" not in _globals:
+            from litellm.llms.custom_httpx.http_handler import (
+                HTTPHandler as _HTTPHandler,
+            )
+            _globals["HTTPHandler"] = _HTTPHandler
+        return _globals["HTTPHandler"]
+    
+    # Lazy load get_num_retries_from_retry_policy and reset_retry_policy to avoid loading at module import time
+    if name == "get_num_retries_from_retry_policy":
+        # Check if already cached
+        if "get_num_retries_from_retry_policy" not in _globals:
+            from litellm.router_utils.get_retry_from_policy import (
+                get_num_retries_from_retry_policy as _get_num_retries_from_retry_policy,
+            )
+            _globals["get_num_retries_from_retry_policy"] = _get_num_retries_from_retry_policy
+        return _globals["get_num_retries_from_retry_policy"]
+    
+    if name == "reset_retry_policy":
+        # Check if already cached
+        if "reset_retry_policy" not in _globals:
+            from litellm.router_utils.get_retry_from_policy import (
+                reset_retry_policy as _reset_retry_policy,
+            )
+            _globals["reset_retry_policy"] = _reset_retry_policy
+        return _globals["reset_retry_policy"]
+    
+    # Lazy load get_secret to avoid loading at module import time
+    if name == "get_secret":
+        # Check if already cached
+        if "get_secret" not in _globals:
+            from litellm.secret_managers.main import get_secret as _get_secret
+            _globals["get_secret"] = _get_secret
+        return _globals["get_secret"]
+    
+    # Lazy load cached_imports functions to avoid loading at module import time
+    if name == "get_coroutine_checker":
+        # Check if already cached
+        if "get_coroutine_checker" not in _globals:
+            from litellm.litellm_core_utils.cached_imports import (
+                get_coroutine_checker as _get_coroutine_checker,
+            )
+            _globals["get_coroutine_checker"] = _get_coroutine_checker
+        return _globals["get_coroutine_checker"]
+    
+    if name == "get_litellm_logging_class":
+        # Check if already cached
+        if "get_litellm_logging_class" not in _globals:
+            from litellm.litellm_core_utils.cached_imports import (
+                get_litellm_logging_class as _get_litellm_logging_class,
+            )
+            _globals["get_litellm_logging_class"] = _get_litellm_logging_class
+        return _globals["get_litellm_logging_class"]
+    
+    if name == "get_set_callbacks":
+        # Check if already cached
+        if "get_set_callbacks" not in _globals:
+            from litellm.litellm_core_utils.cached_imports import (
+                get_set_callbacks as _get_set_callbacks,
+            )
+            _globals["get_set_callbacks"] = _get_set_callbacks
+        return _globals["get_set_callbacks"]
+    
+    # Lazy load core_helpers functions to avoid loading at module import time
+    if name == "get_litellm_metadata_from_kwargs":
+        # Check if already cached
+        if "get_litellm_metadata_from_kwargs" not in _globals:
+            from litellm.litellm_core_utils.core_helpers import (
+                get_litellm_metadata_from_kwargs as _get_litellm_metadata_from_kwargs,
+            )
+            _globals["get_litellm_metadata_from_kwargs"] = _get_litellm_metadata_from_kwargs
+        return _globals["get_litellm_metadata_from_kwargs"]
+    
+    if name == "map_finish_reason":
+        # Check if already cached
+        if "map_finish_reason" not in _globals:
+            from litellm.litellm_core_utils.core_helpers import (
+                map_finish_reason as _map_finish_reason,
+            )
+            _globals["map_finish_reason"] = _map_finish_reason
+        return _globals["map_finish_reason"]
+    
+    if name == "process_response_headers":
+        # Check if already cached
+        if "process_response_headers" not in _globals:
+            from litellm.litellm_core_utils.core_helpers import (
+                process_response_headers as _process_response_headers,
+            )
+            _globals["process_response_headers"] = _process_response_headers
+        return _globals["process_response_headers"]
+    
+    # Lazy load dot_notation_indexing functions to avoid loading at module import time
+    if name == "delete_nested_value":
+        # Check if already cached
+        if "delete_nested_value" not in _globals:
+            from litellm.litellm_core_utils.dot_notation_indexing import (
+                delete_nested_value as _delete_nested_value,
+            )
+            _globals["delete_nested_value"] = _delete_nested_value
+        return _globals["delete_nested_value"]
+    
+    if name == "is_nested_path":
+        # Check if already cached
+        if "is_nested_path" not in _globals:
+            from litellm.litellm_core_utils.dot_notation_indexing import (
+                is_nested_path as _is_nested_path,
+            )
+            _globals["is_nested_path"] = _is_nested_path
+        return _globals["is_nested_path"]
+    
+    # Lazy load get_litellm_params functions to avoid loading at module import time
+    if name == "_get_base_model_from_litellm_call_metadata":
+        # Check if already cached
+        if "_get_base_model_from_litellm_call_metadata" not in _globals:
+            from litellm.litellm_core_utils.get_litellm_params import (
+                _get_base_model_from_litellm_call_metadata as __get_base_model_from_litellm_call_metadata,
+            )
+            _globals["_get_base_model_from_litellm_call_metadata"] = __get_base_model_from_litellm_call_metadata
+        return _globals["_get_base_model_from_litellm_call_metadata"]
+    
+    if name == "get_litellm_params":
+        # Check if already cached
+        if "get_litellm_params" not in _globals:
+            from litellm.litellm_core_utils.get_litellm_params import (
+                get_litellm_params as _get_litellm_params,
+            )
+            _globals["get_litellm_params"] = _get_litellm_params
+        return _globals["get_litellm_params"]
+    
+    # Lazy load _ensure_extra_body_is_safe to avoid loading at module import time
+    if name == "_ensure_extra_body_is_safe":
+        # Check if already cached
+        if "_ensure_extra_body_is_safe" not in _globals:
+            from litellm.litellm_core_utils.llm_request_utils import (
+                _ensure_extra_body_is_safe as __ensure_extra_body_is_safe,
+            )
+            _globals["_ensure_extra_body_is_safe"] = __ensure_extra_body_is_safe
+        return _globals["_ensure_extra_body_is_safe"]
+    
+    # Lazy load get_formatted_prompt to avoid loading at module import time
+    if name == "get_formatted_prompt":
+        # Check if already cached
+        if "get_formatted_prompt" not in _globals:
+            from litellm.litellm_core_utils.llm_response_utils.get_formatted_prompt import (
+                get_formatted_prompt as _get_formatted_prompt,
+            )
+            _globals["get_formatted_prompt"] = _get_formatted_prompt
+        return _globals["get_formatted_prompt"]
+    
+    # Lazy load get_response_headers to avoid loading at module import time
+    if name == "get_response_headers":
+        # Check if already cached
+        if "get_response_headers" not in _globals:
+            from litellm.litellm_core_utils.llm_response_utils.get_headers import (
+                get_response_headers as _get_response_headers,
+            )
+            _globals["get_response_headers"] = _get_response_headers
+        return _globals["get_response_headers"]
+    
+    # Lazy load update_response_metadata to avoid loading at module import time
+    if name == "update_response_metadata":
+        # Check if already cached
+        if "update_response_metadata" not in _globals:
+            from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+                update_response_metadata as _update_response_metadata,
+            )
+            _globals["update_response_metadata"] = _update_response_metadata
+        return _globals["update_response_metadata"]
+    
+    # Lazy load executor to avoid loading at module import time
+    if name == "executor":
+        # Check if already cached
+        if "executor" not in _globals:
+            from litellm.litellm_core_utils.thread_pool_executor import (
+                executor as _executor,
+            )
+            _globals["executor"] = _executor
+        return _globals["executor"]
+    
+    # Lazy load BaseAnthropicMessagesConfig to avoid loading at module import time
+    if name == "BaseAnthropicMessagesConfig":
+        # Check if already cached
+        if "BaseAnthropicMessagesConfig" not in _globals:
+            from litellm.llms.base_llm.anthropic_messages.transformation import (
+                BaseAnthropicMessagesConfig as _BaseAnthropicMessagesConfig,
+            )
+            _globals["BaseAnthropicMessagesConfig"] = _BaseAnthropicMessagesConfig
+        return _globals["BaseAnthropicMessagesConfig"]
+    
+    # Lazy load BaseAudioTranscriptionConfig to avoid loading at module import time
+    if name == "BaseAudioTranscriptionConfig":
+        # Check if already cached
+        if "BaseAudioTranscriptionConfig" not in _globals:
+            from litellm.llms.base_llm.audio_transcription.transformation import (
+                BaseAudioTranscriptionConfig as _BaseAudioTranscriptionConfig,
+            )
+            _globals["BaseAudioTranscriptionConfig"] = _BaseAudioTranscriptionConfig
+        return _globals["BaseAudioTranscriptionConfig"]
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
