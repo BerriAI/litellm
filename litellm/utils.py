@@ -316,6 +316,30 @@ if TYPE_CHECKING:
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.llms.base_llm.files.transformation import BaseFilesConfig
     from litellm.proxy._types import AllowedModelRegion
+    # Type stubs for lazy-loaded functions to help mypy understand their types
+    # These imports allow mypy to understand the types when these are accessed via __getattr__
+    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+    from litellm.litellm_core_utils.get_llm_provider_logic import (
+        _is_non_openai_azure_model,
+        get_llm_provider,
+    )
+    from litellm.litellm_core_utils.get_supported_openai_params import (
+        get_supported_openai_params,
+    )
+    from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+        LiteLLMResponseObjectHandler,
+        _handle_invalid_parallel_tool_calls,
+        convert_to_model_response_object,
+        convert_to_streaming_response,
+        convert_to_streaming_response_async,
+    )
+    from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
+    from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+        ResponseMetadata,
+    )
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _parse_content_for_reasoning,
+    )
 
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig
