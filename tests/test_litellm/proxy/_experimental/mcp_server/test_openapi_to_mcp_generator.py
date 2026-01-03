@@ -35,8 +35,8 @@ class _DummyAsyncClient:
 @pytest.mark.asyncio
 async def test_should_reject_path_traversal_inputs(monkeypatch):
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.httpx.AsyncClient",
-        _DummyAsyncClient,
+        "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.get_async_httpx_client",
+        lambda *_, **__: _DummyAsyncClient(),
     )
     _DummyAsyncClient.last_instance = None
 
@@ -66,8 +66,8 @@ async def test_should_reject_path_traversal_inputs(monkeypatch):
 @pytest.mark.asyncio
 async def test_should_encode_and_request_safe_path_parameters(monkeypatch):
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.httpx.AsyncClient",
-        _DummyAsyncClient,
+        "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.get_async_httpx_client",
+        lambda *_, **__: _DummyAsyncClient(),
     )
     _DummyAsyncClient.last_instance = None
 
