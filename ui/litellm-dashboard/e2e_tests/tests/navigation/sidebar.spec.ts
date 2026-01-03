@@ -1,5 +1,6 @@
 import test, { expect } from "@playwright/test";
 import { Role } from "../../fixtures/roles";
+import { ADMIN_STORAGE_PATH } from "../../constants";
 
 const sidebarButtons = {
   [Role.ProxyAdmin]: [
@@ -16,7 +17,7 @@ const sidebarButtons = {
   ],
 };
 
-const roles = [{ role: Role.ProxyAdmin, storage: "admin.storageState.json" }];
+const roles = [{ role: Role.ProxyAdmin, storage: ADMIN_STORAGE_PATH }];
 
 for (const { role, storage } of roles) {
   test.describe(`${role} sidebar`, () => {
