@@ -20,7 +20,7 @@ class ZAIChatConfig(OpenAIGPTConfig):
         return api_base, dynamic_api_key
 
     def get_supported_openai_params(self, model: str) -> list:
-        return [
+        base_params = [
             "max_tokens",
             "stream",
             "stream_options",
@@ -31,3 +31,12 @@ class ZAIChatConfig(OpenAIGPTConfig):
             "tool_choice",
         ]
 
+        import litellm
+
+        try:
+            if litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider):
+                base_params.append("thinking")
+        except Exception:
+            pass
+
+        return base_params
