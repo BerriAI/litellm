@@ -1,3 +1,4 @@
+import asyncio
 import json
 from typing import Callable, List, Optional, Union
 
@@ -176,9 +177,14 @@ class OpenAITextCompletion(BaseLLM):
             else:
                 openai_aclient = client
 
-            raw_response = await openai_aclient.completions.with_raw_response.create(
-                **data
-            )
+            try:
+                raw_response = await openai_aclient.completions.with_raw_response.create(
+                    **data
+                )
+            except asyncio.CancelledError:
+                # If the request was cancelled, ensure we propagate the cancellation
+                # This will cause the HTTP connection to be closed, which downstream services can detect
+                raise
             response = raw_response.parse()
             response_json = response.model_dump()
 
