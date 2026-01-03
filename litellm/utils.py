@@ -98,10 +98,6 @@ from litellm.litellm_core_utils.llm_response_utils.get_formatted_prompt import (
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
-from litellm.litellm_core_utils.redact_messages import (
-    LiteLLMLoggingObject,
-    redact_message_input_output_from_logging,
-)
 from litellm.litellm_core_utils.rules import Rules
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.base_llm.google_genai.transformation import (
@@ -339,6 +335,10 @@ if TYPE_CHECKING:
     )
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
         _parse_content_for_reasoning,
+    )
+    from litellm.litellm_core_utils.redact_messages import (
+        LiteLLMLoggingObject,
+        redact_message_input_output_from_logging,
     )
 
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
@@ -8885,5 +8885,24 @@ def __getattr__(name: str) -> Any:  # noqa: PLR0915
             )
             _globals["_parse_content_for_reasoning"] = __parse_content_for_reasoning
         return _globals["_parse_content_for_reasoning"]
+    
+    # Lazy load redact_messages to avoid loading at module import time
+    if name == "LiteLLMLoggingObject":
+        # Check if already cached
+        if "LiteLLMLoggingObject" not in _globals:
+            from litellm.litellm_core_utils.redact_messages import (
+                LiteLLMLoggingObject as _LiteLLMLoggingObject,
+            )
+            _globals["LiteLLMLoggingObject"] = _LiteLLMLoggingObject
+        return _globals["LiteLLMLoggingObject"]
+    
+    if name == "redact_message_input_output_from_logging":
+        # Check if already cached
+        if "redact_message_input_output_from_logging" not in _globals:
+            from litellm.litellm_core_utils.redact_messages import (
+                redact_message_input_output_from_logging as _redact_message_input_output_from_logging,
+            )
+            _globals["redact_message_input_output_from_logging"] = _redact_message_input_output_from_logging
+        return _globals["redact_message_input_output_from_logging"]
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
