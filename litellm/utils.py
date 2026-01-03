@@ -99,10 +99,7 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
 from litellm.litellm_core_utils.rules import Rules
-from litellm.llms.bedrock.common_utils import BedrockModelInfo
-from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 from litellm.router_utils.get_retry_from_policy import (
     get_num_retries_from_retry_policy,
     reset_retry_policy,
@@ -340,6 +337,10 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
     from litellm.llms.base_llm.search.transformation import BaseSearchConfig
     from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+    from litellm.llms.cohere.common_utils import CohereModelInfo
+    from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
+    from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig
@@ -4023,6 +4024,7 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "bedrock":
+        BedrockModelInfo = getattr(sys.modules[__name__], 'BedrockModelInfo')
         bedrock_route = BedrockModelInfo.get_bedrock_route(model)
         bedrock_base_model = BedrockModelInfo.get_base_model(model)
         if bedrock_route == "converse" or bedrock_route == "converse_like":
@@ -7440,6 +7442,7 @@ class ProviderConfigManager:
             litellm.LlmProviders.COHERE_CHAT == provider
             or litellm.LlmProviders.COHERE == provider
         ):
+            CohereModelInfo = getattr(sys.modules[__name__], 'CohereModelInfo')
             route = CohereModelInfo.get_cohere_route(model)
             if route == "v2":
                 return litellm.CohereV2ChatConfig()
@@ -8290,6 +8293,7 @@ class ProviderConfigManager:
 
             return get_vertex_ai_ocr_config(model=model)
         
+        MistralOCRConfig = getattr(sys.modules[__name__], 'MistralOCRConfig')
         PROVIDER_TO_CONFIG_MAP = {
             litellm.LlmProviders.MISTRAL: MistralOCRConfig,
         }
@@ -8954,5 +8958,35 @@ def __getattr__(name: str) -> Any:  # noqa: PLR0915
             )
             _globals["BaseTextToSpeechConfig"] = _BaseTextToSpeechConfig
         return _globals["BaseTextToSpeechConfig"]
+    
+    # Lazy load BedrockModelInfo to avoid loading at module import time
+    if name == "BedrockModelInfo":
+        # Check if already cached
+        if "BedrockModelInfo" not in _globals:
+            from litellm.llms.bedrock.common_utils import (
+                BedrockModelInfo as _BedrockModelInfo,
+            )
+            _globals["BedrockModelInfo"] = _BedrockModelInfo
+        return _globals["BedrockModelInfo"]
+    
+    # Lazy load CohereModelInfo to avoid loading at module import time
+    if name == "CohereModelInfo":
+        # Check if already cached
+        if "CohereModelInfo" not in _globals:
+            from litellm.llms.cohere.common_utils import (
+                CohereModelInfo as _CohereModelInfo,
+            )
+            _globals["CohereModelInfo"] = _CohereModelInfo
+        return _globals["CohereModelInfo"]
+    
+    # Lazy load MistralOCRConfig to avoid loading at module import time
+    if name == "MistralOCRConfig":
+        # Check if already cached
+        if "MistralOCRConfig" not in _globals:
+            from litellm.llms.mistral.ocr.transformation import (
+                MistralOCRConfig as _MistralOCRConfig,
+            )
+            _globals["MistralOCRConfig"] = _MistralOCRConfig
+        return _globals["MistralOCRConfig"]
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
