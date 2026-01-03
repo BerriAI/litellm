@@ -7041,7 +7041,8 @@ def _get_base_model_from_metadata(model_call_details=None):
             return _base_model
         metadata = litellm_params.get("metadata", {})
 
-        base_model_from_metadata = _get_base_model_from_litellm_call_metadata(
+        _get_base_model_from_litellm_call_metadata = getattr(sys.modules[__name__], '_get_base_model_from_litellm_call_metadata')
+    base_model_from_metadata = _get_base_model_from_litellm_call_metadata(
             metadata=metadata
         )
         if base_model_from_metadata is not None:
