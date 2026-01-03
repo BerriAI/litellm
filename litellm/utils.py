@@ -71,9 +71,6 @@ from litellm.constants import (
     OPENAI_EMBEDDING_PARAMS,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
-from litellm.integrations.vector_store_integrations.base_vector_store import (
-    BaseVectorStore,
-)
 
 # Import cached imports utilities
 from litellm.litellm_core_utils.cached_imports import (
@@ -86,15 +83,9 @@ from litellm.litellm_core_utils.core_helpers import (
     map_finish_reason,
     process_response_headers,
 )
-from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dot_notation_indexing import (
     delete_nested_value,
     is_nested_path,
-)
-from litellm.litellm_core_utils.exception_mapping_utils import (
-    _get_response_headers,
-    exception_type,
-    get_error_message,
 )
 from litellm.litellm_core_utils.get_litellm_params import (
     _get_base_model_from_litellm_call_metadata,
@@ -618,10 +609,22 @@ def get_applied_guardrails(kwargs: Dict[str, Any]) -> List[str]:
     return applied_guardrails
 
 
+def _get_utils_globals() -> dict:
+    """
+    Get the globals dictionary of the utils module.
+    
+    This is where we cache imported attributes so we don't import them twice.
+    """
+    return sys.modules[__name__].__dict__
+
+
 def load_credentials_from_list(kwargs: dict):
     """
     Updates kwargs with the credentials if credential_name in kwarg
     """
+    # Access CredentialAccessor via module to trigger lazy loading if needed
+    CredentialAccessor = getattr(sys.modules[__name__], 'CredentialAccessor')
+    
     credential_name = kwargs.get("litellm_credential_name")
     if credential_name and litellm.credential_list:
         credential_accessor = CredentialAccessor.get_credential_values(credential_name)
@@ -8705,16 +8708,64 @@ def should_run_mock_completion(
     return False
 
 
-# Re-export encoding from main.py for backward compatibility
-# This allows tests to import: from litellm.utils import encoding
-# We use a lazy import to avoid loading main.py at utils.py import time
 def __getattr__(name: str) -> Any:
     """Lazy import handler for utils module"""
+    _globals = _get_utils_globals()
+    
+    # Lazy load encoding from main.py to avoid heavy tiktoken import
     if name == "encoding":
-        # Cache it in the module's __dict__ for subsequent accesses
-        import sys
-
-        from litellm.main import encoding as _encoding
-        sys.modules[__name__].__dict__["encoding"] = _encoding
-        return _encoding
+        # Check if already cached
+        if "encoding" not in _globals:
+            from litellm.main import encoding as _encoding
+            _globals["encoding"] = _encoding
+        return _globals["encoding"]
+    
+    # Lazy load BaseVectorStore to avoid loading it at module import time
+    if name == "BaseVectorStore":
+        # Check if already cached
+        if "BaseVectorStore" not in _globals:
+            from litellm.integrations.vector_store_integrations.base_vector_store import (
+                BaseVectorStore as _BaseVectorStore,
+            )
+            _globals["BaseVectorStore"] = _BaseVectorStore
+        return _globals["BaseVectorStore"]
+    
+    # Lazy load CredentialAccessor to avoid loading it at module import time
+    if name == "CredentialAccessor":
+        # Check if already cached
+        if "CredentialAccessor" not in _globals:
+            from litellm.litellm_core_utils.credential_accessor import (
+                CredentialAccessor as _CredentialAccessor,
+            )
+            _globals["CredentialAccessor"] = _CredentialAccessor
+        return _globals["CredentialAccessor"]
+    
+    # Lazy load exception_mapping_utils functions to avoid loading at module import time
+    if name == "exception_type":
+        # Check if already cached
+        if "exception_type" not in _globals:
+            from litellm.litellm_core_utils.exception_mapping_utils import (
+                exception_type as _exception_type,
+            )
+            _globals["exception_type"] = _exception_type
+        return _globals["exception_type"]
+    
+    if name == "get_error_message":
+        # Check if already cached
+        if "get_error_message" not in _globals:
+            from litellm.litellm_core_utils.exception_mapping_utils import (
+                get_error_message as _get_error_message,
+            )
+            _globals["get_error_message"] = _get_error_message
+        return _globals["get_error_message"]
+    
+    if name == "_get_response_headers":
+        # Check if already cached
+        if "_get_response_headers" not in _globals:
+            from litellm.litellm_core_utils.exception_mapping_utils import (
+                _get_response_headers as __get_response_headers,
+            )
+            _globals["_get_response_headers"] = __get_response_headers
+        return _globals["_get_response_headers"]
+    
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
