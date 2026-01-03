@@ -8697,7 +8697,7 @@ def should_run_mock_completion(
     return False
 
 
-def __getattr__(name: str) -> Any:
+def __getattr__(name: str) -> Any:  # noqa: PLR0915
     """Lazy import handler for utils module"""
     _globals = _get_utils_globals()
     
