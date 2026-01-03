@@ -380,17 +380,23 @@ class ResponsesAPIRequestUtils:
         raw_headers_from_request: Optional[Dict[str, str]] = None
         if secret_fields and isinstance(secret_fields, dict):
             raw_headers_from_request = secret_fields.get("raw_headers")
-        
+
         # Extract MCP-specific headers using MCPRequestHandler methods
         mcp_auth_header: Optional[str] = None
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None
         oauth2_headers: Optional[Dict[str, str]] = None
-        
+
         if raw_headers_from_request:
             headers_obj = Headers(raw_headers_from_request)
-            mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers_obj)
-            mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers_obj)
-            oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers_obj)
+            mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(
+                headers_obj
+            )
+            mcp_server_auth_headers = (
+                MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers_obj)
+            )
+            oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(
+                headers_obj
+            )
 
         if tools:
             for tool in tools:
@@ -400,21 +406,35 @@ class ResponsesAPIRequestUtils:
                         # Merge tool headers into mcp_server_auth_headers
                         # Extract server-specific headers from tool.headers
                         headers_obj_from_tool = Headers(tool_headers)
-                        tool_mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers_obj_from_tool)
+                        tool_mcp_server_auth_headers = (
+                            MCPRequestHandler._get_mcp_server_auth_headers_from_headers(
+                                headers_obj_from_tool
+                            )
+                        )
                         if tool_mcp_server_auth_headers:
                             if mcp_server_auth_headers is None:
                                 mcp_server_auth_headers = {}
                             # Merge the headers from tool into existing headers
-                            for server_alias, headers_dict in tool_mcp_server_auth_headers.items():
+                            for (
+                                server_alias,
+                                headers_dict,
+                            ) in tool_mcp_server_auth_headers.items():
                                 if server_alias not in mcp_server_auth_headers:
                                     mcp_server_auth_headers[server_alias] = {}
-                                mcp_server_auth_headers[server_alias].update(headers_dict)
+                                mcp_server_auth_headers[server_alias].update(
+                                    headers_dict
+                                )
                         # Also merge raw headers (non-prefixed headers from tool.headers)
                         if raw_headers_from_request is None:
                             raw_headers_from_request = {}
                         raw_headers_from_request.update(tool_headers)
-        
-        return mcp_auth_header, mcp_server_auth_headers, oauth2_headers, raw_headers_from_request
+
+        return (
+            mcp_auth_header,
+            mcp_server_auth_headers,
+            oauth2_headers,
+            raw_headers_from_request,
+        )
 
 
 class ResponseAPILoggingUtils:
@@ -443,11 +463,18 @@ class ResponseAPILoggingUtils:
                 completion_tokens=0,
                 total_tokens=0,
             )
-        response_api_usage: ResponseAPIUsage = (
-            ResponseAPIUsage(**usage_input)
-            if isinstance(usage_input, dict)
-            else usage_input
-        )
+        response_api_usage: ResponseAPIUsage
+        if isinstance(usage_input, dict):
+            total_tokens = usage_input.get("total_tokens")
+            if total_tokens is None:
+                input_tokens = usage_input.get("input_tokens")
+                output_tokens = usage_input.get("output_tokens")
+                if input_tokens is not None and output_tokens is not None:
+                    total_tokens = input_tokens + output_tokens
+                    usage_input["total_tokens"] = total_tokens
+            response_api_usage = ResponseAPIUsage(**usage_input)
+        else:
+            response_api_usage = usage_input
         prompt_tokens: int = response_api_usage.input_tokens or 0
         completion_tokens: int = response_api_usage.output_tokens or 0
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
@@ -464,7 +491,7 @@ class ResponseAPILoggingUtils:
             completion_tokens_details = CompletionTokensDetailsWrapper(
                 reasoning_tokens=getattr(output_tokens_details, "reasoning_tokens", None)
             )
-            
+
         chat_usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,

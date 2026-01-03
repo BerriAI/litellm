@@ -2,10 +2,8 @@
 Integration tests for responses API background cost tracking
 """
 
-import asyncio
-import os
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, Mock
 
 import pytest
 
@@ -37,7 +35,7 @@ class TestResponsesBackgroundCostTracking:
 
     @pytest.mark.asyncio
     async def test_store_response_in_managed_objects_table(
-        self, mock_managed_files_obj, mock_proxy_logging_obj, mock_llm_router
+            self, mock_managed_files_obj, mock_proxy_logging_obj, mock_llm_router
     ):
         """Test that background responses are stored in managed objects table"""
         # Create a mock response with queued status and hidden params
@@ -49,7 +47,7 @@ class TestResponsesBackgroundCostTracking:
             output=[],
             usage=None,
         )
-        
+
         # Add hidden params with model_id (simulating what base_process_llm_request does)
         response._hidden_params = {
             "model_id": "model-deployment-id-123"
@@ -72,7 +70,7 @@ class TestResponsesBackgroundCostTracking:
                 # Get model_id from hidden params
                 hidden_params = getattr(response, "_hidden_params", {}) or {}
                 model_id = hidden_params.get("model_id", None)
-                
+
                 if model_id:
                     # Store in managed objects table using response.id directly
                     await mock_managed_files_obj.store_unified_object_id(
@@ -96,7 +94,7 @@ class TestResponsesBackgroundCostTracking:
 
     @pytest.mark.asyncio
     async def test_no_storage_for_non_background_requests(
-        self, mock_managed_files_obj, mock_proxy_logging_obj
+            self, mock_managed_files_obj, mock_proxy_logging_obj
     ):
         """Test that non-background requests are not stored"""
         # Create a mock response
@@ -130,7 +128,7 @@ class TestResponsesBackgroundCostTracking:
 
     @pytest.mark.asyncio
     async def test_no_storage_for_completed_responses(
-        self, mock_managed_files_obj, mock_proxy_logging_obj
+            self, mock_managed_files_obj, mock_proxy_logging_obj
     ):
         """Test that completed responses are not stored"""
         # Create a mock response with completed status
@@ -164,7 +162,7 @@ class TestResponsesBackgroundCostTracking:
 
     @pytest.mark.asyncio
     async def test_no_storage_without_model_id(
-        self, mock_managed_files_obj, mock_proxy_logging_obj
+            self, mock_managed_files_obj, mock_proxy_logging_obj
     ):
         """Test that responses without model_id in hidden params are not stored"""
         # Create a mock response without hidden params
@@ -191,7 +189,7 @@ class TestResponsesBackgroundCostTracking:
             if response.status in ["queued", "in_progress"]:
                 hidden_params = getattr(response, "_hidden_params", {}) or {}
                 model_id = hidden_params.get("model_id", None)
-                
+
                 if model_id:  # This will be False
                     await mock_managed_files_obj.store_unified_object_id(
                         unified_object_id=response.id,
@@ -207,7 +205,7 @@ class TestResponsesBackgroundCostTracking:
 
     @pytest.mark.asyncio
     async def test_error_handling_in_storage(
-        self, mock_managed_files_obj, mock_proxy_logging_obj
+            self, mock_managed_files_obj, mock_proxy_logging_obj
     ):
         """Test that errors during storage are handled gracefully"""
         # Mock store_unified_object_id to raise an exception
@@ -240,7 +238,7 @@ class TestResponsesBackgroundCostTracking:
                 if response.status in ["queued", "in_progress"]:
                     hidden_params = getattr(response, "_hidden_params", {}) or {}
                     model_id = hidden_params.get("model_id", None)
-                    
+
                     if model_id:
                         await mock_managed_files_obj.store_unified_object_id(
                             unified_object_id=response.id,
@@ -279,12 +277,27 @@ class TestCheckResponsesCost:
         """Create a mock LLM router"""
         return MagicMock()
 
+    @pytest.fixture(autouse=True)
+    def mock_response_id_security(self):
+        """
+        LiteLLM proxy isn't installed in all contexts where the tests run currently.
+        """
+        with patch(
+                "litellm.proxy.hooks.responses_id_security.ResponsesIDSecurity",
+                new_callable=Mock) as responses_id_security_constructor_mock:
+            mock_decrypt_response_id_callable = Mock()
+            mock_decrypt_response_id_callable.return_value = ("nothing", "matters", "forever-empty")
+            responses_id_security_mock_instance_mock = Mock()
+            responses_id_security_mock_instance_mock._decrypt_response_id = mock_decrypt_response_id_callable
+            responses_id_security_constructor_mock.return_value = responses_id_security_mock_instance_mock
+            yield
+
     @pytest.mark.asyncio
     async def test_check_responses_cost_initialization(
-        self, mock_proxy_logging_obj, mock_prisma_client, mock_llm_router
+            self, mock_proxy_logging_obj, mock_prisma_client, mock_llm_router
     ):
         """Test CheckResponsesCost initialization"""
-        from litellm_enterprise.proxy.common_utils.check_responses_cost import (
+        from enterprise.litellm_enterprise.proxy.common_utils.check_responses_cost import (
             CheckResponsesCost,
         )
 
@@ -300,10 +313,10 @@ class TestCheckResponsesCost:
 
     @pytest.mark.asyncio
     async def test_check_responses_cost_no_jobs(
-        self, mock_proxy_logging_obj, mock_prisma_client, mock_llm_router
+            self, mock_proxy_logging_obj, mock_prisma_client, mock_llm_router
     ):
         """Test polling when there are no jobs"""
-        from litellm_enterprise.proxy.common_utils.check_responses_cost import (
+        from enterprise.litellm_enterprise.proxy.common_utils.check_responses_cost import (
             CheckResponsesCost,
         )
 
@@ -331,10 +344,10 @@ class TestCheckResponsesCost:
 
     @pytest.mark.asyncio
     async def test_check_responses_cost_with_completed_job(
-        self, mock_proxy_logging_obj, mock_prisma_client, mock_llm_router
+            self, mock_proxy_logging_obj, mock_prisma_client, mock_llm_router
     ):
         """Test polling with a completed job"""
-        from litellm_enterprise.proxy.common_utils.check_responses_cost import (
+        from enterprise.litellm_enterprise.proxy.common_utils.check_responses_cost import (
             CheckResponsesCost,
         )
 
@@ -388,10 +401,10 @@ class TestCheckResponsesCost:
 
     @pytest.mark.asyncio
     async def test_check_responses_cost_with_failed_job(
-        self, mock_proxy_logging_obj, mock_prisma_client, mock_llm_router
+            self, mock_proxy_logging_obj, mock_prisma_client, mock_llm_router
     ):
         """Test polling with a failed job"""
-        from litellm_enterprise.proxy.common_utils.check_responses_cost import (
+        from enterprise.litellm_enterprise.proxy.common_utils.check_responses_cost import (
             CheckResponsesCost,
         )
 
@@ -432,10 +445,10 @@ class TestCheckResponsesCost:
 
     @pytest.mark.asyncio
     async def test_check_responses_cost_with_in_progress_job(
-        self, mock_proxy_logging_obj, mock_prisma_client, mock_llm_router
+            self, mock_proxy_logging_obj, mock_prisma_client, mock_llm_router
     ):
         """Test polling with a job still in progress"""
-        from litellm_enterprise.proxy.common_utils.check_responses_cost import (
+        from enterprise.litellm_enterprise.proxy.common_utils.check_responses_cost import (
             CheckResponsesCost,
         )
 
@@ -476,10 +489,10 @@ class TestCheckResponsesCost:
 
     @pytest.mark.asyncio
     async def test_check_responses_cost_error_handling(
-        self, mock_proxy_logging_obj, mock_prisma_client, mock_llm_router
+            self, mock_proxy_logging_obj, mock_prisma_client, mock_llm_router
     ):
         """Test that errors when querying responses are handled gracefully"""
-        from litellm_enterprise.proxy.common_utils.check_responses_cost import (
+        from enterprise.litellm_enterprise.proxy.common_utils.check_responses_cost import (
             CheckResponsesCost,
         )
 
@@ -502,9 +515,9 @@ class TestCheckResponsesCost:
 
         # Mock litellm.aget_responses to raise an exception
         with patch(
-            "litellm.aget_responses",
-            new_callable=AsyncMock,
-            side_effect=Exception("API error"),
+                "litellm.aget_responses",
+                new_callable=AsyncMock,
+                side_effect=Exception("API error"),
         ):
             # Should not raise - errors are caught and logged
             await checker.check_responses_cost()
