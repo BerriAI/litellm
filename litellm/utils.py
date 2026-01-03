@@ -818,6 +818,7 @@ def function_setup(  # noqa: PLR0915
                     + litellm.failure_callback
                 )
             )
+            get_set_callbacks = getattr(sys.modules[__name__], 'get_set_callbacks')
             get_set_callbacks()(callback_list=callback_list, function_id=function_id)
         ## ASYNC CALLBACKS
         if len(litellm.input_callback) > 0:
