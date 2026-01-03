@@ -32,6 +32,7 @@ UTILS_NAMES = (
     "ModelResponse", "ModelResponseStream", "EmbeddingResponse", "ImageResponse",
     "TranscriptionResponse", "TextCompletionResponse", "get_provider_fields",
     "ModelResponseListIterator", "get_valid_models", "timeout",
+    "get_llm_provider", "remove_index_from_tool_calls",
 )
 
 # Token counter names that support lazy loading via _lazy_import_token_counter
@@ -336,6 +337,8 @@ _UTILS_IMPORT_MAP = {
     "ModelResponseListIterator": (".utils", "ModelResponseListIterator"),
     "get_valid_models": (".utils", "get_valid_models"),
     "timeout": (".timeout", "timeout"),
+    "get_llm_provider": ("litellm.litellm_core_utils.get_llm_provider_logic", "get_llm_provider"),
+    "remove_index_from_tool_calls": ("litellm.litellm_core_utils.core_helpers", "remove_index_from_tool_calls"),
 }
 
 _COST_CALCULATOR_IMPORT_MAP = {
