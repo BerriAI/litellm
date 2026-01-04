@@ -32,6 +32,7 @@ UTILS_NAMES = (
     "ModelResponse", "ModelResponseStream", "EmbeddingResponse", "ImageResponse",
     "TranscriptionResponse", "TextCompletionResponse", "get_provider_fields",
     "ModelResponseListIterator", "get_valid_models", "timeout",
+    "get_llm_provider", "remove_index_from_tool_calls",
 )
 
 # Token counter names that support lazy loading via _lazy_import_token_counter
@@ -287,6 +288,12 @@ TYPES_NAMES = (
     # is accessed during import time in secret_managers/main.py
 )
 
+# LLM provider logic names that support lazy loading via _lazy_import_llm_provider_logic
+LLM_PROVIDER_LOGIC_NAMES = (
+    "get_llm_provider",
+    "remove_index_from_tool_calls",
+)
+
 # Import maps for registry pattern - reduces repetition
 _UTILS_IMPORT_MAP = {
     "exception_type": (".utils", "exception_type"),
@@ -330,6 +337,8 @@ _UTILS_IMPORT_MAP = {
     "ModelResponseListIterator": (".utils", "ModelResponseListIterator"),
     "get_valid_models": (".utils", "get_valid_models"),
     "timeout": (".timeout", "timeout"),
+    "get_llm_provider": ("litellm.litellm_core_utils.get_llm_provider_logic", "get_llm_provider"),
+    "remove_index_from_tool_calls": ("litellm.litellm_core_utils.core_helpers", "remove_index_from_tool_calls"),
 }
 
 _COST_CALCULATOR_IMPORT_MAP = {
@@ -384,6 +393,11 @@ _TYPES_IMPORT_MAP = {
     "PriorityReservationSettings": ("litellm.types.utils", "PriorityReservationSettings"),
     "CustomLogger": ("litellm.integrations.custom_logger", "CustomLogger"),
     "LoggingCallbackManager": ("litellm.litellm_core_utils.logging_callback_manager", "LoggingCallbackManager"),
+}
+
+_LLM_PROVIDER_LOGIC_IMPORT_MAP = {
+    "get_llm_provider": ("litellm.litellm_core_utils.get_llm_provider_logic", "get_llm_provider"),
+    "remove_index_from_tool_calls": ("litellm.litellm_core_utils.core_helpers", "remove_index_from_tool_calls"),
 }
 
 _LLM_CONFIGS_IMPORT_MAP = {
@@ -587,6 +601,7 @@ __all__ = [
     "DOTPROMPT_NAMES",
     "LLM_CONFIG_NAMES",
     "TYPES_NAMES",
+    "LLM_PROVIDER_LOGIC_NAMES",
     # Import maps
     "_UTILS_IMPORT_MAP",
     "_COST_CALCULATOR_IMPORT_MAP",
@@ -598,5 +613,6 @@ __all__ = [
     "_DOTPROMPT_IMPORT_MAP",
     "_TYPES_IMPORT_MAP",
     "_LLM_CONFIGS_IMPORT_MAP",
+    "_LLM_PROVIDER_LOGIC_IMPORT_MAP",
 ]
 

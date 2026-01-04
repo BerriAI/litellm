@@ -526,12 +526,8 @@ export default function SpendLogsTable({
               <KeyInfoView
                 keyId={selectedKeyIdInfoView}
                 keyData={selectedKeyInfo}
-                accessToken={accessToken}
-                userID={userID}
-                userRole={userRole}
                 teams={allTeams}
                 onClose={() => setSelectedKeyIdInfoView(null)}
-                premiumUser={premiumUser}
                 backButtonText="Back to Logs"
               />
             ) : selectedSessionId ? (
@@ -968,10 +964,7 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
       </div>
 
       {/* Cost Breakdown - Show if cost breakdown data is available */}
-      <CostBreakdownViewer
-        costBreakdown={row.original.metadata?.cost_breakdown}
-        totalSpend={row.original.spend || 0}
-      />
+      <CostBreakdownViewer costBreakdown={row.original.metadata?.cost_breakdown} totalSpend={row.original.spend || 0} />
 
       {/* Configuration Info Message - Show when data is missing */}
       <ConfigInfoMessage show={missingData} />

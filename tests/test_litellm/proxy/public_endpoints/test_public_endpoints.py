@@ -78,3 +78,26 @@ def test_get_litellm_model_cost_map_returns_cost_map():
     # Check for common cost fields that should be present
     assert "input_cost_per_token" in sample_model_data or "output_cost_per_token" in sample_model_data
 
+
+def test_watsonx_provider_fields():
+    """Test that Watsonx provider has all required credential fields including multiple auth options."""
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    response = client.get("/public/providers/fields")
+    providers = response.json()
+
+    watsonx = next((p for p in providers if p["provider"] == "WATSONX"), None)
+    assert watsonx is not None
+
+    field_keys = [f["key"] for f in watsonx["credential_fields"]]
+    # Core fields
+    assert "api_base" in field_keys
+    assert "project_id" in field_keys
+    assert "space_id" in field_keys
+    # Multiple auth methods supported
+    assert "api_key" in field_keys
+    assert "token" in field_keys
+    assert "zen_api_key" in field_keys
+

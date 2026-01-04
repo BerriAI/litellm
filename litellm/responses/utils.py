@@ -26,7 +26,7 @@ from litellm.types.llms.openai import (
 from litellm.types.responses.main import DecodedResponseId
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
-    PromptTokensDetails,
+    PromptTokensDetailsWrapper,
     SpecialEnums,
     Usage,
 )
@@ -431,7 +431,12 @@ class ResponseAPILoggingUtils:
     def _transform_response_api_usage_to_chat_usage(
         usage_input: Optional[Union[dict, ResponseAPIUsage]],
     ) -> Usage:
-        """Tranforms the ResponseAPIUsage object to a Usage object"""
+        """
+        Transforms ResponseAPIUsage or ImageUsage to a Usage object.
+
+        Both have the same spec with input_tokens, output_tokens, and
+        input_tokens_details (text_tokens, image_tokens).
+        """
         if usage_input is None:
             return Usage(
                 prompt_tokens=0,
@@ -445,18 +450,19 @@ class ResponseAPILoggingUtils:
         )
         prompt_tokens: int = response_api_usage.input_tokens or 0
         completion_tokens: int = response_api_usage.output_tokens or 0
-        prompt_tokens_details: Optional[PromptTokensDetails] = None
+        prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
         if response_api_usage.input_tokens_details:
-            prompt_tokens_details = PromptTokensDetails(
-                cached_tokens=response_api_usage.input_tokens_details.cached_tokens,
-                audio_tokens=response_api_usage.input_tokens_details.audio_tokens,
+            prompt_tokens_details = PromptTokensDetailsWrapper(
+                cached_tokens=getattr(response_api_usage.input_tokens_details, "cached_tokens", None),
+                audio_tokens=getattr(response_api_usage.input_tokens_details, "audio_tokens", None),
+                text_tokens=getattr(response_api_usage.input_tokens_details, "text_tokens", None),
+                image_tokens=getattr(response_api_usage.input_tokens_details, "image_tokens", None),
             )
         completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
-        if response_api_usage.output_tokens_details:
+        output_tokens_details = getattr(response_api_usage, "output_tokens_details", None)
+        if output_tokens_details:
             completion_tokens_details = CompletionTokensDetailsWrapper(
-                reasoning_tokens=getattr(
-                    response_api_usage.output_tokens_details, "reasoning_tokens", None
-                )
+                reasoning_tokens=getattr(output_tokens_details, "reasoning_tokens", None)
             )
             
         chat_usage = Usage(

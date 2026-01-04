@@ -122,10 +122,11 @@ class TestRedactSensitiveData:
 
     def test_redact_pat_token(self):
         """Databricks PAT tokens are redacted."""
+        test_token = "dapiTESTTOKENFAKEVALUEFORTESTINGPURPOSESONLY123"
         result = DatabricksBase.redact_sensitive_data(
-            "Using token dapi_fake_test_token_value"
+            f"Using token {test_token}"
         )
-        assert "dapi_fake_test_token_value" not in result
+        assert test_token not in result
         assert "[REDACTED_PAT]" in result
 
     def test_redact_client_secret(self):
@@ -347,17 +348,27 @@ class TestSDKPartnerTelemetry:
             "Authorization": "Bearer token"
         }
 
-        with patch(
-            "databricks.sdk.WorkspaceClient", return_value=mock_workspace_client
-        ):
-            with patch("databricks.sdk.useragent.with_partner") as mock_with_partner:
-                databricks_base._get_databricks_credentials(
-                    api_key=None,
-                    api_base=None,
-                    headers=None,
-                )
+        mock_useragent = MagicMock()
+        # Create a mock databricks.sdk module to simulate the SDK being available
+        # This allows us to test the partner telemetry registration without requiring
+        # the actual databricks-sdk package to be installed
+        mock_sdk_module = MagicMock()
+        mock_sdk_module.WorkspaceClient = MagicMock(return_value=mock_workspace_client)
+        mock_sdk_module.useragent = mock_useragent
+        
+        # Mock both databricks and databricks.sdk modules to ensure the import works
+        with patch.dict(sys.modules, {
+            "databricks": MagicMock(),
+            "databricks.sdk": mock_sdk_module
+        }):
+            databricks_base._get_databricks_credentials(
+                api_key=None,
+                api_base=None,
+                headers=None,
+            )
 
-                mock_with_partner.assert_called_once_with("litellm")
+            # Verify that partner telemetry registration was called correctly
+            mock_useragent.with_partner.assert_called_once_with("litellm")
 
 
 class TestUserAgentFromEnvironment:
@@ -592,19 +603,28 @@ class TestAuthenticationPriority:
             "Authorization": "Bearer sdk-token"
         }
 
-        with patch(
-            "databricks.sdk.WorkspaceClient", return_value=mock_workspace_client
-        ):
-            with patch("databricks.sdk.useragent.with_partner"):
-                api_base, headers = databricks_base.databricks_validate_environment(
-                    api_key=None,
-                    api_base=None,
-                    endpoint_type="chat_completions",
-                    custom_endpoint=False,
-                    headers=None,
-                )
+        # Create a mock databricks.sdk module to simulate the SDK being available
+        # This allows us to test the SDK fallback authentication without requiring
+        # the actual databricks-sdk package to be installed
+        mock_sdk_module = MagicMock()
+        mock_sdk_module.WorkspaceClient = MagicMock(return_value=mock_workspace_client)
+        mock_sdk_module.useragent = MagicMock()
+        
+        # Mock both databricks and databricks.sdk modules to ensure the import works
+        with patch.dict(sys.modules, {
+            "databricks": MagicMock(),
+            "databricks.sdk": mock_sdk_module
+        }):
+            api_base, headers = databricks_base.databricks_validate_environment(
+                api_key=None,
+                api_base=None,
+                endpoint_type="chat_completions",
+                custom_endpoint=False,
+                headers=None,
+            )
 
-                assert "Authorization" in headers
+            # Verify that SDK authentication was used (headers contain Authorization)
+            assert "Authorization" in headers
 
 
 class TestEndpointURLConstruction:

@@ -3958,3 +3958,74 @@ async def test_update_team_guardrails_with_org_id():
             assert "include" in first_call_kwargs
             assert "teams" in first_call_kwargs["include"]
             assert first_call_kwargs["include"]["teams"] is True
+
+
+@pytest.mark.asyncio
+async def test_new_team_negative_max_budget():
+    """
+    Test that NewTeamRequest model allows negative max_budget values.
+    Validation is done at API level, not model level.
+    
+    This prevents GET requests from breaking when they receive data with negative budgets.
+    """
+    from litellm.proxy._types import NewTeamRequest
+    
+    # Should not raise any errors at model level
+    request = NewTeamRequest(team_alias="test-team", max_budget=-7.0)
+    assert request.max_budget == -7.0
+
+
+@pytest.mark.asyncio
+async def test_new_team_negative_team_member_budget():
+    """
+    Test that NewTeamRequest model allows negative team_member_budget values.
+    Validation is done at API level, not model level.
+    """
+    from litellm.proxy._types import NewTeamRequest
+    
+    # Should not raise any errors at model level
+    request = NewTeamRequest(team_alias="test-team", team_member_budget=-10.0)
+    assert request.team_member_budget == -10.0
+
+
+@pytest.mark.asyncio
+async def test_update_team_negative_max_budget():
+    """
+    Test that UpdateTeamRequest model allows negative max_budget values.
+    Validation is done at API level, not model level.
+    """
+    from litellm.proxy._types import UpdateTeamRequest
+    
+    # Should not raise any errors at model level
+    request = UpdateTeamRequest(team_id="test-team-id", max_budget=-5.0)
+    assert request.max_budget == -5.0
+
+
+@pytest.mark.asyncio
+async def test_update_team_negative_team_member_budget():
+    """
+    Test that UpdateTeamRequest model allows negative team_member_budget values.
+    Validation is done at API level, not model level.
+    """
+    from litellm.proxy._types import UpdateTeamRequest
+    
+    # Should not raise any errors at model level
+    request = UpdateTeamRequest(team_id="test-team-id", team_member_budget=-15.0)
+    assert request.team_member_budget == -15.0
+
+
+@pytest.mark.asyncio
+async def test_new_team_positive_budgets_accepted():
+    """
+    Test that NewTeamRequest accepts positive budget values.
+    """
+    from litellm.proxy._types import NewTeamRequest
+    
+    # Should not raise any errors
+    request = NewTeamRequest(
+        team_alias="test-team", 
+        max_budget=100.0, 
+        team_member_budget=50.0
+    )
+    assert request.max_budget == 100.0
+    assert request.team_member_budget == 50.0

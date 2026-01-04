@@ -163,3 +163,78 @@ async def test_update_budget_allows_null_max_budget(client_and_mocks):
     assert captured_data["max_budget"] is None, "max_budget should be None"
     
     mock_table.update.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_new_budget_negative_max_budget(client_and_mocks):
+    """
+    Test that /budget/new rejects negative max_budget values.
+    
+    This prevents the issue where negative budgets would always trigger
+    budget exceeded errors.
+    """
+    client, _, _ = client_and_mocks
+
+    payload = {
+        "budget_id": "budget_negative",
+        "max_budget": -7.0,
+    }
+    resp = client.post("/budget/new", json=payload)
+    assert resp.status_code == 400, resp.text
+    
+    detail = resp.json()["detail"]
+    assert "max_budget cannot be negative" in str(detail)
+
+
+@pytest.mark.asyncio
+async def test_new_budget_negative_soft_budget(client_and_mocks):
+    """
+    Test that /budget/new rejects negative soft_budget values.
+    """
+    client, _, _ = client_and_mocks
+
+    payload = {
+        "budget_id": "budget_negative_soft",
+        "soft_budget": -10.0,
+    }
+    resp = client.post("/budget/new", json=payload)
+    assert resp.status_code == 400, resp.text
+    
+    detail = resp.json()["detail"]
+    assert "soft_budget cannot be negative" in str(detail)
+
+
+@pytest.mark.asyncio
+async def test_update_budget_negative_max_budget(client_and_mocks):
+    """
+    Test that /budget/update rejects negative max_budget values.
+    """
+    client, _, _ = client_and_mocks
+
+    payload = {
+        "budget_id": "budget_update_negative",
+        "max_budget": -5.0,
+    }
+    resp = client.post("/budget/update", json=payload)
+    assert resp.status_code == 400, resp.text
+    
+    detail = resp.json()["detail"]
+    assert "max_budget cannot be negative" in str(detail)
+
+
+@pytest.mark.asyncio
+async def test_update_budget_negative_soft_budget(client_and_mocks):
+    """
+    Test that /budget/update rejects negative soft_budget values.
+    """
+    client, _, _ = client_and_mocks
+
+    payload = {
+        "budget_id": "budget_update_negative_soft",
+        "soft_budget": -15.0,
+    }
+    resp = client.post("/budget/update", json=payload)
+    assert resp.status_code == 400, resp.text
+    
+    detail = resp.json()["detail"]
+    assert "soft_budget cannot be negative" in str(detail)

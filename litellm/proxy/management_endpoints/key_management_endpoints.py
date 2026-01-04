@@ -1069,6 +1069,18 @@ async def generate_key_fn(
 
         verbose_proxy_logger.debug("entered /key/generate")
 
+        # Validate budget values are not negative
+        if data.max_budget is not None and data.max_budget < 0:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"max_budget cannot be negative. Received: {data.max_budget}"}
+            )
+        if data.soft_budget is not None and data.soft_budget < 0:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"soft_budget cannot be negative. Received: {data.soft_budget}"}
+            )
+
         if user_custom_key_generate is not None:
             if asyncio.iscoroutinefunction(user_custom_key_generate):
                 result = await user_custom_key_generate(data)  # type: ignore
@@ -1502,6 +1514,13 @@ async def update_key_fn(
     )
 
     try:
+        # Validate budget values are not negative
+        if data.max_budget is not None and data.max_budget < 0:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"max_budget cannot be negative. Received: {data.max_budget}"}
+            )
+
         data_json: dict = data.model_dump(exclude_unset=True, exclude_none=True)
         key = data_json.pop("key")
 
@@ -3020,9 +3039,13 @@ async def list_keys(
         description="Column to sort by (e.g. 'user_id', 'created_at', 'spend')",
     ),
     sort_order: str = Query(default="desc", description="Sort order ('asc' or 'desc')"),
+    expand: Optional[List[str]] = Query(None, description="Expand related objects (e.g. 'user')"),
 ) -> KeyListResponseObject:
     """
     List all keys for a given user / team / organization.
+
+    Parameters:
+        expand: Optional[List[str]] - Expand related objects (e.g. 'user' to include user information)
 
     Returns:
         {
@@ -3031,6 +3054,9 @@ async def list_keys(
             "current_page": int,
             "total_pages": int,
         }
+
+    When expand includes "user", each key object will include a "user" field with the associated user object.
+    Note: When expand=user is specified, full key objects are returned regardless of the return_full_object parameter.
     """
     try:
         from litellm.proxy.proxy_server import prisma_client
@@ -3080,6 +3106,7 @@ async def list_keys(
             include_created_by_keys=include_created_by_keys,
             sort_by=sort_by,
             sort_order=sort_order,
+            expand=expand,
         )
 
         verbose_proxy_logger.debug("Successfully prepared response")
@@ -3215,45 +3242,17 @@ def _validate_sort_params(
     return order_by
 
 
-async def _list_key_helper(
-    prisma_client: PrismaClient,
-    page: int,
-    size: int,
+def _build_key_filter_conditions(
     user_id: Optional[str],
     team_id: Optional[str],
     organization_id: Optional[str],
     key_alias: Optional[str],
     key_hash: Optional[str],
-    exclude_team_id: Optional[str] = None,
-    return_full_object: bool = False,
-    admin_team_ids: Optional[
-        List[str]
-    ] = None,  # New parameter for teams where user is admin
-    include_created_by_keys: bool = False,
-    sort_by: Optional[str] = None,
-    sort_order: str = "desc",
-) -> KeyListResponseObject:
-    """
-    Helper function to list keys
-    Args:
-        page: int
-        size: int
-        user_id: Optional[str]
-        team_id: Optional[str]
-        key_alias: Optional[str]
-        exclude_team_id: Optional[str] # exclude a specific team_id
-        return_full_object: bool # when true, will return UserAPIKeyAuth objects instead of just the token
-        admin_team_ids: Optional[List[str]] # list of team IDs where the user is an admin
-
-    Returns:
-        KeyListResponseObject
-        {
-            "keys": List[str] or List[UserAPIKeyAuth],  # Updated to reflect possible return types
-            "total_count": int,
-            "current_page": int,
-            "total_pages": int,
-        }
-    """
+    exclude_team_id: Optional[str],
+    admin_team_ids: Optional[List[str]],
+    include_created_by_keys: bool,
+) -> Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]]:
+    """Build filter conditions for key listing."""
     # Prepare filter conditions
     where: Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]] = {}
     where.update(_get_condition_to_filter_out_ui_session_tokens())
@@ -3294,6 +3293,59 @@ async def _list_key_helper(
         where.update(or_conditions[0])
 
     verbose_proxy_logger.debug(f"Filter conditions: {where}")
+    return where
+
+
+async def _list_key_helper(
+    prisma_client: PrismaClient,
+    page: int,
+    size: int,
+    user_id: Optional[str],
+    team_id: Optional[str],
+    organization_id: Optional[str],
+    key_alias: Optional[str],
+    key_hash: Optional[str],
+    exclude_team_id: Optional[str] = None,
+    return_full_object: bool = False,
+    admin_team_ids: Optional[
+        List[str]
+    ] = None,  # New parameter for teams where user is admin
+    include_created_by_keys: bool = False,
+    sort_by: Optional[str] = None,
+    sort_order: str = "desc",
+    expand: Optional[List[str]] = None,
+) -> KeyListResponseObject:
+    """
+    Helper function to list keys
+    Args:
+        page: int
+        size: int
+        user_id: Optional[str]
+        team_id: Optional[str]
+        key_alias: Optional[str]
+        exclude_team_id: Optional[str] # exclude a specific team_id
+        return_full_object: bool # when true, will return UserAPIKeyAuth objects instead of just the token
+        admin_team_ids: Optional[List[str]] # list of team IDs where the user is an admin
+
+    Returns:
+        KeyListResponseObject
+        {
+            "keys": List[str] or List[UserAPIKeyAuth],  # Updated to reflect possible return types
+            "total_count": int,
+            "current_page": int,
+            "total_pages": int,
+        }
+    """
+    where = _build_key_filter_conditions(
+        user_id=user_id,
+        team_id=team_id,
+        organization_id=organization_id,
+        key_alias=key_alias,
+        key_hash=key_hash,
+        exclude_team_id=exclude_team_id,
+        admin_team_ids=admin_team_ids,
+        include_created_by_keys=include_created_by_keys,
+    )
 
     # Calculate skip for pagination
     skip = (page - 1) * size
@@ -3334,13 +3386,28 @@ async def _list_key_helper(
     # Calculate total pages
     total_pages = -(-total_count // size)  # Ceiling division
 
+    # Fetch user information if expand includes "user"
+    user_map = {}
+    if expand and "user" in expand:
+        user_ids = [key.user_id for key in keys if key.user_id]
+        if user_ids:
+            users = await prisma_client.db.litellm_usertable.find_many(
+                where={"user_id": {"in": list(set(user_ids))}}  # Remove duplicates
+            )
+            user_map = {user.user_id: user for user in users}
+
     # Prepare response
     key_list: List[Union[str, UserAPIKeyAuth]] = []
     for key in keys:
         key_dict = key.dict()
         # Attach object_permission if object_permission_id is set
         key_dict = await attach_object_permission_to_dict(key_dict, prisma_client)
-        if return_full_object is True:
+
+        # Include user information if expand includes "user"
+        if expand and "user" in expand and key.user_id and key.user_id in user_map:
+            key_dict["user"] = user_map[key.user_id].dict()
+
+        if return_full_object is True or (expand and "user" in expand):
             key_list.append(UserAPIKeyAuth(**key_dict))  # Return full key object
         else:
             _token = key_dict.get("token")

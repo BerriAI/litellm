@@ -47,9 +47,6 @@ interface ModelInfoViewProps {
   accessToken: string | null;
   userID: string | null;
   userRole: string | null;
-  editModel: boolean;
-  setEditModalVisible: (visible: boolean) => void;
-  setSelectedModel: (model: any) => void;
   onModelUpdate?: (updatedModel: any) => void;
   modelAccessGroups: string[] | null;
 }
@@ -61,9 +58,6 @@ export default function ModelInfoView({
   accessToken,
   userID,
   userRole,
-  editModel,
-  setEditModalVisible,
-  setSelectedModel,
   onModelUpdate,
   modelAccessGroups,
 }: ModelInfoViewProps) {

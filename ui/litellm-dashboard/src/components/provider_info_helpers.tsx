@@ -1,4 +1,3 @@
-
 export enum Providers {
   A2A_Agent = "A2A Agent",
   AIML = "AI/ML API",
@@ -24,6 +23,7 @@ export enum Providers {
   Hosted_Vllm = "vllm",
   Infinity = "Infinity",
   JinaAI = "Jina AI",
+  MiniMax = "MiniMax",
   MistralAI = "Mistral AI",
   Ollama = "Ollama",
   OpenAI = "OpenAI",
@@ -43,6 +43,7 @@ export enum Providers {
   Voyage = "Voyage AI",
   xAI = "xAI",
   SAP = "SAP Generative AI Hub",
+  Watsonx = "Watsonx",
 }
 
 export const provider_map: Record<string, string> = {
@@ -56,6 +57,7 @@ export const provider_map: Record<string, string> = {
   Google_AI_Studio: "gemini",
   Bedrock: "bedrock",
   Groq: "groq",
+  MiniMax: "minimax",
   MistralAI: "mistral",
   Cohere: "cohere",
   OpenAI_Compatible: "openai",
@@ -88,7 +90,8 @@ export const provider_map: Record<string, string> = {
   DeepInfra: "deepinfra",
   Hosted_Vllm: "hosted_vllm",
   Infinity: "infinity",
-    SAP: "sap",
+  SAP: "sap",
+  Watsonx: "watsonx",
 };
 
 const asset_logos_folder = "../ui/assets/logos/";
@@ -112,6 +115,7 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.Google_AI_Studio]: `${asset_logos_folder}google.svg`,
   [Providers.Hosted_Vllm]: `${asset_logos_folder}vllm.png`,
   [Providers.Infinity]: `${asset_logos_folder}infinity.png`,
+  [Providers.MiniMax]: `${asset_logos_folder}minimax.svg`,
   [Providers.MistralAI]: `${asset_logos_folder}mistral.svg`,
   [Providers.Ollama]: `${asset_logos_folder}ollama.svg`,
   [Providers.OpenAI]: `${asset_logos_folder}openai_small.svg`,
@@ -136,7 +140,7 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.JinaAI]: `${asset_logos_folder}jina.png`,
   [Providers.VolcEngine]: `${asset_logos_folder}volcengine.png`,
   [Providers.DeepInfra]: `${asset_logos_folder}deepinfra.png`,
-    [Providers.SAP]: `${asset_logos_folder}sap.png`,
+  [Providers.SAP]: `${asset_logos_folder}sap.png`,
 };
 
 export const getProviderLogoAndName = (providerValue: string): { logo: string; displayName: string } => {
@@ -200,6 +204,8 @@ export const getPlaceholder = (selectedProvider: string): string => {
     return "fal_ai/fal-ai/flux-pro/v1.1-ultra";
   } else if (selectedProvider == Providers.RunwayML) {
     return "runwayml/gen4_turbo";
+  } else if (selectedProvider === Providers.Watsonx) {
+    return "watsonx/ibm/granite-3-3-8b-instruct";
   } else {
     return "gpt-3.5-turbo";
   }

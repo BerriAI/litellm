@@ -4626,7 +4626,7 @@ class ProxyStartupEvent:
                 verbose_proxy_logger.info("Batch cost check job scheduled successfully")
 
             except Exception as e:
-                verbose_proxy_logger.error(f"Failed to setup batch cost checking: {e}")
+                verbose_proxy_logger.debug(f"Failed to setup batch cost checking: {e}")
                 verbose_proxy_logger.debug(
                     "Checking batch cost for LiteLLM Managed Files is an Enterprise Feature. Skipping..."
                 )
@@ -4657,7 +4657,7 @@ class ProxyStartupEvent:
                 verbose_proxy_logger.info("Responses cost check job scheduled successfully")
 
             except Exception as e:
-                verbose_proxy_logger.error(f"Failed to setup responses cost checking: {e}")
+                verbose_proxy_logger.debug(f"Failed to setup responses cost checking: {e}")
                 verbose_proxy_logger.debug(
                     "Checking responses cost for LiteLLM Managed Files is an Enterprise Feature. Skipping..."
                 )
@@ -7322,13 +7322,9 @@ async def model_info_v2(
     """
     global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router
 
-    if llm_router is None:
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": f"No model list passed, models router={llm_router}. You can add a model through the config.yaml or on the LiteLLM Admin UI."
-            },
-        )
+    # Return empty data array when no models are configured (graceful handling for fresh installs)
+    if llm_router is None or not llm_router.model_list:
+        return {"data": []}
 
     if prisma_client is None:
         raise HTTPException(
@@ -8228,14 +8224,9 @@ async def model_group_info(
     """
     global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router
 
-    if llm_model_list is None:
-        raise HTTPException(
-            status_code=500, detail={"error": "LLM Model List not loaded in"}
-        )
-    if llm_router is None:
-        raise HTTPException(
-            status_code=500, detail={"error": "LLM Router is not loaded in"}
-        )
+    # Return empty data array when no models are configured (graceful handling for fresh installs)
+    if llm_model_list is None or llm_router is None or not llm_model_list:
+        return {"data": []}
 
     from litellm.proxy.utils import get_available_models_for_user
 

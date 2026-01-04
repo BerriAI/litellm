@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 # Adds the grandparent directory to sys.path to allow importing project modules
 sys.path.insert(0, os.path.abspath("../.."))
+from opentelemetry import trace
 from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
 from opentelemetry.sdk._logs.export import InMemoryLogExporter, SimpleLogRecordProcessor
 from opentelemetry.sdk.metrics import MeterProvider
@@ -1318,3 +1319,456 @@ class TestOpenTelemetryProtocolSelection(unittest.TestCase):
                 "http://collector:4317/v1/traces", "logs"
             )
             self.assertEqual(normalized, "http://collector:4317/v1/logs")
+
+
+class TestOpenTelemetryExternalSpan(unittest.TestCase):
+    """
+    Test suite for external span handling in OpenTelemetry integration.
+
+    These tests verify that LiteLLM correctly handles spans created outside
+    of LiteLLM (e.g., by Langfuse SDK, user application code, or global context)
+    without closing them prematurely.
+
+    Background:
+    - External spans can come from: Langfuse SDK, user code, HTTP traceparent headers, global context
+    - LiteLLM should NEVER close spans it did not create
+    - Bug: LiteLLM was reusing and closing external spans in _start_primary_span
+    """
+
+    HERE = os.path.dirname(__file__)
+
+    def setUp(self):
+        """Set up common test fixtures"""
+        self.span_exporter = InMemorySpanExporter()
+        self.tracer_provider = TracerProvider()
+        self.tracer_provider.add_span_processor(
+            SimpleSpanProcessor(self.span_exporter)
+        )
+
+        # Don't set global tracer provider - instead, get tracers directly from our provider
+        # This avoids "Overriding of current TracerProvider is not allowed" warnings
+
+        # Clear any existing spans
+        self.span_exporter.clear()
+
+    def _create_test_kwargs_and_response(self):
+        """Load test data from JSON files"""
+        with open(
+            os.path.join(self.HERE, "open_telemetry", "data", "captured_kwargs.json")
+        ) as f:
+            kwargs = json.load(f)
+
+        with open(
+            os.path.join(self.HERE, "open_telemetry", "data", "captured_response.json")
+        ) as f:
+            response_obj = json.load(f)
+
+        return kwargs, response_obj
+
+    def _get_spans_by_name(self, name):
+        """Get all spans with the given name"""
+        spans = self.span_exporter.get_finished_spans()
+        return [s for s in spans if s.name == name]
+
+    @patch.dict(os.environ, {"USE_OTEL_LITELLM_REQUEST_SPAN": "false"}, clear=False)
+    def test_external_span_not_closed_with_use_otel_litellm_request_span_false(self):
+        """
+        Test that external spans are not closed when USE_OTEL_LITELLM_REQUEST_SPAN=false (default).
+
+        Expected behavior:
+        - External span remains open (is_recording = True)
+        - raw_gen_ai_request spans are direct children of external span (shallow hierarchy)
+        - No litellm_request span is created
+        - Multiple completions work correctly
+        """
+        # Initialize OpenTelemetry
+        otel = OpenTelemetry(tracer_provider=self.tracer_provider)
+
+        # Load test data
+        kwargs, response_obj = self._create_test_kwargs_and_response()
+
+        # Create external parent span using our test TracerProvider
+        tracer = self.tracer_provider.get_tracer(__name__)
+
+        with tracer.start_as_current_span("external_parent_span") as parent_span:
+            parent_ctx = parent_span.get_span_context()
+            parent_trace_id = parent_ctx.trace_id
+            parent_span_id = parent_ctx.span_id
+
+            self.assertTrue(
+                parent_span.is_recording(),
+                "External span should be recording before completion calls"
+            )
+
+            # First completion call
+            start_time = datetime.utcnow()
+            end_time = start_time + timedelta(seconds=1)
+            otel._handle_success(kwargs, response_obj, start_time, end_time)
+
+            # Verify parent span is still recording
+            self.assertTrue(
+                parent_span.is_recording(),
+                "External span should still be recording after first completion"
+            )
+
+            # Second completion call
+            start_time2 = end_time
+            end_time2 = start_time2 + timedelta(seconds=1)
+            otel._handle_success(kwargs, response_obj, start_time2, end_time2)
+
+            # Verify parent span is still recording
+            self.assertTrue(
+                parent_span.is_recording(),
+                "External span should still be recording after second completion"
+            )
+
+        # After exiting context, verify spans
+        spans = self.span_exporter.get_finished_spans()
+
+        # All spans should have the same trace_id
+        for span in spans:
+            self.assertEqual(
+                span.context.trace_id,
+                parent_trace_id,
+                f"Span {span.name} should have same trace_id as parent"
+            )
+
+        # Should have external_parent_span
+        parent_spans = self._get_spans_by_name("external_parent_span")
+        self.assertEqual(len(parent_spans), 1, "Should have exactly one external_parent_span")
+
+        # Verify LiteLLM set attributes on external parent span
+        parent_span_finished = parent_spans[0]
+        self.assertIsNotNone(
+            parent_span_finished.attributes,
+            "Parent span should have attributes set by LiteLLM"
+        )
+        self.assertIn(
+            "gen_ai.request.model",
+            parent_span_finished.attributes,
+            "Parent span should have model attribute from LiteLLM"
+        )
+
+        # Should have raw_gen_ai_request spans (if message_logging is on)
+        raw_spans = self._get_spans_by_name("raw_gen_ai_request")
+        # Note: May be 0 if message_logging is off, or 2 if on
+
+        # Should NOT have litellm_request spans (USE_OTEL_LITELLM_REQUEST_SPAN=false)
+        litellm_spans = self._get_spans_by_name("litellm_request")
+        self.assertEqual(
+            len(litellm_spans),
+            0,
+            "Should NOT have litellm_request spans when USE_OTEL_LITELLM_REQUEST_SPAN=false"
+        )
+
+        # Verify raw_gen_ai_request spans are direct children of external span
+        for raw_span in raw_spans:
+            self.assertEqual(
+                raw_span.parent.span_id if raw_span.parent else None,
+                parent_span_id,
+                f"raw_gen_ai_request should be direct child of external_parent_span"
+            )
+
+    @patch.dict(os.environ, {"USE_OTEL_LITELLM_REQUEST_SPAN": "true"}, clear=False)
+    def test_external_span_not_closed_with_use_otel_litellm_request_span_true(self):
+        """
+        Test that external spans are not closed when USE_OTEL_LITELLM_REQUEST_SPAN=true.
+
+        Expected behavior:
+        - External span remains open (is_recording = True)
+        - litellm_request spans are created as children of external span
+        - raw_gen_ai_request spans are children of litellm_request spans
+        - Correct hierarchy: external_parent → litellm_request → raw_gen_ai_request
+        """
+        # Initialize OpenTelemetry
+        otel = OpenTelemetry(tracer_provider=self.tracer_provider)
+
+        # Load test data
+        kwargs, response_obj = self._create_test_kwargs_and_response()
+
+        # Create external parent span using our test TracerProvider
+        tracer = self.tracer_provider.get_tracer(__name__)
+
+        with tracer.start_as_current_span("external_parent_span") as parent_span:
+            parent_ctx = parent_span.get_span_context()
+            parent_trace_id = parent_ctx.trace_id
+            parent_span_id = parent_ctx.span_id
+
+            # First completion call
+            start_time = datetime.utcnow()
+            end_time = start_time + timedelta(seconds=1)
+            otel._handle_success(kwargs, response_obj, start_time, end_time)
+
+            # Verify parent span is still recording
+            self.assertTrue(
+                parent_span.is_recording(),
+                "External span should still be recording after first completion"
+            )
+
+            # Second completion call
+            start_time2 = end_time
+            end_time2 = start_time2 + timedelta(seconds=1)
+            otel._handle_success(kwargs, response_obj, start_time2, end_time2)
+
+            # Verify parent span is still recording
+            self.assertTrue(
+                parent_span.is_recording(),
+                "External span should still be recording after second completion"
+            )
+
+        # After exiting context, verify spans
+        spans = self.span_exporter.get_finished_spans()
+
+        # All spans should have the same trace_id
+        for span in spans:
+            self.assertEqual(
+                span.context.trace_id,
+                parent_trace_id,
+                f"Span {span.name} should have same trace_id as parent"
+            )
+
+        # Should have litellm_request spans (USE_OTEL_LITELLM_REQUEST_SPAN=true)
+        litellm_spans = self._get_spans_by_name("litellm_request")
+        self.assertEqual(
+            len(litellm_spans),
+            2,
+            "Should have 2 litellm_request spans when USE_OTEL_LITELLM_REQUEST_SPAN=true"
+        )
+
+        # Verify litellm_request spans are children of external span
+        for litellm_span in litellm_spans:
+            self.assertEqual(
+                litellm_span.parent.span_id if litellm_span.parent else None,
+                parent_span_id,
+                "litellm_request should be child of external_parent_span"
+            )
+
+        # Verify raw_gen_ai_request spans (if present) are children of litellm_request
+        raw_spans = self._get_spans_by_name("raw_gen_ai_request")
+        if raw_spans:
+            litellm_span_ids = {s.context.span_id for s in litellm_spans}
+            for raw_span in raw_spans:
+                self.assertIn(
+                    raw_span.parent.span_id if raw_span.parent else None,
+                    litellm_span_ids,
+                    "raw_gen_ai_request should be child of litellm_request"
+                )
+
+    @patch.dict(os.environ, {"USE_OTEL_LITELLM_REQUEST_SPAN": "false"}, clear=False)
+    def test_external_span_with_multiple_completions(self):
+        """
+        Test that multiple completion calls work correctly within external span context.
+
+        Expected behavior:
+        - Both completion calls succeed
+        - All spans belong to the same trace
+        - External span remains open throughout
+        - No errors or warnings about "ended span"
+        """
+        # Initialize OpenTelemetry
+        otel = OpenTelemetry(tracer_provider=self.tracer_provider)
+
+        # Load test data
+        kwargs, response_obj = self._create_test_kwargs_and_response()
+
+        # Create external parent span using our test TracerProvider
+        tracer = self.tracer_provider.get_tracer(__name__)
+
+        with tracer.start_as_current_span("external_parent_span") as parent_span:
+            parent_ctx = parent_span.get_span_context()
+            parent_trace_id = parent_ctx.trace_id
+
+            # Make multiple completion calls
+            for i in range(3):
+                start_time = datetime.utcnow()
+                end_time = start_time + timedelta(seconds=1)
+
+                # This should not raise any exceptions
+                otel._handle_success(kwargs, response_obj, start_time, end_time)
+
+                # Verify parent span is still recording after each call
+                self.assertTrue(
+                    parent_span.is_recording(),
+                    f"External span should still be recording after completion #{i+1}"
+                )
+
+        # Verify all spans have the same trace_id
+        spans = self.span_exporter.get_finished_spans()
+        for span in spans:
+            self.assertEqual(
+                span.context.trace_id,
+                parent_trace_id,
+                f"All spans should belong to the same trace"
+            )
+
+        # Should have the external parent span
+        parent_spans = self._get_spans_by_name("external_parent_span")
+        self.assertEqual(len(parent_spans), 1, "Should have exactly one external_parent_span")
+
+        # Verify LiteLLM set attributes on external parent span
+        parent_span_finished = parent_spans[0]
+        self.assertIn(
+            "gen_ai.request.model",
+            parent_span_finished.attributes,
+            "Parent span should have model attribute from LiteLLM"
+        )
+
+    @patch.dict(os.environ, {"USE_OTEL_LITELLM_REQUEST_SPAN": "false"}, clear=False)
+    def test_external_span_from_global_context(self):
+        """
+        Test external span detection from global context (Priority 3 in _get_span_context).
+
+        This simulates the case where a span is set in the global context
+        (e.g., by user code or Langfuse SDK) and LiteLLM detects it via
+        trace.get_current_span().
+
+        Expected behavior:
+        - LiteLLM detects the span from global context
+        - External span is not closed
+        - Correct parent-child relationship
+        """
+        # Initialize OpenTelemetry
+        otel = OpenTelemetry(tracer_provider=self.tracer_provider)
+
+        # Load test data
+        kwargs, response_obj = self._create_test_kwargs_and_response()
+
+        # Create external parent span and set it as current using our test TracerProvider
+        tracer = self.tracer_provider.get_tracer(__name__)
+
+        with tracer.start_as_current_span("external_global_span") as parent_span:
+            parent_ctx = parent_span.get_span_context()
+            parent_trace_id = parent_ctx.trace_id
+
+            # Verify the span is in global context
+            current_span = trace.get_current_span()
+            self.assertEqual(current_span, parent_span, "Span should be in global context")
+
+            # Make completion call
+            start_time = datetime.utcnow()
+            end_time = start_time + timedelta(seconds=1)
+            otel._handle_success(kwargs, response_obj, start_time, end_time)
+
+            # Verify parent span is still recording
+            self.assertTrue(
+                parent_span.is_recording(),
+                "External span from global context should not be closed"
+            )
+
+        # Verify trace structure
+        spans = self.span_exporter.get_finished_spans()
+        for span in spans:
+            self.assertEqual(
+                span.context.trace_id,
+                parent_trace_id,
+                "All spans should have the same trace_id"
+            )
+
+    @patch.dict(os.environ, {"USE_OTEL_LITELLM_REQUEST_SPAN": "false"}, clear=False)
+    def test_external_span_hierarchy_preserved(self):
+        """
+        Test that span hierarchy is correctly preserved with external parent.
+
+        Expected behavior:
+        - Parent span IDs are correct
+        - Trace structure matches expected hierarchy
+        - Span names are correct
+        """
+        # Initialize OpenTelemetry
+        otel = OpenTelemetry(tracer_provider=self.tracer_provider)
+        otel.message_logging = True  # Enable message logging to get raw_gen_ai_request spans
+
+        # Load test data
+        kwargs, response_obj = self._create_test_kwargs_and_response()
+
+        # Create external parent span using our test TracerProvider
+        tracer = self.tracer_provider.get_tracer(__name__)
+
+        with tracer.start_as_current_span("external_parent_span") as parent_span:
+            parent_span_id = parent_span.get_span_context().span_id
+
+            # Make completion call
+            start_time = datetime.utcnow()
+            end_time = start_time + timedelta(seconds=1)
+            otel._handle_success(kwargs, response_obj, start_time, end_time)
+
+        # Verify hierarchy
+        spans = self.span_exporter.get_finished_spans()
+
+        # Get spans by name
+        parent_spans = self._get_spans_by_name("external_parent_span")
+        raw_spans = self._get_spans_by_name("raw_gen_ai_request")
+
+        self.assertEqual(len(parent_spans), 1, "Should have one parent span")
+
+        # Verify parent-child relationship
+        if raw_spans:  # If message_logging is on
+            for raw_span in raw_spans:
+                self.assertEqual(
+                    raw_span.parent.span_id if raw_span.parent else None,
+                    parent_span_id,
+                    "raw_gen_ai_request should be child of external_parent_span"
+                )
+
+    @patch.dict(os.environ, {"USE_OTEL_LITELLM_REQUEST_SPAN": "false"}, clear=False)
+    def test_external_span_not_ended_on_failure(self):
+        """
+        Test that external spans are not closed even on failure.
+
+        Expected behavior:
+        - When _handle_failure is called with external span context
+        - External span remains open (is_recording = True)
+        - Error span is created correctly
+        - External span status is NOT changed by LiteLLM
+        """
+        # Initialize OpenTelemetry
+        otel = OpenTelemetry(tracer_provider=self.tracer_provider)
+
+        # Load test data
+        kwargs, response_obj = self._create_test_kwargs_and_response()
+
+        # Create external parent span using our test TracerProvider
+        tracer = self.tracer_provider.get_tracer(__name__)
+
+        with tracer.start_as_current_span("external_parent_span") as parent_span:
+            parent_ctx = parent_span.get_span_context()
+            parent_trace_id = parent_ctx.trace_id
+
+            # Simulate failure
+            start_time = datetime.utcnow()
+            end_time = start_time + timedelta(seconds=1)
+
+            # Create error response object
+            error_response = {"error": "Test error"}
+
+            # Call _handle_failure
+            otel._handle_failure(kwargs, error_response, start_time, end_time)
+
+            # Verify parent span is still recording
+            self.assertTrue(
+                parent_span.is_recording(),
+                "External span should still be recording even after failure"
+            )
+
+        # Verify trace structure
+        spans = self.span_exporter.get_finished_spans()
+
+        # All spans should have the same trace_id
+        for span in spans:
+            self.assertEqual(
+                span.context.trace_id,
+                parent_trace_id,
+                "All spans should have the same trace_id even on failure"
+            )
+
+        # Should have external_parent_span
+        parent_spans = self._get_spans_by_name("external_parent_span")
+        self.assertEqual(len(parent_spans), 1, "Should have exactly one external_parent_span")
+
+        # Verify LiteLLM set attributes on external parent span even on failure
+        parent_span_finished = parent_spans[0]
+        self.assertIn(
+            "gen_ai.request.model",
+            parent_span_finished.attributes,
+            "Parent span should have model attribute from LiteLLM even on failure"
+        )

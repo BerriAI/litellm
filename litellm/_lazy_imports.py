@@ -34,6 +34,7 @@ from ._lazy_imports_registry import (
     DOTPROMPT_NAMES,
     LLM_CONFIG_NAMES,
     TYPES_NAMES,
+    LLM_PROVIDER_LOGIC_NAMES,
     # Import maps
     _UTILS_IMPORT_MAP,
     _COST_CALCULATOR_IMPORT_MAP,
@@ -45,6 +46,7 @@ from ._lazy_imports_registry import (
     _DOTPROMPT_IMPORT_MAP,
     _TYPES_IMPORT_MAP,
     _LLM_CONFIGS_IMPORT_MAP,
+    _LLM_PROVIDER_LOGIC_IMPORT_MAP,
 )
 
 
@@ -181,6 +183,8 @@ def _get_lazy_import_registry() -> dict[str, Callable[[str], Any]]:
             _LAZY_IMPORT_REGISTRY[name] = _lazy_import_llm_configs
         for name in TYPES_NAMES:
             _LAZY_IMPORT_REGISTRY[name] = _lazy_import_types
+        for name in LLM_PROVIDER_LOGIC_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_llm_provider_logic
     
     return _LAZY_IMPORT_REGISTRY
 
@@ -296,6 +300,11 @@ def _lazy_import_llm_configs(name: str) -> Any:
 def _lazy_import_litellm_logging(name: str) -> Any:
     """Handler for litellm_logging module (Logging, modify_integration)"""
     return _generic_lazy_import(name, _LITELLM_LOGGING_IMPORT_MAP, "Litellm logging")
+
+
+def _lazy_import_llm_provider_logic(name: str) -> Any:
+    """Handler for LLM provider logic functions (get_llm_provider, etc.)"""
+    return _generic_lazy_import(name, _LLM_PROVIDER_LOGIC_IMPORT_MAP, "LLM provider logic")
 
 # ============================================================================
 # SPECIAL HANDLERS

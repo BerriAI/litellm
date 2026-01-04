@@ -128,6 +128,7 @@ run_grype_scans() {
         "GHSA-5j98-mcp5-4vw2"
         "CVE-2025-13836" # Python 3.13 HTTP response reading OOM/DoS - no fix available in base image
         "CVE-2025-12084" # Python 3.13 xml.dom.minidom quadratic algorithm - no fix available in base image
+        "CVE-2025-60876" # BusyBox wget HTTP request splitting - no fix available in Chainguard Wolfi base image
     )
 
     # Build JSON array of allowlisted CVE IDs for jq

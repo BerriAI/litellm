@@ -19,6 +19,7 @@ import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/regenerate_key_modal";
 import { parseErrorMessage } from "../shared/errorUtils";
 import { KeyEditView } from "./key_edit_view";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 interface KeyInfoViewProps {
   keyId: string;
@@ -26,12 +27,7 @@ interface KeyInfoViewProps {
   keyData: KeyResponse | undefined;
   onKeyDataUpdate?: (data: Partial<KeyResponse>) => void;
   onDelete?: () => void;
-  accessToken: string | null;
-  userID: string | null;
-  userRole: string | null;
   teams: any[] | null;
-  premiumUser: boolean;
-  setAccessToken?: (token: string) => void;
   backButtonText?: string;
 }
 
@@ -43,19 +39,14 @@ interface KeyInfoViewProps {
  * ─────────────────────────────────────────────────────────────────────────
  */
 export default function KeyInfoView({
-  keyId,
   onClose,
   keyData,
-  accessToken,
-  userID,
-  userRole,
   teams,
   onKeyDataUpdate,
   onDelete,
-  premiumUser,
-  setAccessToken,
   backButtonText = "Back to Keys",
 }: KeyInfoViewProps) {
+  const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
   const { teams: teamsData } = useTeams();
   const [isEditing, setIsEditing] = useState(false);
   const [form] = Form.useForm();
@@ -400,9 +391,6 @@ export default function KeyInfoView({
         selectedToken={currentKeyData}
         visible={isRegenerateModalOpen}
         onClose={() => setIsRegenerateModalOpen(false)}
-        accessToken={accessToken}
-        premiumUser={premiumUser}
-        setAccessToken={setAccessToken}
         onKeyUpdate={handleRegenerateKeyUpdate}
       />
 
