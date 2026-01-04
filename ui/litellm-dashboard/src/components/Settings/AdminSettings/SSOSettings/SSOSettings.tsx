@@ -10,12 +10,13 @@ import DeleteSSOSettingsModal from "./Modals/DeleteSSOSettingsModal";
 import EditSSOSettingsModal from "./Modals/EditSSOSettingsModal";
 import RedactableField from "./RedactableField";
 import SSOSettingsEmptyPlaceholder from "./SSOSettingsEmptyPlaceholder";
+import SSOSettingsLoadingSkeleton from "./SSOSettingsLoadingSkeleton";
 import { ssoProviderDisplayNames, ssoProviderLogoMap } from "./constants";
 
 const { Title, Text } = Typography;
 
 export default function SSOSettings() {
-  const { data: ssoSettings, refetch } = useSSOSettings();
+  const { data: ssoSettings, refetch, isLoading } = useSSOSettings();
   const { accessToken } = useAuthorized();
   const [isDeleteModalVisible, setIsDeleteModalVisible] = useState(false);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
@@ -26,27 +27,28 @@ export default function SSOSettings() {
     Boolean(ssoSettings?.values.generic_client_id);
 
   // Determine the SSO provider based on the configuration
-  let selectedProvider: string | null = null;
-  if (ssoSettings?.values.google_client_id) {
-    selectedProvider = "google";
-  } else if (ssoSettings?.values.microsoft_client_id) {
-    selectedProvider = "microsoft";
-  } else if (ssoSettings?.values.generic_client_id) {
-    // Check if it looks like Okta based on endpoints
-    if (
-      ssoSettings.values.generic_authorization_endpoint?.includes("okta") ||
-      ssoSettings.values.generic_authorization_endpoint?.includes("auth0")
-    ) {
-      selectedProvider = "okta";
-    } else {
-      selectedProvider = "generic";
+  const detectSSOProvider = (values: SSOSettingsValues): string | null => {
+    if (values.google_client_id) return "google";
+    if (values.microsoft_client_id) return "microsoft";
+    if (values.generic_client_id) {
+      // Check if it looks like Okta/Auth0 based on endpoints
+      if (
+        values.generic_authorization_endpoint?.includes("okta") ||
+        values.generic_authorization_endpoint?.includes("auth0")
+      ) {
+        return "okta";
+      }
+      return "generic";
     }
-  }
+    return null;
+  };
+
+  const selectedProvider = ssoSettings?.values ? detectSSOProvider(ssoSettings.values) : null;
 
   const renderEndpointValue = (value?: string | null) => (
-    <span className="font-mono text-gray-600 text-sm break-all">
-      {value || <span className="text-gray-400 italic">Not configured</span>}
-    </span>
+    <Text className="font-mono text-gray-600 text-sm" copyable={!!value}>
+      {value || "-"}
+    </Text>
   );
 
   const renderSimpleValue = (value?: string | null) =>
@@ -179,38 +181,44 @@ export default function SSOSettings() {
   };
 
   return (
-    <Card>
-      <Space direction="vertical" size="large" className="w-full">
-        {/* Header Section */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Shield className="w-6 h-6 text-gray-400" />
-            <div>
-              <Title level={3}>SSO Configuration</Title>
-              <Text type="secondary">Manage Single Sign-On authentication settings</Text>
+    <>
+      {isLoading ? (
+        <SSOSettingsLoadingSkeleton />
+      ) : (
+        <Card>
+          <Space direction="vertical" size="large" className="w-full">
+            {/* Header Section */}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Shield className="w-6 h-6 text-gray-400" />
+                <div>
+                  <Title level={3}>SSO Configuration</Title>
+                  <Text type="secondary">Manage Single Sign-On authentication settings</Text>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                {isSSOConfigured && (
+                  <>
+                    <Button icon={<Edit className="w-4 h-4" />} onClick={() => setIsEditModalVisible(true)}>
+                      Edit SSO Settings
+                    </Button>
+                    <Button danger icon={<Trash2 className="w-4 h-4" />} onClick={() => setIsDeleteModalVisible(true)}>
+                      Delete SSO Settings
+                    </Button>
+                  </>
+                )}
+              </div>
             </div>
-          </div>
 
-          <div className="flex items-center gap-3">
-            {isSSOConfigured && (
-              <>
-                <Button icon={<Edit className="w-4 h-4" />} onClick={() => setIsEditModalVisible(true)}>
-                  Edit SSO Settings
-                </Button>
-                <Button danger icon={<Trash2 className="w-4 h-4" />} onClick={() => setIsDeleteModalVisible(true)}>
-                  Delete SSO Settings
-                </Button>
-              </>
+            {isSSOConfigured ? (
+              renderSSOSettings()
+            ) : (
+              <SSOSettingsEmptyPlaceholder onAdd={() => setIsAddModalVisible(true)} />
             )}
-          </div>
-        </div>
-
-        {isSSOConfigured ? (
-          renderSSOSettings()
-        ) : (
-          <SSOSettingsEmptyPlaceholder onAdd={() => setIsAddModalVisible(true)} />
-        )}
-      </Space>
+          </Space>
+        </Card>
+      )}
 
       <DeleteSSOSettingsModal
         isVisible={isDeleteModalVisible}
@@ -236,6 +244,6 @@ export default function SSOSettings() {
           refetch();
         }}
       />
-    </Card>
+    </>
   );
 }
