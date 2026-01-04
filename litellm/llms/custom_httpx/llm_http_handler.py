@@ -2005,6 +2005,10 @@ class BaseLLMHTTPHandler:
         """
         Handles responses API requests.
         When _is_async=True, returns a coroutine instead of making the call directly.
+
+        Keeps the pre-transform request context for streaming so post-call hooks/metadata
+        (added for Responses API parity with chat) receive the original params instead of
+        the provider-shaped body that caused them to be skipped before.
         """
 
         if _is_async:
@@ -2061,11 +2065,16 @@ class BaseLLMHTTPHandler:
         if extra_body:
             data.update(extra_body)
 
+        # Preserve the OpenAI-style request context (not sent to the provider) for streaming
+        # hooks/metadata; the streaming iterator now consumes this to run deployment hooks
+        # with the same info as chat, including litellm_params.
         request_context: Dict[str, Any] = {"input": input}
         try:
             request_context.update(response_api_optional_request_params)
         except Exception:
             pass
+        # Needed by streaming callbacks/metadata helpers to reconstruct api_base/model_id
+        # but never included in the outbound provider payload.
         request_context["litellm_params"] = dict(litellm_params)
 
         ## LOGGING
@@ -2201,11 +2210,16 @@ class BaseLLMHTTPHandler:
         if extra_body:
             data.update(extra_body)
 
+        # Preserve the OpenAI-style request context (not sent to the provider) for streaming
+        # hooks/metadata; the streaming iterator now consumes this to run deployment hooks
+        # with the same info as chat, including litellm_params.
         request_context: Dict[str, Any] = {"input": input}
         try:
             request_context.update(response_api_optional_request_params)
         except Exception:
             pass
+        # Needed by streaming callbacks/metadata helpers to reconstruct api_base/model_id
+        # but never included in the outbound provider payload.
         request_context["litellm_params"] = dict(litellm_params)
 
         ## LOGGING
