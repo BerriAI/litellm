@@ -1,6 +1,6 @@
-import asyncio
 from typing import TYPE_CHECKING, Any
 
+from litellm.router_utils.tracked_semaphore import TrackedSemaphore
 from litellm.utils import calculate_max_parallel_requests
 
 if TYPE_CHECKING:
@@ -28,7 +28,7 @@ class InitalizeCachedClient:
             default_max_parallel_requests=litellm_router_instance.default_max_parallel_requests,
         )
         if calculated_max_parallel_requests:
-            semaphore = asyncio.Semaphore(calculated_max_parallel_requests)
+            semaphore = TrackedSemaphore(calculated_max_parallel_requests)
             cache_key = f"{model_id}_max_parallel_requests_client"
             litellm_router_instance.cache.set_cache(
                 key=cache_key,
