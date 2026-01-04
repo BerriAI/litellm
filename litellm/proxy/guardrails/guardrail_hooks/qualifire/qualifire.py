@@ -212,57 +212,23 @@ class QualifireGuardrail(CustomGuardrail):
 
         return False
 
-    async def apply_guardrail(
+    async def _run_qualifire_check(
         self,
-        inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
-        input_type: Literal["request", "response"],
-        logging_obj: Optional[LiteLLMLoggingObj] = None,
-    ) -> GenericGuardrailAPIInputs:
+        messages: List[AllMessageValues],
+        output: Optional[str],
+        dynamic_params: Dict[str, Any],
+    ) -> None:
         """
-        Apply Qualifire guardrail to the given inputs.
-
-        This method is called by the unified guardrail system for both
-        input (request) and output (response) validation.
+        Core Qualifire check logic - shared between hooks.
 
         Args:
-            inputs: Dictionary containing:
-                - texts: List of texts to check
-                - structured_messages: Structured messages from the request
-                - tool_calls: Tool calls if present
-            request_data: The original request data
-            input_type: "request" for pre-call, "response" for post-call
-            logging_obj: Optional logging object
-
-        Returns:
-            GenericGuardrailAPIInputs - unchanged if allowed through
+            messages: The conversation messages
+            output: The LLM output text (for post_call)
+            dynamic_params: Dynamic parameters from request body
 
         Raises:
             HTTPException: If content is blocked
         """
-        # Get dynamic params from request body (allows runtime overrides)
-        dynamic_params = self.get_guardrail_dynamic_request_body_params(
-            request_data=request_data
-        )
-
-        # Extract messages from structured_messages or request_data
-        messages: Optional[List[AllMessageValues]] = inputs.get("structured_messages")
-        if not messages:
-            messages = request_data.get("messages")
-
-        if not messages:
-            verbose_proxy_logger.warning(
-                "Qualifire Guardrail: No messages found in inputs or request_data"
-            )
-            return inputs
-
-        # For response, extract output text from inputs
-        output: Optional[str] = None
-        if input_type == "response":
-            texts = inputs.get("texts", [])
-            if texts:
-                output = texts[-1] if isinstance(texts, list) else str(texts)
-
         # Apply dynamic param overrides
         evaluation_id = dynamic_params.get("evaluation_id") or self.evaluation_id
         assertions = dynamic_params.get("assertions") or self.assertions
@@ -292,7 +258,6 @@ class QualifireGuardrail(CustomGuardrail):
                 )
             else:
                 # Use evaluate with individual checks
-                # Build kwargs with potential dynamic assertion override
                 kwargs: Dict[str, Any] = {"messages": qualifire_messages}
 
                 if output is not None:
@@ -322,6 +287,12 @@ class QualifireGuardrail(CustomGuardrail):
                 "status": getattr(result, "status", None),
             }
 
+            verbose_proxy_logger.debug(
+                "Qualifire Guardrail: Got result from API, score=%s, status=%s",
+                qualifire_response["score"],
+                qualifire_response["status"],
+            )
+
             # Check if any evaluation flagged the content
             is_flagged = self._check_if_flagged(result)
 
@@ -346,6 +317,75 @@ class QualifireGuardrail(CustomGuardrail):
         except Exception as e:
             verbose_proxy_logger.error(f"Qualifire Guardrail error: {e}")
             raise
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[LiteLLMLoggingObj] = None,
+    ) -> GenericGuardrailAPIInputs:
+        """
+        Apply Qualifire guardrail to the given inputs.
+
+        This method is called by the unified guardrail system for both
+        input (request) and output (response) validation.
+
+        Args:
+            inputs: Dictionary containing:
+                - texts: List of texts to check
+                - structured_messages: Structured messages from the request (pre-call only)
+                - tool_calls: Tool calls if present
+            request_data: The original request data
+            input_type: "request" for pre-call, "response" for post-call
+            logging_obj: Optional logging object
+
+        Returns:
+            GenericGuardrailAPIInputs - unchanged if allowed through
+
+        Raises:
+            HTTPException: If content is blocked
+        """
+        # Get dynamic params from request body (allows runtime overrides)
+        dynamic_params = self.get_guardrail_dynamic_request_body_params(
+            request_data=request_data
+        )
+
+        # Extract messages from structured_messages or request_data
+        messages: Optional[List[AllMessageValues]] = inputs.get("structured_messages")
+        if not messages:
+            messages = request_data.get("messages")
+
+        # For response (post_call), messages may not be available in the inputs
+        # We need to work with texts instead and construct messages if needed
+        output: Optional[str] = None
+        texts = inputs.get("texts", [])
+
+        if input_type == "response":
+            # For post_call, extract output from texts
+            if texts:
+                output = texts[-1] if isinstance(texts, list) else str(texts)
+
+            # If no structured messages available, construct from texts
+            if not messages and texts:
+                # Create a simple message structure for the output
+                messages = [{"role": "assistant", "content": output or ""}]  # type: ignore
+
+        if not messages:
+            # For pre_call with no messages, try to construct from texts
+            if texts:
+                messages = [{"role": "user", "content": texts[-1] if texts else ""}]  # type: ignore
+            else:
+                verbose_proxy_logger.debug(
+                    "Qualifire Guardrail: No messages or texts found, skipping"
+                )
+                return inputs
+
+        await self._run_qualifire_check(
+            messages=messages,
+            output=output,
+            dynamic_params=dynamic_params,
+        )
 
         return inputs
 
