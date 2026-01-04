@@ -149,10 +149,6 @@ def _get_cached_audio_utils():
         _audio_utils_module = litellm.litellm_core_utils.audio_utils.utils
     return _audio_utils_module
 
-from litellm.types.llms.anthropic import (
-    ANTHROPIC_API_ONLY_HEADERS,
-    AnthropicThinkingParam,
-)
 from litellm.types.llms.openai import (
     AllMessageValues,
     AllPromptValues,
@@ -163,7 +159,6 @@ from litellm.types.llms.openai import (
     OpenAITextCompletionUserMessage,
     OpenAIWebSearchOptions,
 )
-from litellm.types.rerank import RerankResponse
 from litellm.types.utils import FileTypes  # type: ignore
 from litellm.types.utils import (
     OPENAI_RESPONSE_HEADERS,
@@ -342,29 +337,41 @@ if TYPE_CHECKING:
         reset_retry_policy,
     )
     from litellm.secret_managers.main import get_secret
+    # Type stubs for lazy-loaded config classes and types
+    from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
+    from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
+    from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
+    from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
+    from litellm.llms.base_llm.image_generation.transformation import (
+        BaseImageGenerationConfig,
+    )
+    from litellm.llms.base_llm.image_variations.transformation import (
+        BaseImageVariationConfig,
+    )
+    from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
+    from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+    from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
+    from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
+    from litellm.llms.base_llm.vector_store_files.transformation import (
+        BaseVectorStoreFilesConfig,
+    )
+    from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
+    from litellm.types.llms.anthropic import (
+        ANTHROPIC_API_ONLY_HEADERS,
+        AnthropicThinkingParam,
+    )
+    from litellm.types.rerank import RerankResponse
+    from litellm.types.llms.openai import (
+        ChatCompletionDeltaToolCallChunk,
+        ChatCompletionToolCallChunk,
+        ChatCompletionToolCallFunctionChunk,
+    )
+    from litellm.types.router import LiteLLM_Params
 
-from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
-from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
-from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
-from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
-from litellm.llms.base_llm.image_generation.transformation import (
-    BaseImageGenerationConfig,
-)
-from litellm.llms.base_llm.image_variations.transformation import (
-    BaseImageVariationConfig,
-)
-from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
-from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
-from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
-from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
-from litellm.llms.base_llm.vector_store_files.transformation import (
-    BaseVectorStoreFilesConfig,
-)
-from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 
 from ._logging import _is_debugging_on, verbose_logger
 from .caching.caching import (
@@ -392,12 +399,6 @@ from .exceptions import (
     UnprocessableEntityError,
     UnsupportedParamsError,
 )
-from .types.llms.openai import (
-    ChatCompletionDeltaToolCallChunk,
-    ChatCompletionToolCallChunk,
-    ChatCompletionToolCallFunctionChunk,
-)
-from .types.router import LiteLLM_Params
 
 if TYPE_CHECKING:
     from litellm import MockException
@@ -9225,5 +9226,191 @@ def __getattr__(name: str) -> Any:  # noqa: PLR0915
             )
             _globals["BaseAudioTranscriptionConfig"] = _BaseAudioTranscriptionConfig
         return _globals["BaseAudioTranscriptionConfig"]
+    
+    # Lazy load BaseBatchesConfig to avoid loading at module import time
+    if name == "BaseBatchesConfig":
+        # Check if already cached
+        if "BaseBatchesConfig" not in _globals:
+            from litellm.llms.base_llm.batches.transformation import (
+                BaseBatchesConfig as _BaseBatchesConfig,
+            )
+            _globals["BaseBatchesConfig"] = _BaseBatchesConfig
+        return _globals["BaseBatchesConfig"]
+    
+    # Lazy load BaseContainerConfig to avoid loading at module import time
+    if name == "BaseContainerConfig":
+        # Check if already cached
+        if "BaseContainerConfig" not in _globals:
+            from litellm.llms.base_llm.containers.transformation import (
+                BaseContainerConfig as _BaseContainerConfig,
+            )
+            _globals["BaseContainerConfig"] = _BaseContainerConfig
+        return _globals["BaseContainerConfig"]
+    
+    # Lazy load BaseEmbeddingConfig to avoid loading at module import time
+    if name == "BaseEmbeddingConfig":
+        # Check if already cached
+        if "BaseEmbeddingConfig" not in _globals:
+            from litellm.llms.base_llm.embedding.transformation import (
+                BaseEmbeddingConfig as _BaseEmbeddingConfig,
+            )
+            _globals["BaseEmbeddingConfig"] = _BaseEmbeddingConfig
+        return _globals["BaseEmbeddingConfig"]
+    
+    # Lazy load BaseImageEditConfig to avoid loading at module import time
+    if name == "BaseImageEditConfig":
+        # Check if already cached
+        if "BaseImageEditConfig" not in _globals:
+            from litellm.llms.base_llm.image_edit.transformation import (
+                BaseImageEditConfig as _BaseImageEditConfig,
+            )
+            _globals["BaseImageEditConfig"] = _BaseImageEditConfig
+        return _globals["BaseImageEditConfig"]
+    
+    # Lazy load BaseImageGenerationConfig to avoid loading at module import time
+    if name == "BaseImageGenerationConfig":
+        # Check if already cached
+        if "BaseImageGenerationConfig" not in _globals:
+            from litellm.llms.base_llm.image_generation.transformation import (
+                BaseImageGenerationConfig as _BaseImageGenerationConfig,
+            )
+            _globals["BaseImageGenerationConfig"] = _BaseImageGenerationConfig
+        return _globals["BaseImageGenerationConfig"]
+    
+    # Lazy load BaseImageVariationConfig to avoid loading at module import time
+    if name == "BaseImageVariationConfig":
+        # Check if already cached
+        if "BaseImageVariationConfig" not in _globals:
+            from litellm.llms.base_llm.image_variations.transformation import (
+                BaseImageVariationConfig as _BaseImageVariationConfig,
+            )
+            _globals["BaseImageVariationConfig"] = _BaseImageVariationConfig
+        return _globals["BaseImageVariationConfig"]
+    
+    # Lazy load BasePassthroughConfig to avoid loading at module import time
+    if name == "BasePassthroughConfig":
+        # Check if already cached
+        if "BasePassthroughConfig" not in _globals:
+            from litellm.llms.base_llm.passthrough.transformation import (
+                BasePassthroughConfig as _BasePassthroughConfig,
+            )
+            _globals["BasePassthroughConfig"] = _BasePassthroughConfig
+        return _globals["BasePassthroughConfig"]
+    
+    # Lazy load BaseRealtimeConfig to avoid loading at module import time
+    if name == "BaseRealtimeConfig":
+        # Check if already cached
+        if "BaseRealtimeConfig" not in _globals:
+            from litellm.llms.base_llm.realtime.transformation import (
+                BaseRealtimeConfig as _BaseRealtimeConfig,
+            )
+            _globals["BaseRealtimeConfig"] = _BaseRealtimeConfig
+        return _globals["BaseRealtimeConfig"]
+    
+    # Lazy load BaseRerankConfig to avoid loading at module import time
+    if name == "BaseRerankConfig":
+        # Check if already cached
+        if "BaseRerankConfig" not in _globals:
+            from litellm.llms.base_llm.rerank.transformation import (
+                BaseRerankConfig as _BaseRerankConfig,
+            )
+            _globals["BaseRerankConfig"] = _BaseRerankConfig
+        return _globals["BaseRerankConfig"]
+    
+    # Lazy load BaseVectorStoreConfig to avoid loading at module import time
+    if name == "BaseVectorStoreConfig":
+        # Check if already cached
+        if "BaseVectorStoreConfig" not in _globals:
+            from litellm.llms.base_llm.vector_store.transformation import (
+                BaseVectorStoreConfig as _BaseVectorStoreConfig,
+            )
+            _globals["BaseVectorStoreConfig"] = _BaseVectorStoreConfig
+        return _globals["BaseVectorStoreConfig"]
+    
+    # Lazy load BaseVectorStoreFilesConfig to avoid loading at module import time
+    if name == "BaseVectorStoreFilesConfig":
+        # Check if already cached
+        if "BaseVectorStoreFilesConfig" not in _globals:
+            from litellm.llms.base_llm.vector_store_files.transformation import (
+                BaseVectorStoreFilesConfig as _BaseVectorStoreFilesConfig,
+            )
+            _globals["BaseVectorStoreFilesConfig"] = _BaseVectorStoreFilesConfig
+        return _globals["BaseVectorStoreFilesConfig"]
+    
+    # Lazy load BaseVideoConfig to avoid loading at module import time
+    if name == "BaseVideoConfig":
+        # Check if already cached
+        if "BaseVideoConfig" not in _globals:
+            from litellm.llms.base_llm.videos.transformation import (
+                BaseVideoConfig as _BaseVideoConfig,
+            )
+            _globals["BaseVideoConfig"] = _BaseVideoConfig
+        return _globals["BaseVideoConfig"]
+    
+    # Lazy load ANTHROPIC_API_ONLY_HEADERS to avoid loading at module import time
+    if name == "ANTHROPIC_API_ONLY_HEADERS":
+        # Check if already cached
+        if "ANTHROPIC_API_ONLY_HEADERS" not in _globals:
+            from litellm.types.llms.anthropic import (
+                ANTHROPIC_API_ONLY_HEADERS as _ANTHROPIC_API_ONLY_HEADERS,
+            )
+            _globals["ANTHROPIC_API_ONLY_HEADERS"] = _ANTHROPIC_API_ONLY_HEADERS
+        return _globals["ANTHROPIC_API_ONLY_HEADERS"]
+    
+    # Lazy load AnthropicThinkingParam to avoid loading at module import time
+    if name == "AnthropicThinkingParam":
+        # Check if already cached
+        if "AnthropicThinkingParam" not in _globals:
+            from litellm.types.llms.anthropic import (
+                AnthropicThinkingParam as _AnthropicThinkingParam,
+            )
+            _globals["AnthropicThinkingParam"] = _AnthropicThinkingParam
+        return _globals["AnthropicThinkingParam"]
+    
+    # Lazy load RerankResponse to avoid loading at module import time
+    if name == "RerankResponse":
+        # Check if already cached
+        if "RerankResponse" not in _globals:
+            from litellm.types.rerank import RerankResponse as _RerankResponse
+            _globals["RerankResponse"] = _RerankResponse
+        return _globals["RerankResponse"]
+    
+    # Lazy load ChatCompletionDeltaToolCallChunk to avoid loading at module import time
+    if name == "ChatCompletionDeltaToolCallChunk":
+        # Check if already cached
+        if "ChatCompletionDeltaToolCallChunk" not in _globals:
+            from litellm.types.llms.openai import (
+                ChatCompletionDeltaToolCallChunk as _ChatCompletionDeltaToolCallChunk,
+            )
+            _globals["ChatCompletionDeltaToolCallChunk"] = _ChatCompletionDeltaToolCallChunk
+        return _globals["ChatCompletionDeltaToolCallChunk"]
+    
+    # Lazy load ChatCompletionToolCallChunk to avoid loading at module import time
+    if name == "ChatCompletionToolCallChunk":
+        # Check if already cached
+        if "ChatCompletionToolCallChunk" not in _globals:
+            from litellm.types.llms.openai import (
+                ChatCompletionToolCallChunk as _ChatCompletionToolCallChunk,
+            )
+            _globals["ChatCompletionToolCallChunk"] = _ChatCompletionToolCallChunk
+        return _globals["ChatCompletionToolCallChunk"]
+    
+    # Lazy load ChatCompletionToolCallFunctionChunk to avoid loading at module import time
+    if name == "ChatCompletionToolCallFunctionChunk":
+        # Check if already cached
+        if "ChatCompletionToolCallFunctionChunk" not in _globals:
+            from litellm.types.llms.openai import (
+                ChatCompletionToolCallFunctionChunk as _ChatCompletionToolCallFunctionChunk,
+            )
+            _globals["ChatCompletionToolCallFunctionChunk"] = _ChatCompletionToolCallFunctionChunk
+        return _globals["ChatCompletionToolCallFunctionChunk"]
+    
+    # Lazy load LiteLLM_Params to avoid loading at module import time
+    if name == "LiteLLM_Params":
+        # Check if already cached
+        if "LiteLLM_Params" not in _globals:
+            from litellm.types.router import LiteLLM_Params as _LiteLLM_Params
+            _globals["LiteLLM_Params"] = _LiteLLM_Params
+        return _globals["LiteLLM_Params"]
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
