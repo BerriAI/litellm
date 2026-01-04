@@ -3780,6 +3780,17 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
+    elif custom_llm_provider == "zenmux":
+        optional_params = litellm.ZenMuxConfig().map_openai_params(
+            model=model,
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
     elif custom_llm_provider == "ollama":
         optional_params = litellm.OllamaConfig().map_openai_params(
             non_default_params=non_default_params,
@@ -7148,6 +7159,8 @@ class ProviderConfigManager:
             return litellm.TogetherAIConfig()
         elif litellm.LlmProviders.OPENROUTER == provider:
             return litellm.OpenrouterConfig()
+        elif litellm.LlmProviders.ZENMUX == provider:
+            return litellm.ZenMuxConfig()
         elif litellm.LlmProviders.VERCEL_AI_GATEWAY == provider:
             return litellm.VercelAIGatewayConfig()
         elif litellm.LlmProviders.COMETAPI == provider:

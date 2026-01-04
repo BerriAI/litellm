@@ -695,6 +695,20 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.ZAIChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
+    elif custom_llm_provider == "zenmux":
+        api_base=(
+                api_base
+                or litellm.api_base
+                or get_secret("ZENMUX_API_BASE")
+                or "https://zenmux.ai/api/v1"
+        )
+        dynamic_api_key = (
+                api_key
+                or litellm.api_key
+                or litellm.zenmux_key
+                or get_secret("ZENMUX_API_KEY")
+        )
+
     elif custom_llm_provider == "together_ai":
         api_base = (
             api_base

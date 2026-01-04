@@ -265,6 +265,7 @@ heroku_key: Optional[str] = None
 cometapi_key: Optional[str] = None
 ovhcloud_key: Optional[str] = None
 lemonade_key: Optional[str] = None
+zenmux_key: Optional[str] = None
 amazon_nova_api_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
@@ -1312,6 +1313,7 @@ from .llms.xai.chat.transformation import XAIChatConfig
 from .llms.xai.common_utils import XAIModelInfo
 from .llms.zai.chat.transformation import ZAIChatConfig
 from .llms.aiml.chat.transformation import AIMLChatConfig
+from .llms.zenmux.chat.transformation import ZenMuxConfig
 from .llms.volcengine.chat.transformation import (
     VolcEngineChatConfig as VolcEngineConfig,
 )
