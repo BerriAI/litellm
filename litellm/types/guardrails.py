@@ -615,6 +615,10 @@ class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
         description="Custom message when a guardrail blocks an action. Supports placeholders like {tool_name}, {rule_id}, and {default_message}.",
     )
 
+    run_guardrails_on_stream_item_complete: Optional[bool] = Field(
+        default=None, description="Will be executed when a streamed output item is completed"
+    )
+
     # Model Armor params
     template_id: Optional[str] = Field(
         default=None, description="The ID of your Model Armor template"

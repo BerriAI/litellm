@@ -18,6 +18,7 @@ def initialize_bedrock(litellm_params: LitellmParams, guardrail: Guardrail):
         guardrailVersion=litellm_params.guardrailVersion,
         default_on=litellm_params.default_on,
         disable_exception_on_block=litellm_params.disable_exception_on_block,
+        run_guardrails_on_stream_item_complete=litellm_params.run_guardrails_on_stream_item_complete,
         mask_request_content=litellm_params.mask_request_content,
         mask_response_content=litellm_params.mask_response_content,
         aws_region_name=litellm_params.aws_region_name,
@@ -46,6 +47,7 @@ def initialize_lakera(litellm_params: LitellmParams, guardrail: Guardrail):
         event_hook=litellm_params.mode,
         category_thresholds=litellm_params.category_thresholds,
         default_on=litellm_params.default_on,
+        run_guardrails_on_stream_item_complete=litellm_params.run_guardrails_on_stream_item_complete,
     )
     litellm.logging_callback_manager.add_litellm_callback(_lakera_callback)
     return _lakera_callback
@@ -60,6 +62,7 @@ def initialize_lakera_v2(litellm_params: LitellmParams, guardrail: Guardrail):
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
+        run_guardrails_on_stream_item_complete=litellm_params.run_guardrails_on_stream_item_complete,
         project_id=litellm_params.project_id,
         payload=litellm_params.payload,
         breakdown=litellm_params.breakdown,
@@ -88,6 +91,7 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail):
             presidio_ad_hoc_recognizers=litellm_params.presidio_ad_hoc_recognizers,
             mock_redacted_text=litellm_params.mock_redacted_text,
             default_on=litellm_params.default_on,
+            run_guardrails_on_stream_item_complete=litellm_params.run_guardrails_on_stream_item_complete,
             pii_entities_config=litellm_params.pii_entities_config,
             presidio_score_thresholds=litellm_params.presidio_score_thresholds,
             presidio_analyzer_api_base=litellm_params.presidio_analyzer_api_base,
@@ -139,6 +143,7 @@ def initialize_hide_secrets(litellm_params: LitellmParams, guardrail: Guardrail)
         event_hook=litellm_params.mode,
         guardrail_name=guardrail.get("guardrail_name", ""),
         default_on=litellm_params.default_on,
+        run_guardrails_on_stream_item_complete=litellm_params.run_guardrails_on_stream_item_complete,
     )
     litellm.logging_callback_manager.add_litellm_callback(_secret_detection_object)
     return _secret_detection_object
@@ -166,6 +171,7 @@ def initialize_tool_permission(litellm_params: LitellmParams, guardrail: Guardra
         on_disallowed_action=getattr(litellm_params, "on_disallowed_action", "block"),
         default_on=litellm_params.default_on,
         violation_message_template=litellm_params.violation_message_template,
+        run_guardrails_on_stream_item_complete=litellm_params.run_guardrails_on_stream_item_complete,
     )
     litellm.logging_callback_manager.add_litellm_callback(_tool_permission_callback)
     return _tool_permission_callback
@@ -186,6 +192,7 @@ def initialize_lasso(
         mask=litellm_params.mask,
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
+        run_guardrails_on_stream_item_complete=litellm_params.run_guardrails_on_stream_item_complete,
     )
     litellm.logging_callback_manager.add_litellm_callback(_lasso_callback)
 
@@ -211,6 +218,7 @@ def initialize_panw_prisma_airs(litellm_params, guardrail):
         or "https://service.api.aisecurity.paloaltonetworks.com/v1/scan/sync/request",
         profile_name=litellm_params.profile_name,
         default_on=litellm_params.default_on,
+        run_guardrails_on_stream_item_complete=litellm_params.run_guardrails_on_stream_item_complete,
         mask_on_block=getattr(litellm_params, "mask_on_block", False),
         mask_request_content=getattr(litellm_params, "mask_request_content", False),
         mask_response_content=getattr(litellm_params, "mask_response_content", False),
