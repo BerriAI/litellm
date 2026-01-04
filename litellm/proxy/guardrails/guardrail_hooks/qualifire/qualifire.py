@@ -217,6 +217,7 @@ class QualifireGuardrail(CustomGuardrail):
         messages: List[AllMessageValues],
         output: Optional[str],
         dynamic_params: Dict[str, Any],
+        available_tools: Optional[List[Any]] = None,
     ) -> None:
         """
         Core Qualifire check logic - shared between hooks.
@@ -225,6 +226,7 @@ class QualifireGuardrail(CustomGuardrail):
             messages: The conversation messages
             output: The LLM output text (for post_call)
             dynamic_params: Dynamic parameters from request body
+            available_tools: Available tools from the request (for tool_selection_quality_check)
 
         Raises:
             HTTPException: If content is blocked
@@ -275,7 +277,14 @@ class QualifireGuardrail(CustomGuardrail):
                 if self.content_moderation_check:
                     kwargs["content_moderation_check"] = True
                 if self.tool_selection_quality_check:
-                    kwargs["tool_selection_quality_check"] = True
+                    # Only enable tool_selection_quality_check if available_tools is provided
+                    if available_tools:
+                        kwargs["tool_selection_quality_check"] = True
+                        kwargs["available_tools"] = available_tools
+                    else:
+                        verbose_proxy_logger.debug(
+                            "Qualifire Guardrail: tool_selection_quality_check enabled but no available_tools provided, skipping this check"
+                        )
                 if assertions:
                     kwargs["assertions"] = assertions
 
@@ -381,10 +390,14 @@ class QualifireGuardrail(CustomGuardrail):
                 )
                 return inputs
 
+        # Get available tools from request_data for tool_selection_quality_check
+        available_tools = request_data.get("tools")
+
         await self._run_qualifire_check(
             messages=messages,
             output=output,
             dynamic_params=dynamic_params,
+            available_tools=available_tools,
         )
 
         return inputs
