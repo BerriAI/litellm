@@ -1,9 +1,7 @@
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import VectorStoreSelector from "./VectorStoreSelector";
-import { vectorStoreListCall } from "../networking";
 import { VectorStore } from "./types";
+import VectorStoreSelector from "./VectorStoreSelector";
 
 // Mock dependencies
 const mockVectorStoreListCall = vi.fn();
