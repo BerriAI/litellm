@@ -1252,7 +1252,7 @@ if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo as _ModelInfoType
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.caching.caching import Cache
-    
+
     # Type stubs for lazy-loaded configs to help mypy
     from .llms.bedrock.chat.converse_transformation import AmazonConverseConfig as AmazonConverseConfig
     from .llms.openai_like.chat.handler import OpenAILikeChatConfig as OpenAILikeChatConfig
@@ -1357,6 +1357,7 @@ if TYPE_CHECKING:
     from .llms.azure.responses.o_series_transformation import AzureOpenAIOSeriesResponsesAPIConfig as AzureOpenAIOSeriesResponsesAPIConfig
     from .llms.xai.responses.transformation import XAIResponsesAPIConfig as XAIResponsesAPIConfig
     from .llms.litellm_proxy.responses.transformation import LiteLLMProxyResponsesAPIConfig as LiteLLMProxyResponsesAPIConfig
+    from .llms.volcengine.responses.transformation import VolcEngineResponsesAPIConfig as VolcEngineResponsesAPIConfig
     from .llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig as GoogleAIStudioInteractionsConfig
     from .llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig as OpenAIOSeriesConfig, OpenAIOSeriesConfig as OpenAIO1Config
     from .llms.anthropic.skills.transformation import AnthropicSkillsConfig as AnthropicSkillsConfig
@@ -1369,7 +1370,7 @@ if TYPE_CHECKING:
     from .llms.openai.chat.gpt_audio_transformation import OpenAIGPTAudioConfig as OpenAIGPTAudioConfig
     from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig as NvidiaNimConfig
     from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig as NvidiaNimEmbeddingConfig
-    
+
     # Type stubs for lazy-loaded config instances
     openaiOSeriesConfig: OpenAIOSeriesConfig
     openAIGPTConfig: OpenAIGPTConfig
@@ -1377,7 +1378,7 @@ if TYPE_CHECKING:
     openAIGPT5Config: OpenAIGPT5Config
     nvidiaNimConfig: NvidiaNimConfig
     nvidiaNimEmbeddingConfig: NvidiaNimEmbeddingConfig
-    
+
     # Import config classes that need type stubs (for mypy) - import with _ prefix to avoid circular reference
     from .llms.vllm.completion.transformation import VLLMConfig as _VLLMConfig
     from .llms.deepseek.chat.transformation import DeepSeekChatConfig as _DeepSeekChatConfig
@@ -1395,7 +1396,7 @@ if TYPE_CHECKING:
     from .llms.lm_studio.embed.transformation import LmStudioEmbeddingConfig as _LmStudioEmbeddingConfig
     from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig as _IBMWatsonXEmbeddingConfig
     from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig as _VertexGeminiConfig
-    
+
     # Type stubs for lazy-loaded config classes (to help mypy understand types)
     VLLMConfig: Type[_VLLMConfig]
     DeepSeekChatConfig: Type[_DeepSeekChatConfig]
@@ -1413,7 +1414,7 @@ if TYPE_CHECKING:
     LmStudioEmbeddingConfig: Type[_LmStudioEmbeddingConfig]
     IBMWatsonXEmbeddingConfig: Type[_IBMWatsonXEmbeddingConfig]
     VertexAIConfig: Type[_VertexGeminiConfig]  # Alias for VertexGeminiConfig
-    
+
     from .llms.featherless_ai.chat.transformation import FeatherlessAIConfig as FeatherlessAIConfig
     from .llms.cerebras.chat import CerebrasConfig as CerebrasConfig
     from .llms.baseten.chat import BasetenConfig as BasetenConfig
@@ -1531,11 +1532,11 @@ if TYPE_CHECKING:
 
     # Custom logger class (lazy-loaded)
     from litellm.integrations.custom_logger import CustomLogger
-    
+
     # Logging callback manager class and instance (lazy-loaded)
     from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
     logging_callback_manager: LoggingCallbackManager
-    
+
     # provider_list is lazy-loaded
     from litellm.types.utils import LlmProviders
     provider_list: List[Union[LlmProviders, str]]
@@ -1555,16 +1556,44 @@ def __getattr__(name: str) -> Any:
         from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
         register_async_client_cleanup()
         _async_client_cleanup_registered = True
-    
+
     # Use cached registry from _lazy_imports instead of importing tuples every time
     from ._lazy_imports import _get_lazy_import_registry
-    
+
     registry = _get_lazy_import_registry()
-    
+
     # Check if name is in registry and call the cached handler function
     if name in registry:
         handler_func = registry[name]
         return handler_func(name)
+
+    # Lazy load litellm_logging functions
+    _litellm_logging_names = (
+        "Logging",
+        "modify_integration",
+    )
+    if name in _litellm_logging_names:
+        from ._lazy_imports import _lazy_import_litellm_logging
+        return _lazy_import_litellm_logging(name)
+
+    # Lazy load utils functions
+    _utils_names = (
+        "exception_type", "get_optional_params", "get_response_string", "token_counter",
+        "create_pretrained_tokenizer", "create_tokenizer", "supports_function_calling",
+        "supports_web_search", "supports_url_context", "supports_response_schema",
+        "supports_parallel_function_calling", "supports_vision", "supports_audio_input",
+        "supports_audio_output", "supports_system_messages", "supports_reasoning",
+        "get_litellm_params", "acreate", "get_max_tokens", "get_model_info",
+        "register_prompt_template", "validate_environment", "check_valid_key",
+        "register_model", "encode", "decode", "_calculate_retry_after", "_should_retry",
+        "get_supported_openai_params", "get_api_base", "get_first_chars_messages",
+        "ModelResponse", "ModelResponseStream", "EmbeddingResponse", "ImageResponse",
+        "TranscriptionResponse", "TextCompletionResponse", "get_provider_fields",
+        "ModelResponseListIterator", "get_valid_models",
+    )
+    if name in _utils_names:
+        from ._lazy_imports import _lazy_import_utils
+        return _lazy_import_utils(name)
 
     # Lazy load encoding from main.py to avoid heavy tiktoken import
     if name == "encoding":
@@ -1575,7 +1604,7 @@ def __getattr__(name: str) -> Any:
             from .main import encoding as _encoding
             _globals["encoding"] = _encoding
         return _globals["encoding"]
-    
+
     # Lazy load bedrock_tool_name_mappings instance
     if name == "bedrock_tool_name_mappings":
         from ._lazy_imports import _get_litellm_globals
@@ -1585,7 +1614,7 @@ def __getattr__(name: str) -> Any:
             from .llms.bedrock.chat.invoke_handler import bedrock_tool_name_mappings as _bedrock_tool_name_mappings
             _globals["bedrock_tool_name_mappings"] = _bedrock_tool_name_mappings
         return _globals["bedrock_tool_name_mappings"]
-    
+
     # Lazy load AzureOpenAIError exception class
     if name == "AzureOpenAIError":
         from ._lazy_imports import _get_litellm_globals
@@ -1595,7 +1624,7 @@ def __getattr__(name: str) -> Any:
             from .llms.azure.common_utils import AzureOpenAIError as _AzureOpenAIError
             _globals["AzureOpenAIError"] = _AzureOpenAIError
         return _globals["AzureOpenAIError"]
-    
+
     # Lazy load openaiOSeriesConfig instance
     if name == "openaiOSeriesConfig":
         from ._lazy_imports import _get_litellm_globals
@@ -1605,7 +1634,7 @@ def __getattr__(name: str) -> Any:
             config_class = __getattr__("OpenAIOSeriesConfig")
             _globals["openaiOSeriesConfig"] = config_class()
         return _globals["openaiOSeriesConfig"]
-    
+
     # Lazy load other config instances
     _config_instances = {
         "openAIGPTConfig": "OpenAIGPTConfig",
@@ -1622,11 +1651,11 @@ def __getattr__(name: str) -> Any:
             config_class = __getattr__(_config_instances[name])
             _globals[name] = config_class()
         return _globals[name]
-    
+
     # Handle OpenAIO1Config alias
     if name == "OpenAIO1Config":
         return __getattr__("OpenAIOSeriesConfig")
-    
+
     # Lazy load provider_list
     if name == "provider_list":
         from ._lazy_imports import _get_litellm_globals
@@ -1637,7 +1666,7 @@ def __getattr__(name: str) -> Any:
             from litellm.types.utils import LlmProviders
             _globals["provider_list"] = list(LlmProviders)
         return _globals["provider_list"]
-    
+
     # Lazy load priority_reservation_settings instance
     if name == "priority_reservation_settings":
         from ._lazy_imports import _get_litellm_globals
@@ -1648,7 +1677,7 @@ def __getattr__(name: str) -> Any:
             PriorityReservationSettings = __getattr__("PriorityReservationSettings")
             _globals["priority_reservation_settings"] = PriorityReservationSettings()
         return _globals["priority_reservation_settings"]
-    
+
     # Lazy load logging_callback_manager instance
     if name == "logging_callback_manager":
         from ._lazy_imports import _get_litellm_globals

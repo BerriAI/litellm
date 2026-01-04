@@ -657,7 +657,7 @@ def _is_gemini_model(model: Optional[str], custom_llm_provider: Optional[str]) -
         if custom_llm_provider in ["vertex_ai", "vertex_ai_beta"]:
             return model is not None and "gemini" in model.lower()
         return True
-    
+
     # Check if model name contains gemini
     return model is not None and "gemini" in model.lower()
 
@@ -679,7 +679,7 @@ def _process_assistant_message_tool_calls(
     """
     role = msg_copy.get("role")
     tool_calls = msg_copy.get("tool_calls")
-    
+
     if role == "assistant" and isinstance(tool_calls, list):
         new_tool_calls = []
         for tc in tool_calls:
@@ -692,17 +692,17 @@ def _process_assistant_message_tool_calls(
             else:
                 new_tool_calls.append(tc)
                 continue
-            
+
             # Remove thought signature from ID if present
             if isinstance(tc_dict.get("id"), str):
                 if thought_signature_separator in tc_dict["id"]:
                     tc_dict["id"] = _remove_thought_signature_from_id(
                         tc_dict["id"], thought_signature_separator
                     )
-            
+
             new_tool_calls.append(tc_dict)
         msg_copy["tool_calls"] = new_tool_calls
-    
+
     return msg_copy
 
 
@@ -717,7 +717,7 @@ def _process_tool_message_id(msg_copy: dict, thought_signature_separator: str) -
             msg_copy["tool_call_id"] = _remove_thought_signature_from_id(
                 msg_copy["tool_call_id"], thought_signature_separator
             )
-    
+
     return msg_copy
 
 
@@ -728,7 +728,7 @@ def _remove_thought_signatures_from_messages(
     Remove thought signatures from tool call IDs in all messages.
     """
     processed_messages = []
-    
+
     for msg in messages:
         # Handle Pydantic models (convert to dict)
         if hasattr(msg, "model_dump"):
@@ -739,17 +739,17 @@ def _remove_thought_signatures_from_messages(
             # Unknown type, keep as is
             processed_messages.append(msg)
             continue
-        
+
         # Process assistant messages with tool_calls
         msg_dict = _process_assistant_message_tool_calls(
             msg_dict, thought_signature_separator
         )
-        
+
         # Process tool messages with tool_call_id
         msg_dict = _process_tool_message_id(msg_dict, thought_signature_separator)
-        
+
         processed_messages.append(msg_dict)
-    
+
     return processed_messages
 
 
@@ -966,7 +966,7 @@ def function_setup(  # noqa: PLR0915
                     input=buffer.getvalue(),
                     model=model,
                 )
-            
+
             ### REMOVE THOUGHT SIGNATURES FROM TOOL CALL IDS FOR NON-GEMINI MODELS ###
             # Gemini models embed thought signatures in tool call IDs. When sending
             # messages with tool calls to non-Gemini providers, we need to remove these
@@ -982,7 +982,7 @@ def function_setup(  # noqa: PLR0915
 
                     # Get custom_llm_provider to determine target provider
                     custom_llm_provider = kwargs.get("custom_llm_provider")
-                    
+
                     # If custom_llm_provider not in kwargs, try to determine it from the model
                     if not custom_llm_provider and model:
                         try:
@@ -993,18 +993,18 @@ def function_setup(  # noqa: PLR0915
                         except Exception:
                             # If we can't determine the provider, skip this processing
                             pass
-                    
+
                     # Only process if target is NOT a Gemini model
                     if not _is_gemini_model(model, custom_llm_provider):
                         verbose_logger.debug(
                             "Removing thought signatures from tool call IDs for non-Gemini model"
                         )
-                        
+
                         # Process messages to remove thought signatures
                         processed_messages = _remove_thought_signatures_from_messages(
                             messages, THOUGHT_SIGNATURE_SEPARATOR
                         )
-                        
+
                         # Update messages in kwargs or args
                         if "messages" in kwargs:
                             kwargs["messages"] = processed_messages
@@ -7514,7 +7514,7 @@ class ProviderConfigManager:
             return litellm.IBMWatsonXAIConfig()
         elif litellm.LlmProviders.EMPOWER == provider:
             return litellm.EmpowerChatConfig()
-        elif litellm.LlmProviders.MINIMAX == provider:            
+        elif litellm.LlmProviders.MINIMAX == provider:
             return litellm.MinimaxChatConfig()
         elif litellm.LlmProviders.GITHUB == provider:
             return litellm.GithubChatConfig()
@@ -7853,6 +7853,8 @@ class ProviderConfigManager:
             # Note: GPT models (gpt-3.5, gpt-4, gpt-5, etc.) support temperature parameter
             # O-series models (o1, o3) do not contain "gpt" and have different parameter restrictions
             is_gpt_model = model and "gpt" in model.lower()
+            is_o_series = model and ("o_series" in model.lower() or (supports_reasoning(model) and not is_gpt_model))
+
             is_o_series = model and (
                 "o_series" in model.lower()
                 or (supports_reasoning(model) and not is_gpt_model)
@@ -7868,6 +7870,8 @@ class ProviderConfigManager:
             return litellm.GithubCopilotResponsesAPIConfig()
         elif litellm.LlmProviders.LITELLM_PROXY == provider:
             return litellm.LiteLLMProxyResponsesAPIConfig()
+        elif litellm.LlmProviders.VOLCENGINE == provider:
+            return litellm.VolcEngineResponsesAPIConfig()
         return None
 
     @staticmethod
