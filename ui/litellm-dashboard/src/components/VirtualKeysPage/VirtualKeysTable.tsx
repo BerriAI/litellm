@@ -68,12 +68,13 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
   });
   const [tablePagination, setTablePagination] = React.useState<PaginationState>({
     pageIndex: 0,
-    pageSize: 100,
+    pageSize: 50,
   });
 
   const {
     data: keys,
     isPending: isLoading,
+    isFetching,
     refetch,
   } = useKeys(tablePagination.pageIndex + 1, tablePagination.pageSize);
   const totalCount = keys?.total_count || 0;
@@ -545,8 +546,8 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
           </div>
 
           <div className="flex items-center justify-between w-full mb-4">
-            {isLoading ? (
-              <Skeleton.Input active style={{ width: 200, height: 20 }} />
+            {isLoading || isFetching ? (
+              <Skeleton.Node active style={{ width: 200, height: 20 }} />
             ) : (
               <span className="inline-flex text-sm text-gray-700">
                 Showing {rangeLabel} of {totalCount} results
@@ -554,32 +555,32 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
             )}
 
             <div className="inline-flex items-center gap-2">
-              {isLoading ? (
-                <Skeleton.Input active size="small" style={{ width: 50, height: 20 }} />
+              {isLoading || isFetching ? (
+                <Skeleton.Node active style={{ width: 74, height: 20 }} />
               ) : (
                 <span className="text-sm text-gray-700">
                   Page {pageIndex + 1} of {table.getPageCount()}
                 </span>
               )}
 
-              {isLoading ? (
+              {isLoading || isFetching ? (
                 <Skeleton.Button active size="small" style={{ width: 84, height: 30 }} />
               ) : (
                 <button
                   onClick={() => table.previousPage()}
-                  disabled={isLoading || !table.getCanPreviousPage()}
+                  disabled={isLoading || isFetching || !table.getCanPreviousPage()}
                   className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Previous
                 </button>
               )}
 
-              {isLoading ? (
+              {isLoading || isFetching ? (
                 <Skeleton.Button active size="small" style={{ width: 58, height: 30 }} />
               ) : (
                 <button
                   onClick={() => table.nextPage()}
-                  disabled={isLoading || !table.getCanNextPage()}
+                  disabled={isLoading || isFetching || !table.getCanNextPage()}
                   className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Next
@@ -664,7 +665,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
                     ))}
                   </TableHead>
                   <TableBody>
-                    {isLoading ? (
+                    {isLoading || isFetching ? (
                       <TableRow>
                         <TableCell colSpan={columns.length} className="h-8 text-center">
                           <div className="text-center text-gray-500">

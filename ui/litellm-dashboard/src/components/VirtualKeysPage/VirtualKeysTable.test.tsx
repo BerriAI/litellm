@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, fireEvent } from "@testing-library/react";
 import { vi, it, expect, beforeEach, MockedFunction } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { VirtualKeysTable } from "./VirtualKeysTable";
@@ -263,4 +263,134 @@ it("should show skeleton loaders when isLoading is true", () => {
   // Check that actual key data is not shown
   expect(screen.queryByText("Test Key Alias")).not.toBeInTheDocument();
   expect(screen.queryByText("Test Team")).not.toBeInTheDocument();
+});
+
+it("should show 'No keys found' message when filteredKeys is empty", () => {
+  // Mock empty filteredKeys
+  mockUseFilterLogic.mockReturnValue({
+    filters: {
+      "Team ID": "",
+      "Organization ID": "",
+      "Key Alias": "",
+      "User ID": "",
+      "Sort By": "created_at",
+      "Sort Order": "desc",
+    },
+    filteredKeys: [],
+    allKeyAliases: [],
+    allTeams: [mockTeam],
+    allOrganizations: [mockOrganization],
+    handleFilterChange: vi.fn(),
+    handleFilterReset: vi.fn(),
+  });
+
+  const mockProps = {
+    teams: [mockTeam],
+    organizations: [mockOrganization],
+    onSortChange: vi.fn(),
+    currentSort: {
+      sortBy: "created_at",
+      sortOrder: "desc" as const,
+    },
+  };
+
+  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+  expect(screen.getByText("No keys found")).toBeInTheDocument();
+});
+
+it("should handle models with more than 3 entries to trigger expansion UI", () => {
+  const keyWithManyModels = {
+    ...mockKey,
+    models: ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo", "claude-3", "claude-3-5-sonnet"],
+  };
+
+  mockUseFilterLogic.mockReturnValue({
+    filters: {
+      "Team ID": "",
+      "Organization ID": "",
+      "Key Alias": "",
+      "User ID": "",
+      "Sort By": "created_at",
+      "Sort Order": "desc",
+    },
+    filteredKeys: [keyWithManyModels],
+    allKeyAliases: ["test-key-alias"],
+    allTeams: [mockTeam],
+    allOrganizations: [mockOrganization],
+    handleFilterChange: vi.fn(),
+    handleFilterReset: vi.fn(),
+  });
+
+  const mockProps = {
+    teams: [mockTeam],
+    organizations: [mockOrganization],
+    onSortChange: vi.fn(),
+    currentSort: {
+      sortBy: "created_at",
+      sortOrder: "desc" as const,
+    },
+  };
+
+  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+  // This test ensures the ChevronDownIcon import (line 6) is used
+  // by having a key with > 3 models which triggers the expansion logic
+  // that uses ChevronDownIcon and ChevronRightIcon
+  expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
+});
+
+it("should render table headers correctly", () => {
+  const mockProps = {
+    teams: [mockTeam],
+    organizations: [mockOrganization],
+    onSortChange: vi.fn(),
+    currentSort: {
+      sortBy: "created_at",
+      sortOrder: "desc" as const,
+    },
+  };
+
+  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+  // Check that main headers are rendered (testing the header.isPlaceholder condition path)
+  expect(screen.getByText("Key ID")).toBeInTheDocument();
+  expect(screen.getByText("Key Alias")).toBeInTheDocument();
+  expect(screen.getByText("Team Alias")).toBeInTheDocument();
+  expect(screen.getByText("Models")).toBeInTheDocument();
+  expect(screen.getByText("Spend (USD)")).toBeInTheDocument();
+});
+
+it("should handle column resizing hover events", () => {
+  const mockProps = {
+    teams: [mockTeam],
+    organizations: [mockOrganization],
+    onSortChange: vi.fn(),
+    currentSort: {
+      sortBy: "created_at",
+      sortOrder: "desc" as const,
+    },
+  };
+
+  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+  // Find a header cell with data-header-id attribute
+  const headerCell = document.querySelector("[data-header-id]") as HTMLElement;
+
+  expect(headerCell).toBeInTheDocument();
+
+  // Check that the resizer element exists within the header
+  const resizer = headerCell?.querySelector(".resizer") as HTMLElement;
+  expect(resizer).toBeInTheDocument();
+
+  // Initially, resizer should have opacity 0
+  expect(resizer.style.opacity).toBe("0");
+
+  // Simulate mouse enter using fireEvent - should set opacity to 0.5 (lines 612-616)
+  fireEvent.mouseEnter(headerCell);
+  expect(resizer.style.opacity).toBe("0.5");
+
+  // Simulate mouse leave using fireEvent - should set opacity back to 0 (lines 618-622)
+  fireEvent.mouseLeave(headerCell);
+  expect(resizer.style.opacity).toBe("0");
 });
