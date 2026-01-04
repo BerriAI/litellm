@@ -199,7 +199,7 @@ class MCPServerManager:
 
             server_url = server_config.get("url", None) or ""
             # Generate stable server ID based on parameters
-            server_id = self._generate_stable_server_id(
+            server_id = server_config.get("server_id", None) or self._generate_stable_server_id(
                 server_name=server_name,
                 url=server_url,
                 transport=server_config.get("transport", MCPTransport.http),
