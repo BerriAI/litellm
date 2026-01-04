@@ -6,25 +6,19 @@
 #  Qualifire - Evaluate LLM outputs for quality, safety, and reliability
 
 import os
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any, Dict, List, Literal, Optional, Type
 
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import (
-    CustomGuardrail,
-    log_guardrail_information,
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.litellm_logging import (
+    Logging as LiteLLMLoggingObj,
 )
-from litellm.litellm_core_utils.logging_utils import (
-    convert_litellm_response_object_to_str,
-)
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
-from litellm.types.utils import CallTypesLiteral, GuardrailStatus
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 GUARDRAIL_NAME = "qualifire"
 
@@ -188,126 +182,6 @@ class QualifireGuardrail(CustomGuardrail):
 
         return qualifire_messages
 
-    def _build_evaluate_kwargs(
-        self,
-        messages: List[Any],
-        output: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Build kwargs for client.evaluate() call."""
-        kwargs: Dict[str, Any] = {"messages": messages}
-
-        if output is not None:
-            kwargs["output"] = output
-
-        # Add enabled checks
-        if self.prompt_injections:
-            kwargs["prompt_injections"] = True
-        if self.hallucinations_check:
-            kwargs["hallucinations_check"] = True
-        if self.grounding_check:
-            kwargs["grounding_check"] = True
-        if self.pii_check:
-            kwargs["pii_check"] = True
-        if self.content_moderation_check:
-            kwargs["content_moderation_check"] = True
-        if self.tool_selection_quality_check:
-            kwargs["tool_selection_quality_check"] = True
-        if self.assertions:
-            kwargs["assertions"] = self.assertions
-
-        return kwargs
-
-    async def _run_qualifire_evaluation(
-        self,
-        messages: List[AllMessageValues],
-        request_data: Dict,
-        event_type: GuardrailEventHooks,
-        output: Optional[str] = None,
-    ) -> None:
-        """
-        Run Qualifire evaluation on messages (and optionally output).
-        Raises HTTPException if content is flagged and on_flagged is "block".
-        """
-        start_time = datetime.now()
-        status: GuardrailStatus = "success"
-        qualifire_response: Optional[Dict] = None
-
-        try:
-            client = self._get_client()
-            qualifire_messages = self._convert_messages_to_qualifire_format(messages)
-
-            # Use invoke_evaluation if evaluation_id is provided
-            if self.evaluation_id:
-                # For invoke_evaluation, we need to extract input/output
-                input_text = ""
-                output_text = output or ""
-
-                # Get the last user message as input
-                for msg in reversed(messages):
-                    if msg.get("role") == "user":
-                        content = msg.get("content", "")
-                        if isinstance(content, str):
-                            input_text = content
-                        break
-
-                result = client.invoke_evaluation(
-                    evaluation_id=self.evaluation_id,
-                    input=input_text,
-                    output=output_text,
-                )
-            else:
-                # Use evaluate with individual checks
-                evaluate_kwargs = self._build_evaluate_kwargs(
-                    messages=qualifire_messages,
-                    output=output,
-                )
-                result = client.evaluate(**evaluate_kwargs)
-
-            # Convert result to dict for logging
-            qualifire_response = {
-                "score": getattr(result, "score", None),
-                "status": getattr(result, "status", None),
-            }
-
-            # Check if any evaluation flagged the content
-            is_flagged = self._check_if_flagged(result)
-
-            if is_flagged:
-                if self.on_flagged == "monitor":
-                    verbose_proxy_logger.warning(
-                        "Qualifire Guardrail: Monitoring mode - violation detected but allowing request. "
-                        f"Response: {qualifire_response}"
-                    )
-                else:
-                    # Block the request
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "error": "Violated guardrail policy",
-                            "qualifire_response": qualifire_response,
-                        },
-                    )
-
-        except HTTPException:
-            status = "guardrail_intervened"
-            raise
-        except Exception as e:
-            status = "guardrail_failed_to_respond"
-            verbose_proxy_logger.error(f"Qualifire Guardrail error: {e}")
-            raise
-        finally:
-            # Log guardrail information for observability
-            self.add_standard_logging_guardrail_information_to_request_data(
-                guardrail_json_response=qualifire_response or {},
-                request_data=request_data,
-                guardrail_status=status,
-                start_time=start_time.timestamp(),
-                end_time=datetime.now().timestamp(),
-                duration=(datetime.now() - start_time).total_seconds(),
-                guardrail_provider="qualifire",
-                event_type=event_type,
-            )
-
     def _check_if_flagged(self, result: Any) -> bool:
         """
         Check if the Qualifire evaluation result indicates flagged content.
@@ -338,120 +212,142 @@ class QualifireGuardrail(CustomGuardrail):
 
         return False
 
-    @log_guardrail_information
-    async def async_pre_call_hook(
+    async def apply_guardrail(
         self,
-        user_api_key_dict: UserAPIKeyAuth,
-        cache: Any,
-        data: dict,
-        call_type: CallTypesLiteral,
-    ) -> Optional[Union[Exception, str, dict]]:
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[LiteLLMLoggingObj] = None,
+    ) -> GenericGuardrailAPIInputs:
         """
-        Run Qualifire evaluation before the LLM call.
-        Runs on input only.
+        Apply Qualifire guardrail to the given inputs.
+
+        This method is called by the unified guardrail system for both
+        input (request) and output (response) validation.
+
+        Args:
+            inputs: Dictionary containing:
+                - texts: List of texts to check
+                - structured_messages: Structured messages from the request
+                - tool_calls: Tool calls if present
+            request_data: The original request data
+            input_type: "request" for pre-call, "response" for post-call
+            logging_obj: Optional logging object
+
+        Returns:
+            GenericGuardrailAPIInputs - unchanged if allowed through
+
+        Raises:
+            HTTPException: If content is blocked
         """
-        from litellm.proxy.common_utils.callback_utils import (
-            add_guardrail_to_applied_guardrails_header,
+        # Get dynamic params from request body (allows runtime overrides)
+        dynamic_params = self.get_guardrail_dynamic_request_body_params(
+            request_data=request_data
         )
 
-        event_type = GuardrailEventHooks.pre_call
-        if self.should_run_guardrail(data=data, event_type=event_type) is not True:
-            return data
+        # Extract messages from structured_messages or request_data
+        messages: Optional[List[AllMessageValues]] = inputs.get("structured_messages")
+        if not messages:
+            messages = request_data.get("messages")
 
-        messages: Optional[List[AllMessageValues]] = data.get("messages")
-        if messages is None:
+        if not messages:
             verbose_proxy_logger.warning(
-                "Qualifire Guardrail: not running guardrail. No messages in data"
+                "Qualifire Guardrail: No messages found in inputs or request_data"
             )
-            return data
+            return inputs
 
-        await self._run_qualifire_evaluation(
-            messages=messages,
-            request_data=data,
-            event_type=event_type,
-        )
+        # For response, extract output text from inputs
+        output: Optional[str] = None
+        if input_type == "response":
+            texts = inputs.get("texts", [])
+            if texts:
+                output = texts[-1] if isinstance(texts, list) else str(texts)
 
-        add_guardrail_to_applied_guardrails_header(
-            request_data=data, guardrail_name=self.guardrail_name
-        )
+        # Apply dynamic param overrides
+        evaluation_id = dynamic_params.get("evaluation_id") or self.evaluation_id
+        assertions = dynamic_params.get("assertions") or self.assertions
+        on_flagged = dynamic_params.get("on_flagged") or self.on_flagged
 
-        return data
+        try:
+            client = self._get_client()
+            qualifire_messages = self._convert_messages_to_qualifire_format(messages)
 
-    @log_guardrail_information
-    async def async_moderation_hook(
-        self,
-        data: dict,
-        user_api_key_dict: UserAPIKeyAuth,
-        call_type: CallTypesLiteral,
-    ):
-        """
-        Run Qualifire evaluation during the LLM call (in parallel).
-        Runs on input only.
-        """
-        from litellm.proxy.common_utils.callback_utils import (
-            add_guardrail_to_applied_guardrails_header,
-        )
+            # Use invoke_evaluation if evaluation_id is provided
+            if evaluation_id:
+                # For invoke_evaluation, we need to extract input/output
+                input_text = ""
 
-        event_type = GuardrailEventHooks.during_call
-        if self.should_run_guardrail(data=data, event_type=event_type) is not True:
-            return
+                # Get the last user message as input
+                for msg in reversed(messages):
+                    if msg.get("role") == "user":
+                        content = msg.get("content", "")
+                        if isinstance(content, str):
+                            input_text = content
+                        break
 
-        messages: Optional[List[AllMessageValues]] = data.get("messages")
-        if messages is None:
-            verbose_proxy_logger.warning(
-                "Qualifire Guardrail: not running guardrail. No messages in data"
-            )
-            return
+                result = client.invoke_evaluation(
+                    evaluation_id=evaluation_id,
+                    input=input_text,
+                    output=output or "",
+                )
+            else:
+                # Use evaluate with individual checks
+                # Build kwargs with potential dynamic assertion override
+                kwargs: Dict[str, Any] = {"messages": qualifire_messages}
 
-        await self._run_qualifire_evaluation(
-            messages=messages,
-            request_data=data,
-            event_type=event_type,
-        )
+                if output is not None:
+                    kwargs["output"] = output
 
-        add_guardrail_to_applied_guardrails_header(
-            request_data=data, guardrail_name=self.guardrail_name
-        )
+                # Add enabled checks
+                if self.prompt_injections:
+                    kwargs["prompt_injections"] = True
+                if self.hallucinations_check:
+                    kwargs["hallucinations_check"] = True
+                if self.grounding_check:
+                    kwargs["grounding_check"] = True
+                if self.pii_check:
+                    kwargs["pii_check"] = True
+                if self.content_moderation_check:
+                    kwargs["content_moderation_check"] = True
+                if self.tool_selection_quality_check:
+                    kwargs["tool_selection_quality_check"] = True
+                if assertions:
+                    kwargs["assertions"] = assertions
 
-    @log_guardrail_information
-    async def async_post_call_success_hook(
-        self,
-        data: dict,
-        user_api_key_dict: UserAPIKeyAuth,
-        response,
-    ):
-        """
-        Run Qualifire evaluation after the LLM call.
-        Runs on both input and output.
-        """
-        from litellm.proxy.common_utils.callback_utils import (
-            add_guardrail_to_applied_guardrails_header,
-        )
+                result = client.evaluate(**kwargs)
 
-        event_type = GuardrailEventHooks.post_call
-        if self.should_run_guardrail(data=data, event_type=event_type) is not True:
-            return
+            # Convert result to dict for logging
+            qualifire_response = {
+                "score": getattr(result, "score", None),
+                "status": getattr(result, "status", None),
+            }
 
-        messages: Optional[List[AllMessageValues]] = data.get("messages")
-        if messages is None:
-            verbose_proxy_logger.warning(
-                "Qualifire Guardrail: not running guardrail. No messages in data"
-            )
-            return
+            # Check if any evaluation flagged the content
+            is_flagged = self._check_if_flagged(result)
 
-        # Get the response text
-        response_str: Optional[str] = convert_litellm_response_object_to_str(response)
+            if is_flagged:
+                if on_flagged == "monitor":
+                    verbose_proxy_logger.warning(
+                        "Qualifire Guardrail: Monitoring mode - violation detected but allowing request. "
+                        f"Response: {qualifire_response}"
+                    )
+                else:
+                    # Block the request
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": "Violated guardrail policy",
+                            "qualifire_response": qualifire_response,
+                        },
+                    )
 
-        await self._run_qualifire_evaluation(
-            messages=messages,
-            request_data=data,
-            event_type=event_type,
-            output=response_str,
-        )
+        except HTTPException:
+            raise
+        except Exception as e:
+            verbose_proxy_logger.error(f"Qualifire Guardrail error: {e}")
+            raise
 
-        add_guardrail_to_applied_guardrails_header(
-            request_data=data, guardrail_name=self.guardrail_name
-        )
+        return inputs
 
     @staticmethod
     def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:  # type: ignore
