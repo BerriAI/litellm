@@ -24,7 +24,7 @@ import {
   TableRow,
   Text,
 } from "@tremor/react";
-import { Tooltip } from "antd";
+import { Skeleton, Tooltip } from "antd";
 import React, { useEffect, useState } from "react";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { useFilterLogic } from "../key_team_helpers/filter_logic";
@@ -520,6 +520,10 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     }
   }, [currentSort]);
 
+  const { pageIndex, pageSize } = table.getState().pagination;
+  const start = pageIndex * pageSize + 1;
+  const end = Math.min((pageIndex + 1) * pageSize, totalCount);
+  const rangeLabel = `${start} - ${end}`;
   return (
     <div className="w-full h-full overflow-hidden">
       {selectedKey ? (
@@ -541,38 +545,46 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
           </div>
 
           <div className="flex items-center justify-between w-full mb-4">
-            <span className="inline-flex text-sm text-gray-700">
-              Showing{" "}
-              {isLoading
-                ? "..."
-                : `${table.getState().pagination.pageIndex * table.getState().pagination.pageSize + 1} - ${Math.min(
-                    (table.getState().pagination.pageIndex + 1) * table.getState().pagination.pageSize,
-                    totalCount,
-                  )}`}{" "}
-              of {isLoading ? "..." : totalCount} results
-            </span>
+            {isLoading ? (
+              <Skeleton.Input active style={{ width: 200, height: 20 }} />
+            ) : (
+              <span className="inline-flex text-sm text-gray-700">
+                Showing {rangeLabel} of {totalCount} results
+              </span>
+            )}
 
             <div className="inline-flex items-center gap-2">
-              <span className="text-sm text-gray-700">
-                Page {isLoading ? "..." : table.getState().pagination.pageIndex + 1} of{" "}
-                {isLoading ? "..." : table.getPageCount()}
-              </span>
+              {isLoading ? (
+                <Skeleton.Input active size="small" style={{ width: 50, height: 20 }} />
+              ) : (
+                <span className="text-sm text-gray-700">
+                  Page {pageIndex + 1} of {table.getPageCount()}
+                </span>
+              )}
 
-              <button
-                onClick={() => table.previousPage()}
-                disabled={isLoading || !table.getCanPreviousPage()}
-                className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Previous
-              </button>
+              {isLoading ? (
+                <Skeleton.Button active size="small" style={{ width: 84, height: 30 }} />
+              ) : (
+                <button
+                  onClick={() => table.previousPage()}
+                  disabled={isLoading || !table.getCanPreviousPage()}
+                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+              )}
 
-              <button
-                onClick={() => table.nextPage()}
-                disabled={isLoading || !table.getCanNextPage()}
-                className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Next
-              </button>
+              {isLoading ? (
+                <Skeleton.Button active size="small" style={{ width: 58, height: 30 }} />
+              ) : (
+                <button
+                  onClick={() => table.nextPage()}
+                  disabled={isLoading || !table.getCanNextPage()}
+                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              )}
             </div>
           </div>
           <div className="h-[75vh] overflow-auto">

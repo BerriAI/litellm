@@ -3517,3 +3517,49 @@ async def test_list_keys_with_expand_user():
         "user_email": "user2@example.com",
         "user_alias": "User Two",
     }
+
+
+@pytest.mark.asyncio
+async def test_generate_key_negative_max_budget():
+    """
+    Test that GenerateKeyRequest model allows negative max_budget values.
+    Validation is done at API level, not model level.
+    
+    This prevents GET requests from breaking when they receive data with negative budgets.
+    """
+    # Should not raise any errors at model level
+    request = GenerateKeyRequest(max_budget=-7.0)
+    assert request.max_budget == -7.0
+
+
+@pytest.mark.asyncio
+async def test_generate_key_negative_soft_budget():
+    """
+    Test that GenerateKeyRequest model allows negative soft_budget values.
+    Validation is done at API level, not model level.
+    """
+    # Should not raise any errors at model level
+    request = GenerateKeyRequest(soft_budget=-10.0)
+    assert request.soft_budget == -10.0
+
+
+@pytest.mark.asyncio
+async def test_generate_key_positive_budgets_accepted():
+    """
+    Test that GenerateKeyRequest accepts positive budget values.
+    """
+    # Should not raise any errors
+    request = GenerateKeyRequest(max_budget=100.0, soft_budget=50.0)
+    assert request.max_budget == 100.0
+    assert request.soft_budget == 50.0
+
+
+@pytest.mark.asyncio
+async def test_update_key_negative_max_budget():
+    """
+    Test that UpdateKeyRequest model allows negative max_budget values.
+    Validation is done at API level, not model level.
+    """
+    # Should not raise any errors at model level
+    request = UpdateKeyRequest(key="test-key", max_budget=-5.0)
+    assert request.max_budget == -5.0

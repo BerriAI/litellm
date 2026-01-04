@@ -253,7 +253,7 @@ describe("ChatUI", () => {
     };
 
     const getMcpSelect = () =>
-      screen.getByText("MCP Tool").closest("div")?.querySelector(".ant-select") as HTMLElement | null;
+      screen.getByText("MCP Servers").closest("div")?.querySelector(".ant-select") as HTMLElement | null;
 
     await selectEndpointOption("/v1/embeddings");
 

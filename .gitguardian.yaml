@@ -84,6 +84,10 @@ secret:
     - name: Langfuse test credentials in test_completion
       match: c39310f68cc3d3e22f7b298bb6353c4f45759adcc37080d8b7f4e535d3cfd7f4
     
+    # Test password "sk-1234" in e2e test fixtures - test fixture, not a real secret
+    - name: Test password in e2e test fixtures
+      match: ce32b547202e209ec1dd50107b64be4cfcf2eb15c3b4f8e9dc611ef747af634f
+    
     # === Preventive patterns for test keys (pattern-based) ===
     
     # Test API keys (124 instances across 45 files)
@@ -101,4 +105,7 @@ secret:
     # Generic test API key patterns
     - name: Test API key patterns
       match: test-api-key
+
+    - name: Short fake sk keys (1–9 digits only)
+      match: \bsk-\d{1,9}\b
 
