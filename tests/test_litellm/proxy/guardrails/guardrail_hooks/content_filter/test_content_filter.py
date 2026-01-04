@@ -196,7 +196,7 @@ class TestContentFilterGuardrail:
                 input_type="request",
             )
 
-        assert exc_info.value.status_code == 400
+        assert exc_info.value.status_code == 403
         assert "us_ssn" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
@@ -501,7 +501,7 @@ class TestContentFilterGuardrail:
             ):
                 pass
 
-        assert exc_info.value.status_code == 400
+        assert exc_info.value.status_code == 403
         assert "us_ssn" in str(exc_info.value.detail)
 
     def test_init_with_plain_dicts(self):
@@ -669,5 +669,245 @@ class TestContentFilterGuardrail:
                 input_type="request",
             )
 
-        assert exc_info.value.status_code == 400
+        assert exc_info.value.status_code == 403
         assert "danger_word" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_masks_all_regex_pattern_matches(self):
+        """
+        Test that ALL matches of a regex pattern are masked, not just the first one.
+
+        Regression test for GitHub issue #17687:
+        https://github.com/BerriAI/litellm/issues/17687
+
+        Before fix:
+            Regex: Key\\d+
+            Input: "Key1 Key1 Key2"
+            Output: "[CUSTOM_REGEX_REDACTED] [CUSTOM_REGEX_REDACTED] Key2"
+            (only first unique match was replaced)
+
+        After fix:
+            Input: "Key1 Key1 Key2"
+            Output: "[CUSTOM_REGEX_REDACTED] [CUSTOM_REGEX_REDACTED] [CUSTOM_REGEX_REDACTED]"
+            (all matches are replaced)
+        """
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="regex",
+                pattern=r"Key\d+",
+                name="custom_key",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-regex-all-matches",
+            patterns=patterns,
+        )
+
+        # Test case from issue #17687
+        guardrailed_inputs = await guardrail.apply_guardrail(
+            inputs={"texts": ["Key1 Key1 Key2"]},
+            request_data={},
+            input_type="request",
+        )
+        result = guardrailed_inputs.get("texts", [])
+
+        assert result is not None
+        assert len(result) == 1
+        # All matches should be redacted
+        assert result[0] == "[CUSTOM_KEY_REDACTED] [CUSTOM_KEY_REDACTED] [CUSTOM_KEY_REDACTED]"
+        assert "Key1" not in result[0]
+        assert "Key2" not in result[0]
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_masks_multiple_patterns_all_matches(self):
+        """
+        Test that multiple different patterns each mask ALL their matches.
+        """
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="email",
+                action=ContentFilterAction.MASK,
+            ),
+            ContentFilterPattern(
+                pattern_type="regex",
+                pattern=r"Key\d+",
+                name="custom_key",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-multiple-patterns-all",
+            patterns=patterns,
+        )
+
+        guardrailed_inputs = await guardrail.apply_guardrail(
+            inputs={"texts": ["Key1 user@test.com Key2 admin@test.com Key1"]},
+            request_data={},
+            input_type="request",
+        )
+        result = guardrailed_inputs.get("texts", [])
+
+        assert result is not None
+        assert len(result) == 1
+        # All emails should be redacted
+        assert "user@test.com" not in result[0]
+        assert "admin@test.com" not in result[0]
+        assert result[0].count("[EMAIL_REDACTED]") == 2
+        # All Key patterns should be redacted
+        assert "Key1" not in result[0]
+        assert "Key2" not in result[0]
+        assert result[0].count("[CUSTOM_KEY_REDACTED]") == 3
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_logs_guardrail_information(self):
+        """
+        Test that apply_guardrail calls add_standard_logging_guardrail_information_to_request_data
+        with correct detection information, excluding sensitive content.
+        """
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="email",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        blocked_words = [
+            BlockedWord(
+                keyword="confidential",
+                action=ContentFilterAction.MASK,
+                description="Test keyword",
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-logging",
+            patterns=patterns,
+            blocked_words=blocked_words,
+        )
+
+        request_data = {
+            "messages": [{"role": "user", "content": "Test"}],
+            "model": "gpt-4o",
+            "metadata": {},
+        }
+
+        # Apply guardrail with content that triggers detections
+        # Email will be masked, blocked word will be masked
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["Contact me at test@example.com for confidential info"]},
+            request_data=request_data,
+            input_type="request",
+        )
+
+        # Verify guardrail information was added to metadata
+        assert "metadata" in request_data
+        assert "standard_logging_guardrail_information" in request_data["metadata"]
+
+        guardrail_info_list = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert isinstance(guardrail_info_list, list)
+        assert len(guardrail_info_list) == 1
+
+        guardrail_info = guardrail_info_list[0]
+
+        # Verify basic fields
+        assert guardrail_info["guardrail_name"] == "test-logging"
+        assert guardrail_info["guardrail_provider"] == "litellm_content_filter"
+        assert guardrail_info["guardrail_status"] == "success"
+        assert "start_time" in guardrail_info
+        assert "end_time" in guardrail_info
+        assert "duration" in guardrail_info
+        assert guardrail_info["duration"] > 0
+        assert guardrail_info["start_time"] < guardrail_info["end_time"]
+
+        # Verify detections are logged
+        assert "guardrail_response" in guardrail_info
+        detections = guardrail_info["guardrail_response"]
+        assert isinstance(detections, list)
+        assert len(detections) >= 2  # At least email pattern and blocked word
+
+        # Verify pattern detection structure (without sensitive content)
+        pattern_detections = [d for d in detections if d.get("type") == "pattern"]
+        assert len(pattern_detections) > 0
+        for detection in pattern_detections:
+            assert detection["type"] == "pattern"
+            assert "pattern_name" in detection
+            assert detection["pattern_name"] == "email"
+            assert "action" in detection
+            assert detection["action"] == "MASK"
+            # Verify sensitive content (matched_text) is NOT included
+            assert "matched_text" not in detection, "Sensitive content should not be logged"
+
+        # Verify blocked word detection structure
+        blocked_word_detections = [d for d in detections if d.get("type") == "blocked_word"]
+        assert len(blocked_word_detections) > 0
+        for detection in blocked_word_detections:
+            assert detection["type"] == "blocked_word"
+            assert "keyword" in detection
+            assert detection["keyword"] == "confidential"  # Config keyword, not user content
+            assert "action" in detection
+            assert detection["action"] == "MASK"
+            assert "description" in detection
+            assert detection["description"] == "Test keyword"
+
+        # Verify masked entity count
+        assert "masked_entity_count" in guardrail_info
+        masked_count = guardrail_info["masked_entity_count"]
+        assert isinstance(masked_count, dict)
+        # Should have counts for masked entities
+        assert len(masked_count) > 0
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_logs_blocked_status(self):
+        """
+        Test that apply_guardrail logs guardrail_intervened status when content is blocked.
+        """
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="us_ssn",
+                action=ContentFilterAction.BLOCK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-block-logging",
+            patterns=patterns,
+        )
+
+        request_data = {
+            "messages": [{"role": "user", "content": "Test"}],
+            "model": "gpt-4o",
+            "metadata": {},
+        }
+
+        # Apply guardrail with content that triggers BLOCK
+        with pytest.raises(HTTPException):
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["My SSN is 123-45-6789"]},
+                request_data=request_data,
+                input_type="request",
+            )
+
+        # Verify guardrail information was added even when blocked
+        assert "metadata" in request_data
+        assert "standard_logging_guardrail_information" in request_data["metadata"]
+
+        guardrail_info_list = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(guardrail_info_list) == 1
+
+        guardrail_info = guardrail_info_list[0]
+        assert guardrail_info["guardrail_status"] == "guardrail_intervened"
+        assert guardrail_info["guardrail_name"] == "test-block-logging"
+
+        # Verify detection is logged (even though request was blocked)
+        detections = guardrail_info.get("guardrail_response", [])
+        if isinstance(detections, list) and len(detections) > 0:
+            # If detections are logged, verify they don't contain sensitive content
+            for detection in detections:
+                if detection.get("type") == "pattern":
+                    assert "matched_text" not in detection, "Sensitive content should not be logged"

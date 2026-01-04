@@ -41,16 +41,16 @@ def test_bedrock_agentcore_basic(model):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "model", [
-        "bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/non_stream_agent-mdfwS2DlAu", # non-streaming invocation
-        "bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_r9jvp-3ySZuRHjLC", # streaming invocation
+        "bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_13sf6-cALnp38iZD", # streaming invocation
     ]
 )
 async def test_bedrock_agentcore_with_streaming(model):
     """
     Test AgentCore with streaming
     """
+    print("running streming test for model=", model)
     #litellm._turn_on_debug()
-    response = litellm.completion(
+    response = await litellm.acompletion(
         model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_r9jvp-3ySZuRHjLC",
         messages=[
             {
@@ -61,7 +61,7 @@ async def test_bedrock_agentcore_with_streaming(model):
         stream=True,
     )
 
-    for chunk in response:
+    async for chunk in response:
         print("chunk=", chunk)
 
 
@@ -218,7 +218,7 @@ def test_bedrock_agentcore_with_api_key_bearer_token():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
-    test_jwt_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+    test_jwt_token = "test-jwt-token-header.payload.signature"
 
     with patch.object(client, "post", return_value=MagicMock()) as mock_post:
         try:

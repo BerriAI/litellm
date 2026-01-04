@@ -4,7 +4,7 @@ import TabItem from '@theme/TabItem';
 # /responses
 
 
-LiteLLM provides a BETA endpoint in the spec of [OpenAI's `/responses` API](https://platform.openai.com/docs/api-reference/responses)
+LiteLLM provides an endpoint in the spec of [OpenAI's `/responses` API](https://platform.openai.com/docs/api-reference/responses)
 
 Requests to /chat/completions may be bridged here automatically when the provider lacks support for that endpoint. The model’s default `mode` determines how bridging works.(see `model_prices_and_context_window`) 
 
@@ -41,6 +41,38 @@ response = litellm.responses(
 )
 
 print(response)
+```
+
+#### Response Format (OpenAI Responses API Format)
+
+```json
+{
+    "id": "resp_abc123",
+    "object": "response",
+    "created_at": 1734366691,
+    "status": "completed",
+    "model": "o1-pro-2025-01-30",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_abc123",
+            "status": "completed",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "Once upon a time, a little unicorn named Stardust lived in a magical meadow where flowers sang lullabies. One night, she discovered that her horn could paint dreams across the sky, and she spent the evening creating the most beautiful aurora for all the forest creatures to enjoy. As the animals drifted off to sleep beneath her shimmering lights, Stardust curled up on a cloud of moonbeams, happy to have shared her magic with her friends.",
+                    "annotations": []
+                }
+            ]
+        }
+    ],
+    "usage": {
+        "input_tokens": 18,
+        "output_tokens": 98,
+        "total_tokens": 116
+    }
+}
 ```
 
 #### Streaming

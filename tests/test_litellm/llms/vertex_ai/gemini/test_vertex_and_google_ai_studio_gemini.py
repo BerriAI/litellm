@@ -614,6 +614,59 @@ def test_vertex_ai_usage_metadata_with_image_tokens_auto_calculated_text():
     assert result.completion_tokens_details.reasoning_tokens == 158
 
 
+def test_vertex_ai_usage_metadata_with_image_tokens_in_prompt():
+    """Test promptTokensDetails with IMAGE modality for multimodal inputs
+    
+    This test verifies the fix for issue #18182 where image_tokens were missing
+    from prompt_tokens_details when calling Gemini models with image inputs.
+    
+    Example scenario: User sends a text prompt + image, and Gemini generates an image response.
+    The promptTokensDetails should include both TEXT and IMAGE token counts.
+    
+    In this test case, candidatesTokenCount is INCLUSIVE of thoughtsTokenCount because:
+    promptTokenCount (533) + candidatesTokenCount (1337) = totalTokenCount (1870)
+    """
+    v = VertexGeminiConfig()
+    usage_metadata = {
+        "promptTokenCount": 533,
+        "candidatesTokenCount": 1337,  # INCLUSIVE of thoughtsTokenCount
+        "totalTokenCount": 1870,
+        "promptTokensDetails": [
+            {"modality": "IMAGE", "tokenCount": 527},
+            {"modality": "TEXT", "tokenCount": 6}
+        ],
+        "candidatesTokensDetails": [
+            {"modality": "IMAGE", "tokenCount": 1120}
+        ],
+        "thoughtsTokenCount": 217
+    }
+    usage_metadata = UsageMetadata(**usage_metadata)
+    result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
+    print("result", result)
+    
+    # Verify basic token counts
+    assert result.prompt_tokens == 533
+    # candidatesTokenCount is INCLUSIVE, so completion_tokens = candidatesTokenCount
+    assert result.completion_tokens == 1337
+    assert result.total_tokens == 1870
+    
+    # Verify prompt_tokens_details includes both text and image tokens
+    assert result.prompt_tokens_details.text_tokens == 6
+    assert result.prompt_tokens_details.image_tokens == 527
+    
+    # Verify completion_tokens_details
+    assert result.completion_tokens_details.image_tokens == 1120
+    assert result.completion_tokens_details.reasoning_tokens == 217
+    
+    # Verify the math: prompt_tokens = text + image
+    # 533 = 6 (text) + 527 (image)
+    assert (
+        result.prompt_tokens_details.text_tokens
+        + result.prompt_tokens_details.image_tokens
+        == result.prompt_tokens
+    )
+
+
 def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
     """
     If budget_tokens is 0, do not set includeThoughts to True
@@ -806,7 +859,7 @@ def test_vertex_ai_streaming_usage_web_search_calculation():
             {
                 "content": {"parts": [{"text": "Hello"}]},
                 "groundingMetadata": [
-                    {"webSearchQueries": ["What is the capital of France?"]}
+                    {"webSearchQueries": ["", "What is the capital of France?", "Capital of France"]}
                 ],
             }
         ],
@@ -821,7 +874,7 @@ def test_vertex_ai_streaming_usage_web_search_calculation():
 
     usage: Usage = completed_response.usage
     assert usage.prompt_tokens_details.web_search_requests is not None
-    assert usage.prompt_tokens_details.web_search_requests == 1
+    assert usage.prompt_tokens_details.web_search_requests == 2
 
 
 def test_vertex_ai_transform_parts():
@@ -2226,3 +2279,194 @@ def test_partial_json_chunk_on_first_chunk():
     assert result is None, "Partial first chunk should return None"
     assert iterator.chunk_type == "accumulated_json", "Should switch to accumulated_json mode"
 
+
+# ==================== Tool Type Separation Tests ====================
+# These tests verify that each Tool object contains exactly one type per Vertex AI API spec
+# Ref: https://cloud.google.com/vertex-ai/generative-ai/docs/reference/rest/v1beta1/Tool
+
+
+def test_vertex_ai_multiple_tool_types_separate_objects():
+    """
+    Test that multiple tool types are placed in separate Tool objects.
+
+    This is required by Vertex AI API spec:
+    "A Tool object should contain exactly one type of Tool"
+
+    Related error without this fix:
+    "tools[0].tool_type: one_of 'tool_type' has more than one initialized field:
+    enterprise_web_search, url_context"
+
+    Input:
+        value=[
+            {"enterpriseWebSearch": {}},
+            {"url_context": {}},
+        ]
+
+    Expected Output:
+        tools=[
+            {"enterpriseWebSearch": {}},  # First Tool object
+            {"url_context": {}},          # Second Tool object (separate!)
+        ]
+
+    NOT (incorrect - causes API error):
+        tools=[
+            {"enterpriseWebSearch": {}, "url_context": {}}  # Multiple types in one object
+        ]
+    """
+    v = VertexGeminiConfig()
+    optional_params = {}
+
+    tools = v._map_function(
+        value=[
+            {"enterpriseWebSearch": {}},
+            {"url_context": {}},
+        ],
+        optional_params=optional_params
+    )
+
+    # Should have 2 separate Tool objects
+    assert len(tools) == 2, f"Expected 2 separate Tool objects, got {len(tools)}"
+
+    # Each Tool object should contain exactly ONE type
+    tool_types_in_first = [k for k in tools[0].keys()]
+    tool_types_in_second = [k for k in tools[1].keys()]
+
+    assert len(tool_types_in_first) == 1, f"First Tool should have exactly 1 type, got {tool_types_in_first}"
+    assert len(tool_types_in_second) == 1, f"Second Tool should have exactly 1 type, got {tool_types_in_second}"
+
+    # Verify the correct tool types are present
+    assert "enterpriseWebSearch" in tools[0], "First Tool should contain enterpriseWebSearch"
+    assert "url_context" in tools[1], "Second Tool should contain url_context"
+
+
+def test_vertex_ai_function_declarations_with_other_tools_separate():
+    """
+    Test that function declarations and other tool types are in separate Tool objects.
+
+    This ensures that when using both function calling AND special tools like
+    google_search or code_execution, they are properly separated per API spec.
+
+    Input:
+        value=[
+            {"type": "function", "function": {"name": "get_weather", "description": "Get weather"}},
+            {"googleSearch": {}},
+            {"code_execution": {}},
+        ]
+
+    Expected Output:
+        tools=[
+            {"function_declarations": [{"name": "get_weather", "description": "Get weather"}]},
+            {"googleSearch": {}},
+            {"code_execution": {}},
+        ]
+    """
+    v = VertexGeminiConfig()
+    optional_params = {}
+
+    tools = v._map_function(
+        value=[
+            {"type": "function", "function": {"name": "get_weather", "description": "Get weather"}},
+            {"googleSearch": {}},
+            {"code_execution": {}},
+        ],
+        optional_params=optional_params
+    )
+
+    # Should have 3 separate Tool objects
+    assert len(tools) == 3, f"Expected 3 separate Tool objects, got {len(tools)}"
+
+    # Find each tool type
+    func_tool = None
+    search_tool = None
+    code_tool = None
+
+    for tool in tools:
+        if "function_declarations" in tool:
+            func_tool = tool
+        elif "googleSearch" in tool:
+            search_tool = tool
+        elif "code_execution" in tool:
+            code_tool = tool
+
+    # Verify all tools are present and separate
+    assert func_tool is not None, "function_declarations Tool should be present"
+    assert search_tool is not None, "googleSearch Tool should be present"
+    assert code_tool is not None, "code_execution Tool should be present"
+
+    # Verify each Tool has exactly one type
+    assert len(func_tool.keys()) == 1, "function_declarations Tool should have only one key"
+    assert len(search_tool.keys()) == 1, "googleSearch Tool should have only one key"
+    assert len(code_tool.keys()) == 1, "code_execution Tool should have only one key"
+
+    # Verify function declaration content
+    assert func_tool["function_declarations"][0]["name"] == "get_weather"
+
+
+def test_vertex_ai_single_tool_type_still_works():
+    """
+    Test that single tool type usage still works correctly (backward compatibility).
+
+    Input:
+        value=[{"code_execution": {}}]
+
+    Expected Output:
+        tools=[{"code_execution": {}}]
+    """
+    v = VertexGeminiConfig()
+    optional_params = {}
+
+    tools = v._map_function(
+        value=[{"code_execution": {}}],
+        optional_params=optional_params
+    )
+
+    assert len(tools) == 1
+    assert "code_execution" in tools[0]
+    assert tools[0]["code_execution"] == {}
+
+
+def test_vertex_ai_multiple_function_declarations_grouped():
+    """
+    Test that multiple function declarations are grouped in ONE Tool object.
+
+    Function declarations are the exception - they CAN be grouped together
+    in a single Tool object (up to 512 declarations).
+
+    Input:
+        value=[
+            {"type": "function", "function": {"name": "func1", "description": "First function"}},
+            {"type": "function", "function": {"name": "func2", "description": "Second function"}},
+        ]
+
+    Expected Output:
+        tools=[
+            {
+                "function_declarations": [
+                    {"name": "func1", "description": "First function"},
+                    {"name": "func2", "description": "Second function"},
+                ]
+            }
+        ]
+    """
+    v = VertexGeminiConfig()
+    optional_params = {}
+
+    tools = v._map_function(
+        value=[
+            {"type": "function", "function": {"name": "func1", "description": "First function"}},
+            {"type": "function", "function": {"name": "func2", "description": "Second function"}},
+        ],
+        optional_params=optional_params
+    )
+
+    # Should have only 1 Tool object (function declarations grouped)
+    assert len(tools) == 1, f"Expected 1 Tool object for grouped functions, got {len(tools)}"
+
+    # Should contain function_declarations with 2 functions
+    assert "function_declarations" in tools[0]
+    assert len(tools[0]["function_declarations"]) == 2
+
+    # Verify function names
+    func_names = [f["name"] for f in tools[0]["function_declarations"]]
+    assert "func1" in func_names
+    assert "func2" in func_names

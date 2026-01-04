@@ -15,10 +15,10 @@ import GeneralSettings from "@/components/general_settings";
 import GuardrailsPanel from "@/components/guardrails";
 import { Team } from "@/components/key_team_helpers/key_list";
 import { MCPServers } from "@/components/mcp_tools";
-import ModelHubTable from "@/components/model_hub_table";
+import ModelHubTable from "@/components/AIHub/ModelHubTable";
 import Navbar from "@/components/navbar";
 import { getUiConfig, Organization, proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
-import NewUsagePage from "@/components/new_usage";
+import NewUsagePage from "@/components/UsagePage/components/UsagePageView";
 import OldTeams from "@/components/OldTeams";
 import { fetchUserModels } from "@/components/organisms/create_key_button";
 import Organizations, { fetchOrganizations } from "@/components/organizations";
@@ -323,11 +323,8 @@ export default function CreateKeyPage() {
                   />
                 ) : page == "models" ? (
                   <OldModelDashboard
-                    userID={userID}
-                    userRole={userRole}
                     token={token}
                     keys={keys}
-                    accessToken={accessToken}
                     modelData={modelData}
                     setModelData={setModelData}
                     premiumUser={premiumUser}
@@ -446,12 +443,8 @@ export default function CreateKeyPage() {
                   <VectorStoreManagement accessToken={accessToken} userRole={userRole} userID={userID} />
                 ) : page == "new_usage" ? (
                   <NewUsagePage
-                    userID={userID}
-                    userRole={userRole}
-                    accessToken={accessToken}
                     teams={(teams as Team[]) ?? []}
                     organizations={(organizations as Organization[]) ?? []}
-                    premiumUser={premiumUser}
                   />
                 ) : (
                   <Usage

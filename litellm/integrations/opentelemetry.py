@@ -48,6 +48,7 @@ else:
 LITELLM_TRACER_NAME = os.getenv("OTEL_TRACER_NAME", "litellm")
 LITELLM_METER_NAME = os.getenv("LITELLM_METER_NAME", "litellm")
 LITELLM_LOGGER_NAME = os.getenv("LITELLM_LOGGER_NAME", "litellm")
+LITELLM_PROXY_REQUEST_SPAN_NAME = "Received Proxy Server Request"
 # Remove the hardcoded LITELLM_RESOURCE dictionary - we'll create it properly later
 RAW_REQUEST_SPAN_NAME = "raw_gen_ai_request"
 LITELLM_REQUEST_SPAN_NAME = "litellm_request"
@@ -233,14 +234,16 @@ class OpenTelemetry(CustomLogger):
                 trace.set_tracer_provider(tracer_provider)
         else:
             # Tracer provider explicitly provided (e.g., for testing)
+            # Do NOT call set_tracer_provider - the caller is responsible for managing global state
+            # If they want it to be global, they've already set it before passing it to us
             verbose_logger.debug(
                 "OpenTelemetry: Using provided TracerProvider: %s",
                 type(tracer_provider).__name__,
             )
-            trace.set_tracer_provider(tracer_provider)
 
-        # grab our tracer
-        self.tracer = trace.get_tracer(LITELLM_TRACER_NAME)
+        # Grab our tracer from the TracerProvider (not from global context)
+        # This ensures we use the provided TracerProvider (e.g., for testing)
+        self.tracer = tracer_provider.get_tracer(LITELLM_TRACER_NAME)
         self.span_kind = SpanKind
 
     def _init_metrics(self, meter_provider):
@@ -248,6 +251,9 @@ class OpenTelemetry(CustomLogger):
             self._operation_duration_histogram = None
             self._token_usage_histogram = None
             self._cost_histogram = None
+            self._time_to_first_token_histogram = None
+            self._time_per_output_token_histogram = None
+            self._response_duration_histogram = None
             return
 
         from opentelemetry import metrics
@@ -299,6 +305,21 @@ class OpenTelemetry(CustomLogger):
             name="gen_ai.client.token.cost",
             description="GenAI request cost",
             unit="USD",
+        )
+        self._time_to_first_token_histogram = meter.create_histogram(
+            name="gen_ai.client.response.time_to_first_token",
+            description="Time to first token for streaming requests",
+            unit="s",
+        )
+        self._time_per_output_token_histogram = meter.create_histogram(
+            name="gen_ai.client.response.time_per_output_token",
+            description="Average time per output token (generation time / completion tokens)",
+            unit="s",
+        )
+        self._response_duration_histogram = meter.create_histogram(
+            name="gen_ai.client.response.duration",
+            description="Total LLM API generation time (excludes LiteLLM overhead)",
+            unit="s",
         )
 
     def _init_logs(self, logger_provider):
@@ -509,6 +530,7 @@ class OpenTelemetry(CustomLogger):
 
             # 3. Guardrail span
             self._create_guardrail_span(kwargs=kwargs, context=ctx)
+
         return response
 
     #########################################################
@@ -539,9 +561,9 @@ class OpenTelemetry(CustomLogger):
 
     def _get_dynamic_otel_headers_from_kwargs(self, kwargs) -> Optional[dict]:
         """Extract dynamic headers from kwargs if available."""
-        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
-            kwargs.get("standard_callback_dynamic_params")
-        )
+        standard_callback_dynamic_params: Optional[
+            StandardCallbackDynamicParams
+        ] = kwargs.get("standard_callback_dynamic_params")
 
         if not standard_callback_dynamic_params:
             return None
@@ -589,18 +611,35 @@ class OpenTelemetry(CustomLogger):
         )
         ctx, parent_span = self._get_span_context(kwargs)
 
-        if get_secret_bool("USE_OTEL_LITELLM_REQUEST_SPAN"):
-            primary_span_parent = None
-        else:
-            primary_span_parent = parent_span
-
-        # 1. Primary span
-        span = self._start_primary_span(
-            kwargs, response_obj, start_time, end_time, ctx, primary_span_parent
+        # Decide whether to create a primary span
+        # Always create if no parent span exists (backward compatibility)
+        # OR if USE_OTEL_LITELLM_REQUEST_SPAN is explicitly enabled
+        should_create_primary_span = parent_span is None or get_secret_bool(
+            "USE_OTEL_LITELLM_REQUEST_SPAN"
         )
 
-        # 2. Raw‐request sub-span (if enabled)
-        self._maybe_log_raw_request(kwargs, response_obj, start_time, end_time, span)
+        if should_create_primary_span:
+            # Create a new litellm_request span
+            span = self._start_primary_span(
+                kwargs, response_obj, start_time, end_time, ctx
+            )
+            # Raw-request sub-span (if enabled) - child of litellm_request span
+            self._maybe_log_raw_request(
+                kwargs, response_obj, start_time, end_time, span
+            )
+        else:
+            # Do not create primary span (keep hierarchy shallow when parent exists)
+            from opentelemetry.trace import Status, StatusCode
+
+            span = None
+            # Only set attributes if the span is still recording (not closed)
+            # Note: parent_span is guaranteed to be not None here
+            parent_span.set_status(Status(StatusCode.OK))
+            self.set_attributes(parent_span, kwargs, response_obj)
+            # Raw-request as direct child of parent_span
+            self._maybe_log_raw_request(
+                kwargs, response_obj, start_time, end_time, parent_span
+            )
 
         # 3. Guardrail span
         self._create_guardrail_span(kwargs=kwargs, context=ctx)
@@ -610,11 +649,18 @@ class OpenTelemetry(CustomLogger):
 
         # 5. Semantic logs.
         if self.config.enable_events:
-            self._emit_semantic_logs(kwargs, response_obj, span)
+            log_span = span if span is not None else parent_span
+            if log_span is not None:
+                self._emit_semantic_logs(kwargs, response_obj, log_span)
 
-        # 6. End parent span
-        if parent_span is not None:
-            parent_span.end(end_time=self._to_ns(datetime.now()))
+        # 6. Do NOT end parent span - it should be managed by its creator
+        # External spans (from Langfuse, user code, HTTP headers, global context) must not be closed by LiteLLM
+        # However, proxy-created spans should be closed here
+        if (
+            parent_span is not None
+            and parent_span.name == LITELLM_PROXY_REQUEST_SPAN_NAME
+        ):
+            parent_span.end(end_time=self._to_ns(end_time))
 
     def _start_primary_span(
         self,
@@ -623,16 +669,19 @@ class OpenTelemetry(CustomLogger):
         start_time,
         end_time,
         context,
-        parent_span: Optional[Span] = None,
     ):
         from opentelemetry.trace import Status, StatusCode
 
         otel_tracer: Tracer = self.get_tracer_to_use_for_request(kwargs)
-        span = parent_span or otel_tracer.start_span(
+
+        # Always create a new span
+        # The parent relationship is preserved through the context parameter
+        span = otel_tracer.start_span(
             name=self._get_span_name(kwargs),
             start_time=self._to_ns(start_time),
             context=context,
         )
+
         span.set_status(Status(StatusCode.OK))
         self.set_attributes(span, kwargs, response_obj)
         span.end(end_time=self._to_ns(end_time))
@@ -726,6 +775,170 @@ class OpenTelemetry(CustomLogger):
         cost = kwargs.get("response_cost")
         if self._cost_histogram and cost:
             self._cost_histogram.record(cost, attributes=common_attrs)
+
+        # Record latency metrics (TTFT, TPOT, and Total Generation Time)
+        self._record_time_to_first_token_metric(kwargs, common_attrs)
+        self._record_time_per_output_token_metric(
+            kwargs, response_obj, end_time, duration_s, common_attrs
+        )
+        self._record_response_duration_metric(kwargs, end_time, common_attrs)
+
+    @staticmethod
+    def _to_timestamp(val: Optional[Union[datetime, float, str]]) -> Optional[float]:
+        """Convert datetime/float/string to timestamp."""
+        if val is None:
+            return None
+        if isinstance(val, datetime):
+            return val.timestamp()
+        if isinstance(val, (int, float)):
+            return float(val)
+        # isinstance(val, str) - parse datetime string (with or without microseconds)
+        try:
+            return datetime.strptime(val, "%Y-%m-%d %H:%M:%S.%f").timestamp()
+        except ValueError:
+            try:
+                return datetime.strptime(val, "%Y-%m-%d %H:%M:%S").timestamp()
+            except ValueError:
+                return None
+
+    def _record_time_to_first_token_metric(self, kwargs: dict, common_attrs: dict):
+        """Record Time to First Token (TTFT) metric for streaming requests."""
+        optional_params = kwargs.get("optional_params", {})
+        is_streaming = optional_params.get("stream", False)
+
+        if not (self._time_to_first_token_histogram and is_streaming):
+            return
+
+        # Use api_call_start_time for precision (matches Prometheus implementation)
+        # This excludes LiteLLM overhead and measures pure LLM API latency
+        api_call_start_time = kwargs.get("api_call_start_time", None)
+        completion_start_time = kwargs.get("completion_start_time", None)
+
+        if api_call_start_time is not None and completion_start_time is not None:
+            # Convert to timestamps if needed (handles datetime, float, and string)
+            api_call_start_ts = self._to_timestamp(api_call_start_time)
+            completion_start_ts = self._to_timestamp(completion_start_time)
+
+            if api_call_start_ts is None or completion_start_ts is None:
+                return  # Skip recording if conversion failed
+
+            time_to_first_token_seconds = completion_start_ts - api_call_start_ts
+            self._time_to_first_token_histogram.record(
+                time_to_first_token_seconds, attributes=common_attrs
+            )
+
+    def _record_time_per_output_token_metric(
+        self,
+        kwargs: dict,
+        response_obj: Optional[Any],
+        end_time: datetime,
+        duration_s: float,
+        common_attrs: dict,
+    ):
+        """Record Time Per Output Token (TPOT) metric.
+
+        Calculated as: generation_time / completion_tokens
+        - For streaming: uses end_time - completion_start_time (time to generate all tokens after first)
+        - For non-streaming: uses end_time - api_call_start_time (total generation time)
+        """
+        if not self._time_per_output_token_histogram:
+            return
+
+        # Get completion tokens from response_obj
+        completion_tokens = None
+        if response_obj and (usage := response_obj.get("usage")):
+            completion_tokens = usage.get("completion_tokens")
+
+        if completion_tokens is None or completion_tokens <= 0:
+            return
+
+        # Calculate generation time
+        completion_start_time = kwargs.get("completion_start_time", None)
+        api_call_start_time = kwargs.get("api_call_start_time", None)
+
+        # Convert end_time to timestamp (handles datetime, float, and string)
+        end_time_ts = self._to_timestamp(end_time)
+        if end_time_ts is None:
+            # Fallback to duration_s if conversion failed
+            generation_time_seconds = duration_s
+            if generation_time_seconds > 0:
+                time_per_output_token_seconds = (
+                    generation_time_seconds / completion_tokens
+                )
+                self._time_per_output_token_histogram.record(
+                    time_per_output_token_seconds, attributes=common_attrs
+                )
+            return
+
+        if completion_start_time is not None:
+            # Streaming: use completion_start_time (when first token arrived)
+            # This measures time to generate all tokens after the first one
+            completion_start_ts = self._to_timestamp(completion_start_time)
+            if completion_start_ts is None:
+                # Fallback to duration_s if conversion failed
+                generation_time_seconds = duration_s
+            else:
+                generation_time_seconds = end_time_ts - completion_start_ts
+        elif api_call_start_time is not None:
+            # Non-streaming: use api_call_start_time (total generation time)
+            api_call_start_ts = self._to_timestamp(api_call_start_time)
+            if api_call_start_ts is None:
+                # Fallback to duration_s if conversion failed
+                generation_time_seconds = duration_s
+            else:
+                generation_time_seconds = end_time_ts - api_call_start_ts
+        else:
+            # Fallback: use duration_s (already calculated as (end_time - start_time).total_seconds())
+            generation_time_seconds = duration_s
+
+        if generation_time_seconds > 0:
+            time_per_output_token_seconds = generation_time_seconds / completion_tokens
+            self._time_per_output_token_histogram.record(
+                time_per_output_token_seconds, attributes=common_attrs
+            )
+
+    def _record_response_duration_metric(
+        self,
+        kwargs: dict,
+        end_time: Union[datetime, float],
+        common_attrs: dict,
+    ):
+        """Record Total Generation Time (response duration) metric.
+
+        Measures pure LLM API generation time: end_time - api_call_start_time
+        This excludes LiteLLM overhead and measures only the LLM provider's response time.
+        Works for both streaming and non-streaming requests.
+
+        Mirrors Prometheus's litellm_llm_api_latency_metric.
+        Uses kwargs.get("end_time") with fallback to parameter for consistency with Prometheus.
+        """
+        if not self._response_duration_histogram:
+            return
+
+        api_call_start_time = kwargs.get("api_call_start_time", None)
+        if api_call_start_time is None:
+            return
+
+        # Use end_time from kwargs if available (matches Prometheus), otherwise use parameter
+        # For streaming: end_time is when the stream completes (final chunk received)
+        # For non-streaming: end_time is when the response is received
+        _end_time = kwargs.get("end_time") or end_time
+        if _end_time is None:
+            _end_time = datetime.now()
+
+        # Convert to timestamps if needed (handles datetime, float, and string)
+        api_call_start_ts = self._to_timestamp(api_call_start_time)
+        end_time_ts = self._to_timestamp(_end_time)
+
+        if api_call_start_ts is None or end_time_ts is None:
+            return  # Skip recording if conversion failed
+
+        response_duration_seconds = end_time_ts - api_call_start_ts
+
+        if response_duration_seconds > 0:
+            self._response_duration_histogram.record(
+                response_duration_seconds, attributes=common_attrs
+            )
 
     def _emit_semantic_logs(self, kwargs, response_obj, span: Span):
         if not self.config.enable_events:
@@ -884,26 +1097,49 @@ class OpenTelemetry(CustomLogger):
         )
         _parent_context, parent_otel_span = self._get_span_context(kwargs)
 
-        # Span 1: Requst sent to litellm SDK
-        otel_tracer: Tracer = self.get_tracer_to_use_for_request(kwargs)
-        span = otel_tracer.start_span(
-            name=self._get_span_name(kwargs),
-            start_time=self._to_ns(start_time),
-            context=_parent_context,
+        # Decide whether to create a primary span
+        # Always create if no parent span exists (backward compatibility)
+        # OR if USE_OTEL_LITELLM_REQUEST_SPAN is explicitly enabled
+        should_create_primary_span = parent_otel_span is None or get_secret_bool(
+            "USE_OTEL_LITELLM_REQUEST_SPAN"
         )
-        span.set_status(Status(StatusCode.ERROR))
-        self.set_attributes(span, kwargs, response_obj)
 
-        # Record exception information using OTEL standard method
-        self._record_exception_on_span(span=span, kwargs=kwargs)
+        if should_create_primary_span:
+            # Span 1: Request sent to litellm SDK
+            otel_tracer: Tracer = self.get_tracer_to_use_for_request(kwargs)
+            span = otel_tracer.start_span(
+                name=self._get_span_name(kwargs),
+                start_time=self._to_ns(start_time),
+                context=_parent_context,
+            )
+            span.set_status(Status(StatusCode.ERROR))
+            self.set_attributes(span, kwargs, response_obj)
 
-        span.end(end_time=self._to_ns(end_time))
+            # Record exception information using OTEL standard method
+            self._record_exception_on_span(span=span, kwargs=kwargs)
+
+            span.end(end_time=self._to_ns(end_time))
+        else:
+            # When parent span exists and USE_OTEL_LITELLM_REQUEST_SPAN=false,
+            # record error on parent span (keeps hierarchy shallow)
+            # Only set attributes if the span is still recording (not closed)
+            # Note: parent_otel_span is guaranteed to be not None here
+            if parent_otel_span.is_recording():
+                parent_otel_span.set_status(Status(StatusCode.ERROR))
+                self.set_attributes(parent_otel_span, kwargs, response_obj)
+                self._record_exception_on_span(span=parent_otel_span, kwargs=kwargs)
 
         # Create span for guardrail information
         self._create_guardrail_span(kwargs=kwargs, context=_parent_context)
 
-        if parent_otel_span is not None:
-            parent_otel_span.end(end_time=self._to_ns(datetime.now()))
+        # Do NOT end parent span - it should be managed by its creator
+        # External spans (from Langfuse, user code, HTTP headers, global context) must not be closed by LiteLLM
+        # However, proxy-created spans should be closed here
+        if (
+            parent_otel_span is not None
+            and parent_otel_span.name == LITELLM_PROXY_REQUEST_SPAN_NAME
+        ):
+            parent_otel_span.end(end_time=self._to_ns(end_time))
 
     def _record_exception_on_span(self, span: Span, kwargs: dict):
         """
@@ -1082,7 +1318,9 @@ class OpenTelemetry(CustomLogger):
                 )
                 return
             elif self.callback_name == "weave_otel":
-                from litellm.integrations.weave.weave_otel import set_weave_otel_attributes
+                from litellm.integrations.weave.weave_otel import (
+                    set_weave_otel_attributes,
+                )
 
                 set_weave_otel_attributes(span, kwargs, response_obj)
                 return
@@ -1226,7 +1464,7 @@ class OpenTelemetry(CustomLogger):
                     value=usage.get("prompt_tokens"),
                 )
 
-            ########################################################################
+                ########################################################################
             ########## LLM Request Medssages / tools / content Attributes ###########
             #########################################################################
 
@@ -1813,12 +2051,9 @@ class OpenTelemetry(CustomLogger):
         """
         Create a span for the received proxy server request.
         """
-        # don't create proxy parent spans for arize phoenix - [TODO]: figure out a better way to handle this
-        if self.callback_name == "arize_phoenix":
-            return None
 
         return self.tracer.start_span(
-            name="Received Proxy Server Request",
+            name=LITELLM_PROXY_REQUEST_SPAN_NAME,
             start_time=self._to_ns(start_time),
             context=self.get_traceparent_from_header(headers=headers),
             kind=self.span_kind.SERVER,

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any, Callable, Dict, List, Optional, Set, Union
 
 from fastapi import HTTPException, status
 
@@ -30,6 +30,40 @@ def update_metrics(existing_metrics: SpendMetrics, record: Any) -> SpendMetrics:
     existing_metrics.successful_requests += record.successful_requests
     existing_metrics.failed_requests += record.failed_requests
     return existing_metrics
+
+
+def _is_user_agent_tag(tag: Optional[str]) -> bool:
+    """Determine whether a tag should be treated as a User-Agent tag."""
+    if not tag:
+        return False
+    normalized_tag = tag.strip().lower()
+    return normalized_tag.startswith("user-agent:") or normalized_tag.startswith("user agent:")
+
+
+def compute_tag_metadata_totals(records: List[Any]) -> SpendMetrics:
+    """
+    Deduplicate spend metrics for tags using request_id, ignoring User-Agent prefixed tags.
+
+    Each unique request_id contributes at most one record (the tag with max spend) to metadata.
+    """
+    deduped_records: Dict[str, Any] = {}
+    for record in records:
+        request_id = getattr(record, "request_id", None)
+        if not request_id:
+            continue
+
+        tag_value = getattr(record, "tag", None)
+        if _is_user_agent_tag(tag_value):
+            continue
+
+        current_best = deduped_records.get(request_id)
+        if current_best is None or record.spend > current_best.spend:
+            deduped_records[request_id] = record
+
+    metadata_metrics = SpendMetrics()
+    for record in deduped_records.values():
+        update_metrics(metadata_metrics, record)
+    return metadata_metrics
 
 
 def update_breakdown_metrics(
@@ -380,6 +414,7 @@ async def get_daily_activity(
     page: int,
     page_size: int,
     exclude_entity_ids: Optional[List[str]] = None,
+    metadata_metrics_func: Optional[Callable[[List[Any]], SpendMetrics]] = None,
 ) -> SpendAnalyticsPaginatedResponse:
     """Common function to get daily activity for any entity type."""
 
@@ -428,18 +463,22 @@ async def get_daily_activity(
             entity_metadata_field=entity_metadata_field,
         )
 
+        metadata_metrics = aggregated["totals"]
+        if metadata_metrics_func:
+            metadata_metrics = metadata_metrics_func(daily_spend_data)
+
         return SpendAnalyticsPaginatedResponse(
             results=aggregated["results"],
             metadata=DailySpendMetadata(
-                total_spend=aggregated["totals"].spend,
-                total_prompt_tokens=aggregated["totals"].prompt_tokens,
-                total_completion_tokens=aggregated["totals"].completion_tokens,
-                total_tokens=aggregated["totals"].total_tokens,
-                total_api_requests=aggregated["totals"].api_requests,
-                total_successful_requests=aggregated["totals"].successful_requests,
-                total_failed_requests=aggregated["totals"].failed_requests,
-                total_cache_read_input_tokens=aggregated["totals"].cache_read_input_tokens,
-                total_cache_creation_input_tokens=aggregated["totals"].cache_creation_input_tokens,
+                total_spend=metadata_metrics.spend,
+                total_prompt_tokens=metadata_metrics.prompt_tokens,
+                total_completion_tokens=metadata_metrics.completion_tokens,
+                total_tokens=metadata_metrics.total_tokens,
+                total_api_requests=metadata_metrics.api_requests,
+                total_successful_requests=metadata_metrics.successful_requests,
+                total_failed_requests=metadata_metrics.failed_requests,
+                total_cache_read_input_tokens=metadata_metrics.cache_read_input_tokens,
+                total_cache_creation_input_tokens=metadata_metrics.cache_creation_input_tokens,
                 page=page,
                 total_pages=-(-total_count // page_size),  # Ceiling division
                 has_more=(page * page_size) < total_count,

@@ -239,3 +239,47 @@ class TestAzureAnthropicMessagesConfig:
         assert "tools" in params
         assert "tool_choice" in params
 
+
+class TestProviderConfigManagerAzureAnthropicMessages:
+    """Test ProviderConfigManager returns correct config for Azure AI Anthropic Messages API"""
+
+    def test_get_provider_anthropic_messages_config_returns_azure_config(self):
+        """Test that ProviderConfigManager returns AzureAnthropicMessagesConfig for azure_ai provider with claude model"""
+        import litellm
+        from litellm.utils import ProviderConfigManager
+
+        config = ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="claude-sonnet-4-5_gb_20250929",
+            provider=litellm.LlmProviders.AZURE_AI,
+        )
+
+        assert config is not None
+        assert isinstance(config, AzureAnthropicMessagesConfig)
+
+    def test_get_provider_anthropic_messages_config_case_insensitive_model_name(self):
+        """Test that model name check is case insensitive"""
+        import litellm
+        from litellm.utils import ProviderConfigManager
+
+        # Test with uppercase CLAUDE
+        config = ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="CLAUDE-SONNET-4-5",
+            provider=litellm.LlmProviders.AZURE_AI,
+        )
+
+        assert config is not None
+        assert isinstance(config, AzureAnthropicMessagesConfig)
+
+    def test_get_provider_anthropic_messages_config_returns_none_for_non_claude_model(
+        self,
+    ):
+        """Test that ProviderConfigManager returns None for non-claude model on azure_ai"""
+        import litellm
+        from litellm.utils import ProviderConfigManager
+
+        config = ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="gpt-4o",
+            provider=litellm.LlmProviders.AZURE_AI,
+        )
+
+        assert config is None

@@ -43,10 +43,6 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.exception_mapping_utils
 from litellm import get_secret_str
-from litellm.router_utils.common_utils import (
-    filter_team_based_models,
-    filter_web_search_deployments,
-)
 from litellm._logging import verbose_router_logger
 from litellm._uuid import uuid
 from litellm.caching.caching import (
@@ -88,6 +84,10 @@ from litellm.router_utils.client_initalization_utils import InitalizeCachedClien
 from litellm.router_utils.clientside_credential_handler import (
     get_dynamic_litellm_params,
     is_clientside_credential,
+)
+from litellm.router_utils.common_utils import (
+    filter_team_based_models,
+    filter_web_search_deployments,
 )
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.cooldown_handlers import (
@@ -136,6 +136,7 @@ from litellm.types.router import (
     CustomRoutingStrategyBase,
     Deployment,
     DeploymentTypedDict,
+    GuardrailTypedDict,
     LiteLLM_Params,
     MockRouterTestingParams,
     ModelGroupInfo,
@@ -157,7 +158,11 @@ from litellm.types.utils import (
 )
 from litellm.types.utils import ModelInfo
 from litellm.types.utils import ModelInfo as ModelMapInfo
-from litellm.types.utils import ModelResponseStream, StandardLoggingPayload, Usage
+from litellm.types.utils import (
+    ModelResponseStream,
+    StandardLoggingPayload,
+    Usage,
+)
 from litellm.utils import (
     CustomStreamWrapper,
     EmbeddingResponse,
@@ -210,6 +215,8 @@ class Router:
         assistants_config: Optional[AssistantsTypedDict] = None,
         ## SEARCH API ##
         search_tools: Optional[List[SearchToolTypedDict]] = None,
+        ## GUARDRAIL API ##
+        guardrail_list: Optional[List[GuardrailTypedDict]] = None,
         ## CACHING ##
         redis_url: Optional[str] = None,
         redis_host: Optional[str] = None,
@@ -371,6 +378,7 @@ class Router:
 
         self.assistants_config = assistants_config
         self.search_tools = search_tools or []
+        self.guardrail_list = guardrail_list or []
         self.deployment_names: List = (
             []
         )  # names of models under litellm_params. ex. azure/chatgpt-v-2
@@ -1013,6 +1021,9 @@ class Router:
             list_containers,
             retrieve_container,
         )
+        from litellm.containers.endpoint_factory import (
+            _generated_endpoints as container_file_endpoints,
+        )
 
         self.acreate_container = self.factory_function(
             acreate_container, call_type="acreate_container"
@@ -1038,6 +1049,10 @@ class Router:
         self.delete_container = self.factory_function(
             delete_container, call_type="delete_container"
         )
+        
+        # Auto-register JSON-generated container file endpoints
+        for name, func in container_file_endpoints.items():
+            setattr(self, name, self.factory_function(func, call_type=name))  # type: ignore[arg-type]
 
     def _initialize_skills_endpoints(self):
         """Initialize Anthropic Skills API endpoints."""
@@ -1054,8 +1069,44 @@ class Router:
             litellm.adelete_skill, call_type="adelete_skill"
         )
 
+    def _initialize_interactions_endpoints(self):
+        """Initialize Google Interactions API endpoints."""
+        from litellm.interactions import acancel as acancel_interaction
+        from litellm.interactions import acreate as acreate_interaction
+        from litellm.interactions import adelete as adelete_interaction
+        from litellm.interactions import aget as aget_interaction
+        from litellm.interactions import cancel as cancel_interaction
+        from litellm.interactions import create as create_interaction
+        from litellm.interactions import delete as delete_interaction
+        from litellm.interactions import get as get_interaction
+
+        self.acreate_interaction = self.factory_function(
+            acreate_interaction, call_type="acreate_interaction"
+        )
+        self.create_interaction = self.factory_function(
+            create_interaction, call_type="create_interaction"
+        )
+        self.aget_interaction = self.factory_function(
+            aget_interaction, call_type="aget_interaction"
+        )
+        self.get_interaction = self.factory_function(
+            get_interaction, call_type="get_interaction"
+        )
+        self.adelete_interaction = self.factory_function(
+            adelete_interaction, call_type="adelete_interaction"
+        )
+        self.delete_interaction = self.factory_function(
+            delete_interaction, call_type="delete_interaction"
+        )
+        self.acancel_interaction = self.factory_function(
+            acancel_interaction, call_type="acancel_interaction"
+        )
+        self.cancel_interaction = self.factory_function(
+            cancel_interaction, call_type="cancel_interaction"
+        )
+
     def _initialize_specialized_endpoints(self):
-        """Helper to initialize specialized router endpoints (vector store, OCR, search, video, container, skills)."""
+        """Helper to initialize specialized router endpoints (vector store, OCR, search, video, container, skills, interactions)."""
         self._initialize_vector_store_endpoints()
         self._initialize_vector_store_file_endpoints()
         self._initialize_google_genai_endpoints()
@@ -1063,6 +1114,7 @@ class Router:
         self._initialize_video_endpoints()
         self._initialize_container_endpoints()
         self._initialize_skills_endpoints()
+        self._initialize_interactions_endpoints()
 
     def initialize_router_endpoints(self):
         self._initialize_core_endpoints()
@@ -1254,7 +1306,7 @@ class Router:
 
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             request_priority = kwargs.get("priority") or self.default_priority
-            start_time = time.perf_counter()
+            start_time = time.time()
             _is_prompt_management_model = self._is_prompt_management_model(model)
 
             if _is_prompt_management_model:
@@ -1267,7 +1319,7 @@ class Router:
                 response = await self.schedule_acompletion(**kwargs)
             else:
                 response = await self.async_function_with_fallbacks(**kwargs)
-            end_time = time.perf_counter()
+            end_time = time.time()
             _duration = end_time - start_time
             asyncio.create_task(
                 self.service_logger_obj.async_service_success_hook(
@@ -1445,7 +1497,7 @@ class Router:
             input_kwargs_for_streaming_fallback["model"] = model
 
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
-            start_time = time.perf_counter()
+            start_time = time.time()
             deployment = await self.async_get_available_deployment(
                 model=model,
                 messages=messages,
@@ -1454,7 +1506,7 @@ class Router:
             )
 
             _timeout_debug_deployment_dict = deployment
-            end_time = time.perf_counter()
+            end_time = time.time()
             _duration = end_time - start_time
             asyncio.create_task(
                 self.service_logger_obj.async_service_success_hook(
@@ -2926,6 +2978,99 @@ class Router:
             **kwargs,
         )
 
+    async def aguardrail(
+        self,
+        guardrail_name: str,
+        original_function: Callable,
+        **kwargs,
+    ):
+        """
+        Execute a guardrail with load balancing and fallbacks.
+
+        Args:
+            guardrail_name: Name of the guardrail to execute
+            original_function: The guardrail's execution function (e.g., async_pre_call_hook)
+            **kwargs: Additional arguments passed to the guardrail
+
+        Returns:
+            Result from the guardrail execution
+        """
+        kwargs["model"] = guardrail_name  # For fallback system compatibility
+        kwargs["original_generic_function"] = original_function
+        kwargs["original_function"] = self._aguardrail_helper
+        self._update_kwargs_before_fallbacks(
+            model=guardrail_name, kwargs=kwargs, metadata_variable_name="litellm_metadata"
+        )
+        verbose_router_logger.debug(
+            f"Inside aguardrail() - guardrail_name: {guardrail_name}; kwargs: {kwargs}"
+        )
+        response = await self.async_function_with_fallbacks(**kwargs)
+        return response
+
+    async def _aguardrail_helper(
+        self,
+        model: str,
+        original_generic_function: Callable,
+        **kwargs,
+    ):
+        """
+        Helper for aguardrail - selects a guardrail deployment and executes it.
+        Called by async_function_with_fallbacks for each retry attempt.
+
+        Args:
+            model: The guardrail_name (named 'model' for fallback system compatibility)
+            original_generic_function: The guardrail's execution function
+            **kwargs: Additional arguments
+        """
+        guardrail_name = model
+        selected_guardrail = self.get_available_guardrail(
+            guardrail_name=guardrail_name,
+        )
+
+        verbose_router_logger.debug(
+            f"Selected guardrail deployment: {selected_guardrail.get('litellm_params', {}).get('guardrail')}"
+        )
+
+        # Pass the selected guardrail config to the original function
+        kwargs["selected_guardrail"] = selected_guardrail
+        response = await original_generic_function(**kwargs)
+        return response
+
+    def get_available_guardrail(
+        self,
+        guardrail_name: str,
+    ) -> "GuardrailTypedDict":
+        """
+        Select a guardrail deployment using the router's load balancing strategy.
+
+        Args:
+            guardrail_name: Name of the guardrail to select
+
+        Returns:
+            Selected guardrail configuration dict
+        """
+        from litellm.router_strategy.simple_shuffle import simple_shuffle
+
+        healthy_deployments = [
+            g for g in self.guardrail_list if g.get("guardrail_name") == guardrail_name
+        ]
+
+        if not healthy_deployments:
+            raise ValueError(f"No guardrail found with name: {guardrail_name}")
+
+        if len(healthy_deployments) == 1:
+            return healthy_deployments[0]
+
+        # Use simple_shuffle for weighted selection
+        return cast(
+            GuardrailTypedDict,
+            simple_shuffle(
+                llm_router_instance=self,
+                healthy_deployments=healthy_deployments,
+                model=guardrail_name,
+            ),
+        )
+
     async def _ageneric_api_call_with_fallbacks(
         self, model: str, original_function: Callable, **kwargs
     ):
@@ -3837,10 +3982,24 @@ class Router:
             "retrieve_container",
             "adelete_container",
             "delete_container",
+            "alist_container_files",
+            "list_container_files",
+            "aretrieve_container_file",
+            "retrieve_container_file",
+            "adelete_container_file",
+            "delete_container_file",
             "acreate_skill",
             "alist_skills",
             "aget_skill",
             "adelete_skill",
+            "acreate_interaction",
+            "create_interaction",
+            "aget_interaction",
+            "get_interaction",
+            "adelete_interaction",
+            "delete_interaction",
+            "acancel_interaction",
+            "cancel_interaction",
         ] = "assistants",
     ):
         """
@@ -3957,18 +4116,31 @@ class Router:
                 "avideo_status",
                 "avideo_content",
                 "avideo_remix",
-                "acreate_container",
-                "alist_containers",
-                "aretrieve_container",
-                "adelete_container",
                 "acancel_batch",
                 "acreate_skill",
                 "alist_skills",
                 "aget_skill",
                 "adelete_skill",
+                "acreate_interaction",
+                "create_interaction",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
+                    **kwargs,
+                )
+            elif call_type in (
+                "acreate_container",
+                "alist_containers",
+                "aretrieve_container",
+                "adelete_container",
+                "alist_container_files",
+                "aretrieve_container_file",
+                "adelete_container_file",
+                "aretrieve_container_file_content",
+            ):
+                return await self._init_containers_api_endpoints(
+                    original_function=original_function,
+                    custom_llm_provider=custom_llm_provider,
                     **kwargs,
                 )
             elif call_type == "allm_passthrough_route":
@@ -4003,6 +4175,16 @@ class Router:
                     client=client,
                     **kwargs,
                 )
+            elif call_type in (
+                "aget_interaction",
+                "adelete_interaction",
+                "acancel_interaction",
+            ):
+                return await self._init_interactions_api_endpoints(
+                    original_function=original_function,
+                    custom_llm_provider=custom_llm_provider,
+                    **kwargs,
+                )
 
         return async_wrapper
 
@@ -4014,6 +4196,22 @@ class Router:
     ):
         """
         Initialize the Vector Store API endpoints on the router.
+        """
+        if custom_llm_provider and "custom_llm_provider" not in kwargs:
+            kwargs["custom_llm_provider"] = custom_llm_provider
+        return await original_function(**kwargs)
+
+    async def _init_containers_api_endpoints(
+        self,
+        original_function: Callable,
+        custom_llm_provider: Optional[str] = None,
+        **kwargs,
+    ):
+        """
+        Initialize the Containers API endpoints on the router.
+
+        Container operations don't need model-based routing, so we call the
+        original function directly with the custom_llm_provider.
         """
         if custom_llm_provider and "custom_llm_provider" not in kwargs:
             kwargs["custom_llm_provider"] = custom_llm_provider
@@ -4040,6 +4238,25 @@ class Router:
             original_function=original_function,
             **kwargs,
         )
+
+    async def _init_interactions_api_endpoints(
+        self,
+        original_function: Callable,
+        custom_llm_provider: Optional[str] = None,
+        **kwargs,
+    ):
+        """
+        Initialize the Interactions API endpoints on the router.
+
+        GET, DELETE, CANCEL Interactions API Requests don't need model-based routing,
+        so we call the original function directly with the custom_llm_provider.
+        """
+        if custom_llm_provider and "custom_llm_provider" not in kwargs:
+            kwargs["custom_llm_provider"] = custom_llm_provider
+        # Default to gemini for interactions API
+        if "custom_llm_provider" not in kwargs:
+            kwargs["custom_llm_provider"] = "gemini"
+        return await original_function(**kwargs)
 
     async def _pass_through_assistants_endpoint_factory(
         self,
@@ -6679,6 +6896,58 @@ class Router:
         """
         return candidate_id in self.model_id_to_deployment_index_map
 
+    def resolve_model_name_from_model_id(self, model_id: Optional[str]) -> Optional[str]:
+        """
+        Resolve model_name from model_id.
+        
+        This method attempts to find the correct model_name to use with the router
+        so that litellm_params can be automatically injected from the model config.
+        
+        Strategy:
+        1. First, check if model_id directly matches a model_name or deployment ID
+        2. If not, search through router's model_list to find a match by litellm_params.model
+        3. Return the model_name if found, None otherwise
+        
+        Args:
+            model_id: The model_id extracted from decoded video_id
+                     (could be model_name or litellm_params.model value)
+        
+        Returns:
+            model_name if found, None otherwise. If None, the request will fall through
+            to normal flow using environment variables.
+        """
+        if not model_id:
+            return None
+        
+        # Strategy 1: Check if model_id directly matches a model_name or deployment ID
+        if model_id in self.model_names or self.has_model_id(model_id):
+            return model_id
+        
+        # Strategy 2: Search through router's model_list to find by litellm_params.model
+        all_models = self.get_model_list(model_name=None)
+        if not all_models:
+            return None
+        
+        for deployment in all_models:
+            litellm_params = deployment.get("litellm_params", {})
+            actual_model = litellm_params.get("model")
+            
+            # Match by exact match or by checking if actual_model ends with /model_id or :model_id
+            # e.g., model_id="veo-2.0-generate-001" matches actual_model="vertex_ai/veo-2.0-generate-001"
+            matches = (
+                actual_model == model_id
+                or (actual_model and actual_model.endswith(f"/{model_id}"))
+                or (actual_model and actual_model.endswith(f":{model_id}"))
+            )
+            
+            if matches:
+                model_name = deployment.get("model_name")
+                if model_name:
+                    return model_name
+        
+        # No match found
+        return None
+
     def map_team_model(self, team_model_name: str, team_id: str) -> Optional[str]:
         """
         Map a team model name to a team-specific model name.
@@ -7584,7 +7853,7 @@ class Router:
             if isinstance(healthy_deployments, dict):
                 return healthy_deployments
 
-            start_time = time.perf_counter()
+            start_time = time.time()
             if (
                 self.routing_strategy == "usage-based-routing-v2"
                 and self.lowesttpm_logger_v2 is not None
@@ -7651,7 +7920,7 @@ class Router:
                 f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
             )
 
-            end_time = time.perf_counter()
+            end_time = time.time()
             _duration = end_time - start_time
             asyncio.create_task(
                 self.service_logger_obj.async_service_success_hook(

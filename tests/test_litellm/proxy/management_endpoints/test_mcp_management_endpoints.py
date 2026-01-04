@@ -20,6 +20,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     MCPTransport,
     NewMCPServerRequest,
+    UpdateMCPServerRequest,
     UserAPIKeyAuth,
 )
 from litellm.types.mcp import MCPAuth
@@ -168,8 +169,8 @@ class TestListMCPServers:
             return_value=["config_server_1", "config_server_2"]
         )
 
-        # Mock the new method that returns servers with health and team data
-        mock_servers_with_health = [
+        # Mock the new method that returns servers without health check
+        mock_servers = [
             generate_mock_mcp_server_db_record(
                 server_id="config_server_1",
                 alias="Zapier MCP",
@@ -183,11 +184,11 @@ class TestListMCPServers:
                 transport="http",
             ),
         ]
-        mock_manager.get_all_mcp_servers_with_health_and_teams = AsyncMock(
-            return_value=mock_servers_with_health
+        mock_manager.get_all_allowed_mcp_servers = AsyncMock(
+            return_value=mock_servers
         )
 
-        for idx, server in enumerate(mock_servers_with_health):
+        for idx, server in enumerate(mock_servers):
             server.credentials = {"auth_value": f"secret_{idx}"}
 
         with patch(
@@ -199,6 +200,9 @@ class TestListMCPServers:
         ), patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
             return_value=mock_prisma_client,
+        ), patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+            AsyncMock(return_value=[mock_user_auth]),
         ):
             # Import and call the function
             from litellm.proxy.management_endpoints.mcp_management_endpoints import (
@@ -299,8 +303,8 @@ class TestListMCPServers:
             ]
         )
 
-        # Mock the new method that returns servers with health and team data
-        mock_servers_with_health = [
+        # Mock the new method that returns servers without health check
+        mock_servers = [
             db_server_1,
             db_server_2,
             generate_mock_mcp_server_db_record(
@@ -316,11 +320,11 @@ class TestListMCPServers:
                 transport="http",
             ),
         ]
-        mock_manager.get_all_mcp_servers_with_health_and_teams = AsyncMock(
-            return_value=mock_servers_with_health
+        mock_manager.get_all_allowed_mcp_servers = AsyncMock(
+            return_value=mock_servers
         )
 
-        for idx, server in enumerate(mock_servers_with_health):
+        for idx, server in enumerate(mock_servers):
             server.credentials = {"auth_value": f"secret_{idx}"}
 
         with patch(
@@ -332,6 +336,9 @@ class TestListMCPServers:
         ), patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
             return_value=mock_prisma_client,
+        ), patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+            AsyncMock(return_value=[mock_user_auth]),
         ):
             # Import and call the function
             from litellm.proxy.management_endpoints.mcp_management_endpoints import (
@@ -424,8 +431,8 @@ class TestListMCPServers:
             return_value=["db_server_allowed", "config_server_allowed"]
         )
 
-        # Mock the new method that returns servers with health and team data
-        mock_servers_with_health = [
+        # Mock the new method that returns servers without health check
+        mock_servers = [
             db_server_allowed,
             generate_mock_mcp_server_db_record(
                 server_id="config_server_allowed",
@@ -433,11 +440,11 @@ class TestListMCPServers:
                 url="https://actions.zapier.com/mcp/sse",
             ),
         ]
-        mock_manager.get_all_mcp_servers_with_health_and_teams = AsyncMock(
-            return_value=mock_servers_with_health
+        mock_manager.get_all_allowed_mcp_servers = AsyncMock(
+            return_value=mock_servers
         )
 
-        for idx, server in enumerate(mock_servers_with_health):
+        for idx, server in enumerate(mock_servers):
             server.credentials = {"auth_value": f"secret_{idx}"}
 
         with patch(
@@ -449,6 +456,9 @@ class TestListMCPServers:
         ), patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
             return_value=mock_prisma_client,
+        ), patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+            AsyncMock(return_value=[mock_user_auth]),
         ):
             # Import and call the function
             from litellm.proxy.management_endpoints.mcp_management_endpoints import (
@@ -485,11 +495,14 @@ class TestListMCPServers:
         mock_server.credentials = {"auth_value": "top-secret"}
 
         mock_prisma_client = MagicMock()
-        mock_health_result = {
-            "status": "healthy",
-            "last_health_check": datetime.now().isoformat(),
-            "error": None,
-        }
+
+        # Mock health check result as LiteLLM_MCPServerTable
+        mock_health_result = generate_mock_mcp_server_db_record(
+            server_id="server-1", alias="Server 1"
+        )
+        mock_health_result.status = "healthy"
+        mock_health_result.last_health_check = datetime.now()
+        mock_health_result.health_check_error = None
 
         mock_user_auth = generate_mock_user_api_key_auth(
             user_role=LitellmUserRoles.PROXY_ADMIN
@@ -530,11 +543,14 @@ class TestListMCPServers:
         delattr(mock_server, "credentials")
 
         mock_prisma_client = MagicMock()
-        mock_health_result = {
-            "status": "healthy",
-            "last_health_check": datetime.now().isoformat(),
-            "error": None,
-        }
+
+        # Mock health check result as LiteLLM_MCPServerTable
+        mock_health_result = generate_mock_mcp_server_db_record(
+            server_id="server-2", alias="Server 2"
+        )
+        mock_health_result.status = "healthy"
+        mock_health_result.last_health_check = datetime.now()
+        mock_health_result.health_check_error = None
 
         mock_user_auth = generate_mock_user_api_key_auth(
             user_role=LitellmUserRoles.PROXY_ADMIN
@@ -565,296 +581,6 @@ class TestListMCPServers:
             # credentials attribute should still be absent and no exception raised
             assert not hasattr(result, "credentials")
             assert result.status == "healthy"
-
-
-class TestMCPHealthCheckEndpoints:
-    """Test MCP health check endpoints"""
-
-    @pytest.mark.asyncio
-    async def test_health_check_mcp_server_success(self):
-        """Test successful health check for a specific MCP server"""
-        # Mock server
-        mock_server = generate_mock_mcp_server_db_record(
-            server_id="test-server", alias="Test Server"
-        )
-
-        # Mock dependencies
-        mock_prisma_client = MagicMock()
-
-        # Mock global MCP server manager
-        mock_manager = MagicMock()
-        mock_manager.health_check_server = AsyncMock(
-            return_value={
-                "server_id": "test-server",
-                "server_name": "Test Server",
-                "status": "healthy",
-                "tools_count": 3,
-                "last_health_check": "2024-01-01T12:00:00",
-                "response_time_ms": 150.5,
-                "error": None,
-            }
-        )
-
-        mock_user_auth = generate_mock_user_api_key_auth(
-            user_role=LitellmUserRoles.PROXY_ADMIN
-        )
-
-        with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
-            return_value=mock_prisma_client,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
-            return_value=True,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
-            mock_manager,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
-            AsyncMock(return_value=mock_server),
-        ):
-            # Import and call the function
-            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
-                health_check_mcp_server,
-            )
-
-            result = await health_check_mcp_server(
-                server_id="test-server", user_api_key_dict=mock_user_auth
-            )
-
-            # Verify results
-            assert result["server_id"] == "test-server"
-            assert result["server_name"] == "Test Server"
-            assert result["status"] == "healthy"
-            assert result["tools_count"] == 3
-            assert result["response_time_ms"] == 150.5
-            assert result["error"] is None
-
-    @pytest.mark.asyncio
-    async def test_health_check_mcp_server_not_found(self):
-        """Test health check for a server that doesn't exist"""
-        # Mock dependencies
-        mock_prisma_client = MagicMock()
-
-        mock_user_auth = generate_mock_user_api_key_auth(
-            user_role=LitellmUserRoles.PROXY_ADMIN
-        )
-
-        with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
-            return_value=mock_prisma_client,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
-            AsyncMock(return_value=None),
-        ):
-            # Import and call the function
-            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
-                health_check_mcp_server,
-            )
-
-            # Should raise HTTPException
-            with pytest.raises(Exception) as exc_info:
-                await health_check_mcp_server(
-                    server_id="non-existent-server", user_api_key_dict=mock_user_auth
-                )
-
-            assert "not found" in str(exc_info.value)
-
-    @pytest.mark.asyncio
-    async def test_health_check_mcp_server_unauthorized(self):
-        """Test health check for a server user doesn't have access to"""
-        # Mock server
-        mock_server = generate_mock_mcp_server_db_record(
-            server_id="test-server", alias="Test Server"
-        )
-
-        # Mock dependencies
-        mock_prisma_client = MagicMock()
-
-        mock_user_auth = generate_mock_user_api_key_auth(
-            user_role=LitellmUserRoles.INTERNAL_USER  # Non-admin user
-        )
-
-        # Mock user doesn't have access to this server
-        mock_user_servers = []
-
-        with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
-            return_value=mock_prisma_client,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
-            return_value=False,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_all_mcp_servers_for_user",
-            return_value=mock_user_servers,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
-            AsyncMock(return_value=mock_server),
-        ):
-            # Import and call the function
-            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
-                health_check_mcp_server,
-            )
-
-            # Should raise HTTPException
-            with pytest.raises(Exception) as exc_info:
-                await health_check_mcp_server(
-                    server_id="test-server", user_api_key_dict=mock_user_auth
-                )
-
-            assert "permission" in str(exc_info.value)
-
-    @pytest.mark.asyncio
-    async def test_health_check_all_mcp_servers(self):
-        """Test health check for all accessible MCP servers"""
-        # Mock team records
-        team_records = [
-            generate_mock_team_record(
-                team_id="team1",
-                team_alias="Team 1",
-                organization_id="org1",
-                mcp_servers=["server1", "server2"],
-            )
-        ]
-
-        # Mock DB servers
-        db_servers = [
-            generate_mock_mcp_server_db_record(server_id="server1"),
-            generate_mock_mcp_server_db_record(server_id="server2"),
-        ]
-
-        # Mock dependencies
-        mock_prisma_client = MagicMock()
-        mock_prisma_client = setup_mock_prisma_client(
-            mock_prisma_client=mock_prisma_client,
-            team_records=team_records,
-            mcp_servers=db_servers,
-        )
-
-        # Mock global MCP server manager
-        mock_manager = MagicMock()
-        mock_manager.health_check_allowed_servers = AsyncMock(
-            return_value={
-                "server1": {
-                    "server_id": "server1",
-                    "server_name": "Test DB Server",
-                    "status": "healthy",
-                    "tools_count": 2,
-                    "last_health_check": "2024-01-01T12:00:00",
-                    "response_time_ms": 100.0,
-                    "error": None,
-                },
-                "server2": {
-                    "server_id": "server2",
-                    "server_name": "Test DB Server",
-                    "status": "unhealthy",
-                    "last_health_check": "2024-01-01T12:00:00",
-                    "response_time_ms": 5000.0,
-                    "error": "Connection timeout",
-                },
-            }
-        )
-        mock_manager.get_allowed_mcp_servers = AsyncMock(
-            return_value=["server1", "server2"]
-        )
-
-        mock_user_auth = generate_mock_user_api_key_auth(
-            user_role=LitellmUserRoles.INTERNAL_USER
-        )
-
-        with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
-            return_value=mock_prisma_client,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
-            return_value=False,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
-            mock_manager,
-        ):
-            # Import and call the function
-            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
-                health_check_all_mcp_servers,
-            )
-
-            result = await health_check_all_mcp_servers(
-                user_api_key_dict=mock_user_auth
-            )
-
-            # Verify results
-            assert result["total_servers"] == 2
-            assert result["healthy_count"] == 1
-            assert result["unhealthy_count"] == 1
-            assert result["unknown_count"] == 0
-            assert "server1" in result["servers"]
-            assert "server2" in result["servers"]
-
-            # Check individual server results
-            assert result["servers"]["server1"]["status"] == "healthy"
-            assert result["servers"]["server1"]["tools_count"] == 2
-            assert result["servers"]["server1"]["server_name"] == "Test DB Server"
-            assert result["servers"]["server2"]["status"] == "unhealthy"
-            assert result["servers"]["server2"]["error"] == "Connection timeout"
-            assert result["servers"]["server2"]["server_name"] == "Test DB Server"
-
-    @pytest.mark.asyncio
-    async def test_fetch_all_mcp_servers_with_health_status(self):
-        """Test that fetch_all_mcp_servers includes health check status"""
-        # Mock server with health status
-        mock_server = generate_mock_mcp_server_db_record(
-            server_id="test-server", alias="Test Server"
-        )
-        # Add health status to the mock server
-        mock_server.status = "healthy"
-        mock_server.last_health_check = datetime.now()
-        mock_server.health_check_error = None
-
-        # Mock dependencies
-        mock_prisma_client = MagicMock()
-        mock_prisma_client = setup_mock_prisma_client(
-            mock_prisma_client=mock_prisma_client,
-            team_records=[],
-            mcp_servers=[],  # Don't add servers here since we're mocking get_all_mcp_servers
-        )
-
-        # Mock global MCP server manager
-        mock_manager = MagicMock()
-        mock_manager.config_mcp_servers = {}
-        mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=[])
-        mock_manager.get_all_mcp_servers_with_health_and_teams = AsyncMock(
-            return_value=[mock_server]
-        )
-
-        mock_server.credentials = {"auth_value": "secret"}
-
-        mock_user_auth = generate_mock_user_api_key_auth(
-            user_role=LitellmUserRoles.PROXY_ADMIN
-        )
-
-        with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
-            return_value=mock_prisma_client,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
-            return_value=True,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
-            mock_manager,
-        ):
-            # Import and call the function
-            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
-                fetch_all_mcp_servers,
-            )
-
-            result = await fetch_all_mcp_servers(user_api_key_dict=mock_user_auth)
-
-            # Verify health check status is included
-            assert len(result) == 1
-            server = result[0]
-            assert server.server_id == "test-server"
-            assert server.status == "healthy"
-            assert server.last_health_check is not None
-            assert server.health_check_error is None
-            assert server.credentials is None
 
 
 class TestTemporaryMCPSessionEndpoints:
@@ -1168,3 +894,253 @@ class TestTemporaryMCPSessionEndpoints:
             token_endpoint_auth_method="client_secret_basic",
             fallback_client_id="server-1",
         )
+
+class TestUpdateMCPServer:
+    """Test suite for update MCP server functionality"""
+
+    @pytest.mark.asyncio
+    async def test_update_mcp_server_respects_extra_headers(self):
+        """
+        Test that updating an MCP server with extra_headers properly saves the field.
+        
+        This test ensures that extra_headers field in UpdateMCPServerRequest
+        is properly handled and persisted when updating an MCP server.
+        """
+        # Create an existing server
+        existing_server = generate_mock_mcp_server_db_record(
+            server_id="test-server-1",
+            alias="Test Server",
+            url="https://test.example.com/mcp",
+            transport="http",
+        )
+        existing_server.extra_headers = []  # Initially empty
+
+        # Create update request with extra_headers
+        update_request = UpdateMCPServerRequest(
+            server_id="test-server-1",
+            alias="Updated Test Server",
+            extra_headers=["X-Custom-Header", "X-Another-Header"],
+        )
+
+        # Mock the updated server with extra_headers
+        updated_server = generate_mock_mcp_server_db_record(
+            server_id="test-server-1",
+            alias="Updated Test Server",
+            url="https://test.example.com/mcp",
+            transport="http",
+        )
+        updated_server.extra_headers = ["X-Custom-Header", "X-Another-Header"]
+
+        # Mock dependencies
+        mock_prisma_client = MagicMock()
+        mock_prisma_client.db = MagicMock()
+        mock_prisma_client.db.litellm_mcpservertable = AsyncMock()
+        mock_prisma_client.db.litellm_mcpservertable.find_unique = AsyncMock(
+            return_value=existing_server
+        )
+        mock_prisma_client.db.litellm_mcpservertable.update = AsyncMock(
+            return_value=updated_server
+        )
+
+        mock_user_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        # Mock the update_mcp_server function to capture the call
+        with patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=mock_prisma_client,
+        ), patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
+            MagicMock(),
+        ), patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.update_mcp_server",
+            AsyncMock(return_value=updated_server),
+        ) as update_mock, patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.add_server",
+            AsyncMock(),
+        ), patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.reload_servers_from_database",
+            AsyncMock(),
+        ):
+            # Import and call the function
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                edit_mcp_server,
+            )
+
+            result = await edit_mcp_server(
+                payload=update_request, user_api_key_dict=mock_user_auth
+            )
+
+            # Verify that update_mcp_server was called with the correct payload
+            update_mock.assert_awaited_once()
+            call_args = update_mock.call_args
+            # First arg is prisma_client, second is the payload (UpdateMCPServerRequest)
+            called_payload = call_args[0][1]
+            assert called_payload.server_id == "test-server-1"
+            assert called_payload.extra_headers == ["X-Custom-Header", "X-Another-Header"]
+            assert called_payload.alias == "Updated Test Server"
+
+            # Verify the result includes extra_headers
+            assert result.extra_headers == ["X-Custom-Header", "X-Another-Header"]
+            assert result.alias == "Updated Test Server"
+
+
+class TestHealthCheckServers:
+    """Test suite for health check servers endpoint"""
+
+    @pytest.mark.asyncio
+    async def test_health_check_all_servers(self):
+        """
+        Test health check for all accessible servers
+
+        Scenario: User has access to 2 servers, checks all
+        Expected: Returns health status for both servers
+        """
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            health_check_servers,
+        )
+
+        # Mock user auth
+        mock_user_auth = generate_mock_user_api_key_auth()
+
+        # Mock health check results
+        mock_health_result_1 = generate_mock_mcp_server_db_record(
+            server_id="server-1",
+            alias="Server 1",
+            url="https://server1.example.com",
+        )
+        mock_health_result_1.status = "healthy"
+        mock_health_result_1.last_health_check = datetime.now()
+        mock_health_result_1.health_check_error = None
+
+        mock_health_result_2 = generate_mock_mcp_server_db_record(
+            server_id="server-2",
+            alias="Server 2",
+            url="https://server2.example.com",
+        )
+        mock_health_result_2.status = "unhealthy"
+        mock_health_result_2.last_health_check = datetime.now()
+        mock_health_result_2.health_check_error = "Connection timeout"
+
+        # Mock manager
+        mock_manager = MagicMock()
+        mock_manager.get_all_mcp_servers_with_health_and_teams = AsyncMock(
+            return_value=[mock_health_result_1, mock_health_result_2]
+        )
+
+        with patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+            mock_manager,
+        ), patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+            AsyncMock(return_value=[mock_user_auth]),
+        ):
+            result = await health_check_servers(
+                server_ids=None,
+                user_api_key_dict=mock_user_auth,
+            )
+
+            # Verify results
+            assert len(result) == 2
+            assert result[0]["server_id"] == "server-1"
+            assert result[0]["status"] == "healthy"
+            assert result[1]["server_id"] == "server-2"
+            assert result[1]["status"] == "unhealthy"
+
+    @pytest.mark.asyncio
+    async def test_health_check_specific_servers(self):
+        """
+        Test health check for specific servers
+
+        Scenario: User requests health check for specific server IDs
+        Expected: Returns health status only for requested servers
+        """
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            health_check_servers,
+        )
+
+        # Mock user auth
+        mock_user_auth = generate_mock_user_api_key_auth()
+
+        # Mock health check result
+        mock_health_result = generate_mock_mcp_server_db_record(
+            server_id="server-1",
+            alias="Server 1",
+            url="https://server1.example.com",
+        )
+        mock_health_result.status = "healthy"
+        mock_health_result.last_health_check = datetime.now()
+        mock_health_result.health_check_error = None
+
+        # Mock manager
+        mock_manager = MagicMock()
+        mock_manager.get_all_mcp_servers_with_health_and_teams = AsyncMock(
+            return_value=[mock_health_result]
+        )
+
+        with patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+            mock_manager,
+        ), patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+            AsyncMock(return_value=[mock_user_auth]),
+        ):
+            result = await health_check_servers(
+                server_ids=["server-1"],
+                user_api_key_dict=mock_user_auth,
+            )
+
+            # Verify results
+            assert len(result) == 1
+            assert result[0]["server_id"] == "server-1"
+            assert result[0]["status"] == "healthy"
+
+    @pytest.mark.asyncio
+    async def test_health_check_unauthorized_servers(self):
+        """
+        Test health check with unauthorized servers
+
+        Scenario: User requests health check for servers they don't have access to
+        Expected: Only checks accessible servers, unauthorized servers are filtered out
+        """
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            health_check_servers,
+        )
+
+        # Mock user auth
+        mock_user_auth = generate_mock_user_api_key_auth()
+
+        # Mock health check result for authorized server
+        mock_health_result = generate_mock_mcp_server_db_record(
+            server_id="server-1",
+            alias="Server 1",
+            url="https://server1.example.com",
+        )
+        mock_health_result.status = "healthy"
+        mock_health_result.last_health_check = datetime.now()
+        mock_health_result.health_check_error = None
+
+        # Mock manager - server_ids filter is applied inside get_all_mcp_servers_with_health_and_teams
+        # So it only returns servers the user has access to
+        mock_manager = MagicMock()
+        mock_manager.get_all_mcp_servers_with_health_and_teams = AsyncMock(
+            return_value=[mock_health_result]  # Only server-1 is returned (accessible)
+        )
+
+        with patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+            mock_manager,
+        ), patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+            AsyncMock(return_value=[mock_user_auth]),
+        ):
+            result = await health_check_servers(
+                server_ids=["server-1", "server-unauthorized"],
+                user_api_key_dict=mock_user_auth,
+            )
+
+            # Verify results - only accessible server is returned
+            assert len(result) == 1
+            assert result[0]["server_id"] == "server-1"
+            assert result[0]["status"] == "healthy"

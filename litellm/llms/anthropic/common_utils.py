@@ -12,7 +12,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.types.llms.anthropic import AllAnthropicToolsValues, AnthropicMcpServerTool, ANTHROPIC_HOSTED_TOOLS
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_HOSTED_TOOLS,
+    AllAnthropicToolsValues,
+    AnthropicMcpServerTool,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import TokenCountResponse
 
@@ -186,6 +190,37 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         
         return False
 
+    def is_code_execution_tool_used(self, tools: Optional[List]) -> bool:
+        """
+        Check if code execution tool is being used.
+        
+        Returns True if any tool has type "code_execution_20250825".
+        """
+        if not tools:
+            return False
+        
+        for tool in tools:
+            tool_type = tool.get("type", "")
+            if tool_type == "code_execution_20250825":
+                return True
+        return False
+    
+    def is_container_with_skills_used(self, optional_params: Optional[dict]) -> bool:
+        """
+        Check if container with skills is being used.
+        
+        Returns True if optional_params contains container with skills.
+        """
+        if not optional_params:
+            return False
+        
+        container = optional_params.get("container")
+        if container and isinstance(container, dict):
+            skills = container.get("skills")
+            if skills and isinstance(skills, list) and len(skills) > 0:
+                return True
+        return False
+
     def _get_user_anthropic_beta_headers(
         self, anthropic_beta_header: Optional[str]
     ) -> Optional[List[str]]:
@@ -242,8 +277,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             beta_header = self.get_computer_tool_beta_header(computer_tool_used)
             betas.append(beta_header)
         
-        if prompt_caching_set:
-            betas.append("prompt-caching-2024-07-31")
+        # Anthropic no longer requires the prompt-caching beta header
+        # Prompt caching now works automatically when cache_control is used in messages
+        # Reference: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
         
         if file_id_used:
             betas.append("files-api-2025-04-14")
@@ -270,10 +306,13 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         effort_used: bool = False,
         is_vertex_request: bool = False,
         user_anthropic_beta_headers: Optional[List[str]] = None,
+        code_execution_tool_used: bool = False,
+        container_with_skills_used: bool = False,
     ) -> dict:
         betas = set()
-        if prompt_caching_set:
-            betas.add("prompt-caching-2024-07-31")
+        # Anthropic no longer requires the prompt-caching beta header
+        # Prompt caching now works automatically when cache_control is used in messages
+        # Reference: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
         if computer_tool_used:
             beta_header = self.get_computer_tool_beta_header(computer_tool_used)
             betas.add(beta_header)
@@ -293,6 +332,14 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if effort_used:
             from litellm.types.llms.anthropic import ANTHROPIC_EFFORT_BETA_HEADER
             betas.add(ANTHROPIC_EFFORT_BETA_HEADER)
+        
+        # Code execution tool uses a separate beta header
+        if code_execution_tool_used:
+            betas.add("code-execution-2025-08-25")
+        
+        # Container with skills uses a separate beta header
+        if container_with_skills_used:
+            betas.add("skills-2025-10-02")
 
         headers = {
             "anthropic-version": anthropic_version or "2023-06-01",
@@ -345,6 +392,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         programmatic_tool_calling_used = self.is_programmatic_tool_calling_used(tools=tools)
         input_examples_used = self.is_input_examples_used(tools=tools)
         effort_used = self.is_effort_used(optional_params=optional_params, model=model)
+        code_execution_tool_used = self.is_code_execution_tool_used(tools=tools)
+        container_with_skills_used = self.is_container_with_skills_used(optional_params=optional_params)
         user_anthropic_beta_headers = self._get_user_anthropic_beta_headers(
             anthropic_beta_header=headers.get("anthropic-beta")
         )
@@ -362,6 +411,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             programmatic_tool_calling_used=programmatic_tool_calling_used,
             input_examples_used=input_examples_used,
             effort_used=effort_used,
+            code_execution_tool_used=code_execution_tool_used,
+            container_with_skills_used=container_with_skills_used,
         )
 
         headers = {**headers, **anthropic_headers}

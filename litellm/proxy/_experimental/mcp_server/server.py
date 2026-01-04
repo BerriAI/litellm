@@ -775,6 +775,7 @@ if MCP_AVAILABLE:
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
                     add_prefix=add_prefix,
+                    raw_headers=raw_headers,
                 )
 
                 filtered_tools = filter_tools_by_allowed_tools(tools, server)
@@ -854,6 +855,7 @@ if MCP_AVAILABLE:
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
                     add_prefix=add_prefix,
+                    raw_headers=raw_headers,
                 )
 
                 all_prompts.extend(prompts)
@@ -912,6 +914,7 @@ if MCP_AVAILABLE:
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
                     add_prefix=add_prefix,
+                    raw_headers=raw_headers,
                 )
                 all_resources.extend(resources)
 
@@ -969,6 +972,7 @@ if MCP_AVAILABLE:
                         mcp_auth_header=server_auth_header,
                         extra_headers=extra_headers,
                         add_prefix=add_prefix,
+                        raw_headers=raw_headers,
                     )
                 )
                 all_resource_templates.extend(resource_templates)
@@ -1280,6 +1284,11 @@ if MCP_AVAILABLE:
                 standard_logging_mcp_tool_call["mcp_server_cost_info"] = (
                     mcp_server.mcp_info or {}
                 ).get("mcp_server_cost_info")
+                # Update model_call_details with the cost info
+                if litellm_logging_obj:
+                    litellm_logging_obj.model_call_details[
+                        "mcp_tool_call_metadata"
+                    ] = standard_logging_mcp_tool_call
                 response = await _handle_managed_mcp_tool(
                     server_name=server_name,
                     name=original_tool_name,  # Pass the full name (potentially prefixed)
@@ -1316,6 +1325,20 @@ if MCP_AVAILABLE:
                 response_obj=response,
                 start_time=start_time,
                 end_time=end_time,
+            )
+            # Set call_type to call_mcp_tool so cost calculator recognizes it
+            from litellm.types.utils import CallTypes
+
+            litellm_logging_obj.call_type = CallTypes.call_mcp_tool.value
+            # Trigger success logging to build standard_logging_object and call callbacks
+            # async_success_handler will:
+            # 1. Call _success_handler_helper_fn which recognizes call_mcp_tool
+            # 2. Call _process_hidden_params_and_response_cost which:
+            #    - Calculates cost via _response_cost_calculator -> MCPCostCalculator
+            #    - Builds standard_logging_object
+            # 3. Call async_log_success_event on all callbacks
+            await litellm_logging_obj.async_success_handler(
+                result=response, start_time=start_time, end_time=end_time
             )
         return response
 
@@ -1373,6 +1396,7 @@ if MCP_AVAILABLE:
             arguments=arguments,
             mcp_auth_header=server_auth_header,
             extra_headers=extra_headers,
+            raw_headers=raw_headers,
         )
 
     async def mcp_read_resource(
@@ -1421,6 +1445,7 @@ if MCP_AVAILABLE:
             url=url,
             mcp_auth_header=server_auth_header,
             extra_headers=extra_headers,
+            raw_headers=raw_headers,
         )
 
     def _get_standard_logging_mcp_tool_call(

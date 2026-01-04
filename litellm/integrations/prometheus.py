@@ -214,7 +214,7 @@ class PrometheusLogger(CustomLogger):
 
             # Remaining Rate Limit for model
             self.litellm_remaining_requests_metric = self._gauge_factory(
-                "litellm_remaining_requests",
+                "litellm_remaining_requests_metric",
                 "LLM Deployment Analytics - remaining requests for model, returned from LLM API Provider",
                 labelnames=self.get_labels_for_metric(
                     "litellm_remaining_requests_metric"
@@ -222,7 +222,7 @@ class PrometheusLogger(CustomLogger):
             )
 
             self.litellm_remaining_tokens_metric = self._gauge_factory(
-                "litellm_remaining_tokens",
+                "litellm_remaining_tokens_metric",
                 "remaining tokens for model, returned from LLM API Provider",
                 labelnames=self.get_labels_for_metric(
                     "litellm_remaining_tokens_metric"
@@ -815,7 +815,20 @@ class PrometheusLogger(CustomLogger):
         user_api_key_auth_metadata: Optional[dict] = standard_logging_payload[
             "metadata"
         ].get("user_api_key_auth_metadata")
+        
+        # Include top-level metadata fields (excluding nested dictionaries)
+        # This allows accessing fields like requester_ip_address from top-level metadata
+        top_level_metadata = standard_logging_payload.get("metadata", {})
+        top_level_fields: Dict[str, Any] = {}
+        if isinstance(top_level_metadata, dict):
+            top_level_fields = {
+                k: v
+                for k, v in top_level_metadata.items()
+                if not isinstance(v, dict)  # Exclude nested dicts to avoid conflicts
+            }
+        
         combined_metadata: Dict[str, Any] = {
+            **top_level_fields,  # Include top-level fields first
             **(_requester_metadata if _requester_metadata else {}),
             **(user_api_key_auth_metadata if user_api_key_auth_metadata else {}),
         }

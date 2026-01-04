@@ -25,6 +25,12 @@ function LoginPageContent() {
       return;
     }
 
+    // Check if admin UI is disabled
+    if (uiConfig && uiConfig.admin_ui_disabled) {
+      setIsLoading(false);
+      return;
+    }
+
     const rawToken = getCookie("token");
     if (rawToken && !isJwtExpired(rawToken)) {
       router.replace(`${getProxyBaseUrl()}/ui`);
@@ -57,6 +63,38 @@ function LoginPageContent() {
 
   if (isConfigLoading || isLoading) {
     return <LoadingScreen />;
+  }
+
+  // Show disabled message if admin UI is disabled
+  if (uiConfig && uiConfig.admin_ui_disabled) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <Card className="w-full max-w-lg shadow-md">
+          <Space direction="vertical" size="middle" className="w-full">
+            <div className="text-center">
+              <Title level={2}>🚅 LiteLLM</Title>
+            </div>
+
+            <Alert
+              message="Admin UI Disabled"
+              description={
+                <>
+                  <Paragraph className="text-sm">
+                    The Admin UI has been disabled by the administrator. To re-enable it, please update the following
+                    environment variable:
+                  </Paragraph>
+                  <Paragraph className="text-sm">
+                    <code className="bg-gray-100 px-1 py-0.5 rounded text-xs">DISABLE_ADMIN_UI=False</code>
+                  </Paragraph>
+                </>
+              }
+              type="warning"
+              showIcon
+            />
+          </Space>
+        </Card>
+      </div>
+    );
   }
 
   return (

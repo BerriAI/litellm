@@ -20,6 +20,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTableCachedObj,
     LiteLLM_VerificationToken,
     LitellmUserRoles,
+    Member,
     ProxyException,
     UpdateKeyRequest,
 )
@@ -29,6 +30,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     _check_team_key_limits,
     _common_key_generation_helper,
     _list_key_helper,
+    can_modify_verification_token,
     check_org_key_model_specific_limits,
     check_team_key_model_specific_limits,
     generate_key_helper_fn,
@@ -811,6 +813,37 @@ async def test_update_service_account_works_with_team_id():
     existing_key = LiteLLM_VerificationToken(token="hashed")
 
     await prepare_key_update_data(data=data, existing_key_row=existing_key)
+
+
+@pytest.mark.asyncio
+async def test_prepare_key_update_data_duration_never_expires():
+    """Test that duration="-1" sets expires to None (never expires)."""
+    from litellm.proxy._types import UpdateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        prepare_key_update_data,
+    )
+
+    # Mock existing key
+    existing_key = LiteLLM_VerificationToken(
+        token="test-token",
+        key_alias="test-key",
+        models=["gpt-3.5-turbo"],
+        user_id="test-user",
+        team_id=None,
+        auto_rotate=False,
+        rotation_interval=None,
+        metadata={},
+    )
+
+    # Test setting duration to "-1" (never expires)
+    update_request = UpdateKeyRequest(key="test-token", duration="-1")
+
+    result = await prepare_key_update_data(
+        data=update_request, existing_key_row=existing_key
+    )
+
+    # Verify that expires is set to None
+    assert result["expires"] is None
 
 
 @pytest.mark.asyncio
@@ -2613,3 +2646,920 @@ def test_check_org_key_model_specific_limits_org_model_tpm_overallocation():
         "Allocated TPM limit=17000 + Key TPM limit=4000 is greater than organization TPM limit=20000"
         in str(exc_info.value.detail)
     )
+
+
+@pytest.mark.asyncio
+async def test_can_delete_verification_token_proxy_admin_team_key(monkeypatch):
+    """Test that proxy admin can delete any team key."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="other-user",
+        team_id="test-team-123",
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin-user",
+        api_key="sk-admin",
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_can_delete_verification_token_proxy_admin_personal_key(monkeypatch):
+    """Test that proxy admin can delete any personal key."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="other-user",
+        team_id=None,
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin-user",
+        api_key="sk-admin",
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_can_delete_verification_token_team_admin_own_team(monkeypatch):
+    """Test that team admin can delete team keys from their own team."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="other-user",
+        team_id="test-team-123",
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="team-admin-user",
+        api_key="sk-user",
+    )
+
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test-team-123",
+        team_alias="test-team",
+        tpm_limit=None,
+        rpm_limit=None,
+        max_budget=None,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[
+            Member(user_id="team-admin-user", role="admin"),
+            Member(user_id="other-user", role="user"),
+        ],
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    async def mock_get_team_object(*args, **kwargs):
+        return team_table
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        mock_get_team_object,
+    )
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_can_delete_verification_token_team_admin_different_team(monkeypatch):
+    """Test that team admin cannot delete team keys from a different team."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="other-user",
+        team_id="test-team-456",
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="team-admin-user",
+        api_key="sk-user",
+    )
+
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test-team-456",
+        team_alias="test-team",
+        tpm_limit=None,
+        rpm_limit=None,
+        max_budget=None,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[
+            Member(user_id="different-admin", role="admin"),
+            Member(user_id="other-user", role="user"),
+        ],
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    async def mock_get_team_object(*args, **kwargs):
+        return team_table
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        mock_get_team_object,
+    )
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_can_delete_verification_token_key_owner_team_key(monkeypatch):
+    """Test that key owner can delete their own team key."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="key-owner-user",
+        team_id="test-team-123",
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="key-owner-user",
+        api_key="sk-user",
+    )
+
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test-team-123",
+        team_alias="test-team",
+        tpm_limit=None,
+        rpm_limit=None,
+        max_budget=None,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[
+            Member(user_id="key-owner-user", role="user"),
+        ],
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    async def mock_get_team_object(*args, **kwargs):
+        return team_table
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        mock_get_team_object,
+    )
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_can_delete_verification_token_key_owner_personal_key(monkeypatch):
+    """Test that key owner can delete their own personal key."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="key-owner-user",
+        team_id=None,
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="key-owner-user",
+        api_key="sk-user",
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_can_delete_verification_token_other_user_team_key(monkeypatch):
+    """Test that other user cannot delete team keys they don't own and aren't admin for."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="key-owner-user",
+        team_id="test-team-123",
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="other-user",
+        api_key="sk-user",
+    )
+
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test-team-123",
+        team_alias="test-team",
+        tpm_limit=None,
+        rpm_limit=None,
+        max_budget=None,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[
+            Member(user_id="key-owner-user", role="user"),
+            Member(user_id="other-user", role="user"),
+            Member(user_id="team-admin-user", role="admin"),
+        ],
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    async def mock_get_team_object(*args, **kwargs):
+        return team_table
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        mock_get_team_object,
+    )
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_can_delete_verification_token_other_user_personal_key(monkeypatch):
+    """Test that other user cannot delete personal keys they don't own."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="key-owner-user",
+        team_id=None,
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="other-user",
+        api_key="sk-user",
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_can_delete_verification_token_team_key_no_team_found(monkeypatch):
+    """Test that deletion fails when team is not found in database."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="key-owner-user",
+        team_id="non-existent-team",
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="key-owner-user",
+        api_key="sk-user",
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    async def mock_get_team_object(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        mock_get_team_object,
+    )
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_can_delete_verification_token_personal_key_no_user_id(monkeypatch):
+    """Test that deletion fails for personal key when key has no user_id."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id=None,
+        team_id=None,
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="some-user",
+        api_key="sk-user",
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is False
+
+@pytest.mark.asyncio
+async def test_can_modify_verification_token_proxy_admin_team_key(monkeypatch):
+    """Test that proxy admin can modify any team key."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="other-user",
+        team_id="test-team-123",
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin-user",
+        api_key="sk-admin",
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_can_modify_verification_token_proxy_admin_personal_key(monkeypatch):
+    """Test that proxy admin can modify any personal key."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="other-user",
+        team_id=None,
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin-user",
+        api_key="sk-admin",
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_can_modify_verification_token_team_admin_own_team(monkeypatch):
+    """Test that team admin can modify team keys from their own team."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="other-user",
+        team_id="test-team-123",
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="team-admin-user",
+        api_key="sk-user",
+    )
+
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test-team-123",
+        team_alias="test-team",
+        tpm_limit=None,
+        rpm_limit=None,
+        max_budget=None,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[
+            Member(user_id="team-admin-user", role="admin"),
+            Member(user_id="other-user", role="user"),
+        ],
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    async def mock_get_team_object(*args, **kwargs):
+        return team_table
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        mock_get_team_object,
+    )
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_can_modify_verification_token_team_admin_different_team(monkeypatch):
+    """Test that team admin cannot modify team keys from a different team."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="other-user",
+        team_id="test-team-456",
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="team-admin-user",
+        api_key="sk-user",
+    )
+
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test-team-456",
+        team_alias="test-team",
+        tpm_limit=None,
+        rpm_limit=None,
+        max_budget=None,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[
+            Member(user_id="different-admin", role="admin"),
+            Member(user_id="other-user", role="user"),
+        ],
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    async def mock_get_team_object(*args, **kwargs):
+        return team_table
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        mock_get_team_object,
+    )
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_can_modify_verification_token_key_owner_team_key(monkeypatch):
+    """Test that key owner can modify their own team key."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="key-owner-user",
+        team_id="test-team-123",
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="key-owner-user",
+        api_key="sk-user",
+    )
+
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test-team-123",
+        team_alias="test-team",
+        tpm_limit=None,
+        rpm_limit=None,
+        max_budget=None,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[
+            Member(user_id="key-owner-user", role="user"),
+        ],
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    async def mock_get_team_object(*args, **kwargs):
+        return team_table
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        mock_get_team_object,
+    )
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_can_modify_verification_token_key_owner_personal_key(monkeypatch):
+    """Test that key owner can modify their own personal key."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="key-owner-user",
+        team_id=None,
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="key-owner-user",
+        api_key="sk-user",
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_can_modify_verification_token_other_user_team_key(monkeypatch):
+    """Test that other user cannot modify team keys they don't own and aren't admin for."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="key-owner-user",
+        team_id="test-team-123",
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="other-user",
+        api_key="sk-user",
+    )
+
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test-team-123",
+        team_alias="test-team",
+        tpm_limit=None,
+        rpm_limit=None,
+        max_budget=None,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[
+            Member(user_id="key-owner-user", role="user"),
+            Member(user_id="other-user", role="user"),
+            Member(user_id="team-admin-user", role="admin"),
+        ],
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    async def mock_get_team_object(*args, **kwargs):
+        return team_table
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        mock_get_team_object,
+    )
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_can_modify_verification_token_other_user_personal_key(monkeypatch):
+    """Test that other user cannot modify personal keys they don't own."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="key-owner-user",
+        team_id=None,
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="other-user",
+        api_key="sk-user",
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_can_modify_verification_token_team_key_no_team_found(monkeypatch):
+    """Test that modification fails when team is not found in database."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="key-owner-user",
+        team_id="non-existent-team",
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="key-owner-user",
+        api_key="sk-user",
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    async def mock_get_team_object(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        mock_get_team_object,
+    )
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_can_modify_verification_token_personal_key_no_user_id(monkeypatch):
+    """Test that modification fails for personal key when key has no user_id."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id=None,
+        team_id=None,
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="some-user",
+        api_key="sk-user",
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_list_keys_with_expand_user():
+    """
+    Test that expand=user parameter correctly includes user information in the response.
+    """
+    mock_prisma_client = AsyncMock()
+
+    # Create mock keys with user_ids
+    mock_key1 = MagicMock()
+    mock_key1.token = "token1"
+    mock_key1.user_id = "user123"
+    mock_key1.dict.return_value = {
+        "token": "token1",
+        "user_id": "user123",
+        "key_alias": "key1",
+        "models": ["gpt-4"],
+    }
+
+    mock_key2 = MagicMock()
+    mock_key2.token = "token2"
+    mock_key2.user_id = "user456"
+    mock_key2.dict.return_value = {
+        "token": "token2",
+        "user_id": "user456",
+        "key_alias": "key2",
+        "models": ["gpt-3.5-turbo"],
+    }
+
+    mock_find_many_keys = AsyncMock(return_value=[mock_key1, mock_key2])
+    mock_count_keys = AsyncMock(return_value=2)
+
+    # Create mock users
+    mock_user1 = MagicMock()
+    mock_user1.user_id = "user123"
+    mock_user1.user_email = "user1@example.com"
+    mock_user1.dict.return_value = {
+        "user_id": "user123",
+        "user_email": "user1@example.com",
+        "user_alias": "User One",
+    }
+
+    mock_user2 = MagicMock()
+    mock_user2.user_id = "user456"
+    mock_user2.user_email = "user2@example.com"
+    mock_user2.dict.return_value = {
+        "user_id": "user456",
+        "user_email": "user2@example.com",
+        "user_alias": "User Two",
+    }
+
+    mock_find_many_users = AsyncMock(return_value=[mock_user1, mock_user2])
+
+    mock_prisma_client.db.litellm_verificationtoken.find_many = mock_find_many_keys
+    mock_prisma_client.db.litellm_verificationtoken.count = mock_count_keys
+    mock_prisma_client.db.litellm_usertable.find_many = mock_find_many_users
+
+    args = {
+        "prisma_client": mock_prisma_client,
+        "page": 1,
+        "size": 50,
+        "user_id": None,
+        "team_id": None,
+        "organization_id": None,
+        "key_alias": None,
+        "key_hash": None,
+        "exclude_team_id": None,
+        "return_full_object": False,  # This should be overridden by expand=user
+        "admin_team_ids": None,
+        "include_created_by_keys": False,
+        "expand": ["user"],  # Test the expand parameter
+    }
+
+    result = await _list_key_helper(**args)
+
+    # Verify that keys were fetched
+    mock_find_many_keys.assert_called_once()
+    mock_count_keys.assert_called_once()
+
+    # Verify that users were fetched
+    # Note: Order doesn't matter for the 'in' query, so we just check that both user_ids are present
+    call_args = mock_find_many_users.call_args
+    assert call_args is not None
+    where_clause = call_args.kwargs["where"]
+    assert "user_id" in where_clause
+    assert "in" in where_clause["user_id"]
+    user_ids_in_query = set(where_clause["user_id"]["in"])
+    assert user_ids_in_query == {"user123", "user456"}
+
+    # Verify response structure
+    assert len(result["keys"]) == 2
+    assert result["total_count"] == 2
+    assert result["current_page"] == 1
+    assert result["total_pages"] == 1
+
+    # Verify that user data is included in the response
+    # Since expand=user is specified, keys should be full objects
+    assert isinstance(result["keys"][0], UserAPIKeyAuth)
+    assert isinstance(result["keys"][1], UserAPIKeyAuth)
+
+    # Verify user data is attached to keys
+    assert result["keys"][0].user == {
+        "user_id": "user123",
+        "user_email": "user1@example.com",
+        "user_alias": "User One",
+    }
+    assert result["keys"][1].user == {
+        "user_id": "user456",
+        "user_email": "user2@example.com",
+        "user_alias": "User Two",
+    }
+
+
+@pytest.mark.asyncio
+async def test_generate_key_negative_max_budget():
+    """
+    Test that GenerateKeyRequest model allows negative max_budget values.
+    Validation is done at API level, not model level.
+    
+    This prevents GET requests from breaking when they receive data with negative budgets.
+    """
+    # Should not raise any errors at model level
+    request = GenerateKeyRequest(max_budget=-7.0)
+    assert request.max_budget == -7.0
+
+
+@pytest.mark.asyncio
+async def test_generate_key_negative_soft_budget():
+    """
+    Test that GenerateKeyRequest model allows negative soft_budget values.
+    Validation is done at API level, not model level.
+    """
+    # Should not raise any errors at model level
+    request = GenerateKeyRequest(soft_budget=-10.0)
+    assert request.soft_budget == -10.0
+
+
+@pytest.mark.asyncio
+async def test_generate_key_positive_budgets_accepted():
+    """
+    Test that GenerateKeyRequest accepts positive budget values.
+    """
+    # Should not raise any errors
+    request = GenerateKeyRequest(max_budget=100.0, soft_budget=50.0)
+    assert request.max_budget == 100.0
+    assert request.soft_budget == 50.0
+
+
+@pytest.mark.asyncio
+async def test_update_key_negative_max_budget():
+    """
+    Test that UpdateKeyRequest model allows negative max_budget values.
+    Validation is done at API level, not model level.
+    """
+    # Should not raise any errors at model level
+    request = UpdateKeyRequest(key="test-key", max_budget=-5.0)
+    assert request.max_budget == -5.0

@@ -271,6 +271,99 @@ class TestProxyBaseLLMRequestProcessing:
         assert "x-litellm-response-cost-original" not in headers
         assert "x-litellm-response-cost-discount-amount" not in headers
 
+    def test_get_custom_headers_with_margin_info(self):
+        """
+        Test that margin headers are included when margin is applied.
+        """
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+
+        # Create mock user API key dict
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+        
+        # Create logging object with margin
+        logging_obj = LiteLLMLoggingObj(
+            model="gpt-4",
+            messages=[],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test-call-id-margin",
+            function_id="test-function",
+        )
+        logging_obj.set_cost_breakdown(
+            input_cost=0.00005,
+            output_cost=0.00005,
+            total_cost=0.00011,
+            cost_for_built_in_tools_cost_usd_dollar=0.0,
+            original_cost=0.0001,
+            margin_percent=0.10,
+            margin_total_amount=0.00001,
+        )
+        
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            response_cost=0.00011,
+            litellm_logging_obj=logging_obj,
+        )
+        
+        # Verify margin headers are present
+        assert "x-litellm-response-cost" in headers
+        assert float(headers["x-litellm-response-cost"]) == 0.00011
+        
+        assert "x-litellm-response-cost-margin-amount" in headers
+        assert float(headers["x-litellm-response-cost-margin-amount"]) == 0.00001
+        
+        assert "x-litellm-response-cost-margin-percent" in headers
+        assert float(headers["x-litellm-response-cost-margin-percent"]) == 0.10
+
+    def test_get_custom_headers_without_margin_info(self):
+        """
+        Test that when no margin is applied, margin headers are not included.
+        """
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+
+        # Create mock user API key dict
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+        
+        # Create logging object without margin
+        logging_obj = LiteLLMLoggingObj(
+            model="gpt-4",
+            messages=[],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test-call-id-no-margin",
+            function_id="test-function",
+        )
+        logging_obj.set_cost_breakdown(
+            input_cost=0.00005,
+            output_cost=0.00005,
+            total_cost=0.0001,
+            cost_for_built_in_tools_cost_usd_dollar=0.0,
+        )
+        
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            response_cost=0.0001,
+            litellm_logging_obj=logging_obj,
+        )
+        
+        # Verify margin headers are not present
+        assert "x-litellm-response-cost-margin-amount" not in headers
+        assert "x-litellm-response-cost-margin-percent" not in headers
+
     def test_get_cost_breakdown_from_logging_obj_helper(self):
         """
         Test the helper function that extracts cost breakdown information.
@@ -299,11 +392,39 @@ class TestProxyBaseLLMRequestProcessing:
             discount_amount=0.000005,
         )
         
-        original_cost, discount_amount = _get_cost_breakdown_from_logging_obj(logging_obj)
+        original_cost, discount_amount, margin_total_amount, margin_percent = _get_cost_breakdown_from_logging_obj(logging_obj)
         assert original_cost == 0.0001
         assert discount_amount == 0.000005
+        assert margin_total_amount is None
+        assert margin_percent is None
         
-        # Test with no discount info
+        # Test with margin info
+        logging_obj_with_margin = LiteLLMLoggingObj(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "test"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test-call-id-margin",
+            function_id="test-function-id-margin",
+        )
+        logging_obj_with_margin.set_cost_breakdown(
+            input_cost=0.00005,
+            output_cost=0.00005,
+            total_cost=0.00011,
+            cost_for_built_in_tools_cost_usd_dollar=0.0,
+            original_cost=0.0001,
+            margin_percent=0.10,
+            margin_total_amount=0.00001,
+        )
+        
+        original_cost, discount_amount, margin_total_amount, margin_percent = _get_cost_breakdown_from_logging_obj(logging_obj_with_margin)
+        assert original_cost == 0.0001
+        assert discount_amount is None
+        assert margin_total_amount == 0.00001
+        assert margin_percent == 0.10
+        
+        # Test with no discount or margin info
         logging_obj_no_discount = LiteLLMLoggingObj(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "test"}],
@@ -320,14 +441,109 @@ class TestProxyBaseLLMRequestProcessing:
             cost_for_built_in_tools_cost_usd_dollar=0.0,
         )
         
-        original_cost, discount_amount = _get_cost_breakdown_from_logging_obj(logging_obj_no_discount)
+        original_cost, discount_amount, margin_total_amount, margin_percent = _get_cost_breakdown_from_logging_obj(logging_obj_no_discount)
         assert original_cost is None
         assert discount_amount is None
+        assert margin_total_amount is None
+        assert margin_percent is None
         
         # Test with None logging object
-        original_cost, discount_amount = _get_cost_breakdown_from_logging_obj(None)
+        original_cost, discount_amount, margin_total_amount, margin_percent = _get_cost_breakdown_from_logging_obj(None)
         assert original_cost is None
         assert discount_amount is None
+        assert margin_total_amount is None
+        assert margin_percent is None
+
+    def test_get_custom_headers_key_spend_includes_response_cost(self):
+        """
+        Test that x-litellm-key-spend header includes the current request's response_cost.
+        
+        This ensures that the spend header reflects the updated spend including the current
+        request, even though spend tracking updates happen asynchronously after the response.
+        """
+        # Create mock user API key dict with initial spend
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0.001  # Initial spend: $0.001
+
+        # Test case 1: response_cost is provided as float
+        response_cost_1 = 0.0005  # Current request cost: $0.0005
+        headers_1 = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id-1",
+            response_cost=response_cost_1,
+        )
+        
+        assert "x-litellm-key-spend" in headers_1
+        expected_spend_1 = 0.001 + 0.0005  # Initial spend + current request cost
+        assert float(headers_1["x-litellm-key-spend"]) == pytest.approx(expected_spend_1, abs=1e-10)
+        assert float(headers_1["x-litellm-response-cost"]) == response_cost_1
+
+        # Test case 2: response_cost is provided as string
+        response_cost_2 = "0.0003"  # Current request cost as string
+        headers_2 = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id-2",
+            response_cost=response_cost_2,
+        )
+        
+        assert "x-litellm-key-spend" in headers_2
+        expected_spend_2 = 0.001 + 0.0003  # Initial spend + current request cost
+        assert float(headers_2["x-litellm-key-spend"]) == pytest.approx(expected_spend_2, abs=1e-10)
+
+        # Test case 3: response_cost is None (should use original spend)
+        headers_3 = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id-3",
+            response_cost=None,
+        )
+        
+        assert "x-litellm-key-spend" in headers_3
+        assert float(headers_3["x-litellm-key-spend"]) == 0.001  # Should use original spend
+
+        # Test case 4: response_cost is 0 (should not change spend)
+        headers_4 = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id-4",
+            response_cost=0.0,
+        )
+        
+        assert "x-litellm-key-spend" in headers_4
+        assert float(headers_4["x-litellm-key-spend"]) == 0.001  # Should remain unchanged for 0 cost
+
+        # Test case 5: user_api_key_dict.spend is None (should default to 0.0)
+        mock_user_api_key_dict.spend = None
+        headers_5 = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id-5",
+            response_cost=0.0002,
+        )
+        
+        assert "x-litellm-key-spend" in headers_5
+        assert float(headers_5["x-litellm-key-spend"]) == 0.0002  # 0.0 + 0.0002
+
+        # Test case 6: response_cost is negative (should not be added, use original spend)
+        mock_user_api_key_dict.spend = 0.001
+        headers_6 = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id-6",
+            response_cost=-0.0001,  # Negative cost (should not be added)
+        )
+        
+        assert "x-litellm-key-spend" in headers_6
+        assert float(headers_6["x-litellm-key-spend"]) == 0.001  # Should use original spend
+
+        # Test case 7: response_cost is invalid string (should fallback to original spend)
+        headers_7 = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id-7",
+            response_cost="invalid",  # Invalid string
+        )
+        
+        assert "x-litellm-key-spend" in headers_7
+        assert float(headers_7["x-litellm-key-spend"]) == 0.001  # Should use original spend on error
 
 
 @pytest.mark.asyncio

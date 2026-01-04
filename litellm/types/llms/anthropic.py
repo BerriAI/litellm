@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Any, Dict, Iterable, List, Optional, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing_extensions import Literal, Required, TypedDict
 
 from .openai import (
@@ -358,6 +358,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     top_p: Optional[float]
     mcp_servers: Optional[List[AnthropicMcpServerTool]]
     context_management: Optional[Dict[str, Any]]
+    container: Optional[Dict[str, Any]]  # Container config with skills for code execution
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):
@@ -535,8 +536,7 @@ class AnthropicResponseContentBlockToolUse(BaseModel):
     input: dict
     provider_specific_fields: Optional[Dict[str, Any]] = None
 
-    class Config:
-        extra = "allow"  # Allow provider_specific_fields
+    model_config = ConfigDict(extra="allow") # Allow provider_specific_fields
 
 
 class AnthropicResponseContentBlockThinking(BaseModel):
