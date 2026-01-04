@@ -1,10 +1,4 @@
-"""
-Support for OpenAI's `/v1/chat/completions` endpoint.
 
-Calls done in OpenAI/openai.py as OpenRouter is openai-compatible.
-
-Docs: https://openrouter.ai/docs/parameters
-"""
 
 from enum import Enum
 from typing import Any, AsyncIterator, Iterator, List, Optional, Tuple, Union, cast
@@ -53,7 +47,6 @@ class ZenMuxConfig(OpenAIGPTConfig):
             "reasoning_effort",
             "provider",
             "model_routing_config",
-            "usage"
         ]
         return list(dict.fromkeys(supported_params))
 
@@ -64,10 +57,11 @@ class ZenMuxConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
+        # when user passing max_tokens, change it to max_completion_tokens
         supported_openai_params = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
-            if param == "max_completion_tokens":
-                optional_params["max_tokens"] = value
+            if param == "max_tokens":
+                optional_params["max_completion_tokens"] = value
             elif param in supported_openai_params:
                 optional_params[param] = value
         return optional_params
@@ -95,8 +89,8 @@ class ZenMuxConfig(OpenAIGPTConfig):
         )
         response.update(extra_body)
 
-        # ALWAYS add usage parameter to get cost data from OpenRouter
-        # This ensures cost tracking works for all OpenRouter models
+        # ALWAYS add usage parameter to get cost data from ZenMux
+        # This ensures cost tracking works for all ZenMux models
         if "usage" not in response:
             response["usage"] = {"include": True}
 
@@ -117,12 +111,7 @@ class ZenMuxConfig(OpenAIGPTConfig):
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         """
-        Transform the response from OpenRouter API.
-
-        Extracts cost information from response headers if available.
-
-        Returns:
-            ModelResponse: The transformed response with cost information.
+        Transform the response from ZenMux API.
         """
         # Call parent transform_response to get the standard ModelResponse
         model_response = super().transform_response(
@@ -139,8 +128,8 @@ class ZenMuxConfig(OpenAIGPTConfig):
             json_mode=json_mode,
         )
 
-        # Extract cost from OpenRouter response body
-        # OpenRouter returns cost information in the usage object when usage.include=true
+        # Extract cost from ZenMux response body
+        # ZenMux returns cost information in the usage object when usage.include=true
         try:
             response_json = raw_response.json()
             if "usage" in response_json and response_json["usage"]:
@@ -215,7 +204,7 @@ class ZenMuxChatCompletionStreamingHandler(BaseModelResponseIterator):
             )
         except KeyError as e:
             raise ZenMuxException(
-                message=f"KeyError: {e}, Got unexpected response from OpenRouter: {chunk}",
+                message=f"KeyError: {e}, Got unexpected response from ZenMux: {chunk}",
                 status_code=400,
                 headers={"Content-Type": "application/json"},
             )

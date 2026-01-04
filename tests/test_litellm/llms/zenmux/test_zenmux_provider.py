@@ -101,7 +101,6 @@ async def test_zenmux_async_completion(monkeypatch):
     )
     print(response)
 
-    # 验证响应内容和使用情况
     assert response.choices[0].message.content == "Hello! How can I help you today?"
     assert response.usage.total_tokens == 20
 
@@ -159,7 +158,7 @@ def test_zenmux_completion_tools(monkeypatch):
                         tool_call_delta.function.arguments = ""
                     tool_calls[current_index] = tool_call_delta
     tool_call_list = [tool_calls[index] for index in sorted(tool_calls.keys())]
-    print(f"工具调用信息:{tool_call_list}")
+    print(f"tool_calls:{tool_call_list}")
 
     assistant_message=ChatCompletionAssistantMessageParam(
         role="assistant",

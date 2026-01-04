@@ -1719,7 +1719,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     },
                 )
         elif custom_llm_provider == "zenmux":
-            # 设置默认的 API base 和 API key 获取逻辑
+            # zenmux configs：setting default zenmux base_url and api_key,and add header to recognize calling from litellm
             api_base = (
                     api_base
                     or litellm.api_base
