@@ -133,11 +133,12 @@ class TestQualifireGuardrailMessageConversion:
             assert len(result) == 1
 
 
-class TestQualifireGuardrailBuildEvaluateKwargs:
-    """Tests for building evaluate kwargs."""
+class TestQualifireGuardrailEvaluateKwargs:
+    """Tests for evaluate kwargs passed to Qualifire client."""
 
-    def test_build_evaluate_kwargs_with_prompt_injections(self):
-        """Test building kwargs with prompt_injections enabled."""
+    @pytest.mark.asyncio
+    async def test_evaluate_called_with_prompt_injections(self):
+        """Test that evaluate is called with prompt_injections enabled."""
         from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import (
             QualifireGuardrail,
         )
@@ -148,14 +149,30 @@ class TestQualifireGuardrailBuildEvaluateKwargs:
             guardrail_name="test_guardrail",
         )
 
-        mock_messages = [MagicMock()]
-        kwargs = guardrail._build_evaluate_kwargs(messages=mock_messages)
+        # Mock the client
+        mock_client = MagicMock()
+        mock_result = MagicMock()
+        mock_result.score = 100
+        mock_result.status = "completed"
+        mock_result.evaluationResults = []
+        mock_client.evaluate.return_value = mock_result
+        guardrail._client = mock_client
 
-        assert kwargs["messages"] == mock_messages
-        assert kwargs["prompt_injections"] is True
+        messages = [{"role": "user", "content": "Hello, world!"}]
 
-    def test_build_evaluate_kwargs_with_multiple_checks(self):
-        """Test building kwargs with multiple checks enabled."""
+        await guardrail._run_qualifire_check(
+            messages=messages, output=None, dynamic_params={}
+        )
+
+        # Verify evaluate was called with correct kwargs
+        mock_client.evaluate.assert_called_once()
+        call_kwargs = mock_client.evaluate.call_args[1]
+        assert call_kwargs["prompt_injections"] is True
+        assert "messages" in call_kwargs
+
+    @pytest.mark.asyncio
+    async def test_evaluate_called_with_multiple_checks(self):
+        """Test that evaluate is called with multiple checks enabled."""
         from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import (
             QualifireGuardrail,
         )
@@ -169,16 +186,29 @@ class TestQualifireGuardrailBuildEvaluateKwargs:
             guardrail_name="test_guardrail",
         )
 
-        mock_messages = [MagicMock()]
-        kwargs = guardrail._build_evaluate_kwargs(
-            messages=mock_messages, output="Test output"
+        # Mock the client
+        mock_client = MagicMock()
+        mock_result = MagicMock()
+        mock_result.score = 100
+        mock_result.status = "completed"
+        mock_result.evaluationResults = []
+        mock_client.evaluate.return_value = mock_result
+        guardrail._client = mock_client
+
+        messages = [{"role": "user", "content": "Hello, world!"}]
+
+        await guardrail._run_qualifire_check(
+            messages=messages, output="Test output", dynamic_params={}
         )
 
-        assert kwargs["prompt_injections"] is True
-        assert kwargs["pii_check"] is True
-        assert kwargs["hallucinations_check"] is True
-        assert kwargs["assertions"] == ["Output must be valid JSON"]
-        assert kwargs["output"] == "Test output"
+        # Verify evaluate was called with correct kwargs
+        mock_client.evaluate.assert_called_once()
+        call_kwargs = mock_client.evaluate.call_args[1]
+        assert call_kwargs["prompt_injections"] is True
+        assert call_kwargs["pii_check"] is True
+        assert call_kwargs["hallucinations_check"] is True
+        assert call_kwargs["assertions"] == ["Output must be valid JSON"]
+        assert call_kwargs["output"] == "Test output"
 
 
 class TestQualifireGuardrailCheckIfFlagged:
@@ -328,8 +358,8 @@ class TestQualifireGuardrailHooks:
     """Tests for guardrail hook methods."""
 
     @pytest.mark.asyncio
-    async def test_async_pre_call_hook_returns_data_when_disabled(self):
-        """Test that async_pre_call_hook returns data unchanged when guardrail is disabled."""
+    async def test_async_pre_call_hook_returns_none_when_disabled(self):
+        """Test that async_pre_call_hook returns None when guardrail is disabled."""
         from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import (
             QualifireGuardrail,
         )
@@ -352,7 +382,8 @@ class TestQualifireGuardrailHooks:
             call_type="completion",
         )
 
-        assert result == data
+        # When guardrail doesn't run (not in metadata), it returns None
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_async_moderation_hook_returns_when_no_messages(self):

@@ -315,7 +315,7 @@ class QualifireGuardrail(CustomGuardrail):
         except HTTPException:
             raise
         except Exception as e:
-            verbose_proxy_logger.error(f"Qualifire Guardrail error: {e}")
+            verbose_proxy_logger.exception(f"Qualifire Guardrail error: {e}")
             raise
 
     async def apply_guardrail(
