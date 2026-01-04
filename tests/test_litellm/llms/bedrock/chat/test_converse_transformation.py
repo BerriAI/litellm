@@ -621,7 +621,14 @@ def test_transform_response_with_structured_response_being_called():
     assert result.choices[0].message.content ==  '{"Current_Temperature": 62, "Weather_Explanation": "San Francisco typically has mild, cool weather year-round due to its coastal location and marine influence. The city is known for its fog, moderate temperatures, and relatively stable climate with little seasonal variation."}'
 
 def test_transform_response_with_structured_response_calling_tool():
-    """Test response transformation with structured response."""
+    """Test response transformation with structured response when real tool is called.
+    
+    This tests the scenario where both tools and response_format are provided,
+    but only the real tool (get_weather) is called by the model.
+    The json_tool_call should be filtered out from the response.
+    
+    Related issue: https://github.com/BerriAI/litellm/issues/18381
+    """
     from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
     from litellm.types.utils import ModelResponse
 
@@ -738,6 +745,151 @@ def test_transform_response_with_structured_response_calling_tool():
     assert len(result.choices[0].message.tool_calls) == 1
     assert result.choices[0].message.tool_calls[0].function.name == "get_weather"
     assert result.choices[0].message.tool_calls[0].function.arguments == '{"location": "San Francisco, CA", "unit": "celsius"}'
+
+
+def test_transform_response_with_both_json_tool_call_and_real_tool():
+    """Test response transformation when Bedrock returns BOTH json_tool_call and real tool.
+    
+    This is the bug scenario reported in issue #18381.
+    When both tools and response_format are used together, Bedrock may return both:
+    - json_tool_call (fake tool added by LiteLLM for structured output)
+    - get_weather (real tool)
+    
+    The fix should filter out json_tool_call and only return the real tool.
+    
+    Related issue: https://github.com/BerriAI/litellm/issues/18381
+    """
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    # Simulate a Bedrock Converse response with BOTH json_tool_call AND real tool
+    response_json = {
+        "metrics": {
+            "latencyMs": 1148
+        }, 
+        "output": {
+            "message": 
+            {
+                "content": [
+                    {
+                        "toolUse": {
+                            "input": {
+                                "message": "I'll check the weather for you",
+                                "location_ids": ["san-francisco"]
+                            }, 
+                            "name": "json_tool_call",  # Fake tool added by LiteLLM
+                            "toolUseId": "tooluse_json_123"
+                        }
+                    },
+                    {
+                        "toolUse": {
+                            "input": {
+                                "location": "San Francisco, CA",
+                                "unit": "celsius"
+                            }, 
+                            "name": "get_weather",  # Real tool
+                            "toolUseId": "tooluse_real_456"
+                        }
+                    }
+                ], 
+                "role": "assistant"
+            }
+        }, 
+        "stopReason": "tool_use", 
+        "usage": {
+            "cacheReadInputTokenCount": 0, 
+            "cacheReadInputTokens": 0, 
+            "cacheWriteInputTokenCount": 0, 
+            "cacheWriteInputTokens": 0, 
+            "inputTokens": 534, 
+            "outputTokens": 69, 
+            "totalTokens": 603
+        }
+    }
+    
+    # Mock httpx.Response
+    class MockResponse:
+        def json(self):
+            return response_json
+        @property
+        def text(self):
+            return json.dumps(response_json)
+    
+    config = AmazonConverseConfig()
+    model_response = ModelResponse()
+    optional_params = {
+        "json_mode": True,
+        "tools": [
+            {
+                'type': 'function', 
+                'function': {
+                    'name': 'get_weather', 
+                    'description': 'Get the current weather in a given location', 
+                    'parameters': {
+                        'type': 'object', 
+                        'properties': {
+                            'location': {
+                                'type': 'string', 
+                                'description': 'The city and state, e.g. San Francisco, CA'
+                            }, 
+                            'unit': {
+                                'type': 'string', 
+                                'enum': ['celsius', 'fahrenheit']
+                            }
+                        }, 
+                        'required': ['location']
+                    }
+                }
+            }, 
+            {
+                'type': 'function', 
+                'function': {
+                    'name': 'json_tool_call', 
+                    'parameters': {
+                        '$schema': 'http://json-schema.org/draft-07/schema#', 
+                        'type': 'object', 
+                        'required': ['message', 'location_ids'], 
+                        'properties': {
+                            'message': {
+                                'type': 'string', 
+                                'description': 'Response message'
+                            }, 
+                            'location_ids': {
+                                'type': 'array', 
+                                'items': {'type': 'string'},
+                                'description': 'List of location IDs'
+                            }
+                        }, 
+                        'additionalProperties': False
+                    }
+                }
+            }
+        ]
+    }
+    
+    # Call the transformation logic
+    result = config._transform_response(
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        response=MockResponse(),
+        model_response=model_response,
+        stream=False,
+        logging_obj=None,
+        optional_params=optional_params,
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+    
+    # Verify that ONLY the real tool is returned (json_tool_call should be filtered out)
+    assert result.choices[0].message.tool_calls is not None, "Expected tool_calls to be present"
+    assert len(result.choices[0].message.tool_calls) == 1, f"Expected 1 tool call, got {len(result.choices[0].message.tool_calls)}"
+    assert result.choices[0].message.tool_calls[0].function.name == "get_weather", f"Expected 'get_weather', got '{result.choices[0].message.tool_calls[0].function.name}'"
+    assert result.choices[0].message.tool_calls[0].function.arguments == '{"location": "San Francisco, CA", "unit": "celsius"}'
+    
+    # Verify that json_tool_call is NOT in the response
+    tool_names = [tc.function.name for tc in result.choices[0].message.tool_calls]
+    assert "json_tool_call" not in tool_names, "json_tool_call should be filtered out"
 
 
 @pytest.mark.asyncio
