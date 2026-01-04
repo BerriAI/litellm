@@ -903,3 +903,159 @@ def test_convert_to_model_response_object_with_thinking_content():
     resp: ModelResponse = convert_to_model_response_object(**args)
     assert resp is not None
     assert resp.choices[0].message.reasoning_content is not None
+
+
+def test_convert_to_model_response_object_with_empty_error_object():
+    """
+    Test that convert_to_model_response_object handles empty error objects gracefully.
+
+    This is a regression test for issue #18407 where providers like Apertis return
+    empty error objects even on successful responses, causing spurious APIErrors.
+
+    The error object structure:
+    {
+        "error": {
+            "message": "",
+            "type": "",
+            "param": "",
+            "code": null
+        }
+    }
+    """
+    response_object = {
+        "model": "minimax-m2.1",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hey! I'm doing well, thanks for asking!",
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 49,
+            "completion_tokens": 87,
+            "total_tokens": 136,
+        },
+        "error": {
+            "message": "",
+            "type": "",
+            "param": "",
+            "code": None,
+        },
+    }
+
+    # This should NOT raise an exception
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(),
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        hidden_params=None,
+        _response_headers=None,
+        convert_tool_call_to_json_mode=False,
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert result.model == "minimax-m2.1"
+    assert len(result.choices) == 1
+    assert result.choices[0].message.content == "Hey! I'm doing well, thanks for asking!"
+
+
+def test_convert_to_model_response_object_with_real_error():
+    """
+    Test that convert_to_model_response_object still raises for real errors.
+
+    Ensures the empty error fix doesn't break legitimate error handling.
+    """
+    response_object = {
+        "error": {
+            "message": "Rate limit exceeded",
+            "type": "rate_limit_error",
+            "param": None,
+            "code": 429,
+        },
+    }
+
+    with pytest.raises(Exception) as exc_info:
+        convert_to_model_response_object(
+            model_response_object=ModelResponse(),
+            response_object=response_object,
+            stream=False,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            hidden_params=None,
+            _response_headers=None,
+            convert_tool_call_to_json_mode=False,
+        )
+
+    # The exception should have the error message
+    assert hasattr(exc_info.value, "message")
+    assert "Rate limit exceeded" in str(exc_info.value.message)
+
+
+def test_convert_to_model_response_object_with_empty_dict_error():
+    """
+    Test that convert_to_model_response_object handles completely empty error dict.
+    """
+    response_object = {
+        "model": "test-model",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello!",
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+        },
+        "error": {},  # Completely empty error object
+    }
+
+    # This should NOT raise an exception
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(),
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        hidden_params=None,
+        _response_headers=None,
+        convert_tool_call_to_json_mode=False,
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert result.choices[0].message.content == "Hello!"
+
+
+def test_convert_to_model_response_object_with_error_code_only():
+    """
+    Test that errors with only a code (no message) are still treated as real errors.
+    """
+    response_object = {
+        "error": {
+            "message": "",
+            "code": 500,
+        },
+    }
+
+    with pytest.raises(Exception):
+        convert_to_model_response_object(
+            model_response_object=ModelResponse(),
+            response_object=response_object,
+            stream=False,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            hidden_params=None,
+            _response_headers=None,
+            convert_tool_call_to_json_mode=False,
+        )

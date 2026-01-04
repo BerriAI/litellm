@@ -604,12 +604,22 @@ def generic_cost_per_token(
         reasoning_tokens = completion_tokens_details["reasoning_tokens"]
         image_tokens = completion_tokens_details["image_tokens"]
 
-    # Only assume all tokens are text if there's NO breakdown at all
-    # If image_tokens, audio_tokens, or reasoning_tokens exist, respect text_tokens=0
+    # Handle text_tokens calculation:
+    # 1. If text_tokens is explicitly provided and > 0, use it
+    # 2. If there's a breakdown (reasoning/audio/image tokens), calculate text_tokens as the remainder
+    # 3. If no breakdown at all, assume all completion_tokens are text_tokens
     has_token_breakdown = image_tokens > 0 or audio_tokens > 0 or reasoning_tokens > 0
-    if text_tokens == 0 and not has_token_breakdown:
-        text_tokens = usage.completion_tokens
-        is_text_tokens_total = True
+    if text_tokens == 0:
+        if has_token_breakdown:
+            # Calculate text tokens as remainder when we have a breakdown
+            # This handles cases like OpenAI's reasoning models where text_tokens isn't provided
+            text_tokens = max(
+                0, usage.completion_tokens - reasoning_tokens - audio_tokens - image_tokens
+            )
+        else:
+            # No breakdown at all, all tokens are text tokens
+            text_tokens = usage.completion_tokens
+            is_text_tokens_total = True
     ## TEXT COST
     completion_cost = float(text_tokens) * completion_base_cost
 
