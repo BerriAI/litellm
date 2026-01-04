@@ -630,14 +630,14 @@ class MCPServerManager:
         """
         allowed_mcp_servers = await self.get_allowed_mcp_servers(user_api_key_auth)
 
-        list_tools_result: List[MCPTool] = []
         verbose_logger.debug("SERVER MANAGER LISTING TOOLS")
 
-        for server_id in allowed_mcp_servers:
+        async def _fetch_server_tools(server_id: str) -> List[MCPTool]:
+            """Fetch tools from a single server with error handling."""
             server = self.get_mcp_server_by_id(server_id)
             if server is None:
                 verbose_logger.warning(f"MCP Server {server_id} not found")
-                continue
+                return []
 
             # Get server-specific auth header if available
             server_auth_header = None
@@ -655,15 +655,21 @@ class MCPServerManager:
                     server=server,
                     mcp_auth_header=server_auth_header,
                 )
-                list_tools_result.extend(tools)
-                verbose_logger.info(
-                    f"Successfully fetched {len(tools)} tools from server {server.name}"
-                )
+                return tools
             except Exception as e:
                 verbose_logger.warning(
                     f"Failed to list tools from server {server.name}: {str(e)}. Continuing with other servers."
                 )
-                # Continue with other servers instead of failing completely
+                return []
+
+        # Fetch tools from all servers in parallel
+        tasks = [_fetch_server_tools(server_id) for server_id in allowed_mcp_servers]
+        results = await asyncio.gather(*tasks)
+
+        # Flatten results into single list
+        list_tools_result: List[MCPTool] = [
+            tool for tools in results for tool in tools
+        ]
 
         verbose_logger.info(
             f"Successfully fetched {len(list_tools_result)} tools total from all servers"
