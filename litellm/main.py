@@ -1757,7 +1757,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     custom_llm_provider="zenmux",
                     timeout=timeout,
                     headers=headers,
-                    encoding=encoding,
+                    encoding=_get_encoding(),
                     api_key=api_key,
                     logging_obj=logging,
                     client=client,
