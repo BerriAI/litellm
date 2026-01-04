@@ -36,7 +36,7 @@ class _ProxyDBLogger(CustomLogger):
     ):
         """Persist spend logs after proxy guardrails mutate metadata."""
 
-        if ProxyUpdateSpend.should_store_proxy_response_in_spend_logs() is not True:
+        if ProxyUpdateSpend.should_store_proxy_response_in_spend_logs() is False:
             return
 
         logging_obj = data.get("litellm_logging_obj", None)
@@ -219,7 +219,7 @@ class _ProxyDBLogger(CustomLogger):
                     ## UPDATE DATABASE
                     if (
                         ProxyUpdateSpend.should_store_proxy_response_in_spend_logs()
-                        is not True
+                        is False
                     ):
                         await proxy_logging_obj.db_spend_update_writer.update_database(
                             token=user_api_key,
