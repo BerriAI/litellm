@@ -210,6 +210,7 @@ maritalk_key: Optional[str] = None
 ai21_key: Optional[str] = None
 ollama_key: Optional[str] = None
 openrouter_key: Optional[str] = None
+zenmux_key: Optional[str] = None
 datarobot_key: Optional[str] = None
 predibase_key: Optional[str] = None
 huggingface_key: Optional[str] = None
@@ -1269,6 +1270,7 @@ if TYPE_CHECKING:
     from .llms.oobabooga.chat.transformation import OobaboogaConfig as OobaboogaConfig
     from .llms.maritalk import MaritalkConfig as MaritalkConfig
     from .llms.openrouter.chat.transformation import OpenrouterConfig as OpenrouterConfig
+    from .llms.zenmux.chat.transformation import ZenMuxConfig as ZenMuxConfig
     from .llms.datarobot.chat.transformation import DataRobotConfig as DataRobotConfig
     from .llms.anthropic.chat.transformation import AnthropicConfig as AnthropicConfig
     from .llms.anthropic.completion.transformation import AnthropicTextConfig as AnthropicTextConfig
