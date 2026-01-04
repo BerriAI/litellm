@@ -4458,9 +4458,21 @@ class Router:
 
         if hasattr(original_exception, "message"):
             # add the available fallbacks to the exception
-            original_exception.message += ". Received Model Group={}\nAvailable Model Group Fallbacks={}".format(  # type: ignore
-                model_group,
-                fallback_model_group,
+            deployment_info = ""
+            if kwargs is not None:
+                metadata = kwargs.get('metadata', {})
+                if metadata and 'deployment' in metadata:
+                    deployment_info = f"\nUsed Deployment: {metadata['deployment']}"
+                    if 'model_info' in metadata:
+                        model_info = metadata['model_info']
+                        if isinstance(model_info, dict):
+                            deployment_info += f"\nDeployment ID: {model_info.get('id', 'unknown')}"
+            
+            original_exception.message += (  # type: ignore
+                f". Received Model Group={model_group}"
+                f"\nAvailable Model Group Fallbacks={fallback_model_group}"
+                f"{deployment_info}"
+                f"\n\n💡 Tip: If using wildcard patterns (e.g., 'openai/*'), ensure all matching deployments have credentials with access to this model."
             )
             if len(fallback_failure_exception_str) > 0:
                 original_exception.message += (  # type: ignore
@@ -5713,6 +5725,37 @@ class Router:
             return True
         return False
 
+    def _validate_wildcard_deployments(self):
+        """Warn if multiple wildcard patterns exist for same provider with different credentials"""
+        provider_wildcards: Dict[str, List[Tuple[str, str]]] = {}  # provider -> [(credential, deployment_id)]
+        
+        for deployment in self.model_list:
+            model_name = deployment.get('model_name', '')
+            if '*' in model_name:
+                # Extract provider from pattern (e.g., "openai/*" -> "openai")
+                provider = model_name.split('/')[0] if '/' in model_name else model_name.split('*')[0]
+                
+                litellm_params = deployment.get('litellm_params', {})
+                # Get credential identifier - use litellm_credential_name or first 10 chars of api_key
+                credential = litellm_params.get('litellm_credential_name') or \
+                            (litellm_params.get('api_key', '')[:10] if litellm_params.get('api_key') else 'none')
+                deployment_id = deployment.get('model_info', {}).get('id', 'unknown')
+                
+                if provider not in provider_wildcards:
+                    provider_wildcards[provider] = []
+                provider_wildcards[provider].append((credential, deployment_id))
+        
+        for provider, cred_deployment_pairs in provider_wildcards.items():
+            unique_credentials = set(cred for cred, _ in cred_deployment_pairs)
+            if len(unique_credentials) > 1:
+                deployment_ids = [dep_id for _, dep_id in cred_deployment_pairs]
+                verbose_router_logger.warning(
+                    f"⚠️  Multiple wildcard deployments found for '{provider}/*' with different credentials ({len(unique_credentials)} credentials). "
+                    f"This may cause non-deterministic authentication failures. "
+                    f"Deployments: {len(cred_deployment_pairs)} ({deployment_ids[:3]}{'...' if len(deployment_ids) > 3 else ''}). "
+                    f"Consider: 1) Using concrete model names, 2) Using one credential per provider, or 3) Using tag-based routing."
+                )
+
     def set_model_list(self, model_list: list):
         original_model_list = copy.deepcopy(model_list)
         self.model_list = []
@@ -5762,6 +5805,9 @@ class Router:
 
         # Note: model_name_to_deployment_indices is already built incrementally
         # by _create_deployment -> _add_model_to_list_and_index_map
+        
+        # Validate wildcard deployments after all models are loaded
+        self._validate_wildcard_deployments()
 
     def _add_deployment(self, deployment: Deployment) -> Deployment:
         import os
@@ -7629,6 +7675,10 @@ class Router:
             )
 
             if pattern_deployments:
+                verbose_router_logger.debug(
+                    f"Pattern match for model='{model}': Found {len(pattern_deployments)} deployments. "
+                    f"Deployment IDs: {[d.get('model_info', {}).get('id', 'unknown') for d in pattern_deployments]}"
+                )
                 return model, pattern_deployments
 
             if (
