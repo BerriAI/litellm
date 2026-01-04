@@ -88,17 +88,22 @@ const EditSSOSettingsModal: React.FC<EditSSOSettingsModalProps> = ({ isVisible, 
 
   // Enhanced form submission handler
   const handleFormSubmit = async (formValues: Record<string, any>) => {
-    const payload = processSSOSettingsPayload(formValues);
+    try {
+      const payload = processSSOSettingsPayload(formValues);
 
-    await mutateAsync(payload, {
-      onSuccess: () => {
-        NotificationsManager.success("SSO settings updated successfully");
-        onSuccess();
-      },
-      onError: (error) => {
-        NotificationsManager.fromBackend("Failed to save SSO settings: " + parseErrorMessage(error));
-      },
-    });
+      await mutateAsync(payload, {
+        onSuccess: () => {
+          NotificationsManager.success("SSO settings updated successfully");
+          onSuccess();
+        },
+        onError: (error) => {
+          NotificationsManager.fromBackend("Failed to save SSO settings: " + parseErrorMessage(error));
+        },
+      });
+    } catch (error) {
+      // Handle processing errors gracefully
+      NotificationsManager.fromBackend("Failed to process SSO settings: " + parseErrorMessage(error));
+    }
   };
 
   const handleCancel = () => {
