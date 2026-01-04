@@ -88,9 +88,16 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     content_type = content_item.get("type")
                     if content_type == "output_text":
                         response_text = content_item.get("text", "")
+
+                        # Extract annotations from content if present
+                        annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
+                            content_item.get("annotations")
+                        )
+
                         msg = Message(
                             role=item.get("role", "assistant"),
                             content=response_text if response_text else "",
+                            annotations=annotations,
                         )
                         choice = Choices(message=msg, finish_reason="stop", index=index)
                         return choice, index + 1
@@ -322,6 +329,74 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         return request_data
 
     @staticmethod
+    def _convert_annotations_to_chat_format(
+        annotations: Optional[List[Any]],
+    ) -> Optional[List[Dict[str, Any]]]:
+        """
+        Convert Responses API annotations to Chat Completion annotation format.
+
+        Args:
+            annotations: List of annotation objects from ResponseOutputText
+
+        Returns:
+            List of ChatCompletionAnnotation dicts or None if no annotations
+        """
+        if not annotations:
+            return None
+
+        result: List[Dict[str, Any]] = []
+        for annotation in annotations:
+            try:
+                # Handle different annotation object types (Pydantic v1/v2, dict, etc.)
+                if hasattr(annotation, "model_dump"):
+                    # Pydantic v2
+                    annotation_dict = annotation.model_dump()
+                elif hasattr(annotation, "dict"):
+                    # Pydantic v1
+                    annotation_dict = annotation.dict()
+                elif isinstance(annotation, dict):
+                    annotation_dict = annotation
+                else:
+                    # Fallback: try to convert to dict
+                    annotation_dict = dict(annotation) if hasattr(annotation, "__iter__") else {}
+
+                # Normalize the annotation to Chat Completion format
+                # Responses API uses different structures for different annotation types
+                annotation_type = annotation_dict.get("type")
+
+                if annotation_type == "url_citation":
+                    # Already in the correct format for url_citation
+                    # Normalize nested url_citation object if needed
+                    url_citation = annotation_dict.get("url_citation")
+                    if url_citation:
+                        # Handle nested url_citation object conversion
+                        if hasattr(url_citation, "model_dump"):
+                            url_citation = url_citation.model_dump()
+                        elif hasattr(url_citation, "dict"):
+                            url_citation = url_citation.dict()
+                        annotation_dict["url_citation"] = url_citation
+                    result.append(annotation_dict)
+                elif annotation_type == "file_citation":
+                    # Convert file_citation to url_citation format for compatibility
+                    # or preserve as-is depending on use case
+                    result.append(annotation_dict)
+                elif annotation_type == "container_file_citation":
+                    # Preserve container_file_citation as-is
+                    result.append(annotation_dict)
+                elif annotation_type == "file_path":
+                    # Preserve file_path as-is
+                    result.append(annotation_dict)
+                else:
+                    # Unknown annotation type, include as-is
+                    result.append(annotation_dict)
+            except Exception:
+                # Skip malformed annotations
+                verbose_logger.debug(f"Skipping malformed annotation: {annotation}")
+                continue
+
+        return result if result else None
+
+    @staticmethod
     def _convert_response_output_to_choices(
         output_items: List[Any],
         handle_raw_dict_callback: Optional[Callable] = None,
@@ -362,10 +437,17 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             elif isinstance(item, ResponseOutputMessage):
                 for content in item.content:
                     response_text = getattr(content, "text", "")
+
+                    # Extract annotations from content if present
+                    annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
+                        getattr(content, "annotations", None)
+                    )
+
                     msg = Message(
                         role=item.role,
                         content=response_text if response_text else "",
                         reasoning_content=reasoning_content,
+                        annotations=annotations,
                     )
 
                     choices.append(
