@@ -1,10 +1,10 @@
-import React, { useState, useRef, useEffect } from "react";
-import { Text, Button } from "@tremor/react";
+import React from "react";
+import { Text } from "@tremor/react";
 import { Card, Statistic, Row, Col, Divider, Spin } from "antd";
-import { DollarOutlined, LoadingOutlined, DownloadOutlined, FilePdfOutlined, FileExcelOutlined } from "@ant-design/icons";
+import { DollarOutlined, LoadingOutlined } from "@ant-design/icons";
 import { CostEstimateResponse } from "../types";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { exportToPDF, exportToCSV } from "./export_utils";
+import ExportDropdown from "./export_dropdown";
 
 interface CostResultsProps {
   result: CostEstimateResponse | null;
@@ -22,65 +22,6 @@ const formatCost = (value: number | null | undefined): string => {
 const formatRequests = (value: number | null | undefined): string => {
   if (value === null || value === undefined) return "-";
   return formatNumberWithCommas(value, 0, true);
-};
-
-const ExportDropdown: React.FC<{ result: CostEstimateResponse }> = ({ result }) => {
-  const [isOpen, setIsOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
-    };
-
-    if (isOpen) {
-      document.addEventListener("mousedown", handleClickOutside);
-    }
-
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-    };
-  }, [isOpen]);
-
-  return (
-    <div className="relative inline-block" ref={menuRef}>
-      <Button
-        size="xs"
-        variant="secondary"
-        icon={DownloadOutlined}
-        onClick={() => setIsOpen(!isOpen)}
-      >
-        Export
-      </Button>
-
-      {isOpen && (
-        <div className="absolute right-0 mt-1 w-44 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50">
-          <button
-            className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
-            onClick={() => {
-              exportToPDF(result);
-              setIsOpen(false);
-            }}
-          >
-            <FilePdfOutlined className="mr-3 text-red-500" />
-            Export as PDF
-          </button>
-          <button
-            className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
-            onClick={() => {
-              exportToCSV(result);
-              setIsOpen(false);
-            }}
-          >
-            <FileExcelOutlined className="mr-3 text-green-600" />
-            Export as CSV
-          </button>
-        </div>
-      )}
-    </div>
-  );
 };
 
 const CostResults: React.FC<CostResultsProps> = ({ result, loading }) => {
