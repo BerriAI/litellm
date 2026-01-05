@@ -38,7 +38,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
   const [marginForm] = Form.useForm();
   const [modal, contextHolder] = Modal.useModal();
   
-  const isProxyAdmin = userRole === "proxy_admin";
+  const isProxyAdmin = userRole === "proxy_admin" || userRole === "Admin";
 
   // Use custom hooks for discount and margin config
   const {
