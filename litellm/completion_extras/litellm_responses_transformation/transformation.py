@@ -691,7 +691,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         if isinstance(reasoning_effort, dict):
             return Reasoning(**reasoning_effort)  # type: ignore[typeddict-item]
 
-        # If string is passed, map with summary="concise"
+        # If string is passed, map with summary="detailed"
         if reasoning_effort == "none":
             return Reasoning(effort="none", summary="detailed")  # type: ignore
         elif reasoning_effort == "high":
