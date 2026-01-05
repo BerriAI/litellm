@@ -2990,6 +2990,8 @@ def get_optional_params_embeddings(  # noqa: PLR0915
 
     drop_params = passed_params.pop("drop_params", None)
     additional_drop_params = passed_params.pop("additional_drop_params", None)
+    # Remove function objects from passed_params to avoid JSON serialization errors
+    passed_params.pop("get_supported_openai_params", None)
 
     def _check_valid_arg(supported_params: Optional[list]):
         if supported_params is None:
