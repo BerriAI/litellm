@@ -104,8 +104,7 @@ class ProductionGCSLogger(CustomLogger):
         try:
             correlation_id = getattr(response_obj, "id", None) or str(uuid.uuid4())
             litellm_params = kwargs.get("litellm_params", {})
-            metadata = litellm_params.get("metadata", {})
-
+            metadata = litellm_params.get("metadata", {}) or litellm_params.get("litellm_metadata", {})
             # Extract date and session_id for queryability
             log_date = datetime.utcnow().strftime("%Y-%m-%d")
             session_id = self._get_session_id(kwargs, litellm_params, metadata)
@@ -121,8 +120,8 @@ class ProductionGCSLogger(CustomLogger):
                     "email": metadata.get("user_api_key_user_email"),
                     "user_id": metadata.get("user_api_key_user_id"),
                     "team_alias": metadata.get("user_api_key_team_alias"),
-                    "department": metadata.get("user_api_key_metadata", {}).get(
-                        "department"
+                    "department": (metadata.get("user_api_key_metadata") or {}).get(
+                        "department", "unknown"
                     ),
                 },
                 "model": {
@@ -133,7 +132,7 @@ class ProductionGCSLogger(CustomLogger):
                     "mode": metadata.get("model_info", {}).get("mode"),
                 },
                 "conversation": {
-                    "messages": kwargs.get("messages", []),
+                    "messages": kwargs.get("input", kwargs.get("messages", [])),
                     "temperature": kwargs.get("temperature"),
                     "max_tokens": kwargs.get("max_tokens"),
                     "top_p": kwargs.get("top_p"),
@@ -204,8 +203,7 @@ class ProductionGCSLogger(CustomLogger):
         try:
             correlation_id = getattr(response_obj, "id", None) or str(uuid.uuid4())
             litellm_params = kwargs.get("litellm_params", {})
-            metadata = litellm_params.get("metadata", {})
-
+            metadata = litellm_params.get("metadata", {}) or litellm_params.get("litellm_metadata", {})
             # Extract date and session_id for queryability
             log_date = datetime.utcnow().strftime("%Y-%m-%d")
             session_id = self._get_session_id(kwargs, litellm_params, metadata)
@@ -221,7 +219,7 @@ class ProductionGCSLogger(CustomLogger):
                     "email": metadata.get("user_api_key_user_email"),
                     "user_id": metadata.get("user_api_key_user_id"),
                     "team_alias": metadata.get("user_api_key_team_alias"),
-                    "department": metadata.get("user_api_key_metadata", {}).get(
+                    "department": (metadata.get("user_api_key_metadata") or {}).get(
                         "department"
                     ),
                 },
