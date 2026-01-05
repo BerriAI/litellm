@@ -4,6 +4,7 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.llms.xai.common_utils import XAIModelInfo
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     filter_value_from_dict,
     strip_name_from_messages,
@@ -26,7 +27,7 @@ class XAIChatConfig(OpenAIGPTConfig):
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
         api_base = api_base or get_secret_str("XAI_API_BASE") or XAI_API_BASE  # type: ignore
-        dynamic_api_key = api_key or get_secret_str("XAI_API_KEY")
+        dynamic_api_key = XAIModelInfo.get_api_key(api_key)
         return api_base, dynamic_api_key
 
     def get_supported_openai_params(self, model: str) -> list:
