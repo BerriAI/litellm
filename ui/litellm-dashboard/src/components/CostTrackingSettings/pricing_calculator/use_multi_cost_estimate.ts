@@ -159,15 +159,25 @@ export function useMultiCostEstimate(accessToken: string | null) {
       let totalCostPerRequest = 0;
       let totalDailyCost: number | null = null;
       let totalMonthlyCost: number | null = null;
+      let totalMarginPerRequest = 0;
+      let totalDailyMargin: number | null = null;
+      let totalMonthlyMargin: number | null = null;
 
       for (const r of results) {
         if (r.result) {
           totalCostPerRequest += r.result.cost_per_request;
+          totalMarginPerRequest += r.result.margin_cost_per_request;
           if (r.result.daily_cost !== null) {
             totalDailyCost = (totalDailyCost ?? 0) + r.result.daily_cost;
           }
+          if (r.result.daily_margin_cost !== null) {
+            totalDailyMargin = (totalDailyMargin ?? 0) + r.result.daily_margin_cost;
+          }
           if (r.result.monthly_cost !== null) {
             totalMonthlyCost = (totalMonthlyCost ?? 0) + r.result.monthly_cost;
+          }
+          if (r.result.monthly_margin_cost !== null) {
+            totalMonthlyMargin = (totalMonthlyMargin ?? 0) + r.result.monthly_margin_cost;
           }
         }
       }
@@ -178,6 +188,9 @@ export function useMultiCostEstimate(accessToken: string | null) {
           cost_per_request: totalCostPerRequest,
           daily_cost: totalDailyCost,
           monthly_cost: totalMonthlyCost,
+          margin_per_request: totalMarginPerRequest,
+          daily_margin: totalDailyMargin,
+          monthly_margin: totalMonthlyMargin,
         },
       };
     },

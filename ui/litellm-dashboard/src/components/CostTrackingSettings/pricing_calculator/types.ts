@@ -31,6 +31,9 @@ export interface MultiModelResult {
     cost_per_request: number;
     daily_cost: number | null;
     monthly_cost: number | null;
+    margin_per_request: number;
+    daily_margin: number | null;
+    monthly_margin: number | null;
   };
 }
 

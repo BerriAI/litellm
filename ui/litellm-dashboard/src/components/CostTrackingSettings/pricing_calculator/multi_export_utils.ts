@@ -196,7 +196,6 @@ export const exportMultiToPDF = (multiResult: MultiModelResult): void => {
       <h1>LLM Cost Estimate Report</h1>
       <p style="color: #666; margin-top: -20px; margin-bottom: 30px;">${modelCount} model${modelCount !== 1 ? "s" : ""} configured</p>
       
-      ${modelCount > 1 ? `
       <div class="summary-box">
         <h2>Combined Totals</h2>
         <div class="summary-grid">
@@ -213,8 +212,23 @@ export const exportMultiToPDF = (multiResult: MultiModelResult): void => {
             <div class="value purple">${formatCostForExport(multiResult.totals.monthly_cost)}</div>
           </div>
         </div>
+        ${multiResult.totals.margin_per_request > 0 ? `
+        <div class="summary-grid" style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #ddd;">
+          <div class="summary-item">
+            <div class="label">Margin/Request</div>
+            <div class="value" style="color: #faad14;">${formatCostForExport(multiResult.totals.margin_per_request)}</div>
+          </div>
+          <div class="summary-item">
+            <div class="label">Daily Margin</div>
+            <div class="value" style="color: #faad14;">${formatCostForExport(multiResult.totals.daily_margin)}</div>
+          </div>
+          <div class="summary-item">
+            <div class="label">Monthly Margin</div>
+            <div class="value" style="color: #faad14;">${formatCostForExport(multiResult.totals.monthly_margin)}</div>
+          </div>
+        </div>
+        ` : ""}
       </div>
-      ` : ""}
 
       <h2>Model Breakdown</h2>
       ${validEntries.map((e) => generateModelSection(e.result!)).join("")}
@@ -243,15 +257,16 @@ export const exportMultiToCSV = (multiResult: MultiModelResult): void => {
   ];
 
   // Summary section
-  if (validEntries.length > 1) {
-    rows.push(
-      ["COMBINED TOTALS"],
-      ["Total Per Request", multiResult.totals.cost_per_request.toString()],
-      ["Total Daily", multiResult.totals.daily_cost?.toString() || "-"],
-      ["Total Monthly", multiResult.totals.monthly_cost?.toString() || "-"],
-      [""]
-    );
-  }
+  rows.push(
+    ["COMBINED TOTALS"],
+    ["Total Per Request", multiResult.totals.cost_per_request.toString()],
+    ["Total Daily", multiResult.totals.daily_cost?.toString() || "-"],
+    ["Total Monthly", multiResult.totals.monthly_cost?.toString() || "-"],
+    ["Margin Per Request", multiResult.totals.margin_per_request.toString()],
+    ["Daily Margin", multiResult.totals.daily_margin?.toString() || "-"],
+    ["Monthly Margin", multiResult.totals.monthly_margin?.toString() || "-"],
+    [""]
+  );
 
   // Summary table header
   rows.push([

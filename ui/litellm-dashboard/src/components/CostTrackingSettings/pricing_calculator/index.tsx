@@ -1,8 +1,7 @@
 import React, { useState, useCallback } from "react";
-import { Button, Text } from "@tremor/react";
-import { PlusOutlined } from "@ant-design/icons";
+import { Table, Select, InputNumber, Button } from "antd";
+import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
 import { PricingCalculatorProps, ModelEntry } from "./types";
-import ModelEntryRow from "./model_entry_row";
 import MultiCostResults from "./multi_cost_results";
 import { useMultiCostEstimate } from "./use_multi_cost_estimate";
 
@@ -53,38 +52,135 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({
     [removeEntry]
   );
 
-  // Note: Fetching is triggered by handleEntryChange when model is selected
-
   const multiModelResult = getMultiModelResult(entries);
+
+  const columns = [
+    {
+      title: "Model",
+      dataIndex: "model",
+      key: "model",
+      width: "30%",
+      render: (_: string, record: ModelEntry) => (
+        <Select
+          showSearch
+          placeholder="Select a model"
+          value={record.model || undefined}
+          onChange={(value) => handleEntryChange(record.id, "model", value)}
+          optionFilterProp="label"
+          filterOption={(input, option) =>
+            String(option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+          }
+          options={models.map((model) => ({
+            value: model,
+            label: model,
+          }))}
+          style={{ width: "100%" }}
+          size="small"
+        />
+      ),
+    },
+    {
+      title: "Input Tokens",
+      dataIndex: "input_tokens",
+      key: "input_tokens",
+      width: "15%",
+      render: (_: number, record: ModelEntry) => (
+        <InputNumber
+          min={0}
+          value={record.input_tokens}
+          onChange={(value) => handleEntryChange(record.id, "input_tokens", value ?? 0)}
+          style={{ width: "100%" }}
+          size="small"
+          formatter={(value) => `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
+        />
+      ),
+    },
+    {
+      title: "Output Tokens",
+      dataIndex: "output_tokens",
+      key: "output_tokens",
+      width: "15%",
+      render: (_: number, record: ModelEntry) => (
+        <InputNumber
+          min={0}
+          value={record.output_tokens}
+          onChange={(value) => handleEntryChange(record.id, "output_tokens", value ?? 0)}
+          style={{ width: "100%" }}
+          size="small"
+          formatter={(value) => `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
+        />
+      ),
+    },
+    {
+      title: "Requests/Day",
+      dataIndex: "num_requests_per_day",
+      key: "num_requests_per_day",
+      width: "15%",
+      render: (_: number | undefined, record: ModelEntry) => (
+        <InputNumber
+          min={0}
+          value={record.num_requests_per_day}
+          onChange={(value) => handleEntryChange(record.id, "num_requests_per_day", value ?? undefined)}
+          style={{ width: "100%" }}
+          size="small"
+          placeholder="-"
+          formatter={(value) => value ? `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ",") : ""}
+        />
+      ),
+    },
+    {
+      title: "Requests/Month",
+      dataIndex: "num_requests_per_month",
+      key: "num_requests_per_month",
+      width: "15%",
+      render: (_: number | undefined, record: ModelEntry) => (
+        <InputNumber
+          min={0}
+          value={record.num_requests_per_month}
+          onChange={(value) => handleEntryChange(record.id, "num_requests_per_month", value ?? undefined)}
+          style={{ width: "100%" }}
+          size="small"
+          placeholder="-"
+          formatter={(value) => value ? `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ",") : ""}
+        />
+      ),
+    },
+    {
+      title: "",
+      key: "actions",
+      width: 50,
+      render: (_: unknown, record: ModelEntry) => (
+        <Button
+          type="text"
+          icon={<DeleteOutlined />}
+          onClick={() => handleRemoveEntry(record.id)}
+          disabled={entries.length === 1}
+          danger
+          size="small"
+        />
+      ),
+    },
+  ];
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between mb-2">
-        <Text className="text-sm text-gray-600">
-          Add models to estimate costs. Each model can have its own token counts and request volumes.
-        </Text>
-        <Button
-          size="xs"
-          variant="secondary"
-          icon={PlusOutlined}
-          onClick={handleAddEntry}
-        >
-          Add Model
-        </Button>
-      </div>
-
-      <div className="space-y-3">
-        {entries.map((entry) => (
-          <ModelEntryRow
-            key={entry.id}
-            entry={entry}
-            models={models}
-            onChange={handleEntryChange}
-            onRemove={handleRemoveEntry}
-            canRemove={entries.length > 1}
-          />
-        ))}
-      </div>
+      <Table
+        columns={columns}
+        dataSource={entries}
+        rowKey="id"
+        pagination={false}
+        size="small"
+        footer={() => (
+          <Button
+            type="dashed"
+            onClick={handleAddEntry}
+            icon={<PlusOutlined />}
+            className="w-full"
+          >
+            Add Another Model
+          </Button>
+        )}
+      />
 
       <MultiCostResults multiResult={multiModelResult} />
     </div>
