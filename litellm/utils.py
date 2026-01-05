@@ -6915,6 +6915,8 @@ def get_valid_models(
         ################################
         # init litellm_params
         #################################
+        from litellm.types.router import LiteLLM_Params
+        
         if litellm_params is None:
             litellm_params = LiteLLM_Params(model="")
         if api_key is not None:
