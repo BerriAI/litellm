@@ -1,25 +1,24 @@
-import React, { useEffect, useState, useRef, useMemo } from "react";
-import {
-  modelHubPublicModelsCall,
-  getPublicModelHubInfo,
-  agentHubPublicModelsCall,
-  mcpHubPublicServersCall,
-  getUiConfig,
-} from "./networking";
-import { ModelDataTable } from "./model_dashboard/table";
-import { ColumnDef } from "@tanstack/react-table";
-import { Card, Text, Title, Button } from "@tremor/react";
-import { Tag, Tooltip, Modal, Select, Tabs } from "antd";
+import { ThemeProvider } from "@/contexts/ThemeContext";
 import { ExternalLinkIcon, SearchIcon } from "@heroicons/react/outline";
+import { ColumnDef } from "@tanstack/react-table";
+import { Button, Card, Text, Title } from "@tremor/react";
+import { Modal, Select, Tabs, Tag, Tooltip } from "antd";
 import { Copy, Info } from "lucide-react";
-import { Table as TableInstance } from "@tanstack/react-table";
+import React, { useEffect, useMemo, useState } from "react";
+import { ModelDataTable } from "./model_dashboard/table";
+import NotificationsManager from "./molecules/notifications_manager";
+import Navbar from "./navbar";
+import {
+  agentHubPublicModelsCall,
+  getPublicModelHubInfo,
+  getUiConfig,
+  mcpHubPublicServersCall,
+  modelHubPublicModelsCall,
+} from "./networking";
 import { generateCodeSnippet } from "./playground/chat_ui/CodeSnippets";
 import { getEndpointType } from "./playground/chat_ui/mode_endpoint_mapping";
 import { MessageType } from "./playground/chat_ui/types";
 import { getProviderLogoAndName } from "./provider_info_helpers";
-import Navbar from "./navbar";
-import { ThemeProvider } from "@/contexts/ThemeContext";
-import NotificationsManager from "./molecules/notifications_manager";
 
 const { TabPane } = Tabs;
 
@@ -118,9 +117,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const [selectedMcpServer, setSelectedMcpServer] = useState<null | MCPServerData>(null);
   const [proxySettings, setProxySettings] = useState<any>({});
   const [activeTab, setActiveTab] = useState<string>("models");
-  const tableRef = useRef<TableInstance<any>>(null);
-  const agentTableRef = useRef<TableInstance<any>>(null);
-  const mcpTableRef = useRef<TableInstance<any>>(null);
 
   useEffect(() => {
     const initializeAndFetch = async () => {
@@ -1121,7 +1117,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   columns={publicModelHubColumns()}
                   data={filteredData}
                   isLoading={loading}
-                  table={tableRef}
                   defaultSorting={[{ id: "model_group", desc: false }]}
                 />
 
@@ -1184,7 +1179,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                     columns={publicAgentHubColumns()}
                     data={filteredAgentData}
                     isLoading={agentLoading}
-                    table={agentTableRef}
                     defaultSorting={[{ id: "name", desc: false }]}
                   />
 
@@ -1248,7 +1242,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                     columns={publicMCPHubColumns()}
                     data={filteredMcpData}
                     isLoading={mcpLoading}
-                    table={mcpTableRef}
                     defaultSorting={[{ id: "server_name", desc: false }]}
                   />
 
@@ -1453,7 +1446,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         selectedTags: [],
                         selectedVectorStores: [],
                         selectedGuardrails: [],
-                        selectedMCPTools: [],
+                        selectedMCPServers: [],
                         endpointType: getEndpointType(selectedModel.mode || "chat"),
                         selectedModel: selectedModel.model_group,
                         selectedSdk: "openai",
@@ -1474,7 +1467,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         selectedTags: [],
                         selectedVectorStores: [],
                         selectedGuardrails: [],
-                        selectedMCPTools: [],
+                        selectedMCPServers: [],
                         endpointType: getEndpointType(selectedModel.mode || "chat"),
                         selectedModel: selectedModel.model_group,
                         selectedSdk: "openai",

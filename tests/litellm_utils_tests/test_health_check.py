@@ -637,3 +637,38 @@ async def test_image_generation_health_check_prompt(monkeypatch):
 
     assert len(health_check_calls) == 1
     assert health_check_calls[0]["prompt"] == override_prompt
+
+
+@pytest.mark.asyncio
+async def test_health_check_with_custom_llm_provider():
+    """
+    Test that ahealth_check correctly uses custom_llm_provider from model_params.
+    
+    This test verifies the fix for the issue where the UI's "Test connect" button
+    failed with "LLM Provider NOT provided" error for OpenAI-compatible self-hosted
+    providers, even when a provider was selected in the dropdown.
+    
+    The fix ensures that when custom_llm_provider is passed in model_params,
+    it's properly forwarded to get_llm_provider() to identify the correct provider.
+    """
+    from unittest.mock import MagicMock
+    
+    # Mock the completion call to avoid making real API calls
+    mock_response = MagicMock()
+    mock_response._hidden_params = {"headers": {"x-ratelimit-remaining-tokens": "1000"}}
+    
+    with patch("litellm.acompletion", return_value=mock_response):
+        # Test with a custom model name that wouldn't be recognized without custom_llm_provider
+        response = await litellm.ahealth_check(
+            model_params={
+                "model": "deepseek-r1-distill-qwen-1.5B-q4",
+                "custom_llm_provider": "openai",
+                "api_base": "https://example.com/v1",
+                "api_key": "fake-key",
+            },
+            mode="chat",
+        )
+        
+        # Should succeed without "LLM Provider NOT provided" error
+        assert "error" not in response
+        assert isinstance(response, dict)

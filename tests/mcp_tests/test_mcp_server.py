@@ -812,10 +812,19 @@ async def test_get_tools_from_mcp_servers():
                 return_value=["server1_id", "server2_id"]
             )
             mock_manager_2.get_mcp_server_by_id = lambda server_id: mock_server_1 if server_id == "server1_id" else mock_server_2
+            async def mock_get_tools_side_effect(
+                server,
+                mcp_auth_header=None,
+                extra_headers=None,
+                add_prefix=False,
+                raw_headers=None,
+            ):
+                if server.server_id == "server1_id":
+                    return [mock_tool_1]
+                return [mock_tool_2]
+
             mock_manager_2._get_tools_from_server = AsyncMock(
-                side_effect=lambda server, mcp_auth_header=None, extra_headers=None, add_prefix=False: (
-                    [mock_tool_1] if server.server_id == "server1_id" else [mock_tool_2]
-                )
+                side_effect=mock_get_tools_side_effect
             )
 
         with patch(
@@ -1048,7 +1057,7 @@ async def test_mcp_server_manager_config_integration_with_database():
     )
 
     # Test the add_update_server method (this tests our fix)
-    await test_manager.add_update_server(db_server)
+    await test_manager.add_server(db_server)
 
     # Verify the server was added with correct access_groups
     registry = test_manager.get_registry()
@@ -1372,7 +1381,7 @@ async def test_add_update_server_with_alias():
     mock_mcp_server.token_url = None
 
     # Add server to manager
-    await test_manager.add_update_server(mock_mcp_server)
+    await test_manager.add_server(mock_mcp_server)
 
     # Verify server was added with correct name (should use alias)
     assert "test-server-123" in test_manager.registry
@@ -1412,7 +1421,7 @@ async def test_add_update_server_without_alias():
     mock_mcp_server.token_url = None
 
     # Add server to manager
-    await test_manager.add_update_server(mock_mcp_server)
+    await test_manager.add_server(mock_mcp_server)
 
     # Verify server was added with correct name (should use server_name)
     assert "test-server-123" in test_manager.registry
@@ -1452,7 +1461,7 @@ async def test_add_update_server_fallback_to_server_id():
     mock_mcp_server.token_url = None
 
     # Add server to manager
-    await test_manager.add_update_server(mock_mcp_server)
+    await test_manager.add_server(mock_mcp_server)
 
     # Verify server was added with correct name (should use server_id)
     assert "test-server-123" in test_manager.registry
@@ -1693,6 +1702,7 @@ async def test_get_tools_for_single_server():
             server=mock_server,
             mcp_auth_header="Bearer test_token",
             add_prefix=False,
+            raw_headers=None,
         )
 
         # Verify the result

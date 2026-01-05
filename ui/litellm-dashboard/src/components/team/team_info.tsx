@@ -508,7 +508,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             Back to Teams
           </TremorButton>
           <Title>{info.team_alias}</Title>
-          <div className="flex items-center cursor-pointer">
+          <div className="flex items-center">
             <Text className="text-gray-500 font-mono">{info.team_id}</Text>
             <Button
               type="text"

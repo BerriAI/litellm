@@ -13,7 +13,7 @@ uvloop==0.21.0 # uvicorn dep, gives us much better performance under load
 boto3==1.36.0 # aws bedrock/sagemaker calls
 redis==5.2.1 # redis caching
 prisma==0.11.0 # for db
-nodejs-bin==18.4.0a4 ## required by prisma for migrations, prevents runtime download
+nodejs-wheel-binaries==24.12.0 ## required by prisma for migrations, prevents runtime download (updated from nodejs-bin for security fixes)
 mangum==0.17.0 # for aws lambda functions
 pynacl==1.5.0 # for encrypting keys
 google-cloud-aiplatform==1.47.0 # for vertex ai calls
@@ -29,7 +29,7 @@ ddtrace==2.19.0      # for advanced DD tracing / profiling
 orjson==3.11.2 # fast /embedding responses
 polars==1.31.0 # for data processing
 apscheduler==3.10.4 # for resetting budget in background
-fastapi-sso==0.16.0 # admin UI, SSO
+fastapi-sso==0.19.0 # admin UI, SSO
 pyjwt[crypto]==2.10.1 ; python_version >= "3.9"
 python-multipart==0.0.18 # admin UI
 Pillow==11.0.0
@@ -41,13 +41,13 @@ opentelemetry-api==1.25.0
 opentelemetry-sdk==1.25.0
 opentelemetry-exporter-otlp==1.25.0
 # grpcio: 1.68.0-1.68.1 has reconnect bug (#38290), 1.75+ has Python 3.14 wheels + fix
-grpcio>=1.62.3,<1.68.0; python_version < "3.14"
+grpcio>=1.62.3,!=1.68.*,!=1.69.*,!=1.70.*,!=1.71.0,!=1.71.1,!=1.72.0,!=1.72.1,!=1.73.0; python_version < "3.14"
 grpcio>=1.75.0; python_version >= "3.14"
 sentry_sdk==2.21.0 # for sentry error handling
 detect-secrets==1.5.0 # Enterprise - secret detection / masking in LLM requests
 cryptography==44.0.1
 tzdata==2025.1 # IANA time zone database
-litellm-proxy-extras==0.4.14 # for proxy extras - e.g. prisma migrations
+litellm-proxy-extras==0.4.16 # for proxy extras - e.g. prisma migrations
 llm-sandbox==0.3.31 # for skill execution in sandbox
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv==1.0.1 # for env

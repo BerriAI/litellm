@@ -60,6 +60,7 @@ def prisma_client():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="local testing only")
 async def test_slack_gif_skill_creates_gif(prisma_client):
     """
     Test slack-gif-creator skill generates a GIF using GPT-4o via messages API.

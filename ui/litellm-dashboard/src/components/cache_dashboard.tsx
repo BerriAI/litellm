@@ -1,23 +1,23 @@
-import React, { useState, useEffect } from "react";
 import {
-  Card,
   BarChart,
-  Subtitle,
-  Grid,
+  Card,
   Col,
   DateRangePickerValue,
+  Grid,
+  Icon,
   MultiSelect,
   MultiSelectItem,
-  TabPanel,
-  TabPanels,
+  Subtitle,
+  Tab,
   TabGroup,
   TabList,
-  Tab,
-  Icon,
+  TabPanel,
+  TabPanels,
   Text,
 } from "@tremor/react";
-import UsageDatePicker from "./shared/usage_date_picker";
+import React, { useEffect, useState } from "react";
 import NotificationsManager from "./molecules/notifications_manager";
+import UsageDatePicker from "./shared/usage_date_picker";
 
 import { RefreshIcon } from "@heroicons/react/outline";
 import { adminGlobalCacheActivity, cachingHealthCheckCall } from "./networking";
@@ -271,9 +271,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
       <TabList className="flex justify-between mt-2 w-full items-center">
         <div className="flex">
           <Tab>Cache Analytics</Tab>
-          <Tab>
-            <pre>Cache Health</pre>
-          </Tab>
+          <Tab>Cache Health</Tab>
           <Tab>Cache Settings</Tab>
         </div>
 

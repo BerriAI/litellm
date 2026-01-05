@@ -1,3 +1,4 @@
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import AvailableTeamsPanel from "@/components/team/available_teams";
 import TeamInfoView from "@/components/team/team_info";
 import TeamSSOSettings from "@/components/TeamSSOSettings";
@@ -149,6 +150,18 @@ const getAdminOrganizations = (
   return [];
 };
 
+const getOrganizationAlias = (
+  organizationId: string | null | undefined,
+  organizations: Organization[] | null | undefined,
+): string => {
+  if (!organizationId || !organizations) {
+    return organizationId || "N/A";
+  }
+
+  const organization = organizations.find((org) => org.organization_id === organizationId);
+  return organization?.organization_alias || organizationId;
+};
+
 // @deprecated
 const Teams: React.FC<TeamProps> = ({
   teams,
@@ -161,6 +174,7 @@ const Teams: React.FC<TeamProps> = ({
   premiumUser = false,
 }) => {
   console.log(`organizations: ${JSON.stringify(organizations)}`);
+  const { data: organizationsData } = useOrganizations();
   const [lastRefreshed, setLastRefreshed] = useState("");
   const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
   const [currentOrgForCreateTeam, setCurrentOrgForCreateTeam] = useState<Organization | null>(null);
@@ -940,7 +954,9 @@ const Teams: React.FC<TeamProps> = ({
                                       </div>
                                     </TableCell>
 
-                                    <TableCell>{team.organization_id}</TableCell>
+                                    <TableCell>
+                                      {getOrganizationAlias(team.organization_id, organizationsData || organizations)}
+                                    </TableCell>
                                     <TableCell>
                                       <Text>
                                         {perTeamInfo &&

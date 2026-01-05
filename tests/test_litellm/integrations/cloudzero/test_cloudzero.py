@@ -1,11 +1,13 @@
-import pytest
-import polars as pl
-
-from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import polars as pl
+import pytest
+
 from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
 from litellm.integrations.cloudzero.cz_stream_api import CloudZeroStreamer
 from litellm.integrations.cloudzero.database import LiteLLMDatabase
+
 
 
 class TestCloudZeroHourlyExport:
@@ -49,6 +51,12 @@ class TestCloudZeroHourlyExport:
                 "token": ["sk-test-cloudzero-token-010"],
             }
         )
+        user_mock_data = pl.LazyFrame(
+            {
+                "user_id": ["069e8205-8f55-44fd-870b-0c036cab600c"],
+                "user_email": ["user@example.com"],
+            }
+        )
 
         with (
             patch.object(LiteLLMDatabase, "_ensure_prisma_client") as mock_prisma_client_getter,
@@ -63,6 +71,7 @@ class TestCloudZeroHourlyExport:
                     LiteLLM_DailyUserSpend=spend_mock_data,
                     LiteLLM_VerificationToken=verification_mock_data,
                     LiteLLM_TeamTable=team_mock_data,
+                    LiteLLM_UserTable=user_mock_data,
                 )
                 result = sql_context.execute(query).collect()
 

@@ -21,7 +21,7 @@ export default function CloudZeroEmptyPlaceholder({ startCreation }: CloudZeroEm
         }
       >
         <Button type="primary" size="large" onClick={startCreation} className="flex items-center gap-2 mx-auto mt-4">
-          Create Integration
+          Add CloudZero Integration
         </Button>
       </Empty>
     </div>

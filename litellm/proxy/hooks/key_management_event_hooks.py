@@ -45,12 +45,13 @@ class KeyManagementEventHooks:
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
         # Send email notification - non-blocking, independent operation
-        try:
-            await KeyManagementEventHooks._send_key_created_email(
-                response.model_dump(exclude_none=True)
-            )
-        except Exception as e:
-            verbose_proxy_logger.warning(f"Failed to send key created email: {e}")
+        if data.send_invite_email is True:
+            try:
+                await KeyManagementEventHooks._send_key_created_email(
+                    response.model_dump(exclude_none=True)
+                )
+            except Exception as e:
+                verbose_proxy_logger.warning(f"Failed to send key created email: {e}")
 
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         if litellm.store_audit_logs is True:
