@@ -4,7 +4,7 @@ import TabItem from '@theme/TabItem';
 
 # OpenTelemetry - Tracing LLMs with any observability tool
 
-OpenTelemetry is a CNCF standard for observability. It connects to any observability tool, such as Jaeger, Zipkin, Datadog, New Relic, Traceloop and others.
+OpenTelemetry is a CNCF standard for observability. It connects to any observability tool, such as Jaeger, Zipkin, Datadog, New Relic, Traceloop, Levo AI and others.
 
 <Image img={require('../../img/traceloop_dash.png')} />
 
