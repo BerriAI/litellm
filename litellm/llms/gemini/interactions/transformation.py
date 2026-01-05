@@ -139,7 +139,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> InteractionsAPIResponse:
-        """Parse response and transform to OpenAI-compatible format."""
+        """Parse response - it already matches our response type."""
         try:
             logging_obj.post_call(
                 original_response=raw_response.text,
@@ -154,18 +154,6 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             )
         
         verbose_logger.debug("Google AI Interactions response: %s", raw_json)
-        
-        # Transform usage to OpenAI format
-        if "usage" in raw_json and raw_json["usage"]:
-            usage = raw_json["usage"]
-            # Map Google's field names to OpenAI's field names
-            if "total_input_tokens" in usage:
-                usage["input_tokens"] = usage["total_input_tokens"]
-            if "total_output_tokens" in usage:
-                usage["output_tokens"] = usage["total_output_tokens"]
-            if "total_tokens" in usage:
-                # Keep total_tokens as is - it's the same in both formats
-                pass
         
         response = InteractionsAPIResponse(**raw_json)
         response._hidden_params["headers"] = dict(raw_response.headers)
@@ -212,16 +200,6 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
                 status_code=raw_response.status_code,
                 headers=dict(raw_response.headers),
             )
-        
-        # Transform usage to OpenAI format
-        if "usage" in raw_json and raw_json["usage"]:
-            usage = raw_json["usage"]
-            # Map Google's field names to OpenAI's field names
-            if "total_input_tokens" in usage:
-                usage["input_tokens"] = usage["total_input_tokens"]
-            if "total_output_tokens" in usage:
-                usage["output_tokens"] = usage["total_output_tokens"]
-        
         response = InteractionsAPIResponse(**raw_json)
         response._hidden_params["headers"] = dict(raw_response.headers)
         return response
