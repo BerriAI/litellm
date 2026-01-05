@@ -1304,11 +1304,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     request_data=request_data,
                 )
 
-                if bedrock_response.get("action") == "BLOCKED":
-                    raise Exception(
-                        f"Content blocked by Bedrock guardrail: {bedrock_response.get('reason', 'Unknown reason')}"
-                    )
-
                 # Apply any masking that was applied by the guardrail
 
                 output_list = bedrock_response.get("output")
