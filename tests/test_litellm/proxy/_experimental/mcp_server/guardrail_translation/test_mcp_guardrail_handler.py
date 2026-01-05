@@ -3,7 +3,9 @@
 import pytest
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.llms.mcp.guardrail_translation.handler import MCPGuardrailTranslationHandler
+from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import (
+    MCPGuardrailTranslationHandler,
+)
 
 
 class MockGuardrail(CustomGuardrail):

@@ -4,7 +4,9 @@ import pytest
 
 from litellm.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.llms.mcp.guardrail_translation.handler import MCPGuardrailTranslationHandler
+from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import (
+    MCPGuardrailTranslationHandler,
+)
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail import unified_guardrail as unified_module
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
