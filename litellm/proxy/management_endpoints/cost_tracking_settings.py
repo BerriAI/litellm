@@ -7,15 +7,22 @@ GET /config/cost_discount_config - Get current cost discount configuration
 PATCH /config/cost_discount_config - Update cost discount configuration
 GET /config/cost_margin_config - Get current cost margin configuration
 PATCH /config/cost_margin_config - Update cost margin configuration
+POST /cost/estimate - Estimate cost for a given model and token counts
 """
 
-from typing import Dict, Union
+from typing import Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
+from litellm.cost_calculator import completion_cost
+from litellm.proxy._types import (
+    CommonProxyErrors,
+    CostEstimateRequest,
+    CostEstimateResponse,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.utils import LlmProvidersSet
 
@@ -346,4 +353,114 @@ async def update_cost_margin_config(
             status_code=500,
             detail={"error": f"Failed to update cost margin config: {str(e)}"}
         )
+
+
+@router.post(
+    "/cost/estimate",
+    tags=["Cost Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=CostEstimateResponse,
+)
+async def estimate_cost(
+    request: CostEstimateRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> CostEstimateResponse:
+    """
+    Estimate cost for a given model and token counts.
+
+    This endpoint uses the same cost calculation logic as actual requests,
+    including any configured margins and discounts.
+
+    Parameters:
+    - model: Model name from /model_group/info (e.g., "gpt-4", "claude-3-opus")
+    - input_tokens: Expected input tokens per request
+    - output_tokens: Expected output tokens per request
+    - num_requests: Number of requests (default: 1)
+
+    Returns cost breakdown including:
+    - Input token cost
+    - Output token cost
+    - Margin/fee cost
+    - Total cost
+
+    Example:
+    ```json
+    {
+        "model": "gpt-4",
+        "input_tokens": 1000,
+        "output_tokens": 500,
+        "num_requests": 100
+    }
+    ```
+    """
+    from litellm.cost_calculator import _apply_cost_margin
+    from litellm.proxy.proxy_server import llm_router
+    from litellm.types.utils import Usage
+
+    if llm_router is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Router not initialized. No models configured."},
+        )
+
+    # Get model group info from router to resolve pricing
+    model_group_info = llm_router.get_model_group_info(model_group=request.model)
+
+    if model_group_info is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": f"Model '{request.model}' not found. Use /model_group/info to see available models."
+            },
+        )
+
+    # Get the provider from the model group
+    providers: List[str] = model_group_info.providers or []
+    custom_llm_provider: Optional[str] = providers[0] if providers else None
+
+    # Get cost per token from model group info
+    input_cost_per_token = model_group_info.input_cost_per_token or 0.0
+    output_cost_per_token = model_group_info.output_cost_per_token or 0.0
+
+    # Calculate base costs (before margin)
+    input_cost = input_cost_per_token * request.input_tokens
+    output_cost = output_cost_per_token * request.output_tokens
+    base_cost = input_cost + output_cost
+
+    # Apply margin using the same function as completion_cost
+    (
+        cost_with_margin,
+        _margin_percent,
+        _margin_fixed_amount,
+        margin_cost,
+    ) = _apply_cost_margin(
+        base_cost=base_cost,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    cost_per_request = cost_with_margin
+
+    # Calculate totals based on number of requests
+    total_cost = cost_per_request * request.num_requests
+    total_input_cost = input_cost * request.num_requests
+    total_output_cost = output_cost * request.num_requests
+    total_margin_cost = margin_cost * request.num_requests
+
+    return CostEstimateResponse(
+        model=request.model,
+        input_tokens=request.input_tokens,
+        output_tokens=request.output_tokens,
+        num_requests=request.num_requests,
+        cost_per_request=cost_per_request,
+        input_cost_per_request=input_cost,
+        output_cost_per_request=output_cost,
+        margin_cost_per_request=margin_cost,
+        total_cost=total_cost,
+        total_input_cost=total_input_cost,
+        total_output_cost=total_output_cost,
+        total_margin_cost=total_margin_cost,
+        input_cost_per_token=input_cost_per_token,
+        output_cost_per_token=output_cost_per_token,
+        provider=custom_llm_provider,
+    )
 

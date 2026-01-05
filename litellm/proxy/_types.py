@@ -3825,3 +3825,35 @@ class LiteLLM_ManagedVectorStoresTable(LiteLLMPydanticObjectBase):
 
 class ResponseLiteLLM_ManagedVectorStore(TypedDict, total=False):
     vector_store: LiteLLM_ManagedVectorStoresTable
+
+
+class CostEstimateRequest(LiteLLMPydanticObjectBase):
+    """Request body for /cost/estimate endpoint."""
+
+    model: str = Field(description="Model name (from /model_group/info)")
+    input_tokens: int = Field(description="Expected input tokens per request", ge=0)
+    output_tokens: int = Field(description="Expected output tokens per request", ge=0)
+    num_requests: int = Field(default=1, description="Number of requests", ge=1)
+
+
+class CostEstimateResponse(LiteLLMPydanticObjectBase):
+    """Response body for /cost/estimate endpoint."""
+
+    model: str
+    input_tokens: int
+    output_tokens: int
+    num_requests: int
+    # Per-request costs
+    cost_per_request: float = Field(description="Total cost per request (includes margin)")
+    input_cost_per_request: float = Field(description="Input token cost per request (before margin)")
+    output_cost_per_request: float = Field(description="Output token cost per request (before margin)")
+    margin_cost_per_request: float = Field(default=0.0, description="Margin/fee added per request")
+    # Total costs (per-request * num_requests)
+    total_cost: float = Field(description="Total cost for all requests (includes margin)")
+    total_input_cost: float = Field(description="Total input token cost (before margin)")
+    total_output_cost: float = Field(description="Total output token cost (before margin)")
+    total_margin_cost: float = Field(default=0.0, description="Total margin/fee for all requests")
+    # Pricing info
+    input_cost_per_token: Optional[float] = None
+    output_cost_per_token: Optional[float] = None
+    provider: Optional[str] = None
