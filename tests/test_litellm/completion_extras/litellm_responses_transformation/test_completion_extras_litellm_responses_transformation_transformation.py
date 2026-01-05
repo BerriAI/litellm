@@ -1007,3 +1007,272 @@ def test_multiple_tool_calls_in_single_choice():
     assert tool_calls[2]["function"]["name"] == "get_horoscope"
 
     print("✓ Multiple tool calls are correctly grouped in a single choice")
+
+
+# =============================================================================
+# Tests for issue #18378: Annotations stripped when bridging Responses -> Chat Completion
+# =============================================================================
+
+
+def test_annotations_preserved_in_transform_response():
+    """
+    Test that annotations from ResponseOutputMessage are preserved when transforming
+    Responses API response to Chat Completion format.
+
+    This is a regression test for issue #18378 where annotations/citations were
+    being lost during the transformation.
+    """
+    from unittest.mock import Mock
+
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+    from openai.types.responses.annotation_url_citation import AnnotationURLCitation
+    from openai.types.responses.annotation_url_citation import (
+        URLCitation as AnnotationURLCitationURLCitation,
+    )
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import (
+        InputTokensDetails,
+        OutputTokensDetails,
+        ResponseAPIUsage,
+        ResponsesAPIResponse,
+    )
+    from litellm.types.utils import ModelResponse, Usage
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Create annotation with URL citation (as returned by web search)
+    url_citation = AnnotationURLCitationURLCitation(
+        end_index=100,
+        start_index=50,
+        title="Example Article",
+        url="https://example.com/article",
+    )
+    annotation = AnnotationURLCitation(
+        type="url_citation",
+        url_citation=url_citation,
+    )
+
+    # Create output text with annotations
+    output_text = ResponseOutputText(
+        annotations=[annotation],
+        text="The answer is based on this source [1].",
+        type="output_text",
+        logprobs=[],
+    )
+    output_message = ResponseOutputMessage(
+        id="msg_test",
+        content=[output_text],
+        role="assistant",
+        status="completed",
+        type="message",
+    )
+
+    # Create usage
+    usage = ResponseAPIUsage(
+        input_tokens=10,
+        input_tokens_details=InputTokensDetails(cached_tokens=0),
+        output_tokens=20,
+        output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
+        total_tokens=30,
+    )
+
+    # Create the full ResponsesAPIResponse
+    raw_response = ResponsesAPIResponse(
+        id="resp_test",
+        created_at=1234567890,
+        error=None,
+        incomplete_details=None,
+        instructions=None,
+        metadata={},
+        model="gpt-5.1",
+        object="response",
+        output=[output_message],
+        parallel_tool_calls=True,
+        temperature=1.0,
+        tool_choice="auto",
+        tools=[],
+        top_p=1.0,
+        max_output_tokens=None,
+        previous_response_id=None,
+        reasoning=None,
+        status="completed",
+        text=None,
+        truncation="disabled",
+        usage=usage,
+        user=None,
+        store=True,
+        background=False,
+    )
+
+    model_response = ModelResponse(
+        id="chatcmpl-test",
+        created=1234567890,
+        model=None,
+        object="chat.completion",
+        choices=[],
+        usage=Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
+    )
+
+    logging_obj = Mock()
+
+    result = handler.transform_response(
+        model="gpt-5.1",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=logging_obj,
+        request_data={"model": "gpt-5.1"},
+        messages=[{"role": "user", "content": "test"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    # Check that annotations are preserved
+    assert len(result.choices) == 1
+    choice = result.choices[0]
+    assert choice.message.content == "The answer is based on this source [1]."
+    assert choice.message.annotations is not None, "annotations should be preserved"
+    assert len(choice.message.annotations) == 1
+
+    annotation_result = choice.message.annotations[0]
+    assert annotation_result["type"] == "url_citation"
+    assert "url_citation" in annotation_result
+    assert annotation_result["url_citation"]["url"] == "https://example.com/article"
+    assert annotation_result["url_citation"]["title"] == "Example Article"
+    assert annotation_result["url_citation"]["start_index"] == 50
+    assert annotation_result["url_citation"]["end_index"] == 100
+
+    print("✓ Annotations are correctly preserved in transform_response")
+
+
+def test_convert_annotations_to_chat_format_with_url_citation():
+    """
+    Test the _convert_annotations_to_chat_format helper function with URL citations.
+    """
+    from openai.types.responses.annotation_url_citation import AnnotationURLCitation
+    from openai.types.responses.annotation_url_citation import (
+        URLCitation as AnnotationURLCitationURLCitation,
+    )
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    # Create annotation
+    url_citation = AnnotationURLCitationURLCitation(
+        end_index=100,
+        start_index=50,
+        title="Test Title",
+        url="https://test.com",
+    )
+    annotation = AnnotationURLCitation(
+        type="url_citation",
+        url_citation=url_citation,
+    )
+
+    result = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
+        [annotation]
+    )
+
+    assert result is not None
+    assert len(result) == 1
+    assert result[0]["type"] == "url_citation"
+    assert result[0]["url_citation"]["url"] == "https://test.com"
+
+    print("✓ _convert_annotations_to_chat_format works with URL citations")
+
+
+def test_convert_annotations_to_chat_format_with_empty_list():
+    """
+    Test that _convert_annotations_to_chat_format returns None for empty list.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    result = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format([])
+    assert result is None
+
+    result = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(None)
+    assert result is None
+
+    print("✓ _convert_annotations_to_chat_format returns None for empty input")
+
+
+def test_convert_annotations_to_chat_format_with_dict():
+    """
+    Test that _convert_annotations_to_chat_format handles dict annotations.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    # Test with dict annotation (as might come from raw dict response)
+    annotation_dict = {
+        "type": "url_citation",
+        "url_citation": {
+            "url": "https://example.com",
+            "title": "Example",
+            "start_index": 0,
+            "end_index": 10,
+        },
+    }
+
+    result = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
+        [annotation_dict]
+    )
+
+    assert result is not None
+    assert len(result) == 1
+    assert result[0]["type"] == "url_citation"
+    assert result[0]["url_citation"]["url"] == "https://example.com"
+
+    print("✓ _convert_annotations_to_chat_format works with dict annotations")
+
+
+def test_raw_dict_response_preserves_annotations():
+    """
+    Test that annotations are preserved when handling raw dict response items.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Raw dict format with annotations
+    item = {
+        "type": "message",
+        "role": "assistant",
+        "content": [
+            {
+                "type": "output_text",
+                "text": "Answer with citation [1].",
+                "annotations": [
+                    {
+                        "type": "url_citation",
+                        "url_citation": {
+                            "url": "https://source.com",
+                            "title": "Source Article",
+                            "start_index": 20,
+                            "end_index": 23,
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+    choice, index = handler._handle_raw_dict_response_item(item, 0)
+
+    assert choice is not None
+    assert choice.message.content == "Answer with citation [1]."
+    assert choice.message.annotations is not None
+    assert len(choice.message.annotations) == 1
+    assert choice.message.annotations[0]["type"] == "url_citation"
+    assert choice.message.annotations[0]["url_citation"]["url"] == "https://source.com"
+
+    print("✓ Raw dict response correctly preserves annotations")
