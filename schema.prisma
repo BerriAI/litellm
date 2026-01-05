@@ -211,6 +211,7 @@ model LiteLLM_MCPServerTable {
   authorization_url  String?
   token_url          String?
   registration_url   String?
+  allow_all_keys Boolean @default(false)
 }
 
 // Generate Tokens for Proxy

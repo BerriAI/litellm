@@ -212,6 +212,7 @@ if MCP_AVAILABLE:
             authorization_url=payload.authorization_url,
             token_url=payload.token_url,
             registration_url=payload.registration_url,
+            allow_all_keys=payload.allow_all_keys,
         )
 
     def get_prisma_client_or_throw(message: str):

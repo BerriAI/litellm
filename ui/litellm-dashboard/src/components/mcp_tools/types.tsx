@@ -152,6 +152,7 @@ export interface MCPServer {
   teams?: Team[];
   mcp_access_groups?: string[];
   allowed_tools?: string[];
+  allow_all_keys?: boolean;
 }
 
 export interface MCPServerProps {
