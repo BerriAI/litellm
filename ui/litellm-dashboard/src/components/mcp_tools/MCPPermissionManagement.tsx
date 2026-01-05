@@ -70,7 +70,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
                   <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                 </Tooltip>
               </span>
-              <p className="text-sm text-gray-600 mt-1">Enable if this server should be "public" to all keys.</p>
+              <p className="text-sm text-gray-600 mt-1">Enable if this server should be &quot;public&quot; to all keys.</p>
             </div>
             <Form.Item
               name="allow_all_keys"
