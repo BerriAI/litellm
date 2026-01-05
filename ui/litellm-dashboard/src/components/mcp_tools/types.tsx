@@ -136,6 +136,9 @@ export interface MCPServer {
   url: string;
   transport?: string | null;
   auth_type?: string | null;
+  authorization_url?: string | null;
+  token_url?: string | null;
+  registration_url?: string | null;
   mcp_info?: MCPInfo | null;
   created_at: string;
   created_by: string;

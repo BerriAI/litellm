@@ -551,6 +551,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 valid_token = UserAPIKeyAuth(
                     api_key=None,
                     team_id=team_id,
+                    team_alias=(
+                        team_object.team_alias if team_object is not None else None
+                    ),
                     team_tpm_limit=(
                         team_object.tpm_limit if team_object is not None else None
                     ),

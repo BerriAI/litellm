@@ -7,6 +7,7 @@ from litellm.proxy._experimental.mcp_server import rest_endpoints
 from litellm.proxy._experimental.mcp_server.auth import (
     user_api_key_auth_mcp as auth_mcp,
 )
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy._types import NewMCPServerRequest, UserAPIKeyAuth
 from litellm.types.mcp import MCPAuth
 
@@ -29,6 +30,60 @@ def _build_request(headers: Optional[Dict[str, str]] = None) -> Request:
         return {"type": "http.request", "body": b"", "more_body": False}
 
     return Request(scope, receive=receive)
+
+
+def _get_route(path: str, method: str):
+    for route in rest_endpoints.router.routes:
+        if getattr(route, "path", None) == path and method in getattr(
+            route, "methods", set()
+        ):
+            return route
+    raise AssertionError(f"Route {method} {path} not found")
+
+
+def _route_has_dependency(route, dependency) -> bool:
+    if any(
+        getattr(dep, "dependency", None) == dependency
+        for dep in getattr(route, "dependencies", [])
+    ):
+        return True
+    dependant = getattr(route, "dependant", None)
+    if dependant is None:
+        return False
+    return any(getattr(dep, "call", None) == dependency for dep in dependant.dependencies)
+
+
+@pytest.mark.asyncio
+async def test_execute_with_mcp_client_redacts_stack_trace(monkeypatch):
+    def fake_create_client(*args, **kwargs):
+        return object()
+
+    monkeypatch.setattr(
+        rest_endpoints.global_mcp_server_manager,
+        "_create_mcp_client",
+        fake_create_client,
+    )
+
+    async def failing_operation(client):
+        raise RuntimeError("boom")
+
+    payload = NewMCPServerRequest(
+        server_name="example",
+        url="https://example.com",
+        auth_type=MCPAuth.none,
+    )
+
+    result = await rest_endpoints._execute_with_mcp_client(
+        payload, failing_operation
+    )
+
+    assert result["status"] == "error"
+    assert "stack_trace" not in result
+
+
+def test_test_connection_requires_auth_dependency():
+    route = _get_route("/mcp-rest/test/connection", "POST")
+    assert _route_has_dependency(route, user_api_key_auth)
 
 
 @pytest.mark.asyncio
