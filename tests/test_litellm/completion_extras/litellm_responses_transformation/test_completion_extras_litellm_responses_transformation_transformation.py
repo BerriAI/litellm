@@ -1007,3 +1007,43 @@ def test_multiple_tool_calls_in_single_choice():
     assert tool_calls[2]["function"]["name"] == "get_horoscope"
 
     print("✓ Multiple tool calls are correctly grouped in a single choice")
+
+
+def test_map_reasoning_effort_adds_summary_detailed():
+    """
+    Test that _map_reasoning_effort adds summary="detailed" when user provides reasoning_effort as a string.
+    
+    This ensures that when users pass reasoning_effort in the completions API for OpenAI responses/models,
+    the transformation automatically includes summary="detailed" in the reasoning parameter.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Test all string effort levels
+    effort_levels = ["none", "low", "medium", "high", "xhigh", "minimal"]
+    
+    for effort in effort_levels:
+        result = handler._map_reasoning_effort(effort)
+        
+        assert result is not None, f"Result should not be None for effort={effort}"
+        assert result["effort"] == effort, f"Effort should be {effort}"
+        assert result["summary"] == "detailed", f"Summary should be 'detailed' for effort={effort}"
+        
+        print(f"✓ reasoning_effort='{effort}' correctly maps to effort='{effort}', summary='detailed'")
+    
+    # Test that dict input is passed through as-is (no modification)
+    dict_input = {"effort": "high", "summary": "custom_summary"}
+    result_dict = handler._map_reasoning_effort(dict_input)
+    assert result_dict["effort"] == "high"
+    assert result_dict["summary"] == "custom_summary"
+    print("✓ Dict input is passed through without modification")
+    
+    # Test that None/unknown values return None
+    result_unknown = handler._map_reasoning_effort("unknown_value")
+    assert result_unknown is None
+    print("✓ Unknown reasoning_effort values return None")
+    
+    print("✓ All reasoning_effort string values correctly map to summary='detailed'")
