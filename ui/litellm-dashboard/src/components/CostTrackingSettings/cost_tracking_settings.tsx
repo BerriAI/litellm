@@ -6,11 +6,13 @@ import ProviderDiscountTable from "./provider_discount_table";
 import AddProviderForm from "./add_provider_form";
 import ProviderMarginTable from "./provider_margin_table";
 import AddMarginForm from "./add_margin_form";
+import PricingCalculator from "./pricing_calculator/index";
 import { ExclamationCircleOutlined } from "@ant-design/icons";
 import { DocsMenu } from "../HelpLink";
 import HowItWorks from "./how_it_works";
 import { useDiscountConfig } from "./use_discount_config";
 import { useMarginConfig } from "./use_margin_config";
+import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_models";
 
 const DOCS_LINKS = [
   { label: "Custom pricing for models", href: "https://docs.litellm.ai/docs/proxy/custom_pricing" },
@@ -31,9 +33,12 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
   const [marginType, setMarginType] = useState<"percentage" | "fixed">("percentage");
   const [percentageValue, setPercentageValue] = useState<string>("");
   const [fixedAmountValue, setFixedAmountValue] = useState<string>("");
+  const [models, setModels] = useState<string[]>([]);
   const [form] = Form.useForm();
   const [marginForm] = Form.useForm();
   const [modal, contextHolder] = Modal.useModal();
+  
+  const isProxyAdmin = userRole === "proxy_admin" || userRole === "Admin";
 
   // Use custom hooks for discount and margin config
   const {
@@ -57,6 +62,17 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
       Promise.all([fetchDiscountConfig(), fetchMarginConfig()]).finally(() => {
         setIsFetching(false);
       });
+      
+      // Fetch models for pricing calculator (available to all roles)
+      const loadModels = async () => {
+        try {
+          const modelGroups = await fetchAvailableModels(accessToken);
+          setModels(modelGroups.map((m: ModelGroup) => m.model_group));
+        } catch (error) {
+          console.error("Error fetching models:", error);
+        }
+      };
+      loadModels();
     }
   }, [accessToken, fetchDiscountConfig, fetchMarginConfig]);
 
@@ -152,129 +168,153 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
 
       {/* Main Content Card with Accordions */}
       <div className="bg-white rounded-lg shadow w-full max-w-full space-y-4">
-        {/* Accordion 1: Provider Discounts */}
-        <Accordion>
-          <AccordionHeader className="px-6 py-4">
-            <div className="flex flex-col items-start w-full">
-              <Text className="text-lg font-semibold text-gray-900">Provider Discounts</Text>
-              <Text className="text-sm text-gray-500 mt-1">
-                Apply percentage-based discounts to reduce costs for specific providers
-              </Text>
-            </div>
-          </AccordionHeader>
-          <AccordionBody className="px-0">
-            <TabGroup>
-              <TabList className="px-6 pt-4">
-                <Tab>Discounts</Tab>
-                <Tab>Test It</Tab>
-              </TabList>
-              <TabPanels>
-                <TabPanel>
-                  <div className="p-6">
-                    <div className="flex justify-end mb-4">
-                      <Button
-                        onClick={() => setIsModalVisible(true)}
-                      >
-                        + Add Provider Discount
-                      </Button>
-                    </div>
-                    {isFetching ? (
-                      <div className="py-12 text-center">
-                        <Text className="text-gray-500">Loading configuration...</Text>
-                      </div>
-                    ) : Object.keys(discountConfig).length > 0 ? (
-                      <ProviderDiscountTable
-                        discountConfig={discountConfig}
-                        onDiscountChange={handleDiscountChange}
-                        onRemoveProvider={handleRemoveProvider}
-                      />
-                    ) : (
-                      <div className="py-16 px-6 text-center">
-                        <svg
-                          className="mx-auto h-12 w-12 text-gray-400 mb-4"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
+        {/* Accordion 1: Provider Discounts - Only for proxy admins */}
+        {isProxyAdmin && (
+          <Accordion>
+            <AccordionHeader className="px-6 py-4">
+              <div className="flex flex-col items-start w-full">
+                <Text className="text-lg font-semibold text-gray-900">Provider Discounts</Text>
+                <Text className="text-sm text-gray-500 mt-1">
+                  Apply percentage-based discounts to reduce costs for specific providers
+                </Text>
+              </div>
+            </AccordionHeader>
+            <AccordionBody className="px-0">
+              <TabGroup>
+                <TabList className="px-6 pt-4">
+                  <Tab>Discounts</Tab>
+                  <Tab>Test It</Tab>
+                </TabList>
+                <TabPanels>
+                  <TabPanel>
+                    <div className="p-6">
+                      <div className="flex justify-end mb-4">
+                        <Button
+                          onClick={() => setIsModalVisible(true)}
                         >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={1.5}
-                            d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                          />
-                        </svg>
-                        <Text className="text-gray-700 font-medium mb-2">
-                          No provider discounts configured
-                        </Text>
-                        <Text className="text-gray-500 text-sm">
-                          Click &quot;Add Provider Discount&quot; to get started
-                        </Text>
+                          + Add Provider Discount
+                        </Button>
                       </div>
-                    )}
-                  </div>
-                </TabPanel>
-                <TabPanel>
-                  <div className="px-6 pb-4">
-                    <HowItWorks />
-                  </div>
-                </TabPanel>
-              </TabPanels>
-            </TabGroup>
-          </AccordionBody>
-        </Accordion>
+                      {isFetching ? (
+                        <div className="py-12 text-center">
+                          <Text className="text-gray-500">Loading configuration...</Text>
+                        </div>
+                      ) : Object.keys(discountConfig).length > 0 ? (
+                        <ProviderDiscountTable
+                          discountConfig={discountConfig}
+                          onDiscountChange={handleDiscountChange}
+                          onRemoveProvider={handleRemoveProvider}
+                        />
+                      ) : (
+                        <div className="py-16 px-6 text-center">
+                          <svg
+                            className="mx-auto h-12 w-12 text-gray-400 mb-4"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={1.5}
+                              d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                            />
+                          </svg>
+                          <Text className="text-gray-700 font-medium mb-2">
+                            No provider discounts configured
+                          </Text>
+                          <Text className="text-gray-500 text-sm">
+                            Click &quot;Add Provider Discount&quot; to get started
+                          </Text>
+                        </div>
+                      )}
+                    </div>
+                  </TabPanel>
+                  <TabPanel>
+                    <div className="px-6 pb-4">
+                      <HowItWorks />
+                    </div>
+                  </TabPanel>
+                </TabPanels>
+              </TabGroup>
+            </AccordionBody>
+          </Accordion>
+        )}
 
-        {/* Accordion 2: Fee/Price Margin */}
-        <Accordion>
+        {/* Accordion 2: Fee/Price Margin - Only for proxy admins */}
+        {isProxyAdmin && (
+          <Accordion>
+            <AccordionHeader className="px-6 py-4">
+              <div className="flex flex-col items-start w-full">
+                <Text className="text-lg font-semibold text-gray-900">Fee/Price Margin</Text>
+                <Text className="text-sm text-gray-500 mt-1">
+                  Add fees or margins to LLM costs for internal billing and cost recovery
+                </Text>
+              </div>
+            </AccordionHeader>
+            <AccordionBody className="px-0">
+              <div className="p-6">
+                <div className="flex justify-end mb-4">
+                  <Button
+                    onClick={() => setIsMarginModalVisible(true)}
+                  >
+                    + Add Provider Margin
+                  </Button>
+                </div>
+                {isFetching ? (
+                  <div className="py-12 text-center">
+                    <Text className="text-gray-500">Loading configuration...</Text>
+                  </div>
+                ) : Object.keys(marginConfig).length > 0 ? (
+                  <ProviderMarginTable
+                    marginConfig={marginConfig}
+                    onMarginChange={handleMarginChange}
+                    onRemoveProvider={handleRemoveMargin}
+                  />
+                ) : (
+                  <div className="py-16 px-6 text-center">
+                    <svg
+                      className="mx-auto h-12 w-12 text-gray-400 mb-4"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={1.5}
+                        d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                      />
+                    </svg>
+                    <Text className="text-gray-700 font-medium mb-2">
+                      No provider margins configured
+                    </Text>
+                    <Text className="text-gray-500 text-sm">
+                      Click &quot;Add Provider Margin&quot; to get started
+                    </Text>
+                  </div>
+                )}
+              </div>
+            </AccordionBody>
+          </Accordion>
+        )}
+
+        {/* Accordion 3: Pricing Calculator - Available to all roles */}
+        <Accordion defaultOpen={true}>
           <AccordionHeader className="px-6 py-4">
             <div className="flex flex-col items-start w-full">
-              <Text className="text-lg font-semibold text-gray-900">Fee/Price Margin</Text>
+              <Text className="text-lg font-semibold text-gray-900">Pricing Calculator</Text>
               <Text className="text-sm text-gray-500 mt-1">
-                Add fees or margins to LLM costs for internal billing and cost recovery
+                Estimate LLM costs based on expected token usage and request volume
               </Text>
             </div>
           </AccordionHeader>
           <AccordionBody className="px-0">
             <div className="p-6">
-              <div className="flex justify-end mb-4">
-                <Button
-                  onClick={() => setIsMarginModalVisible(true)}
-                >
-                  + Add Provider Margin
-                </Button>
-              </div>
-              {isFetching ? (
-                <div className="py-12 text-center">
-                  <Text className="text-gray-500">Loading configuration...</Text>
-                </div>
-              ) : Object.keys(marginConfig).length > 0 ? (
-                <ProviderMarginTable
-                  marginConfig={marginConfig}
-                  onMarginChange={handleMarginChange}
-                  onRemoveProvider={handleRemoveMargin}
-                />
-              ) : (
-                <div className="py-16 px-6 text-center">
-                  <svg
-                    className="mx-auto h-12 w-12 text-gray-400 mb-4"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={1.5}
-                      d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                    />
-                  </svg>
-                  <Text className="text-gray-700 font-medium mb-2">
-                    No provider margins configured
-                  </Text>
-                  <Text className="text-gray-500 text-sm">
-                    Click &quot;Add Provider Margin&quot; to get started
-                  </Text>
-                </div>
-              )}
+              <PricingCalculator
+                accessToken={accessToken}
+                models={models}
+              />
             </div>
           </AccordionBody>
         </Accordion>
