@@ -523,9 +523,9 @@ class LangFuseLogger:
             # we clean out all extra litellm metadata params before logging
             clean_metadata: Dict[str, Any] = {}
             if prompt_management_metadata is not None:
-                clean_metadata[
-                    "prompt_management_metadata"
-                ] = prompt_management_metadata
+                clean_metadata["prompt_management_metadata"] = (
+                    prompt_management_metadata
+                )
             if isinstance(metadata, dict):
                 for key, value in metadata.items():
                     # generate langfuse tags - Default Tags sent to Langfuse from LiteLLM Proxy
@@ -754,12 +754,21 @@ class LangFuseLogger:
                     )
                     total_tokens = getattr(_usage_obj, "total_tokens", None) or 0
 
-                    cache_creation_input_tokens = (
-                        _usage_obj.get("cache_creation_input_tokens") or 0
-                    )
-                    cache_read_input_tokens = (
-                        _usage_obj.get("cache_read_input_tokens") or 0
-                    )
+                    if hasattr(_usage_obj, "get"):
+                        cache_creation_input_tokens = (
+                            _usage_obj.get("cache_creation_input_tokens") or 0
+                        )
+                        cache_read_input_tokens = (
+                            _usage_obj.get("cache_read_input_tokens") or 0
+                        )
+                    else:
+                        cache_creation_input_tokens = (
+                            getattr(_usage_obj, "cache_creation_input_tokens", None)
+                            or 0
+                        )
+                        cache_read_input_tokens = (
+                            getattr(_usage_obj, "cache_read_input_tokens", None) or 0
+                        )
 
                     usage = {
                         "prompt_tokens": prompt_tokens,
