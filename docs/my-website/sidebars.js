@@ -390,6 +390,7 @@ const sidebars = {
           items: [
             "proxy/cost_tracking",
             "proxy/custom_pricing",
+            "proxy/pricing_calculator",
             "proxy/provider_margins",
             "proxy/provider_discounts",
             "proxy/sync_models_github",
