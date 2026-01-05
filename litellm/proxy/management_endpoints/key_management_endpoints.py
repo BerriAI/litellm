@@ -2097,7 +2097,9 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     if duration is None:  # allow tokens that never expire
         expires = None
     else:
-        expires = get_budget_reset_time(budget_duration=duration)
+        # Add duration to current time for exact expiration (not standardized reset time)
+        duration_seconds = duration_in_seconds(duration)
+        expires = datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)
 
     if key_budget_duration is None:  # one-time budget
         key_reset_at = None
