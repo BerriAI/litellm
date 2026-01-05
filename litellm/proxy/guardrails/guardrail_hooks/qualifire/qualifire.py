@@ -212,6 +212,44 @@ class QualifireGuardrail(CustomGuardrail):
 
         return False
 
+    def _build_evaluate_kwargs(
+        self,
+        qualifire_messages: List[Any],
+        output: Optional[str],
+        assertions: Optional[List[str]],
+        available_tools: Optional[List[Any]],
+    ) -> Dict[str, Any]:
+        """Build kwargs dictionary for the evaluate call."""
+        kwargs: Dict[str, Any] = {"messages": qualifire_messages}
+
+        if output is not None:
+            kwargs["output"] = output
+
+        # Add enabled checks
+        if self.prompt_injections:
+            kwargs["prompt_injections"] = True
+        if self.hallucinations_check:
+            kwargs["hallucinations_check"] = True
+        if self.grounding_check:
+            kwargs["grounding_check"] = True
+        if self.pii_check:
+            kwargs["pii_check"] = True
+        if self.content_moderation_check:
+            kwargs["content_moderation_check"] = True
+        if self.tool_selection_quality_check:
+            # Only enable tool_selection_quality_check if available_tools is provided
+            if available_tools:
+                kwargs["tool_selection_quality_check"] = True
+                kwargs["available_tools"] = available_tools
+            else:
+                verbose_proxy_logger.debug(
+                    "Qualifire Guardrail: tool_selection_quality_check enabled but no available_tools provided, skipping this check"
+                )
+        if assertions:
+            kwargs["assertions"] = assertions
+
+        return kwargs
+
     async def _run_qualifire_check(
         self,
         messages: List[AllMessageValues],
@@ -260,34 +298,12 @@ class QualifireGuardrail(CustomGuardrail):
                 )
             else:
                 # Use evaluate with individual checks
-                kwargs: Dict[str, Any] = {"messages": qualifire_messages}
-
-                if output is not None:
-                    kwargs["output"] = output
-
-                # Add enabled checks
-                if self.prompt_injections:
-                    kwargs["prompt_injections"] = True
-                if self.hallucinations_check:
-                    kwargs["hallucinations_check"] = True
-                if self.grounding_check:
-                    kwargs["grounding_check"] = True
-                if self.pii_check:
-                    kwargs["pii_check"] = True
-                if self.content_moderation_check:
-                    kwargs["content_moderation_check"] = True
-                if self.tool_selection_quality_check:
-                    # Only enable tool_selection_quality_check if available_tools is provided
-                    if available_tools:
-                        kwargs["tool_selection_quality_check"] = True
-                        kwargs["available_tools"] = available_tools
-                    else:
-                        verbose_proxy_logger.debug(
-                            "Qualifire Guardrail: tool_selection_quality_check enabled but no available_tools provided, skipping this check"
-                        )
-                if assertions:
-                    kwargs["assertions"] = assertions
-
+                kwargs = self._build_evaluate_kwargs(
+                    qualifire_messages=qualifire_messages,
+                    output=output,
+                    assertions=assertions,
+                    available_tools=available_tools,
+                )
                 result = client.evaluate(**kwargs)
 
             # Convert result to dict for logging
