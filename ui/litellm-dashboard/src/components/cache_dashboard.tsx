@@ -1,23 +1,23 @@
-import React, { useState, useEffect } from "react";
 import {
-  Card,
   BarChart,
-  Subtitle,
-  Grid,
+  Card,
   Col,
   DateRangePickerValue,
+  Grid,
+  Icon,
   MultiSelect,
   MultiSelectItem,
-  TabPanel,
-  TabPanels,
+  Subtitle,
+  Tab,
   TabGroup,
   TabList,
-  Tab,
-  Icon,
+  TabPanel,
+  TabPanels,
   Text,
 } from "@tremor/react";
-import UsageDatePicker from "./shared/usage_date_picker";
+import React, { useEffect, useState } from "react";
 import NotificationsManager from "./molecules/notifications_manager";
+import UsageDatePicker from "./shared/usage_date_picker";
 
 import { RefreshIcon } from "@heroicons/react/outline";
 import { adminGlobalCacheActivity, cachingHealthCheckCall } from "./networking";
@@ -271,9 +271,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
       <TabList className="flex justify-between mt-2 w-full items-center">
         <div className="flex">
           <Tab>Cache Analytics</Tab>
-          <Tab>
-            <pre>Cache Health</pre>
-          </Tab>
+          <Tab>Cache Health</Tab>
           <Tab>Cache Settings</Tab>
         </div>
 
@@ -293,7 +291,11 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
           <Card>
             <Grid numItems={3} className="gap-4 mt-4">
               <Col>
-                <MultiSelect placeholder="Select API Keys" value={selectedApiKeys} onValueChange={setSelectedApiKeys}>
+                <MultiSelect
+                  placeholder="Select Virtual Keys"
+                  value={selectedApiKeys}
+                  onValueChange={setSelectedApiKeys}
+                >
                   {uniqueApiKeys.map((key) => (
                     <MultiSelectItem key={key} value={key}>
                       {key}
@@ -388,11 +390,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
           />
         </TabPanel>
         <TabPanel>
-          <CacheSettings
-            accessToken={accessToken}
-            userRole={userRole}
-            userID={userID}
-          />
+          <CacheSettings accessToken={accessToken} userRole={userRole} userID={userID} />
         </TabPanel>
       </TabPanels>
     </TabGroup>

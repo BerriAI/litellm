@@ -1,46 +1,46 @@
-import React, { useState, useEffect, useRef } from "react";
-import { Text, Grid, Col } from "@tremor/react";
-import { CredentialItem, credentialListCall, CredentialsResponse } from "@/components/networking";
+import { useQueryClient } from "@tanstack/react-query";
+import { Col, Grid, Text } from "@tremor/react";
+import React, { useEffect, useRef, useState } from "react";
 
 import { handleAddModelSubmit } from "@/components/add_model/handle_add_model_submit";
 
+import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
+import { useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
+import { Team } from "@/components/key_team_helpers/key_list";
 import CredentialsPanel from "@/components/model_add/credentials";
-import { getDisplayModelName } from "@/components/view_model/model_name_display";
-import { TabPanel, TabPanels, TabGroup, TabList, Tab, Icon } from "@tremor/react";
-import { DateRangePickerValue } from "@tremor/react";
 import {
-  modelInfoCall,
-  modelCostMap,
-  modelMetricsCall,
-  streamingModelMetricsCall,
-  modelExceptionsCall,
-  modelMetricsSlowResponsesCall,
-  getCallbacksCall,
-  setCallbacksCall,
-  modelSettingsCall,
   adminGlobalActivityExceptions,
   adminGlobalActivityExceptionsPerDeployment,
   allEndUsersCall,
+  getCallbacksCall,
+  modelCostMap,
+  modelExceptionsCall,
+  modelMetricsCall,
+  modelMetricsSlowResponsesCall,
+  modelSettingsCall,
+  setCallbacksCall,
+  streamingModelMetricsCall,
 } from "@/components/networking";
-import { Form } from "antd";
-import { Typography } from "antd";
-import { RefreshIcon } from "@heroicons/react/outline";
-import type { UploadProps } from "antd";
-import { Team } from "@/components/key_team_helpers/key_list";
-import TeamInfoView from "../../../components/team/team_info";
 import { Providers, getPlaceholder, getProviderModels } from "@/components/provider_info_helpers";
-import ModelInfoView from "../../../components/model_info_view";
+import { getDisplayModelName } from "@/components/view_model/model_name_display";
+import { RefreshIcon } from "@heroicons/react/outline";
+import { DateRangePickerValue, Icon, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
+import type { UploadProps } from "antd";
+import { Form, Typography } from "antd";
 import AddModelTab from "../../../components/add_model/add_model_tab";
+import ModelInfoView from "../../../components/model_info_view";
+import TeamInfoView from "../../../components/team/team_info";
 
-import HealthCheckComponent from "../../../components/model_dashboard/HealthCheckComponent";
-import PassThroughSettings from "../../../components/pass_through_settings";
-import ModelGroupAliasSettings from "../../../components/model_group_alias_settings";
-import { all_admin_roles } from "@/utils/roles";
-import NotificationsManager from "../../../components/molecules/notifications_manager";
 import AllModelsTab from "@/app/(dashboard)/models-and-endpoints/components/AllModelsTab";
-import PriceDataManagementTab from "@/app/(dashboard)/models-and-endpoints/components/PriceDataManagementTab";
-import ModelRetrySettingsTab from "@/app/(dashboard)/models-and-endpoints/components/ModelRetrySettingsTab";
 import ModelAnalyticsTab from "@/app/(dashboard)/models-and-endpoints/components/ModelAnalyticsTab/ModelAnalyticsTab";
+import ModelRetrySettingsTab from "@/app/(dashboard)/models-and-endpoints/components/ModelRetrySettingsTab";
+import PriceDataManagementTab from "@/app/(dashboard)/models-and-endpoints/components/PriceDataManagementTab";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
+import { all_admin_roles, internalUserRoles, isProxyAdminRole, isUserTeamAdminForAnyTeam } from "@/utils/roles";
+import HealthCheckComponent from "../../../components/model_dashboard/HealthCheckComponent";
+import ModelGroupAliasSettings from "../../../components/model_group_alias_settings";
+import NotificationsManager from "../../../components/molecules/notifications_manager";
+import PassThroughSettings from "../../../components/pass_through_settings";
 
 interface ModelDashboardProps {
   accessToken: string | null;
@@ -99,7 +99,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
   const [providerModels, setProviderModels] = useState<Array<string>>([]); // Explicitly typing providerModels as a string array
 
   const [providerSettings, setProviderSettings] = useState<ProviderSettings[]>([]);
-  const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.OpenAI);
+  const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.Anthropic);
   const [editModalVisible, setEditModalVisible] = useState<boolean>(false);
 
   const [selectedModel, setSelectedModel] = useState<any>(null);
@@ -133,8 +133,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
 
   const [allEndUsers, setAllEndUsers] = useState<any[]>([]);
 
-  const [credentialsList, setCredentialsList] = useState<CredentialItem[]>([]);
-
   // Model Group Alias state
   const [modelGroupAlias, setModelGroupAlias] = useState<{ [key: string]: string }>({});
 
@@ -152,20 +150,28 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const [selectedTabIndex, setSelectedTabIndex] = useState(0);
+
+  const queryClient = useQueryClient();
+  const {
+    data: modelDataResponse,
+    isLoading: isLoadingModels,
+    refetch: refetchModels,
+  } = useModelsInfo(accessToken, userID, userRole);
+  const { data: credentialsResponse } = useCredentials(accessToken);
+  const credentialsList = credentialsResponse?.credentials || [];
+  const { data: uiSettings } = useUISettings(accessToken || "");
+
+  const isProxyAdmin = userRole && isProxyAdminRole(userRole);
+  const isInternalUser = userRole && internalUserRoles.includes(userRole);
+  const isUserTeamAdmin = userID && isUserTeamAdminForAnyTeam(teams, userID);
+  const addModelDisabledForInternalUsers =
+    isInternalUser && uiSettings?.values?.disable_model_add_for_internal_users === true;
+  // Hide tab if user is NOT a proxy admin AND (internal user with setting enabled OR not a team admin)
+  const shouldHideAddModelTab = !isProxyAdmin && (addModelDisabledForInternalUsers || !isUserTeamAdmin);
+
   const setProviderModelsFn = (provider: Providers) => {
     const _providerModels = getProviderModels(provider, modelMap);
     setProviderModels(_providerModels);
-    console.log(`providerModels: ${_providerModels}`);
-  };
-
-  const fetchCredentials = async (accessToken: string) => {
-    try {
-      const response: CredentialsResponse = await credentialListCall(accessToken);
-      console.log(`credentials: ${JSON.stringify(response)}`);
-      setCredentialsList(response.credentials);
-    } catch (error) {
-      console.error("Error fetching credentials:", error);
-    }
   };
 
   useEffect(() => {
@@ -182,15 +188,14 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
   const uploadProps: UploadProps = {
     name: "file",
     accept: ".json",
+    pastable: false,
     beforeUpload: (file) => {
       if (file.type === "application/json") {
         const reader = new FileReader();
         reader.onload = (e) => {
           if (e.target) {
             const jsonStr = e.target.result as string;
-            console.log(`Resetting vertex_credentials to JSON; jsonStr: ${jsonStr}`);
             addModelForm.setFieldsValue({ vertex_credentials: jsonStr });
-            console.log("Form values right after setting:", addModelForm.getFieldsValue());
           }
         };
         reader.readAsText(file);
@@ -199,12 +204,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
       return false;
     },
     onChange(info) {
-      console.log("Upload onChange triggered with values:", info);
-      console.log("Current form values:", addModelForm.getFieldsValue());
-
-      if (info.file.status !== "uploading") {
-        console.log(info.file, info.fileList);
-      }
       if (info.file.status === "done") {
         NotificationsManager.success(`${info.file.name} file uploaded successfully`);
       } else if (info.file.status === "error") {
@@ -217,11 +216,13 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
     // Update the 'lastRefreshed' state to the current date and time
     const currentDate = new Date();
     setLastRefreshed(currentDate.toLocaleString());
+    // Invalidate and refetch models data using React Query
+    queryClient.invalidateQueries({ queryKey: ["models", "list"] });
+    refetchModels();
   };
 
   const handleSaveRetrySettings = async () => {
     if (!accessToken) {
-      console.error("Access token is missing");
       return;
     }
 
@@ -232,14 +233,11 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
 
       if (selectedModelGroup === "global") {
         // Only update global retry policy
-        console.log("Saving global retry policy:", globalRetryPolicy);
         if (globalRetryPolicy) {
           payload.router_settings.retry_policy = globalRetryPolicy;
         }
         NotificationsManager.success("Global retry settings saved successfully");
       } else {
-        // Only update model group retry policy
-        console.log("Saving model group retry policy for", selectedModelGroup, ":", modelGroupRetryPolicy);
         if (modelGroupRetryPolicy) {
           payload.router_settings.model_group_retry_policy = modelGroupRetryPolicy;
         }
@@ -248,20 +246,16 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
 
       await setCallbacksCall(accessToken, payload);
     } catch (error) {
-      console.error("Failed to save retry settings:", error);
       NotificationsManager.fromBackend("Failed to save retry settings");
     }
   };
 
   useEffect(() => {
-    if (!accessToken || !token || !userRole || !userID) {
+    if (!accessToken || !token || !userRole || !userID || !modelDataResponse) {
       return;
     }
     const fetchData = async () => {
       try {
-        // Replace with your actual API call for model data
-        const modelDataResponse = await modelInfoCall(accessToken, userID, userRole);
-        console.log("Model data response:", modelDataResponse.data);
         setModelData(modelDataResponse);
         const _providerSettings = await modelSettingsCall(accessToken);
         if (_providerSettings) {
@@ -274,7 +268,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
           const model = modelDataResponse.data[i];
           all_model_groups.add(model.model_name);
         }
-        console.log("all_model_groups:", all_model_groups);
         let _array_model_groups = Array.from(all_model_groups);
         // sort _array_model_groups alphabetically
         _array_model_groups = _array_model_groups.sort();
@@ -297,16 +290,10 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
 
         setAvailableModelAccessGroups(Array.from(all_model_access_groups));
 
-        console.log("array_model_groups:", _array_model_groups);
         let _initial_model_group = "all";
         if (_array_model_groups.length > 0) {
-          // set selectedModelGroup to the last model group
           _initial_model_group = _array_model_groups[_array_model_groups.length - 1];
-          console.log("_initial_model_group:", _initial_model_group);
-          //setSelectedModelGroup(_initial_model_group);
         }
-
-        console.log("selectedModelGroup:", selectedModelGroup);
 
         const modelMetricsResponse = await modelMetricsCall(
           accessToken,
@@ -318,9 +305,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
           selectedAPIKey?.token,
           selectedCustomer,
         );
-
-        console.log("Model metrics response:", modelMetricsResponse);
-        // Sort by latency (avg_latency_per_token)
 
         setModelMetrics(modelMetricsResponse.data);
         setModelMetricsCategories(modelMetricsResponse.all_api_bases);
@@ -346,7 +330,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
           selectedAPIKey?.token,
           selectedCustomer,
         );
-        console.log("Model exceptions response:", modelExceptionsResponse);
         setModelExceptions(modelExceptionsResponse.data);
         setAllExceptions(modelExceptionsResponse.exception_types);
 
@@ -378,30 +361,15 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
         );
 
         setGlobalExceptionPerDeployment(dailyExceptionsPerDeplyment);
-
-        console.log("dailyExceptions:", dailyExceptions);
-
-        console.log("dailyExceptionsPerDeplyment:", dailyExceptionsPerDeplyment);
-
-        console.log("slowResponses:", slowResponses);
-
         setSlowResponsesData(slowResponses);
-
         let all_end_users_data = await allEndUsersCall(accessToken);
-
         setAllEndUsers(all_end_users_data?.map((u: any) => u.user_id));
-
         const routerSettingsInfo = await getCallbacksCall(accessToken, userID, userRole);
-
         let router_settings = routerSettingsInfo.router_settings;
 
-        console.log("routerSettingsInfo:", router_settings);
-        ``;
         let model_group_retry_policy = router_settings.model_group_retry_policy;
         let default_retries = router_settings.num_retries;
 
-        console.log("model_group_retry_policy:", model_group_retry_policy);
-        console.log("default_retries:", default_retries);
         setModelGroupRetryPolicy(model_group_retry_policy);
         setGlobalRetryPolicy(router_settings.retry_policy);
         setDefaultRetry(default_retries);
@@ -410,27 +378,25 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
         const model_group_alias = router_settings.model_group_alias || {};
         setModelGroupAlias(model_group_alias);
       } catch (error) {
-        console.error("There was an error fetching the model data", error);
+        console.error("Error fetching model data:", error);
       }
     };
 
-    if (accessToken && token && userRole && userID) {
+    if (accessToken && token && userRole && userID && modelDataResponse) {
       fetchData();
     }
 
     const fetchModelMap = async () => {
-      const data = await modelCostMap(accessToken);
+      const data = await modelCostMap();
       console.log(`received model cost map data: ${Object.keys(data)}`);
       setModelMap(data);
     };
     if (modelMap == null) {
       fetchModelMap();
     }
+  }, [accessToken, token, userRole, userID, modelDataResponse]);
 
-    handleRefreshClick();
-  }, [accessToken, token, userRole, userID, modelMap, lastRefreshed, selectedTeam]);
-
-  if (!modelData) {
+  if (!modelData || isLoadingModels) {
     return <div>Loading...</div>;
   }
 
@@ -461,7 +427,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
        * - check if model in model map
        * - return it's litellm_provider, if so
        */
-      console.log(`GET PROVIDER CALLED! - ${modelMap}`);
       if (modelMap !== null && modelMap !== undefined) {
         if (typeof modelMap == "object" && model in modelMap) {
           return modelMap[model]["litellm_provider"];
@@ -522,8 +487,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
     modelData.data[i].cleanedLitellmParams = cleanedLitellmParams;
 
     all_models_on_proxy.push(curr_model.model_name);
-
-    console.log(modelData.data[i]);
   }
   // when users click request access show pop up to allow them to request access
 
@@ -578,18 +541,12 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
   };
 
   const handleOk = () => {
-    console.log("🚀 handleOk called from model dashboard!");
-    console.log("Current form values:", addModelForm.getFieldsValue());
-
     addModelForm
       .validateFields()
       .then((values: any) => {
-        console.log("✅ Validation passed, submitting:", values);
         handleAddModelSubmit(values, accessToken, addModelForm, handleRefreshClick);
       })
       .catch((error: any) => {
-        console.error("❌ Validation failed:", error);
-        console.error("Form errors:", error.errorFields);
         const errorMessages =
           error.errorFields
             ?.map((field: any) => {
@@ -600,8 +557,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
       });
   };
 
-  console.log(`selectedProvider: ${selectedProvider}`);
-  console.log(`providerModels.length: ${providerModels.length}`);
   Object.keys(Providers).find((key) => (Providers as { [index: string]: any })[key] === selectedProvider);
   // If a team is selected, render TeamInfoView in full page layout
   if (selectedTeamId) {
@@ -616,6 +571,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
           userModels={all_models_on_proxy}
           editTeam={false}
           onUpdate={handleRefreshClick}
+          premiumUser={premiumUser}
         />
       </div>
     );
@@ -651,15 +607,25 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
               setEditModalVisible={setEditModalVisible}
               setSelectedModel={setSelectedModel}
               onModelUpdate={(updatedModel) => {
-                // Update the model in the modelData.data array
-                const updatedModelData = {
-                  ...modelData,
-                  data: modelData.data.map((model: any) =>
-                    model.model_info.id === updatedModel.model_info.id ? updatedModel : model,
-                  ),
-                };
-                setModelData(updatedModelData);
-                // Trigger a refresh to update UI
+                // Handle model deletion
+                if (updatedModel.deleted) {
+                  const updatedModelData = {
+                    ...modelData,
+                    data: modelData.data.filter((model: any) => model.model_info.id !== updatedModel.model_info.id),
+                  };
+                  setModelData(updatedModelData);
+                } else {
+                  // Update the model in the modelData.data array
+                  const updatedModelData = {
+                    ...modelData,
+                    data: modelData.data.map((model: any) =>
+                      model.model_info.id === updatedModel.model_info.id ? updatedModel : model,
+                    ),
+                  };
+                  setModelData(updatedModelData);
+                }
+                // Invalidate cache and trigger a refresh to update UI
+                queryClient.invalidateQueries({ queryKey: ["models", "list"] });
                 handleRefreshClick();
               }}
               modelAccessGroups={availableModelAccessGroups}
@@ -669,7 +635,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
               <TabList className="flex justify-between mt-2 w-full items-center">
                 <div className="flex">
                   {all_admin_roles.includes(userRole) ? <Tab>All Models</Tab> : <Tab>Your Models</Tab>}
-                  <Tab>Add Model</Tab>
+                  {!shouldHideAddModelTab && <Tab>Add Model</Tab>}
                   {all_admin_roles.includes(userRole) && <Tab>LLM Credentials</Tab>}
                   {all_admin_roles.includes(userRole) && <Tab>Pass-Through Endpoints</Tab>}
                   {all_admin_roles.includes(userRole) && <Tab>Health Status</Tab>}
@@ -701,32 +667,29 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({
                   setEditModel={setEditModel}
                   modelData={modelData}
                 />
-                <TabPanel className="h-full">
-                  <AddModelTab
-                    form={addModelForm}
-                    handleOk={handleOk}
-                    selectedProvider={selectedProvider}
-                    setSelectedProvider={setSelectedProvider}
-                    providerModels={providerModels}
-                    setProviderModelsFn={setProviderModelsFn}
-                    getPlaceholder={getPlaceholder}
-                    uploadProps={uploadProps}
-                    showAdvancedSettings={showAdvancedSettings}
-                    setShowAdvancedSettings={setShowAdvancedSettings}
-                    teams={teams}
-                    credentials={credentialsList}
-                    accessToken={accessToken}
-                    userRole={userRole}
-                    premiumUser={premiumUser}
-                  />
-                </TabPanel>
+                {!shouldHideAddModelTab && (
+                  <TabPanel className="h-full">
+                    <AddModelTab
+                      form={addModelForm}
+                      handleOk={handleOk}
+                      selectedProvider={selectedProvider}
+                      setSelectedProvider={setSelectedProvider}
+                      providerModels={providerModels}
+                      setProviderModelsFn={setProviderModelsFn}
+                      getPlaceholder={getPlaceholder}
+                      uploadProps={uploadProps}
+                      showAdvancedSettings={showAdvancedSettings}
+                      setShowAdvancedSettings={setShowAdvancedSettings}
+                      teams={teams}
+                      credentials={credentialsList}
+                      accessToken={accessToken}
+                      userRole={userRole}
+                      premiumUser={premiumUser}
+                    />
+                  </TabPanel>
+                )}
                 <TabPanel>
-                  <CredentialsPanel
-                    accessToken={accessToken}
-                    uploadProps={uploadProps}
-                    credentialList={credentialsList}
-                    fetchCredentials={fetchCredentials}
-                  />
+                  <CredentialsPanel uploadProps={uploadProps} />
                 </TabPanel>
                 <TabPanel>
                   <PassThroughSettings

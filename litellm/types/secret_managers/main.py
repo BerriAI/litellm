@@ -50,3 +50,25 @@ class KeyManagementSettings(LiteLLMPydanticObjectBase):
     Path to custom secret manager class (e.g. "my_secret_manager.InMemorySecretManager")
     Required when key_management_system is "custom"
     """
+
+    # AWS IAM Role Assumption Settings (for AWS Secret Manager)
+    aws_region_name: Optional[str] = None
+    """AWS region for Secret Manager operations (e.g., 'us-east-1')"""
+
+    aws_role_name: Optional[str] = None
+    """ARN of IAM role to assume for Secret Manager access (e.g., 'arn:aws:iam::123456789012:role/MyRole')"""
+
+    aws_session_name: Optional[str] = None
+    """Session name for the assumed role session (optional, auto-generated if not provided)"""
+
+    aws_external_id: Optional[str] = None
+    """External ID for role assumption (required for cross-account access)"""
+
+    aws_profile_name: Optional[str] = None
+    """AWS profile name to use from ~/.aws/credentials"""
+
+    aws_web_identity_token: Optional[str] = None
+    """Web identity token for OIDC/IRSA authentication"""
+
+    aws_sts_endpoint: Optional[str] = None
+    """Custom STS endpoint URL (useful for VPC endpoints or testing)"""

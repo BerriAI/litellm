@@ -1,40 +1,44 @@
-import React, { useState, useEffect } from "react";
+import { useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
+import { InfoCircleOutlined } from "@ant-design/icons";
+import { ArrowLeftIcon, KeyIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
 import {
   Card,
-  Title,
-  Text,
+  Grid,
   Tab,
-  TabList,
   TabGroup,
+  TabList,
   TabPanel,
   TabPanels,
-  Grid,
-  Button as TremorButton,
+  Text,
   TextInput,
+  Title,
+  Button as TremorButton,
 } from "@tremor/react";
-import NumericalInput from "./shared/numerical_input";
-import { ArrowLeftIcon, TrashIcon, KeyIcon } from "@heroicons/react/outline";
+import { Button, Form, Input, Modal, Select, Tooltip } from "antd";
+import { CheckIcon, CopyIcon } from "lucide-react";
+import { useEffect, useState } from "react";
+import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
+import { formItemValidateJSON, truncateString } from "../utils/textUtils";
+import CacheControlSettings from "./add_model/cache_control_settings";
+import DeleteResourceModal from "./common_components/DeleteResourceModal";
+import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
+import ReuseCredentialsModal from "./model_add/reuse_credentials";
+import NotificationsManager from "./molecules/notifications_manager";
 import {
-  modelDeleteCall,
   CredentialItem,
-  credentialGetCall,
   credentialCreateCall,
+  credentialGetCall,
+  getGuardrailsList,
+  modelDeleteCall,
   modelInfoV1Call,
   modelPatchUpdateCall,
-  getGuardrailsList,
   tagListCall,
+  testConnectionRequest,
 } from "./networking";
-import { Button, Form, Input, Select, Modal, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
 import { getProviderLogoAndName } from "./provider_info_helpers";
-import { getDisplayModelName } from "./view_model/model_name_display";
-import ReuseCredentialsModal from "./model_add/reuse_credentials";
-import CacheControlSettings from "./add_model/cache_control_settings";
-import { CheckIcon, CopyIcon } from "lucide-react";
-import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
-import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
-import NotificationsManager from "./molecules/notifications_manager";
+import NumericalInput from "./shared/numerical_input";
 import { Tag } from "./tag_management/types";
+import { getDisplayModelName } from "./view_model/model_name_display";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -66,6 +70,7 @@ export default function ModelInfoView({
   const [form] = Form.useForm();
   const [localModelData, setLocalModelData] = useState<any>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
   const [isCredentialModalOpen, setIsCredentialModalOpen] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -81,6 +86,8 @@ export default function ModelInfoView({
   const isAdmin = userRole === "Admin";
   const isAutoRouter = modelData?.litellm_params?.auto_router_config != null;
 
+  const { data: modelsInfoData } = useModelsInfo(accessToken, userID, userRole);
+  console.log("modelsInfoData, ", modelsInfoData);
   const usingExistingCredential =
     modelData?.litellm_params?.litellm_credential_name != null &&
     modelData?.litellm_params?.litellm_credential_name != undefined;
@@ -176,8 +183,19 @@ export default function ModelInfoView({
 
       console.log("values.model_name, ", values.model_name);
 
+      // Parse LiteLLM extra params from JSON text area
+      let parsedExtraParams: Record<string, any> = {};
+      try {
+        parsedExtraParams = values.litellm_extra_params ? JSON.parse(values.litellm_extra_params) : {};
+      } catch (e) {
+        NotificationsManager.fromBackend("Invalid JSON in LiteLLM Params");
+        setIsSaving(false);
+        return;
+      }
+
       let updatedLitellmParams = {
-        ...localModelData.litellm_params,
+        ...values.litellm_params,
+        ...parsedExtraParams,
         model: values.litellm_model_name,
         api_base: values.api_base,
         custom_llm_provider: values.custom_llm_provider,
@@ -211,6 +229,13 @@ export default function ModelInfoView({
           updatedModelInfo = {
             ...updatedModelInfo,
             access_groups: values.model_access_group,
+          };
+        }
+        // Override health_check_model from the form
+        if (values.health_check_model !== undefined) {
+          updatedModelInfo = {
+            ...updatedModelInfo,
+            health_check_model: values.health_check_model,
           };
         }
       } catch (e) {
@@ -262,8 +287,40 @@ export default function ModelInfoView({
     );
   }
 
+  const handleTestConnection = async () => {
+    if (!accessToken) return;
+    try {
+      NotificationsManager.info("Testing connection...");
+      const response = await testConnectionRequest(
+        accessToken,
+        {
+          custom_llm_provider: localModelData.litellm_params.custom_llm_provider,
+          litellm_credential_name: localModelData.litellm_params.litellm_credential_name,
+          model: localModelData.litellm_model_name,
+        },
+        {
+          mode: localModelData.model_info?.mode,
+        },
+        localModelData.model_info?.mode,
+      );
+
+      if (response.status === "success") {
+        NotificationsManager.success("Connection test successful!");
+      } else {
+        throw new Error(response?.result?.error || response?.message || "Unknown error");
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        NotificationsManager.error("Error testing connection: " + truncateString(error.message, 100));
+      } else {
+        NotificationsManager.error("Error testing connection: " + String(error));
+      }
+    }
+  };
+
   const handleDelete = async () => {
     try {
+      setDeleteLoading(true);
       if (!accessToken) return;
       await modelDeleteCall(accessToken, modelId);
       NotificationsManager.success("Model deleted successfully");
@@ -279,6 +336,9 @@ export default function ModelInfoView({
     } catch (error) {
       console.error("Error deleting the model:", error);
       NotificationsManager.fromBackend("Failed to delete model");
+    } finally {
+      setDeleteLoading(false);
+      setIsDeleteModalOpen(false);
     }
   };
 
@@ -298,6 +358,7 @@ export default function ModelInfoView({
       onModelUpdate(updatedModel);
     }
   };
+  const isWildcardModel = modelData.litellm_model_name.includes("*");
 
   return (
     <div className="p-4">
@@ -323,26 +384,36 @@ export default function ModelInfoView({
           </div>
         </div>
         <div className="flex gap-2">
-          {isAdmin && (
-            <TremorButton
-              icon={KeyIcon}
-              variant="secondary"
-              onClick={() => setIsCredentialModalOpen(true)}
-              className="flex items-center"
-            >
-              Re-use Credentials
-            </TremorButton>
-          )}
-          {canEditModel && (
-            <TremorButton
-              icon={TrashIcon}
-              variant="secondary"
-              onClick={() => setIsDeleteModalOpen(true)}
-              className="flex items-center"
-            >
-              Delete Model
-            </TremorButton>
-          )}
+          <TremorButton
+            variant="secondary"
+            icon={RefreshIcon}
+            onClick={handleTestConnection}
+            className="flex items-center gap-2"
+            data-testid="test-connection-button"
+          >
+            Test Connection
+          </TremorButton>
+
+          <TremorButton
+            icon={KeyIcon}
+            variant="secondary"
+            onClick={() => setIsCredentialModalOpen(true)}
+            className="flex items-center"
+            disabled={!isAdmin}
+            data-testid="reuse-credentials-button"
+          >
+            Re-use Credentials
+          </TremorButton>
+          <TremorButton
+            icon={TrashIcon}
+            variant="secondary"
+            onClick={() => setIsDeleteModalOpen(true)}
+            className="flex items-center text-red-500 border-red-500 hover:text-red-700"
+            disabled={!canEditModel}
+            data-testid="delete-model-button"
+          >
+            Delete Model
+          </TremorButton>
         </div>
       </div>
 
@@ -365,15 +436,20 @@ export default function ModelInfoView({
                       alt={`${modelData.provider} logo`}
                       className="w-4 h-4"
                       onError={(e) => {
-                        // Create a div with provider initial as fallback
-                        const target = e.target as HTMLImageElement;
+                        const target = e.currentTarget as HTMLImageElement;
                         const parent = target.parentElement;
-                        if (parent) {
+                        if (!parent || !parent.contains(target)) {
+                          return;
+                        }
+
+                        try {
                           const fallbackDiv = document.createElement("div");
                           fallbackDiv.className =
                             "w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs";
                           fallbackDiv.textContent = modelData.provider?.charAt(0) || "-";
                           parent.replaceChild(fallbackDiv, target);
+                        } catch (error) {
+                          console.error("Failed to replace provider logo fallback:", error);
                         }
                       }}
                     />
@@ -439,22 +515,14 @@ export default function ModelInfoView({
                 <Title>Model Settings</Title>
                 <div className="flex gap-2">
                   {isAutoRouter && canEditModel && !isEditing && (
-                    <TremorButton
-                      variant="primary"
-                      onClick={() => setIsAutoRouterModalOpen(true)}
-                      className="flex items-center"
-                    >
+                    <TremorButton onClick={() => setIsAutoRouterModalOpen(true)} className="flex items-center">
                       Edit Auto Router
                     </TremorButton>
                   )}
                   {canEditModel ? (
                     !isEditing && (
-                      <TremorButton
-                        variant="secondary"
-                        onClick={() => setIsEditing(true)}
-                        className="flex items-center"
-                      >
-                        Edit Model
+                      <TremorButton onClick={() => setIsEditing(true)} className="flex items-center">
+                        Edit Settings
                       </TremorButton>
                     )
                   ) : (
@@ -494,6 +562,8 @@ export default function ModelInfoView({
                       ? localModelData.litellm_params.guardrails
                       : [],
                     tags: Array.isArray(localModelData.litellm_params?.tags) ? localModelData.litellm_params.tags : [],
+                    health_check_model: isWildcardModel ? localModelData.model_info?.health_check_model : null,
+                    litellm_extra_params: JSON.stringify(localModelData.litellm_params || {}, null, 2),
                   }}
                   layout="vertical"
                   onValuesChange={() => setIsDirty(true)}
@@ -816,6 +886,49 @@ export default function ModelInfoView({
                         )}
                       </div>
 
+                      {isWildcardModel && (
+                        <div>
+                          <Text className="font-medium">Health Check Model</Text>
+                          {isEditing ? (
+                            <Form.Item name="health_check_model" className="mb-0">
+                              <Select
+                                showSearch
+                                placeholder="Select existing health check model"
+                                optionFilterProp="children"
+                                allowClear
+                                options={(() => {
+                                  const seen = new Set();
+                                  return modelsInfoData?.data
+                                    ?.filter((model: any) => {
+                                      const modelProvider = model.provider;
+                                      const wildcardProvider = modelData.litellm_model_name.split("/")[0];
+                                      return (
+                                        modelProvider === wildcardProvider &&
+                                        model.model_name !== modelData.litellm_model_name
+                                      );
+                                    })
+                                    .filter((model: any) => {
+                                      if (seen.has(model.model_name)) {
+                                        return false;
+                                      }
+                                      seen.add(model.model_name);
+                                      return true;
+                                    })
+                                    .map((model: any) => ({
+                                      value: model.model_name,
+                                      label: model.model_name,
+                                    }));
+                                })()}
+                              />
+                            </Form.Item>
+                          ) : (
+                            <div className="mt-1 p-2 bg-gray-50 rounded">
+                              {localModelData.model_info?.health_check_model || "Not Set"}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                       {/* Cache Control Section */}
                       {isEditing ? (
                         <CacheControlSettings
@@ -867,6 +980,39 @@ export default function ModelInfoView({
                         )}
                       </div>
                       <div>
+                        <Text className="font-medium">
+                          LiteLLM Params
+                          <Tooltip title="Optional litellm params used for making a litellm.completion() call. Some params are automatically added by LiteLLM.">
+                            <a
+                              href="https://docs.litellm.ai/docs/completion/input"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                            </a>
+                          </Tooltip>
+                        </Text>
+                        {isEditing ? (
+                          <Form.Item name="litellm_extra_params" rules={[{ validator: formItemValidateJSON }]}>
+                            <Input.TextArea
+                              rows={4}
+                              placeholder='{
+                  "rpm": 100,
+                  "timeout": 0,
+                  "stream_timeout": 0
+                }'
+                            />
+                          </Form.Item>
+                        ) : (
+                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                            <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
+                              {JSON.stringify(localModelData.litellm_params, null, 2)}
+                            </pre>
+                          </div>
+                        )}
+                      </div>
+                      <div>
                         <Text className="font-medium">Team ID</Text>
                         <div className="mt-1 p-2 bg-gray-50 rounded">{modelData.model_info.team_id || "Not Set"}</div>
                       </div>
@@ -881,6 +1027,7 @@ export default function ModelInfoView({
                             setIsDirty(false);
                             setIsEditing(false);
                           }}
+                          disabled={isSaving}
                         >
                           Cancel
                         </TremorButton>
@@ -905,39 +1052,34 @@ export default function ModelInfoView({
         </TabPanels>
       </TabGroup>
 
-      {/* Delete Confirmation Modal */}
-      {isDeleteModalOpen && (
-        <div className="fixed z-10 inset-0 overflow-y-auto">
-          <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-            <div className="fixed inset-0 transition-opacity" aria-hidden="true">
-              <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
-            </div>
-
-            <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">
-              &#8203;
-            </span>
-
-            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                <div className="sm:flex sm:items-start">
-                  <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
-                    <h3 className="text-lg leading-6 font-medium text-gray-900">Delete Model</h3>
-                    <div className="mt-2">
-                      <p className="text-sm text-gray-500">Are you sure you want to delete this model?</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                <Button onClick={handleDelete} className="ml-2" danger>
-                  Delete
-                </Button>
-                <Button onClick={() => setIsDeleteModalOpen(false)}>Cancel</Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <DeleteResourceModal
+        isOpen={isDeleteModalOpen}
+        title="Delete Model"
+        alertMessage="This action cannot be undone."
+        message="Are you sure you want to delete this model?"
+        resourceInformationTitle="Model Information"
+        resourceInformation={[
+          {
+            label: "Model Name",
+            value: modelData?.model_name || "Not Set",
+          },
+          {
+            label: "LiteLLM Model Name",
+            value: modelData?.litellm_model_name || "Not Set",
+          },
+          {
+            label: "Provider",
+            value: modelData?.provider || "Not Set",
+          },
+          {
+            label: "Created By",
+            value: modelData?.model_info?.created_by || "Not Set",
+          },
+        ]}
+        onCancel={() => setIsDeleteModalOpen(false)}
+        onOk={handleDelete}
+        confirmLoading={deleteLoading}
+      />
 
       {isCredentialModalOpen && !usingExistingCredential ? (
         <ReuseCredentialsModal

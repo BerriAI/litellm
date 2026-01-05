@@ -22,9 +22,10 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
-    convert_b64_uid_to_unified_uid,
     get_batch_id_from_unified_batch_id,
+    get_content_type_from_file_object,
     get_model_id_from_unified_batch_id,
+    normalize_mime_type_for_provider,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -34,6 +35,7 @@ from litellm.types.llms.openai import (
     FileObject,
     OpenAIFileObject,
     OpenAIFilesPurpose,
+    ResponsesAPIResponse,
 )
 from litellm.types.utils import (
     CallTypesLiteral,
@@ -108,6 +110,17 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         if file_object is not None:
             db_data["file_object"] = file_object.model_dump_json()
+            # Extract storage metadata from hidden params if present
+            hidden_params = getattr(file_object, "_hidden_params", {}) or {}
+            if "storage_backend" in hidden_params:
+                db_data["storage_backend"] = hidden_params["storage_backend"]
+            if "storage_url" in hidden_params:
+                db_data["storage_url"] = hidden_params["storage_url"]
+            
+            verbose_logger.debug(
+                f"Storage metadata: storage_backend={db_data.get('storage_backend')}, "
+                f"storage_url={db_data.get('storage_url')}"
+            )
 
         result = await self.prisma_client.db.litellm_managedfiletable.create(
             data=db_data
@@ -119,10 +132,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     async def store_unified_object_id(
         self,
         unified_object_id: str,
-        file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob],
+        file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob, "ResponsesAPIResponse"],
         litellm_parent_otel_span: Optional[Span],
         model_object_id: str,
-        file_purpose: Literal["batch", "fine-tune"],
+        file_purpose: Literal["batch", "fine-tune", "response"],
         user_api_key_dict: UserAPIKeyAuth,
     ) -> None:
         verbose_logger.info(
@@ -268,7 +281,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 )
         return False
 
-    async def async_pre_call_hook(
+    async def async_pre_call_hook(  # noqa: PLR0915
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
@@ -287,15 +300,41 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             await self.check_managed_file_id_access(data, user_api_key_dict)
 
         ### HANDLE TRANSFORMATIONS ###
-        if call_type == CallTypes.completion.value:
+        # Check both completion and acompletion call types
+        is_completion_call = (
+            call_type == CallTypes.completion.value 
+            or call_type == CallTypes.acompletion.value
+        )
+        
+        if is_completion_call:
             messages = data.get("messages")
+            model = data.get("model", "")
             if messages:
                 file_ids = self.get_file_ids_from_messages(messages)
+                if file_ids:
+                    # Check if any files are stored in storage backends and need base64 conversion
+                    # This is needed for Vertex AI/Gemini which requires base64 content
+                    is_vertex_ai = model and ("vertex_ai" in model or "gemini" in model.lower())
+                    if is_vertex_ai:
+                        await self._convert_storage_files_to_base64(
+                            messages=messages,
+                            file_ids=file_ids,
+                            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                        )
+                    
+                    model_file_id_mapping = await self.get_model_file_id_mapping(
+                        file_ids, user_api_key_dict.parent_otel_span
+                    )
+                    data["model_file_id_mapping"] = model_file_id_mapping
+        elif call_type == CallTypes.aresponses.value or call_type == CallTypes.responses.value:
+            # Handle managed files in responses API input
+            input_data = data.get("input")
+            if input_data:
+                file_ids = self.get_file_ids_from_responses_input(input_data)
                 if file_ids:
                     model_file_id_mapping = await self.get_model_file_id_mapping(
                         file_ids, user_api_key_dict.parent_otel_span
                     )
-
                     data["model_file_id_mapping"] = model_file_id_mapping
         elif call_type == CallTypes.afile_content.value:
             retrieve_file_id = cast(Optional[str], data.get("file_id"))
@@ -453,6 +492,47 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                                 file_ids.append(file_id)
         return file_ids
 
+    def get_file_ids_from_responses_input(
+        self, input: Union[str, List[Dict[str, Any]]]
+    ) -> List[str]:
+        """
+        Gets file ids from responses API input.
+        
+        The input can be:
+        - A string (no files)
+        - A list of input items, where each item can have:
+          - type: "input_file" with file_id
+          - content: a list that can contain items with type: "input_file" and file_id
+        """
+        file_ids: List[str] = []
+        
+        if isinstance(input, str):
+            return file_ids
+        
+        if not isinstance(input, list):
+            return file_ids
+        
+        for item in input:
+            if not isinstance(item, dict):
+                continue
+            
+            # Check for direct input_file type
+            if item.get("type") == "input_file":
+                file_id = item.get("file_id")
+                if file_id:
+                    file_ids.append(file_id)
+            
+            # Check for input_file in content array
+            content = item.get("content")
+            if isinstance(content, list):
+                for content_item in content:
+                    if isinstance(content_item, dict) and content_item.get("type") == "input_file":
+                        file_id = content_item.get("file_id")
+                        if file_id:
+                            file_ids.append(file_id)
+        
+        return file_ids
+
     async def get_model_file_id_mapping(
         self, file_ids: List[str], litellm_parent_otel_span: Span
     ) -> dict:
@@ -478,7 +558,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         for file_id in file_ids:
             ## CHECK IF FILE ID IS MANAGED BY LITELM
             is_base64_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
-
             if is_base64_unified_file_id:
                 litellm_managed_file_ids.append(file_id)
 
@@ -489,6 +568,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 unified_file_object = await self.get_unified_file_id(
                     file_id, litellm_parent_otel_span
                 )
+
                 if unified_file_object:
                     file_id_mapping[file_id] = unified_file_object.model_mappings
 
@@ -669,9 +749,27 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         model_id=model_id,
                         model_name=model_name,
                     )
-                    await self.store_unified_file_id(  # need to store otherwise any retrieve call will fail
+                    
+                    # Fetch the actual file object for the output file
+                    file_object = None
+                    try:
+                        # Use litellm to retrieve the file object from the provider
+                        from litellm import afile_retrieve
+                        file_object = await afile_retrieve(
+                            custom_llm_provider=model_name.split("/")[0] if model_name and "/" in model_name else "openai",
+                            file_id=original_output_file_id
+                        )
+                        verbose_logger.debug(
+                            f"Successfully retrieved file object for output_file_id={original_output_file_id}"
+                        )
+                    except Exception as e:
+                        verbose_logger.warning(
+                            f"Failed to retrieve file object for output_file_id={original_output_file_id}: {str(e)}. Storing with None and will fetch on-demand."
+                        )
+                    
+                    await self.store_unified_file_id(
                         file_id=response.output_file_id,
-                        file_object=None,
+                        file_object=file_object,
                         litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
                         model_mappings={model_id: original_output_file_id},
                         user_api_key_dict=user_api_key_dict,
@@ -764,18 +862,21 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         llm_router: Router,
         **data: Dict,
     ) -> OpenAIFileObject:
-        file_id = convert_b64_uid_to_unified_uid(file_id)
+
+        # file_id = convert_b64_uid_to_unified_uid(file_id)
         model_file_id_mapping = await self.get_model_file_id_mapping(
             [file_id], litellm_parent_otel_span
         )
+
         specific_model_file_id_mapping = model_file_id_mapping.get(file_id)
         if specific_model_file_id_mapping:
-            for model_id, file_id in specific_model_file_id_mapping.items():
-                await llm_router.afile_delete(model=model_id, file_id=file_id, **data)  # type: ignore
+            for model_id, model_file_id in specific_model_file_id_mapping.items():
+                await llm_router.afile_delete(model=model_id, file_id=model_file_id, **data)  # type: ignore
 
         stored_file_object = await self.delete_unified_file_id(
             file_id, litellm_parent_otel_span
         )
+
         if stored_file_object:
             return stored_file_object
         else:
@@ -796,6 +897,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             model_file_id_mapping
             or await self.get_model_file_id_mapping([file_id], litellm_parent_otel_span)
         )
+
         specific_model_file_id_mapping = model_file_id_mapping.get(file_id)
 
         if specific_model_file_id_mapping:
@@ -810,3 +912,126 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             )
         else:
             raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
+
+    async def _convert_storage_files_to_base64(
+        self,
+        messages: List[AllMessageValues],
+        file_ids: List[str],
+        litellm_parent_otel_span: Optional[Span],
+    ) -> None:
+        """
+        Convert files stored in storage backends to base64 format for Vertex AI/Gemini.
+        
+        This method checks if any managed files are stored in storage backends,
+        downloads them, and converts them to base64 format in the messages.
+        """
+        # Check each file_id to see if it's stored in a storage backend
+        for file_id in file_ids:
+            # Check if this is a base64 encoded unified file ID
+            decoded_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
+            
+            if not decoded_unified_file_id:
+                continue
+            
+            # Check database for storage backend info
+            # IMPORTANT: The database stores the base64 encoded unified_file_id (not the decoded version)
+            # So we query with the original file_id (which is base64 encoded)
+            db_file = await self.prisma_client.db.litellm_managedfiletable.find_first(
+                where={"unified_file_id": file_id}
+            )
+            
+            if not db_file or not db_file.storage_backend or not db_file.storage_url:
+                continue
+            
+            # File is stored in a storage backend, download and convert to base64
+            try:
+                from litellm.llms.base_llm.files.storage_backend_factory import (
+                    get_storage_backend,
+                )
+                
+                storage_backend_name = db_file.storage_backend
+                storage_url = db_file.storage_url
+                
+                # Get storage backend (uses same env vars as callback)
+                try:
+                    storage_backend = get_storage_backend(storage_backend_name)
+                except ValueError as e:
+                    verbose_logger.warning(
+                        f"Storage backend '{storage_backend_name}' error for file {file_id}: {str(e)}"
+                    )
+                    continue
+                
+                file_content = await storage_backend.download_file(storage_url)
+                
+                # Determine content type from file object
+                content_type = self._get_content_type_from_file_object(db_file.file_object)
+                
+                # Convert to base64
+                base64_data = base64.b64encode(file_content).decode("utf-8")
+                base64_data_uri = f"data:{content_type};base64,{base64_data}"
+                
+                # Update messages to use base64 instead of file_id
+                self._update_messages_with_base64_data(messages, file_id, base64_data_uri, content_type)
+            except Exception as e:
+                verbose_logger.exception(
+                    f"Error converting file {file_id} from storage backend to base64: {str(e)}"
+                )
+                # Continue with other files even if one fails
+                continue
+
+    def _get_content_type_from_file_object(self, file_object: Optional[Any]) -> str:
+        """
+        Determine content type from file object.
+        
+        Uses the MIME type utility for consistent detection and normalization.
+        
+        Args:
+            file_object: The file object from the database (can be dict, JSON string, or None)
+        
+        Returns:
+            str: MIME type (defaults to "application/octet-stream" if cannot be determined)
+        """
+        # Use utility function for detection
+        content_type = get_content_type_from_file_object(file_object)
+        
+        # Normalize for Gemini/Vertex AI (requires image/jpeg, not image/jpg)
+        content_type = normalize_mime_type_for_provider(content_type, provider="gemini")
+        
+        return content_type
+
+    def _update_messages_with_base64_data(
+        self,
+        messages: List[AllMessageValues],
+        file_id: str,
+        base64_data_uri: str,
+        content_type: str,
+    ) -> None:
+        """
+        Update messages to replace file_id with base64 data URI.
+        
+        Args:
+            messages: List of messages to update
+            file_id: The file ID to replace
+            base64_data_uri: The base64 data URI to use as replacement
+            content_type: The MIME type of the file (e.g., "image/jpeg", "application/pdf")
+        """
+        for message in messages:
+            if message.get("role") == "user":
+                content = message.get("content")
+                if content and isinstance(content, list):
+                    for element in content:
+                        if element.get("type") == "file":
+                            file_element = cast(ChatCompletionFileObject, element)
+                            file_element_file = file_element.get("file", {})
+                            
+                            if file_element_file.get("file_id") == file_id:
+                                # Replace file_id with base64 data
+                                file_element_file["file_data"] = base64_data_uri
+                                # Set format to help Gemini determine mime type
+                                file_element_file["format"] = content_type
+                                # Remove file_id to ensure only file_data is used
+                                file_element_file.pop("file_id", None)
+                                
+                                verbose_logger.debug(
+                                    f"Converted file {file_id} from storage backend to base64 with format {content_type}"
+                                )

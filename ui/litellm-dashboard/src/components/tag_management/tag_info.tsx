@@ -1,5 +1,15 @@
 import React, { useState, useEffect } from "react";
-import { Card, Text, Title, Button, Badge, Accordion, AccordionHeader, AccordionBody, Title as TremorTitle } from "@tremor/react";
+import {
+  Card,
+  Text,
+  Title,
+  Button,
+  Badge,
+  Accordion,
+  AccordionHeader,
+  AccordionBody,
+  Title as TremorTitle,
+} from "@tremor/react";
 import { Form, Input, Select as Select2, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { fetchUserModels } from "../organisms/create_key_button";
@@ -131,7 +141,7 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
         <Card>
           <Form form={form} onFinish={handleSave} layout="vertical" initialValues={tagDetails}>
             <Form.Item label="Tag Name" name="name" rules={[{ required: true, message: "Please input a tag name" }]}>
-              <Input />
+              <Input className="rounded-md border-gray-300" />
             </Form.Item>
 
             <Form.Item label="Description" name="description">
@@ -141,15 +151,15 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
             <Form.Item
               label={
                 <span>
-                  Allowed LLMs{" "}
-                  <Tooltip title="Select which LLMs are allowed to process this type of data">
+                  Allowed Models
+                  <Tooltip title="Select which models are allowed to process this type of data">
                     <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                   </Tooltip>
                 </span>
               }
               name="models"
             >
-              <Select2 mode="multiple" placeholder="Select LLMs">
+              <Select2 mode="multiple" placeholder="Select Models">
                 {userModels.map((modelId) => (
                   <Select2.Option key={modelId} value={modelId}>
                     {getModelDisplayName(modelId)}
@@ -228,7 +238,7 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
                 <Text>{tagDetails.description || "-"}</Text>
               </div>
               <div>
-                <Text className="font-medium">Allowed LLMs</Text>
+                <Text className="font-medium">Allowed Models</Text>
                 <div className="flex flex-wrap gap-2 mt-2">
                   {!tagDetails.models || tagDetails.models.length === 0 ? (
                     <Badge color="red">All Models</Badge>
@@ -256,30 +266,33 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
             <Card>
               <Title>Budget & Rate Limits</Title>
               <div className="space-y-4 mt-4">
-                {tagDetails.litellm_budget_table.max_budget !== undefined && tagDetails.litellm_budget_table.max_budget !== null && (
-                  <div>
-                    <Text className="font-medium">Max Budget</Text>
-                    <Text>${tagDetails.litellm_budget_table.max_budget}</Text>
-                  </div>
-                )}
+                {tagDetails.litellm_budget_table.max_budget !== undefined &&
+                  tagDetails.litellm_budget_table.max_budget !== null && (
+                    <div>
+                      <Text className="font-medium">Max Budget</Text>
+                      <Text>${tagDetails.litellm_budget_table.max_budget}</Text>
+                    </div>
+                  )}
                 {tagDetails.litellm_budget_table.budget_duration && (
                   <div>
                     <Text className="font-medium">Budget Duration</Text>
                     <Text>{tagDetails.litellm_budget_table.budget_duration}</Text>
                   </div>
                 )}
-                {tagDetails.litellm_budget_table.tpm_limit !== undefined && tagDetails.litellm_budget_table.tpm_limit !== null && (
-                  <div>
-                    <Text className="font-medium">TPM Limit</Text>
-                    <Text>{tagDetails.litellm_budget_table.tpm_limit.toLocaleString()}</Text>
-                  </div>
-                )}
-                {tagDetails.litellm_budget_table.rpm_limit !== undefined && tagDetails.litellm_budget_table.rpm_limit !== null && (
-                  <div>
-                    <Text className="font-medium">RPM Limit</Text>
-                    <Text>{tagDetails.litellm_budget_table.rpm_limit.toLocaleString()}</Text>
-                  </div>
-                )}
+                {tagDetails.litellm_budget_table.tpm_limit !== undefined &&
+                  tagDetails.litellm_budget_table.tpm_limit !== null && (
+                    <div>
+                      <Text className="font-medium">TPM Limit</Text>
+                      <Text>{tagDetails.litellm_budget_table.tpm_limit.toLocaleString()}</Text>
+                    </div>
+                  )}
+                {tagDetails.litellm_budget_table.rpm_limit !== undefined &&
+                  tagDetails.litellm_budget_table.rpm_limit !== null && (
+                    <div>
+                      <Text className="font-medium">RPM Limit</Text>
+                      <Text>{tagDetails.litellm_budget_table.rpm_limit.toLocaleString()}</Text>
+                    </div>
+                  )}
               </div>
             </Card>
           )}

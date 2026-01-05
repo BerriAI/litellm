@@ -16,6 +16,8 @@ from unittest.mock import MagicMock, patch
 
 import litellm
 
+from litellm import main as litellm_main
+
 
 @pytest.fixture(autouse=True)
 def add_api_keys_to_env(monkeypatch):
@@ -160,7 +162,7 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
+                            "url": "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png",
                             "format": "image/png",
                         },
                     },
@@ -192,8 +194,33 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):
             json_str = json_str.decode("utf-8")
 
         print(f"type of json_str: {type(json_str)}")
-        assert "png" in json_str
-        assert "jpeg" not in json_str
+        
+        # Bedrock models convert URLs to base64, while direct Anthropic models support URLs
+        # bedrock/invoke models use Anthropic messages API which supports URLs
+        if model.startswith("bedrock/invoke/"):
+            # bedrock/invoke should convert URLs to base64 (doesn't support URL references)
+            # URL should NOT be in the JSON (it should be converted to base64)
+            assert "https://awsmp-logos.s3.amazonaws.com" not in json_str
+            # Should have base64 data in the source (type="base64", not type="url")
+            assert '"type":"base64"' in json_str or '"type": "base64"' in json_str
+            # Should have "data" field containing base64 content
+            assert '"data"' in json_str
+        elif model.startswith("bedrock/"):
+            # Regular Bedrock models should convert URLs to base64 (uses "bytes" field)
+            # URL should NOT be in the JSON (it should be converted to base64)
+            assert "https://awsmp-logos.s3.amazonaws.com" not in json_str
+            # Should have "bytes" field (Bedrock uses "bytes" not "base64" in the field name)
+            assert '"bytes"' in json_str or '"bytes":' in json_str
+        elif model.startswith("anthropic/"):
+            # Direct Anthropic models should pass HTTPS URLs directly (HTTP URLs are converted to base64)
+            # Since we're using HTTPS URL, it should be passed as-is
+            assert "https://awsmp-logos.s3.amazonaws.com" in json_str
+            # For Anthropic, URL references use "url" type, not base64
+            assert '"type":"url"' in json_str or '"type": "url"' in json_str
+        else:
+            # For other models, check format parameter is respected
+            assert "png" in json_str
+            assert "jpeg" not in json_str
 
 
 @pytest.mark.parametrize("model", ["gpt-4o-mini"])
@@ -218,7 +245,7 @@ async def test_url_with_format_param_openai(model, sync_mode):
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
+                            "url": "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png",
                             "format": "image/png",
                         },
                     },
@@ -266,6 +293,30 @@ def test_bedrock_latency_optimized_inference():
         mock_post.assert_called_once()
         json_data = json.loads(mock_post.call_args.kwargs["data"])
         assert json_data["performanceConfig"]["latency"] == "optimized"
+
+
+def test_strip_input_examples_for_non_anthropic_providers():
+    tools = [
+        {
+            "type": "function",
+            "name": "example_tool",
+            "input_examples": [{"foo": "bar"}],
+            "function": {
+                "name": "example_tool",
+                "input_examples": [{"foo": "bar"}],
+            },
+        }
+    ]
+
+    assert not litellm_main._should_allow_input_examples(
+        custom_llm_provider="openai", model="gpt-4o-mini"
+    )
+
+    cleaned = litellm_main._drop_input_examples_from_tools(tools=tools)
+
+    assert isinstance(cleaned, list)
+    assert "input_examples" not in cleaned[0]
+    assert "input_examples" not in cleaned[0]["function"]
 
 
 def test_custom_provider_with_extra_headers():
@@ -1410,3 +1461,43 @@ async def test_async_mock_completion_stream_with_model_response():
             accumulated_content += chunk.choices[0].delta.content
 
     assert "This is an async test response" in accumulated_content or len(chunks) > 0
+
+
+class TestCallTypesOCR:
+    """Test that OCR call types are properly defined in CallTypes enum.
+
+    Fixes https://github.com/BerriAI/litellm/issues/17381
+    """
+
+    def test_ocr_call_type_exists(self):
+        """Test that CallTypes.ocr exists and has correct value."""
+        from litellm.types.utils import CallTypes
+
+        assert hasattr(CallTypes, "ocr")
+        assert CallTypes.ocr.value == "ocr"
+
+    def test_aocr_call_type_exists(self):
+        """Test that CallTypes.aocr exists and has correct value."""
+        from litellm.types.utils import CallTypes
+
+        assert hasattr(CallTypes, "aocr")
+        assert CallTypes.aocr.value == "aocr"
+
+    def test_ocr_call_type_from_string(self):
+        """Test that CallTypes can be constructed from 'ocr' string."""
+        from litellm.types.utils import CallTypes
+
+        call_type = CallTypes("ocr")
+        assert call_type == CallTypes.ocr
+
+    def test_aocr_call_type_from_string(self):
+        """Test that CallTypes can be constructed from 'aocr' string.
+
+        This is the actual use case that was failing - the OCR endpoint
+        uses route_type='aocr' and guardrails try to instantiate
+        CallTypes('aocr').
+        """
+        from litellm.types.utils import CallTypes
+
+        call_type = CallTypes("aocr")
+        assert call_type == CallTypes.aocr

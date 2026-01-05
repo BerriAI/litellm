@@ -107,6 +107,41 @@ vi.mock("./networking", () => ({
     ],
   }),
   credentialGetCall: vi.fn().mockResolvedValue({}),
+  getGuardrailsList: vi.fn().mockResolvedValue({
+    guardrails: [{ guardrail_name: "content_filter" }, { guardrail_name: "toxicity_filter" }],
+  }),
+  tagListCall: vi.fn().mockResolvedValue({
+    test_tag: {
+      name: "test_tag",
+      description: "A test tag",
+    },
+    production_tag: {
+      name: "production_tag",
+      description: "Production ready models",
+    },
+  }),
+}));
+
+// Mock the useModelsInfo hook since it uses React Query
+vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
+  useModelsInfo: vi.fn().mockReturnValue({
+    data: {
+      data: [
+        {
+          model_name: "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+          provider: "bedrock",
+          litellm_model_name: "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        },
+        {
+          model_name: "openai/gpt-4",
+          provider: "openai",
+          litellm_model_name: "gpt-4",
+        },
+      ],
+    },
+    isLoading: false,
+    error: null,
+  }),
 }));
 
 describe("ModelInfoView", () => {
@@ -127,23 +162,23 @@ describe("ModelInfoView", () => {
     supported_openai_params: ["temperature", "max_tokens", "top_p", "frequency_penalty", "presence_penalty"],
   };
 
+  const DEFAULT_ADMIN_PROPS = {
+    modelId: "123",
+    onClose: () => {},
+    modelData: modelData,
+    accessToken: "123",
+    userID: "123",
+    userRole: "Admin",
+    editModel: false,
+    setEditModalVisible: () => {},
+    setSelectedModel: () => {},
+    onModelUpdate: () => {},
+    modelAccessGroups: [],
+  };
+
   describe("Edit Model", () => {
     it("should render the model info view", async () => {
-      const { getByText } = render(
-        <ModelInfoView
-          modelId="123"
-          onClose={() => {}}
-          modelData={modelData}
-          accessToken="123"
-          userID="123"
-          userRole="Admin"
-          editModel={false}
-          setEditModalVisible={() => {}}
-          setSelectedModel={() => {}}
-          onModelUpdate={() => {}}
-          modelAccessGroups={[]}
-        />,
-      );
+      const { getByText } = render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />);
       await waitFor(() => {
         expect(getByText("Model Settings")).toBeInTheDocument();
       });
@@ -158,86 +193,130 @@ describe("ModelInfoView", () => {
         },
       };
 
-      const { queryByText } = render(
-        <ModelInfoView
-          modelId="123"
-          onClose={() => {}}
-          modelData={nonDbModelData}
-          accessToken="123"
-          userID="123"
-          userRole="Admin"
-          editModel={false}
-          setEditModalVisible={() => {}}
-          setSelectedModel={() => {}}
-          onModelUpdate={() => {}}
-          modelAccessGroups={[]}
-        />,
-      );
+      const NON_DB_ADMIN_PROPS = {
+        ...DEFAULT_ADMIN_PROPS,
+        modelData: nonDbModelData,
+      };
+
+      const { queryByText } = render(<ModelInfoView {...NON_DB_ADMIN_PROPS} />);
       await waitFor(() => {
         expect(queryByText("Edit Model")).not.toBeInTheDocument();
       });
     });
 
     it("should render tags in the edit model", async () => {
-      const { getByText } = render(
-        <ModelInfoView
-          modelId="123"
-          onClose={() => {}}
-          modelData={modelData}
-          accessToken="123"
-          userID="123"
-          userRole="Admin"
-          editModel={true}
-          setEditModalVisible={() => {}}
-          setSelectedModel={() => {}}
-          onModelUpdate={() => {}}
-          modelAccessGroups={[]}
-        />,
-      );
+      const { getByText } = render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />);
       await waitFor(() => {
         expect(getByText("Tags")).toBeInTheDocument();
       });
+    });
+
+    it("should render the litellm params in the edit model", async () => {
+      const { getByText } = render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />);
+      await waitFor(() => {
+        expect(getByText("LiteLLM Params")).toBeInTheDocument();
+      });
+    });
+  });
+
+  it("should render a test connection button", async () => {
+    const { getByTestId } = render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />);
+    await waitFor(() => {
+      expect(getByTestId("test-connection-button")).toBeInTheDocument();
+    });
+  });
+
+  it("should render a reuse credentials button", async () => {
+    const { getByTestId } = render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />);
+    await waitFor(() => {
+      expect(getByTestId("reuse-credentials-button")).toBeInTheDocument();
+    });
+  });
+
+  it("should render a delete model button", async () => {
+    const { getByTestId } = render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />);
+    await waitFor(() => {
+      expect(getByTestId("delete-model-button")).toBeInTheDocument();
+    });
+  });
+
+  it("should render a disabled delete model button if the model is not a DB model", async () => {
+    const nonDbModelData = {
+      ...modelData,
+      model_info: {
+        ...modelData.model_info,
+        db_model: false,
+      },
+    };
+    const NON_DB_ADMIN_PROPS = {
+      ...DEFAULT_ADMIN_PROPS,
+      modelData: nonDbModelData,
+    };
+    const { getByTestId } = render(<ModelInfoView {...NON_DB_ADMIN_PROPS} />);
+    await waitFor(() => {
+      expect(getByTestId("delete-model-button")).toBeDisabled();
+    });
+  });
+
+  it("should render a disabled delete model button if the user is not an admin and model is not created by the user", async () => {
+    const nonCreatedByUserModelData = {
+      ...modelData,
+      model_info: {
+        ...modelData.model_info,
+        created_by: "456",
+      },
+    };
+    const NON_CREATED_BY_USER_ADMIN_PROPS = {
+      ...DEFAULT_ADMIN_PROPS,
+      modelData: nonCreatedByUserModelData,
+      userRole: "User",
+    };
+    const { getByTestId } = render(<ModelInfoView {...NON_CREATED_BY_USER_ADMIN_PROPS} />);
+    await waitFor(() => {
+      expect(getByTestId("delete-model-button")).toBeDisabled();
+    });
+  });
+
+  it("should render health check model field for wildcard routes", async () => {
+    const wildcardModelData = {
+      ...modelData,
+      litellm_model_name: "openai/gpt-4*",
+    };
+
+    const WILDCARD_ADMIN_PROPS = {
+      ...DEFAULT_ADMIN_PROPS,
+      modelData: wildcardModelData,
+    };
+
+    const { getByText } = render(<ModelInfoView {...WILDCARD_ADMIN_PROPS} />);
+    await waitFor(() => {
+      expect(getByText("Model Settings")).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(getByText("Health Check Model")).toBeInTheDocument();
+    });
+  });
+
+  it("should not render health check model field for non-wildcard routes", async () => {
+    const { queryByText } = render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />);
+    await waitFor(() => {
+      expect(queryByText("Model Settings")).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(queryByText("Health Check Model")).not.toBeInTheDocument();
     });
   });
 
   describe("View Model", () => {
     it("should render the model info view", async () => {
-      const { getByText } = render(
-        <ModelInfoView
-          modelId="123"
-          onClose={() => {}}
-          modelData={modelData}
-          accessToken="123"
-          userID="123"
-          userRole="Admin"
-          editModel={false}
-          setEditModalVisible={() => {}}
-          setSelectedModel={() => {}}
-          onModelUpdate={() => {}}
-          modelAccessGroups={[]}
-        />,
-      );
+      const { getByText } = render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />);
       await waitFor(() => {
         expect(getByText("Model Settings")).toBeInTheDocument();
       });
     });
 
     it("should render tags in the view model", async () => {
-      const { getByText } = render(
-        <ModelInfoView
-          modelId="123"
-          onClose={() => {}}
-          modelData={modelData}
-          accessToken="123"
-          userID="123"
-          userRole="Admin"
-          editModel={false}
-          setEditModalVisible={() => {}}
-          setSelectedModel={() => {}}
-          onModelUpdate={() => {}}
-          modelAccessGroups={[]}
-        />,
-      );
+      const { getByText } = render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />);
       await waitFor(() => {
         expect(getByText("Tags")).toBeInTheDocument();
       });

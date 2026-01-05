@@ -370,4 +370,62 @@ class TestPerplexityCostCalculator:
         
         # Ensure costs are non-negative
         assert prompt_cost >= 0
-        assert completion_cost >= 0 
+        assert completion_cost >= 0
+
+    def test_uses_perplexity_provided_cost_when_available(self):
+        """
+        Test that when Perplexity provides pre-calculated cost in usage.cost.total_cost,
+        it is used directly instead of manual calculation.
+
+        This is the fix for issue #15337 - Perplexity returns accurate costs including
+        request_cost (fixed per-request fee) that LiteLLM cannot calculate.
+        """
+        # Create usage with Perplexity's cost object (as returned by the API)
+        usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150
+        )
+
+        # Add the cost object that Perplexity returns
+        usage.cost = {
+            "input_tokens_cost": 0.0,
+            "output_tokens_cost": 0.002,
+            "request_cost": 0.006,
+            "total_cost": 0.008
+        }
+
+        prompt_cost, completion_cost = perplexity_cost_per_token(
+            model="sonar-pro",
+            usage=usage
+        )
+
+        # When Perplexity provides total_cost, we use it directly
+        # prompt_cost should be 0, completion_cost should be total_cost
+        assert prompt_cost == 0.0
+        assert completion_cost == 0.008
+        assert prompt_cost + completion_cost == 0.008
+
+    def test_falls_back_to_manual_calculation_when_no_cost_provided(self):
+        """
+        Test that manual cost calculation is used when Perplexity doesn't
+        provide the cost object (fallback behavior).
+        """
+        usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150
+        )
+        # No cost object - should use manual calculation
+
+        prompt_cost, completion_cost = perplexity_cost_per_token(
+            model="sonar-deep-research",
+            usage=usage
+        )
+
+        # Should calculate manually: 100 * 2e-6 + 50 * 8e-6
+        expected_prompt = 100 * 2e-6
+        expected_completion = 50 * 8e-6
+
+        assert math.isclose(prompt_cost, expected_prompt, rel_tol=1e-6)
+        assert math.isclose(completion_cost, expected_completion, rel_tol=1e-6)

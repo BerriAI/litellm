@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { Form, Typography, Select, Modal, Tag, Steps } from "antd";
 import { Button, TextInput } from "@tremor/react";
 import {
@@ -16,6 +16,9 @@ import GuardrailProviderFields from "./guardrail_provider_fields";
 import GuardrailOptionalParams from "./guardrail_optional_params";
 import NotificationsManager from "../molecules/notifications_manager";
 import ContentFilterConfiguration from "./content_filter/ContentFilterConfiguration";
+import ToolPermissionRulesEditor, {
+  ToolPermissionConfig,
+} from "./tool_permission/ToolPermissionRulesEditor";
 
 const { Title, Text, Link } = Typography;
 const { Option } = Select;
@@ -55,6 +58,12 @@ interface GuardrailSettings {
     }>;
     pattern_categories: string[];
     supported_actions: string[];
+    content_categories?: Array<{
+      name: string;
+      display_name: string;
+      description: string;
+      default_action: string;
+    }>;
   };
 }
 
@@ -100,6 +109,21 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   // Content Filter state
   const [selectedPatterns, setSelectedPatterns] = useState<any[]>([]);
   const [blockedWords, setBlockedWords] = useState<any[]>([]);
+  const [selectedContentCategories, setSelectedContentCategories] = useState<any[]>([]);
+  const [toolPermissionConfig, setToolPermissionConfig] = useState<ToolPermissionConfig>({
+    rules: [],
+    default_action: "deny",
+    on_disallowed_action: "block",
+    violation_message_template: "",
+  });
+
+  const isToolPermissionProvider = useMemo(() => {
+    if (!selectedProvider) {
+      return false;
+    }
+    const providerValue = guardrail_provider_map[selectedProvider];
+    return (providerValue || "").toLowerCase() === "tool_permission";
+  }, [selectedProvider]);
 
   // Fetch guardrail UI settings + provider params on mount / accessToken change
   useEffect(() => {
@@ -145,6 +169,13 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     setSelectedCategories([]);
     setGlobalSeverityThreshold(2);
     setCategorySpecificThresholds({});
+
+    setToolPermissionConfig({
+      rules: [],
+      default_action: "deny",
+      on_disallowed_action: "block",
+      violation_message_template: "",
+    });
   };
 
   const handleEntitySelect = (entity: string) => {
@@ -225,6 +256,15 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     setSelectedCategories([]);
     setGlobalSeverityThreshold(2);
     setCategorySpecificThresholds({});
+    setSelectedPatterns([]);
+    setBlockedWords([]);
+    setSelectedContentCategories([]);
+    setToolPermissionConfig({
+      rules: [],
+      default_action: "deny",
+      on_disallowed_action: "block",
+      violation_message_template: "",
+    });
     setCurrentStep(0);
   };
 
@@ -283,7 +323,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         }
       }
 
-      // For Content Filter, add patterns and blocked words
+      // For Content Filter, add patterns, blocked words, and categories
       if (shouldRenderContentFilterConfigSettings(values.provider)) {
         if (selectedPatterns.length > 0) {
           guardrailData.litellm_params.patterns = selectedPatterns.map((p) => ({
@@ -301,6 +341,14 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
             description: w.description,
           }));
         }
+        if (selectedContentCategories.length > 0) {
+          guardrailData.litellm_params.categories = selectedContentCategories.map((c) => ({
+            category: c.category,
+            enabled: true,
+            action: c.action,
+            severity_threshold: c.severity_threshold || "medium",
+          }));
+        }
       }
       // Add config values to the guardrail_info if provided
       else if (values.config) {
@@ -312,6 +360,20 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           NotificationsManager.fromBackend("Invalid JSON in configuration");
           setLoading(false);
           return;
+        }
+      }
+
+      if (guardrailProvider === "tool_permission") {
+        if (toolPermissionConfig.rules.length === 0) {
+          NotificationsManager.fromBackend("Add at least one tool permission rule");
+          setLoading(false);
+          return;
+        }
+        guardrailData.litellm_params.rules = toolPermissionConfig.rules;
+        guardrailData.litellm_params.default_action = toolPermissionConfig.default_action;
+        guardrailData.litellm_params.on_disallowed_action = toolPermissionConfig.on_disallowed_action;
+        if (toolPermissionConfig.violation_message_template) {
+          guardrailData.litellm_params.violation_message_template = toolPermissionConfig.violation_message_template;
         }
       }
 
@@ -535,11 +597,13 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         </Form.Item>
 
         {/* Use the GuardrailProviderFields component to render provider-specific fields */}
-        <GuardrailProviderFields
-          selectedProvider={selectedProvider}
-          accessToken={accessToken}
-          providerParams={providerParams}
-        />
+        {!isToolPermissionProvider && !shouldRenderContentFilterConfigSettings(selectedProvider) && (
+          <GuardrailProviderFields
+            selectedProvider={selectedProvider}
+            accessToken={accessToken}
+            providerParams={providerParams}
+          />
+        )}
       </>
     );
   };
@@ -560,7 +624,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     );
   };
 
-  const renderContentFilterConfiguration = (step: "patterns" | "keywords") => {
+  const renderContentFilterConfiguration = (step: "patterns" | "keywords" | "categories") => {
     if (!guardrailSettings || !shouldRenderContentFilterConfigSettings(selectedProvider)) return null;
 
     const contentFilterSettings = guardrailSettings.content_filter_settings;
@@ -586,6 +650,15 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
             blockedWords.map((w) => (w.id === id ? { ...w, [field]: value } : w))
           );
         }}
+        contentCategories={contentFilterSettings.content_categories || []}
+        selectedContentCategories={selectedContentCategories}
+        onContentCategoryAdd={(category) => setSelectedContentCategories([...selectedContentCategories, category])}
+        onContentCategoryRemove={(id) => setSelectedContentCategories(selectedContentCategories.filter((c) => c.id !== id))}
+        onContentCategoryUpdate={(id, field, value) => {
+          setSelectedContentCategories(
+            selectedContentCategories.map((c) => (c.id === id ? { ...c, [field]: value } : c))
+          );
+        }}
         accessToken={accessToken}
         showStep={step}
       />
@@ -593,7 +666,20 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   };
 
   const renderOptionalParams = () => {
-    if (!selectedProvider || !providerParams) return null;
+    if (!selectedProvider) return null;
+
+    if (isToolPermissionProvider) {
+      return (
+        <ToolPermissionRulesEditor
+          value={toolPermissionConfig}
+          onChange={setToolPermissionConfig}
+        />
+      );
+    }
+
+    if (!providerParams) {
+      return null;
+    }
 
     console.log("guardrail_provider_map: ", guardrail_provider_map);
     console.log("selectedProvider: ", selectedProvider);
@@ -614,10 +700,15 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           return renderPiiConfiguration();
         }
         if (shouldRenderContentFilterConfigSettings(selectedProvider)) {
-          return renderContentFilterConfiguration("patterns");
+          return renderContentFilterConfiguration("categories");
         }
         return renderOptionalParams();
       case 2:
+        if (shouldRenderContentFilterConfigSettings(selectedProvider)) {
+          return renderContentFilterConfiguration("patterns");
+        }
+        return null;
+      case 3:
         if (shouldRenderContentFilterConfigSettings(selectedProvider)) {
           return renderContentFilterConfiguration("keywords");
         }
@@ -628,7 +719,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   };
 
   const renderStepButtons = () => {
-    const totalSteps = shouldRenderContentFilterConfigSettings(selectedProvider) ? 3 : 2;
+    const totalSteps = shouldRenderContentFilterConfigSettings(selectedProvider) ? 4 : 2;
     const isLastStep = currentStep === totalSteps - 1;
     
     return (
@@ -652,7 +743,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   };
 
   return (
-    <Modal title="Add Guardrail" open={visible} onCancel={handleClose} footer={null} width={700}>
+    <Modal title="Add Guardrail" open={visible} onCancel={handleClose} footer={null} width={800}>
       <Form
         form={form}
         layout="vertical"
@@ -661,19 +752,22 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           default_on: false,
         }}
       >
-        <Steps current={currentStep} className="mb-6">
+        <Steps current={currentStep} className="mb-6" style={{ overflow: "visible" }}>
           <Step title="Basic Info" />
           <Step
             title={
               shouldRenderPIIConfigSettings(selectedProvider)
                 ? "PII Configuration"
                 : shouldRenderContentFilterConfigSettings(selectedProvider)
-                  ? "Pattern Detection"
+                  ? "Default Categories"
                   : "Provider Configuration"
             }
           />
           {shouldRenderContentFilterConfigSettings(selectedProvider) && (
-            <Step title="Blocked Keywords" />
+            <>
+              <Step title="Patterns" />
+              <Step title="Keywords" />
+            </>
           )}
         </Steps>
 

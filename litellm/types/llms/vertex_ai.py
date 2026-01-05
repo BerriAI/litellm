@@ -1,16 +1,9 @@
-import json
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from typing_extensions import (
-    Protocol,
     Required,
-    Self,
     TypedDict,
-    TypeGuard,
-    get_origin,
-    override,
-    runtime_checkable,
 )
 
 
@@ -29,7 +22,7 @@ class FileDataType(TypedDict):
     file_uri: str  # the cloud storage uri of storing this file
 
 
-class BlobType(TypedDict):
+class BlobType(TypedDict, total=False):
     mime_type: Required[str]
     data: Required[str]
 
@@ -42,6 +35,7 @@ class PartType(TypedDict, total=False):
     function_response: FunctionResponse
     thought: bool
     thoughtSignature: str
+    media_resolution: Literal["low", "medium", "high"]
 
 
 class HttpxFunctionCall(TypedDict):
@@ -59,7 +53,7 @@ class HttpxCodeExecutionResult(TypedDict):
     output: str
 
 
-class HttpxBlobType(TypedDict):
+class HttpxBlobType(TypedDict, total=False):
     mimeType: str
     data: str
 
@@ -74,6 +68,7 @@ class HttpxPartType(TypedDict, total=False):
     codeExecutionResult: HttpxCodeExecutionResult
     thought: bool
     thoughtSignature: str
+    mediaResolution: Literal["low", "medium", "high"]
 
 
 class HttpxContentType(TypedDict, total=False):
@@ -174,14 +169,20 @@ class SafetSettingsConfig(TypedDict, total=False):
 class GeminiThinkingConfig(TypedDict, total=False):
     includeThoughts: bool
     thinkingBudget: int
+    thinkingLevel: Literal["minimal", "low", "medium", "high"]
 
 
 GeminiResponseModalities = Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]
 
 GeminiImageAspectRatio = Literal["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"]
 
+GeminiImageSize = Literal["1K", "2K", "4K"]
+
+
 class GeminiImageConfig(TypedDict, total=False):
     aspectRatio: GeminiImageAspectRatio
+    imageSize: GeminiImageSize
+
 
 class PrebuiltVoiceConfig(TypedDict):
     voiceName: str
@@ -212,6 +213,7 @@ class GenerationConfig(TypedDict, total=False):
     responseModalities: List[GeminiResponseModalities]
     imageConfig: GeminiImageConfig
     thinkingConfig: GeminiThinkingConfig
+    speechConfig: SpeechConfig
 
 
 class VertexToolName(str, Enum):
@@ -222,6 +224,7 @@ class VertexToolName(str, Enum):
     URL_CONTEXT = "url_context"
     CODE_EXECUTION = "code_execution"
     GOOGLE_MAPS = "googleMaps"
+    COMPUTER_USE = "computerUse"
 
 
 class Tools(TypedDict, total=False):
@@ -232,6 +235,7 @@ class Tools(TypedDict, total=False):
     url_context: dict
     code_execution: dict
     googleMaps: dict
+    computerUse: dict
     retrieval: Retrieval
 
 
@@ -258,6 +262,7 @@ class UsageMetadata(TypedDict, total=False):
     promptTokensDetails: List[PromptTokensDetails]
     thoughtsTokenCount: int
     responseTokensDetails: List[PromptTokensDetails]
+    candidatesTokensDetails: List[PromptTokensDetails]  # Alternative key name used in some responses
 
 
 class TokenCountDetailsResponse(TypedDict):
@@ -297,7 +302,6 @@ class RequestBody(TypedDict, total=False):
     generationConfig: GenerationConfig
     cachedContent: str
     labels: Dict[str, str]
-    speechConfig: SpeechConfig
 
 
 class CachedContentRequestBody(TypedDict, total=False):
