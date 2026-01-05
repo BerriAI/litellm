@@ -279,7 +279,9 @@ async def test_key_token_handling(monkeypatch):
 @pytest.mark.asyncio
 async def test_budget_reset_and_expires_at_first_of_month(monkeypatch):
     """
-    Test that when budget_duration, duration, and key_budget_duration are "1mo", budget_reset_at and expires are set to first of next month
+    Test that when budget_duration, duration, and key_budget_duration are "1mo":
+    - budget_reset_at is set to first of next month (standardized reset time)
+    - expires is set to approximately 1 month from creation time (exact duration)
     """
     mock_prisma_client = AsyncMock()
     mock_insert_data = AsyncMock(
@@ -299,7 +301,7 @@ async def test_budget_reset_and_expires_at_first_of_month(monkeypatch):
         return_value=MagicMock(token="hashed_token_123", litellm_budget_table=None)
     )
 
-    from datetime import datetime, timezone
+    from datetime import datetime, timedelta, timezone
 
     import pytest
 
@@ -324,7 +326,7 @@ async def test_budget_reset_and_expires_at_first_of_month(monkeypatch):
     # Get the current date
     now = datetime.now(timezone.utc)
 
-    # Calculate expected reset date (first of next month)
+    # Calculate expected reset date (first of next month) for budget_reset_at
     if now.month == 12:
         expected_month = 1
         expected_year = now.year + 1
@@ -332,19 +334,96 @@ async def test_budget_reset_and_expires_at_first_of_month(monkeypatch):
         expected_month = now.month + 1
         expected_year = now.year
 
-    # Verify budget_reset_at, expires is set to first of next month
-    for key in ["budget_reset_at", "expires"]:
-        response_date = response.get(key)
-        assert response_date is not None, f"{key} not found in response"
-        assert (
-            response_date.year == expected_year
-        ), f"Expected year {expected_year}, got {response_date.year} for {key}"
-        assert (
-            response_date.month == expected_month
-        ), f"Expected month {expected_month}, got {response_date.month} for {key}"
-        assert (
-            response_date.day == 1
-        ), f"Expected day 1, got {response_date.day} for {key}"
+    # Verify budget_reset_at is set to first of next month (standardized reset time)
+    budget_reset_at = response.get("budget_reset_at")
+    assert budget_reset_at is not None, "budget_reset_at not found in response"
+    assert (
+        budget_reset_at.year == expected_year
+    ), f"Expected year {expected_year}, got {budget_reset_at.year} for budget_reset_at"
+    assert (
+        budget_reset_at.month == expected_month
+    ), f"Expected month {expected_month}, got {budget_reset_at.month} for budget_reset_at"
+    assert (
+        budget_reset_at.day == 1
+    ), f"Expected day 1, got {budget_reset_at.day} for budget_reset_at"
+
+    # Verify expires is set to approximately 1 month from creation time (exact duration, not standardized)
+    expires = response.get("expires")
+    assert expires is not None, "expires not found in response"
+    # expires should be approximately 1 month from now (same day next month, same time)
+    # Allow for some variance due to test execution time
+    expected_expires_min = now + timedelta(days=28)
+    expected_expires_max = now + timedelta(days=32)
+    assert (
+        expected_expires_min <= expires <= expected_expires_max
+    ), f"Expected expires to be approximately 1 month from now, got {expires}"
+
+
+@pytest.mark.asyncio
+async def test_key_expiration_exact_duration_hours(monkeypatch):
+    """
+    Test that key expiration uses exact duration addition, not standardized reset times.
+    Specifically tests the bug where "12h" duration would expire at midnight instead of 12 hours from creation.
+    """
+    mock_prisma_client = AsyncMock()
+    mock_insert_data = AsyncMock(
+        return_value=MagicMock(token="hashed_token_123", litellm_budget_table=None)
+    )
+    mock_prisma_client.insert_data = mock_insert_data
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=None
+    )
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[]
+    )
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(
+        return_value=MagicMock(token="hashed_token_123", litellm_budget_table=None)
+    )
+
+    from datetime import datetime, timedelta, timezone
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_helper_fn,
+    )
+
+    # Use monkeypatch to set the prisma_client
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Test key generation with duration="12h"
+    # This should expire exactly 12 hours from creation, not at the next midnight/noon boundary
+    response = await generate_key_helper_fn(
+        request_type="user",
+        duration="12h",
+        user_id="test_user",
+    )
+
+    expires = response.get("expires")
+    assert expires is not None, "expires not found in response"
+
+    # Calculate expected expiration (approximately 12 hours from now)
+    # Allow for small variance due to test execution time
+    now = datetime.now(timezone.utc)
+    expected_expires_min = now + timedelta(hours=11, minutes=59)
+    expected_expires_max = now + timedelta(hours=12, minutes=1)
+
+    assert (
+        expected_expires_min <= expires <= expected_expires_max
+    ), f"Expected expires to be approximately 12 hours from now ({now}), got {expires}. Duration should be exact, not aligned to time boundaries."
+
+    # Verify it's NOT aligned to hour boundaries (e.g., not exactly at :00 minutes)
+    # If created at 2:30 PM, it should expire at 2:30 AM, not midnight
+    expires_minute = expires.minute
+    expires_second = expires.second
+    # If the expiration is exactly at :00:00, it might be aligned (though could be coincidence)
+    # More importantly, verify the duration is correct
+    time_diff = expires - now
+    hours_diff = time_diff.total_seconds() / 3600
+    assert (
+        11.9 <= hours_diff <= 12.1
+    ), f"Expected expiration to be approximately 12 hours from creation, got {hours_diff} hours"
 
 
 @pytest.mark.asyncio
