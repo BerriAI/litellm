@@ -713,6 +713,23 @@ class Router:
         self, routing_strategy: Union[RoutingStrategy, str], routing_strategy_args: dict
     ):
         verbose_router_logger.info(f"Routing strategy: {routing_strategy}")
+
+        # Validate routing_strategy value to fail fast with helpful error
+        # See: https://github.com/BerriAI/litellm/issues/11330
+        # Derive valid strategies from RoutingStrategy enum + "simple-shuffle" (default, not in enum)
+        valid_strategy_strings = ["simple-shuffle"] + [s.value for s in RoutingStrategy]
+
+        if routing_strategy is not None:
+            is_valid_string = isinstance(routing_strategy, str) and routing_strategy in valid_strategy_strings
+            is_valid_enum = isinstance(routing_strategy, RoutingStrategy)
+            if not is_valid_string and not is_valid_enum:
+                raise ValueError(
+                    f"Invalid routing_strategy: '{routing_strategy}'. "
+                    f"Valid options: {valid_strategy_strings}. "
+                    f"Check 'router_settings.routing_strategy' in your config.yaml "
+                    f"or the 'routing_strategy' parameter if using the Router SDK directly."
+                )
+
         if (
             routing_strategy == RoutingStrategy.LEAST_BUSY.value
             or routing_strategy == RoutingStrategy.LEAST_BUSY
