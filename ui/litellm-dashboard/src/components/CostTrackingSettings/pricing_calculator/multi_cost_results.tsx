@@ -9,6 +9,7 @@ import MultiExportDropdown from "./multi_export_dropdown";
 
 interface MultiCostResultsProps {
   multiResult: MultiModelResult;
+  timePeriod: "day" | "month";
 }
 
 const formatCost = (value: number | null | undefined): string => {
@@ -27,7 +28,15 @@ const formatRequests = (value: number | null | undefined): string => {
 const SingleModelBreakdown: React.FC<{
   result: CostEstimateResponse;
   loading: boolean;
-}> = ({ result, loading }) => {
+  timePeriod: "day" | "month";
+}> = ({ result, loading, timePeriod }) => {
+  const periodLabel = timePeriod === "day" ? "Daily" : "Monthly";
+  const periodCost = timePeriod === "day" ? result.daily_cost : result.monthly_cost;
+  const periodInputCost = timePeriod === "day" ? result.daily_input_cost : result.monthly_input_cost;
+  const periodOutputCost = timePeriod === "day" ? result.daily_output_cost : result.monthly_output_cost;
+  const periodMarginCost = timePeriod === "day" ? result.daily_margin_cost : result.monthly_margin_cost;
+  const periodRequests = timePeriod === "day" ? result.num_requests_per_day : result.num_requests_per_month;
+
   return (
     <div className="space-y-3 bg-gray-50 p-4 rounded-lg">
       {loading && (
@@ -51,54 +60,33 @@ const SingleModelBreakdown: React.FC<{
           <Text className="text-sm">{formatCost(result.output_cost_per_request)}</Text>
         </div>
         <div>
-          <Text className="text-xs text-gray-500 block">Margin/Fee</Text>
+          <Text className="text-xs text-gray-500 block">Margin Fee</Text>
           <Text className={`text-sm ${result.margin_cost_per_request > 0 ? "text-amber-600" : ""}`}>
             {formatCost(result.margin_cost_per_request)}
           </Text>
         </div>
       </div>
 
-      {result.daily_cost !== null && (
+      {periodCost !== null && (
         <div className="grid grid-cols-4 gap-4 pt-2 border-t border-gray-200">
           <div>
-            <Text className="text-xs text-gray-500 block">Daily Total ({formatRequests(result.num_requests_per_day)} req)</Text>
-            <Text className="text-base font-semibold text-green-600">{formatCost(result.daily_cost)}</Text>
-          </div>
-          <div>
-            <Text className="text-xs text-gray-500 block">Daily Input</Text>
-            <Text className="text-sm">{formatCost(result.daily_input_cost)}</Text>
-          </div>
-          <div>
-            <Text className="text-xs text-gray-500 block">Daily Output</Text>
-            <Text className="text-sm">{formatCost(result.daily_output_cost)}</Text>
-          </div>
-          <div>
-            <Text className="text-xs text-gray-500 block">Daily Margin</Text>
-            <Text className={`text-sm ${(result.daily_margin_cost ?? 0) > 0 ? "text-amber-600" : ""}`}>
-              {formatCost(result.daily_margin_cost)}
+            <Text className="text-xs text-gray-500 block">{periodLabel} Total ({formatRequests(periodRequests)} req)</Text>
+            <Text className={`text-base font-semibold ${timePeriod === "day" ? "text-green-600" : "text-purple-600"}`}>
+              {formatCost(periodCost)}
             </Text>
           </div>
-        </div>
-      )}
-
-      {result.monthly_cost !== null && (
-        <div className="grid grid-cols-4 gap-4 pt-2 border-t border-gray-200">
           <div>
-            <Text className="text-xs text-gray-500 block">Monthly Total ({formatRequests(result.num_requests_per_month)} req)</Text>
-            <Text className="text-base font-semibold text-purple-600">{formatCost(result.monthly_cost)}</Text>
+            <Text className="text-xs text-gray-500 block">{periodLabel} Input</Text>
+            <Text className="text-sm">{formatCost(periodInputCost)}</Text>
           </div>
           <div>
-            <Text className="text-xs text-gray-500 block">Monthly Input</Text>
-            <Text className="text-sm">{formatCost(result.monthly_input_cost)}</Text>
+            <Text className="text-xs text-gray-500 block">{periodLabel} Output</Text>
+            <Text className="text-sm">{formatCost(periodOutputCost)}</Text>
           </div>
           <div>
-            <Text className="text-xs text-gray-500 block">Monthly Output</Text>
-            <Text className="text-sm">{formatCost(result.monthly_output_cost)}</Text>
-          </div>
-          <div>
-            <Text className="text-xs text-gray-500 block">Monthly Margin</Text>
-            <Text className={`text-sm ${(result.monthly_margin_cost ?? 0) > 0 ? "text-amber-600" : ""}`}>
-              {formatCost(result.monthly_margin_cost)}
+            <Text className="text-xs text-gray-500 block">{periodLabel} Margin Fee</Text>
+            <Text className={`text-sm ${(periodMarginCost ?? 0) > 0 ? "text-amber-600" : ""}`}>
+              {formatCost(periodMarginCost)}
             </Text>
           </div>
         </div>
@@ -120,7 +108,7 @@ const SingleModelBreakdown: React.FC<{
   );
 };
 
-const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult }) => {
+const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePeriod }) => {
   const [expandedModels, setExpandedModels] = useState<Set<string>>(new Set());
 
   const validEntries = multiResult.entries.filter((e) => e.result !== null);
@@ -161,6 +149,9 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult }) => {
 
   const hasMargin = multiResult.totals.margin_per_request > 0;
 
+  const periodLabel = timePeriod === "day" ? "Daily" : "Monthly";
+  const periodCostKey = timePeriod === "day" ? "daily_cost" : "monthly_cost";
+
   const summaryColumns = [
     {
       title: "Model",
@@ -185,7 +176,7 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult }) => {
       render: (value: number) => <span className="font-mono text-sm">{formatCost(value)}</span>,
     },
     {
-      title: "Margin",
+      title: "Margin Fee",
       dataIndex: "margin_cost_per_request",
       key: "margin_cost_per_request",
       align: "right" as const,
@@ -196,16 +187,9 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult }) => {
       ),
     },
     {
-      title: "Daily",
-      dataIndex: "daily_cost",
-      key: "daily_cost",
-      align: "right" as const,
-      render: (value: number | null) => <span className="font-mono text-sm">{formatCost(value)}</span>,
-    },
-    {
-      title: "Monthly",
-      dataIndex: "monthly_cost",
-      key: "monthly_cost",
+      title: periodLabel,
+      dataIndex: periodCostKey,
+      key: "period_cost",
       align: "right" as const,
       render: (value: number | null) => <span className="font-mono text-sm">{formatCost(value)}</span>,
     },
@@ -252,41 +236,32 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult }) => {
       {/* Combined Totals - Always show when there are results */}
       <Card size="small" className="bg-gradient-to-r from-slate-50 to-blue-50 border-slate-200">
         <Row gutter={[16, 8]}>
-          <Col xs={24} sm={8}>
+          <Col xs={24} sm={12}>
             <Statistic
               title={<span className="text-xs">Total Per Request</span>}
               value={formatCost(multiResult.totals.cost_per_request)}
               valueStyle={{ color: "#1890ff", fontSize: "18px", fontFamily: "monospace" }}
             />
           </Col>
-          <Col xs={24} sm={8}>
+          <Col xs={24} sm={12}>
             <Statistic
-              title={<span className="text-xs">Total Daily</span>}
-              value={formatCost(multiResult.totals.daily_cost)}
-              valueStyle={{ color: "#52c41a", fontSize: "18px", fontFamily: "monospace" }}
-            />
-          </Col>
-          <Col xs={24} sm={8}>
-            <Statistic
-              title={<span className="text-xs">Total Monthly</span>}
-              value={formatCost(multiResult.totals.monthly_cost)}
-              valueStyle={{ color: "#722ed1", fontSize: "18px", fontFamily: "monospace" }}
+              title={<span className="text-xs">Total {periodLabel}</span>}
+              value={formatCost(timePeriod === "day" ? multiResult.totals.daily_cost : multiResult.totals.monthly_cost)}
+              valueStyle={{ color: timePeriod === "day" ? "#52c41a" : "#722ed1", fontSize: "18px", fontFamily: "monospace" }}
             />
           </Col>
         </Row>
         {hasMargin && (
           <Row gutter={[16, 8]} className="mt-3 pt-3 border-t border-slate-200">
-            <Col xs={24} sm={8}>
-              <div className="text-xs text-gray-500">Margin/Request</div>
+            <Col xs={24} sm={12}>
+              <div className="text-xs text-gray-500">Margin Fee/Request</div>
               <div className="text-sm font-mono text-amber-600">{formatCost(multiResult.totals.margin_per_request)}</div>
             </Col>
-            <Col xs={24} sm={8}>
-              <div className="text-xs text-gray-500">Daily Margin</div>
-              <div className="text-sm font-mono text-amber-600">{formatCost(multiResult.totals.daily_margin)}</div>
-            </Col>
-            <Col xs={24} sm={8}>
-              <div className="text-xs text-gray-500">Monthly Margin</div>
-              <div className="text-sm font-mono text-amber-600">{formatCost(multiResult.totals.monthly_margin)}</div>
+            <Col xs={24} sm={12}>
+              <div className="text-xs text-gray-500">{periodLabel} Margin Fee</div>
+              <div className="text-sm font-mono text-amber-600">
+                {formatCost(timePeriod === "day" ? multiResult.totals.daily_margin : multiResult.totals.monthly_margin)}
+              </div>
             </Col>
           </Row>
         )}
@@ -307,7 +282,7 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult }) => {
               if (!entry?.result) return null;
               return (
                 <div className="py-2">
-                  <SingleModelBreakdown result={entry.result} loading={entry.loading} />
+                  <SingleModelBreakdown result={entry.result} loading={entry.loading} timePeriod={timePeriod} />
                 </div>
               );
             },

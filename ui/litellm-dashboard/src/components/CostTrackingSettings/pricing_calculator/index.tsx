@@ -1,9 +1,11 @@
 import React, { useState, useCallback } from "react";
-import { Table, Select, InputNumber, Button } from "antd";
+import { Table, Select, InputNumber, Button, Radio } from "antd";
 import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
 import { PricingCalculatorProps, ModelEntry } from "./types";
 import MultiCostResults from "./multi_cost_results";
 import { useMultiCostEstimate } from "./use_multi_cost_estimate";
+
+type TimePeriod = "day" | "month";
 
 const generateId = () => `entry-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
@@ -21,6 +23,7 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({
   models,
 }) => {
   const [entries, setEntries] = useState<ModelEntry[]>([createDefaultEntry()]);
+  const [timePeriod, setTimePeriod] = useState<TimePeriod>("month");
   const { debouncedFetchForEntry, removeEntry, getMultiModelResult } =
     useMultiCostEstimate(accessToken);
 
@@ -39,6 +42,18 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({
     },
     [debouncedFetchForEntry]
   );
+
+  const handleTimePeriodChange = useCallback((period: TimePeriod) => {
+    setTimePeriod(period);
+    // Clear the opposite field for all entries when switching
+    setEntries((prev) =>
+      prev.map((entry) => ({
+        ...entry,
+        num_requests_per_day: period === "day" ? entry.num_requests_per_day : undefined,
+        num_requests_per_month: period === "month" ? entry.num_requests_per_month : undefined,
+      }))
+    );
+  }, []);
 
   const handleAddEntry = useCallback(() => {
     setEntries((prev) => [...prev, createDefaultEntry()]);
@@ -59,7 +74,7 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({
       title: "Model",
       dataIndex: "model",
       key: "model",
-      width: "30%",
+      width: "35%",
       render: (_: string, record: ModelEntry) => (
         <Select
           showSearch
@@ -83,7 +98,7 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({
       title: "Input Tokens",
       dataIndex: "input_tokens",
       key: "input_tokens",
-      width: "15%",
+      width: "18%",
       render: (_: number, record: ModelEntry) => (
         <InputNumber
           min={0}
@@ -99,7 +114,7 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({
       title: "Output Tokens",
       dataIndex: "output_tokens",
       key: "output_tokens",
-      width: "15%",
+      width: "18%",
       render: (_: number, record: ModelEntry) => (
         <InputNumber
           min={0}
@@ -112,36 +127,25 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({
       ),
     },
     {
-      title: "Requests/Day",
-      dataIndex: "num_requests_per_day",
-      key: "num_requests_per_day",
-      width: "15%",
+      title: `Requests/${timePeriod === "day" ? "Day" : "Month"}`,
+      dataIndex: timePeriod === "day" ? "num_requests_per_day" : "num_requests_per_month",
+      key: "num_requests",
+      width: "20%",
       render: (_: number | undefined, record: ModelEntry) => (
         <InputNumber
           min={0}
-          value={record.num_requests_per_day}
-          onChange={(value) => handleEntryChange(record.id, "num_requests_per_day", value ?? undefined)}
+          value={timePeriod === "day" ? record.num_requests_per_day : record.num_requests_per_month}
+          onChange={(value) =>
+            handleEntryChange(
+              record.id,
+              timePeriod === "day" ? "num_requests_per_day" : "num_requests_per_month",
+              value ?? undefined
+            )
+          }
           style={{ width: "100%" }}
           size="small"
           placeholder="-"
-          formatter={(value) => value ? `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ",") : ""}
-        />
-      ),
-    },
-    {
-      title: "Requests/Month",
-      dataIndex: "num_requests_per_month",
-      key: "num_requests_per_month",
-      width: "15%",
-      render: (_: number | undefined, record: ModelEntry) => (
-        <InputNumber
-          min={0}
-          value={record.num_requests_per_month}
-          onChange={(value) => handleEntryChange(record.id, "num_requests_per_month", value ?? undefined)}
-          style={{ width: "100%" }}
-          size="small"
-          placeholder="-"
-          formatter={(value) => value ? `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ",") : ""}
+          formatter={(value) => (value ? `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ",") : "")}
         />
       ),
     },
@@ -164,6 +168,19 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({
 
   return (
     <div className="space-y-4">
+      <div className="flex items-center justify-end mb-2">
+        <Radio.Group
+          value={timePeriod}
+          onChange={(e) => handleTimePeriodChange(e.target.value)}
+          size="small"
+          optionType="button"
+          buttonStyle="solid"
+        >
+          <Radio.Button value="day">Per Day</Radio.Button>
+          <Radio.Button value="month">Per Month</Radio.Button>
+        </Radio.Group>
+      </div>
+
       <Table
         columns={columns}
         dataSource={entries}
@@ -182,7 +199,7 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({
         )}
       />
 
-      <MultiCostResults multiResult={multiModelResult} />
+      <MultiCostResults multiResult={multiModelResult} timePeriod={timePeriod} />
     </div>
   );
 };
