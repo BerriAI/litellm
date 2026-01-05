@@ -7,6 +7,7 @@ GET /config/cost_discount_config - Get current cost discount configuration
 PATCH /config/cost_discount_config - Update cost discount configuration
 GET /config/cost_margin_config - Get current cost margin configuration
 PATCH /config/cost_margin_config - Update cost margin configuration
+POST /cost/estimate - Estimate cost for a given model and token counts
 """
 
 from typing import Dict, Union
@@ -15,11 +16,35 @@ from fastapi import APIRouter, Depends, HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
+from litellm.cost_calculator import completion_cost
+from litellm.proxy._types import (
+    CommonProxyErrors,
+    CostEstimateRequest,
+    CostEstimateResponse,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.utils import LlmProvidersSet
 
 router = APIRouter()
+
+
+def _calculate_period_costs(
+    num_requests, cost_per_request, input_cost, output_cost, margin_cost
+):
+    """
+    Calculate costs for a given number of requests.
+
+    Returns tuple of (total_cost, input_cost, output_cost, margin_cost) or all None if num_requests is None/0.
+    """
+    if not num_requests:
+        return None, None, None, None
+    return (
+        cost_per_request * num_requests,
+        input_cost * num_requests,
+        output_cost * num_requests,
+        margin_cost * num_requests,
+    )
 
 
 @router.get(
@@ -346,4 +371,145 @@ async def update_cost_margin_config(
             status_code=500,
             detail={"error": f"Failed to update cost margin config: {str(e)}"}
         )
+
+
+@router.post(
+    "/cost/estimate",
+    tags=["Cost Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=CostEstimateResponse,
+)
+async def estimate_cost(
+    request: CostEstimateRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> CostEstimateResponse:
+    """
+    Estimate cost for a given model and token counts.
+
+    This endpoint uses the same cost calculation logic as actual requests,
+    including any configured margins and discounts.
+
+    Parameters:
+    - model: Model name (e.g., "gpt-4", "claude-3-opus")
+    - input_tokens: Expected input tokens per request
+    - output_tokens: Expected output tokens per request
+    - num_requests_per_day: Number of requests per day (optional)
+    - num_requests_per_month: Number of requests per month (optional)
+
+    Returns cost breakdown including:
+    - Per-request costs (input, output, margin)
+    - Daily costs (if num_requests_per_day provided)
+    - Monthly costs (if num_requests_per_month provided)
+
+    Example:
+    ```json
+    {
+        "model": "gpt-4",
+        "input_tokens": 1000,
+        "output_tokens": 500,
+        "num_requests_per_day": 100,
+        "num_requests_per_month": 3000
+    }
+    ```
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.utils import Usage
+    from litellm.utils import ModelResponse
+
+    # Create a mock response with usage for completion_cost
+    mock_response = ModelResponse(
+        model=request.model,
+        usage=Usage(
+            prompt_tokens=request.input_tokens,
+            completion_tokens=request.output_tokens,
+            total_tokens=request.input_tokens + request.output_tokens,
+        ),
+    )
+
+    # Create a logging object to capture cost breakdown
+    litellm_logging_obj = LiteLLMLoggingObj(
+        model=request.model,
+        messages=[],
+        stream=False,
+        call_type="completion",
+        start_time=None,
+        litellm_call_id="cost-estimate",
+        function_id="cost-estimate",
+    )
+
+    # Use completion_cost which handles all the logic including margins/discounts
+    try:
+        cost_per_request = completion_cost(
+            completion_response=mock_response,
+            model=request.model,
+            litellm_logging_obj=litellm_logging_obj,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": f"Could not calculate cost for model '{request.model}': {str(e)}"
+            },
+        )
+
+    # Get cost breakdown from the logging object
+    cost_breakdown = litellm_logging_obj.cost_breakdown
+
+    input_cost = cost_breakdown.get("input_cost", 0.0) if cost_breakdown else 0.0
+    output_cost = cost_breakdown.get("output_cost", 0.0) if cost_breakdown else 0.0
+    margin_cost = cost_breakdown.get("margin_total_amount", 0.0) if cost_breakdown else 0.0
+
+    # Get model info for per-token pricing display
+    try:
+        model_info = litellm.get_model_info(model=request.model)
+        input_cost_per_token = model_info.get("input_cost_per_token")
+        output_cost_per_token = model_info.get("output_cost_per_token")
+        custom_llm_provider = model_info.get("litellm_provider")
+    except Exception:
+        input_cost_per_token = None
+        output_cost_per_token = None
+        custom_llm_provider = None
+
+    # Calculate daily and monthly costs
+    daily_cost, daily_input_cost, daily_output_cost, daily_margin_cost = (
+        _calculate_period_costs(
+            num_requests=request.num_requests_per_day,
+            cost_per_request=cost_per_request,
+            input_cost=input_cost,
+            output_cost=output_cost,
+            margin_cost=margin_cost,
+        )
+    )
+    monthly_cost, monthly_input_cost, monthly_output_cost, monthly_margin_cost = (
+        _calculate_period_costs(
+            num_requests=request.num_requests_per_month,
+            cost_per_request=cost_per_request,
+            input_cost=input_cost,
+            output_cost=output_cost,
+            margin_cost=margin_cost,
+        )
+    )
+
+    return CostEstimateResponse(
+        model=request.model,
+        input_tokens=request.input_tokens,
+        output_tokens=request.output_tokens,
+        num_requests_per_day=request.num_requests_per_day,
+        num_requests_per_month=request.num_requests_per_month,
+        cost_per_request=cost_per_request,
+        input_cost_per_request=input_cost,
+        output_cost_per_request=output_cost,
+        margin_cost_per_request=margin_cost,
+        daily_cost=daily_cost,
+        daily_input_cost=daily_input_cost,
+        daily_output_cost=daily_output_cost,
+        daily_margin_cost=daily_margin_cost,
+        monthly_cost=monthly_cost,
+        monthly_input_cost=monthly_input_cost,
+        monthly_output_cost=monthly_output_cost,
+        monthly_margin_cost=monthly_margin_cost,
+        input_cost_per_token=input_cost_per_token,
+        output_cost_per_token=output_cost_per_token,
+        provider=custom_llm_provider,
+    )
 
