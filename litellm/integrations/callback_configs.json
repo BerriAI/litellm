@@ -187,6 +187,12 @@
         "ui_name": "Sampling Rate",
         "description": "Sampling rate for logging (0.0 to 1.0, default: 1.0)",
         "required": false
+      },
+      "langsmith_tenant_id": {
+        "type": "text",
+        "ui_name": "Tenant ID",
+        "description": "LangSmith tenant ID for organization-scoped API keys (required when using org-scoped keys)",
+        "required": false
       }
     },
     "description": "Langsmith Logging Integration"
