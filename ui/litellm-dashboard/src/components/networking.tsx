@@ -92,6 +92,12 @@ const updateServerRootPath = (receivedServerRootPath: string) => {
 };
 
 export const getProxyBaseUrl = (): string => {
+  // Check for custom proxy base URL from sessionStorage first
+  const customProxyBaseUrl = sessionStorage.getItem("customProxyBaseUrl");
+  if (customProxyBaseUrl && customProxyBaseUrl.trim() !== "") {
+    return customProxyBaseUrl;
+  }
+
   if (proxyBaseUrl) {
     return proxyBaseUrl;
   }
