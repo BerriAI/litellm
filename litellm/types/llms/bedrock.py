@@ -154,8 +154,24 @@ class ToolSpecBlock(TypedDict, total=False):
     description: str
 
 
+class SystemToolBlock(TypedDict, total=False):
+    """
+    System tool block for Nova grounding and other built-in tools.
+
+    Example:
+        {
+            "systemTool": {
+                "name": "nova_grounding"
+            }
+        }
+    """
+
+    name: Required[str]
+
+
 class ToolBlock(TypedDict, total=False):
     toolSpec: Optional[ToolSpecBlock]
+    systemTool: Optional[SystemToolBlock]
     cachePoint: Optional[CachePointBlock]
 
 
