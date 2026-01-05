@@ -62,7 +62,8 @@ class ProductionGCSLogger(CustomLogger):
             )
             
             # Upload using the GCS REST API
-            json_data = json.dumps(data, indent=2, default=str)
+            # Note: No indent - BigQuery requires single-line JSON (NEWLINE_DELIMITED_JSON format)
+            json_data = json.dumps(data, default=str)
             await self.gcs_base._log_json_data_on_gcs(
                 headers=headers,
                 bucket_name=bucket_name,
@@ -113,7 +114,6 @@ class ProductionGCSLogger(CustomLogger):
                 "correlation_id": correlation_id,
                 "timestamp": time.time(),
                 "timestamp_iso": datetime.utcnow().isoformat(),
-                "date": log_date,
                 "litellm_session_id": session_id,
                 "type": "SUCCESS",
                 "user": {
@@ -212,7 +212,6 @@ class ProductionGCSLogger(CustomLogger):
                 "correlation_id": correlation_id,
                 "timestamp": time.time(),
                 "timestamp_iso": datetime.utcnow().isoformat(),
-                "date": log_date,
                 "litellm_session_id": session_id,
                 "type": "ERROR",
                 "user": {
