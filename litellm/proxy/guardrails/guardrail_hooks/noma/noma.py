@@ -638,7 +638,7 @@ class NomaGuardrail(CustomGuardrail):
         call_type: CallTypesLiteral,
     ) -> Union[Exception, str, dict, None]:
         event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
-        if call_type == CallTypes.during_mcp_call.value:
+        if call_type == CallTypes.call_mcp_tool.value:
             event_type = GuardrailEventHooks.pre_mcp_call
 
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
