@@ -372,7 +372,7 @@ async def estimate_cost(
     including any configured margins and discounts.
 
     Parameters:
-    - model: Model name from /model_group/info (e.g., "gpt-4", "claude-3-opus")
+    - model: Model name (e.g., "gpt-4", "claude-3-opus")
     - input_tokens: Expected input tokens per request
     - output_tokens: Expected output tokens per request
     - num_requests: Number of requests (default: 1)
@@ -393,55 +393,66 @@ async def estimate_cost(
     }
     ```
     """
-    from litellm.cost_calculator import _apply_cost_margin
-    from litellm.proxy.proxy_server import llm_router
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.utils import Usage
+    from litellm.utils import ModelResponse
 
-    if llm_router is None:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Router not initialized. No models configured."},
+    # Create a mock response with usage for completion_cost
+    mock_response = ModelResponse(
+        model=request.model,
+        usage=Usage(
+            prompt_tokens=request.input_tokens,
+            completion_tokens=request.output_tokens,
+            total_tokens=request.input_tokens + request.output_tokens,
+        ),
+    )
+
+    # Create a logging object to capture cost breakdown
+    litellm_logging_obj = LiteLLMLoggingObj(
+        model=request.model,
+        messages=[],
+        stream=False,
+        call_type="completion",
+        start_time=None,
+        litellm_call_id="cost-estimate",
+        function_id="cost-estimate",
+    )
+
+    # Use completion_cost which handles all the logic including margins/discounts
+    try:
+        total_cost_per_request = completion_cost(
+            completion_response=mock_response,
+            model=request.model,
+            litellm_logging_obj=litellm_logging_obj,
         )
-
-    # Get model group info from router to resolve pricing
-    model_group_info = llm_router.get_model_group_info(model_group=request.model)
-
-    if model_group_info is None:
+    except Exception as e:
         raise HTTPException(
             status_code=404,
             detail={
-                "error": f"Model '{request.model}' not found. Use /model_group/info to see available models."
+                "error": f"Could not calculate cost for model '{request.model}': {str(e)}"
             },
         )
 
-    # Get the provider from the model group
-    providers: List[str] = model_group_info.providers or []
-    custom_llm_provider: Optional[str] = providers[0] if providers else None
+    # Get cost breakdown from the logging object
+    cost_breakdown = litellm_logging_obj.cost_breakdown
 
-    # Get cost per token from model group info
-    input_cost_per_token = model_group_info.input_cost_per_token or 0.0
-    output_cost_per_token = model_group_info.output_cost_per_token or 0.0
+    input_cost = cost_breakdown.get("input_cost", 0.0) if cost_breakdown else 0.0
+    output_cost = cost_breakdown.get("output_cost", 0.0) if cost_breakdown else 0.0
+    margin_cost = cost_breakdown.get("margin_total_amount", 0.0) if cost_breakdown else 0.0
 
-    # Calculate base costs (before margin)
-    input_cost = input_cost_per_token * request.input_tokens
-    output_cost = output_cost_per_token * request.output_tokens
-    base_cost = input_cost + output_cost
-
-    # Apply margin using the same function as completion_cost
-    (
-        cost_with_margin,
-        _margin_percent,
-        _margin_fixed_amount,
-        margin_cost,
-    ) = _apply_cost_margin(
-        base_cost=base_cost,
-        custom_llm_provider=custom_llm_provider,
-    )
-
-    cost_per_request = cost_with_margin
+    # Get model info for per-token pricing display
+    try:
+        model_info = litellm.get_model_info(model=request.model)
+        input_cost_per_token = model_info.get("input_cost_per_token")
+        output_cost_per_token = model_info.get("output_cost_per_token")
+        custom_llm_provider = model_info.get("litellm_provider")
+    except Exception:
+        input_cost_per_token = None
+        output_cost_per_token = None
+        custom_llm_provider = None
 
     # Calculate totals based on number of requests
-    total_cost = cost_per_request * request.num_requests
+    total_cost = total_cost_per_request * request.num_requests
     total_input_cost = input_cost * request.num_requests
     total_output_cost = output_cost * request.num_requests
     total_margin_cost = margin_cost * request.num_requests
@@ -451,7 +462,7 @@ async def estimate_cost(
         input_tokens=request.input_tokens,
         output_tokens=request.output_tokens,
         num_requests=request.num_requests,
-        cost_per_request=cost_per_request,
+        cost_per_request=total_cost_per_request,
         input_cost_per_request=input_cost,
         output_cost_per_request=output_cost,
         margin_cost_per_request=margin_cost,
