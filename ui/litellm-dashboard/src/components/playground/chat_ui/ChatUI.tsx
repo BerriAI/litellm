@@ -45,8 +45,8 @@ import { makeOpenAIAudioSpeechRequest } from "../llm_calls/audio_speech";
 import { makeOpenAIAudioTranscriptionRequest } from "../llm_calls/audio_transcriptions";
 import { makeOpenAIChatCompletionRequest } from "../llm_calls/chat_completion";
 import { makeOpenAIEmbeddingsRequest } from "../llm_calls/embeddings_api";
-import type { MCPTool } from "../llm_calls/fetch_mcp_tools";
-import { fetchAvailableMCPTools } from "../llm_calls/fetch_mcp_tools";
+import { listMCPTools, fetchMCPServers } from "../../networking";
+import { MCPServer } from "../../mcp_tools/types";
 import { fetchAvailableModels, ModelGroup } from "../llm_calls/fetch_models";
 import { makeOpenAIImageEditsRequest } from "../llm_calls/image_edits";
 import { makeOpenAIImageGenerationRequest } from "../llm_calls/image_generation";
@@ -97,20 +97,27 @@ const ChatUI: React.FC<ChatUIProps> = ({
   disabledPersonalKeyCreation,
   proxySettings,
 }) => {
-  const [isMCPToolsModalVisible, setIsMCPToolsModalVisible] = useState(false);
-  const [mcpTools, setMCPTools] = useState<MCPTool[]>([]);
-  const [selectedMCPTools, setSelectedMCPTools] = useState<string[]>(() => {
-    const saved = sessionStorage.getItem("selectedMCPTools");
+  const [mcpServers, setMCPServers] = useState<MCPServer[]>([]);
+  const [selectedMCPServers, setSelectedMCPServers] = useState<string[]>(() => {
+    const saved = sessionStorage.getItem("selectedMCPServers");
     try {
-      const parsed = saved ? JSON.parse(saved) : [];
-      // Convert from single string to array if needed for backward compatibility
-      return Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
+      return saved ? JSON.parse(saved) : [];
     } catch (error) {
-      console.error("Error parsing selectedMCPTools from sessionStorage", error);
+      console.error("Error parsing selectedMCPServers from sessionStorage", error);
       return [];
     }
   });
-  const [isLoadingMCPTools, setIsLoadingMCPTools] = useState(false);
+  const [isLoadingMCPServers, setIsLoadingMCPServers] = useState(false);
+  const [serverToolsMap, setServerToolsMap] = useState<Record<string, any[]>>({});
+  const [mcpServerToolRestrictions, setMCPServerToolRestrictions] = useState<Record<string, string[]>>(() => {
+    const saved = sessionStorage.getItem("mcpServerToolRestrictions");
+    try {
+      return saved ? JSON.parse(saved) : {};
+    } catch (error) {
+      console.error("Error parsing mcpServerToolRestrictions from sessionStorage", error);
+      return {};
+    }
+  });
   const [apiKeySource, setApiKeySource] = useState<"session" | "custom">(() => {
     const saved = sessionStorage.getItem("apiKeySource");
     if (saved) {
@@ -211,27 +218,38 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
-  // Fetch MCP tools
-  const loadMCPTools = async () => {
+  // Fetch MCP servers
+  const loadMCPServers = async () => {
     const userApiKey = apiKeySource === "session" ? accessToken : apiKey;
     if (!userApiKey) return;
 
-    setIsLoadingMCPTools(true);
+    setIsLoadingMCPServers(true);
     try {
-      const tools = await fetchAvailableMCPTools(userApiKey);
-      setMCPTools(tools);
+      const servers = await fetchMCPServers(userApiKey);
+      setMCPServers(Array.isArray(servers) ? servers : servers.data || []);
     } catch (error) {
-      console.error("Error fetching MCP tools:", error);
+      console.error("Error fetching MCP servers:", error);
     } finally {
-      setIsLoadingMCPTools(false);
+      setIsLoadingMCPServers(false);
     }
   };
 
-  useEffect(() => {
-    if (isMCPToolsModalVisible) {
-      loadMCPTools();
+  // Fetch tools for a specific server
+  const loadServerTools = async (serverId: string) => {
+    const userApiKey = apiKeySource === "session" ? accessToken : apiKey;
+    if (!userApiKey || serverToolsMap[serverId]) return;
+
+    try {
+      const response = await listMCPTools(userApiKey, serverId);
+      setServerToolsMap(prev => ({
+        ...prev,
+        [serverId]: response.tools || []
+      }));
+    } catch (error) {
+      console.error(`Error fetching tools for server ${serverId}:`, error);
     }
-  }, [isMCPToolsModalVisible, accessToken, apiKey, apiKeySource]);
+  };
+
 
   useEffect(() => {
     if (isGetCodeModalVisible) {
@@ -244,7 +262,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
         selectedTags,
         selectedVectorStores,
         selectedGuardrails,
-        selectedMCPTools,
+        selectedMCPServers,
+        mcpServers,
+        mcpServerToolRestrictions,
         endpointType,
         selectedModel,
         selectedSdk,
@@ -264,7 +284,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
     selectedTags,
     selectedVectorStores,
     selectedGuardrails,
-    selectedMCPTools,
+    selectedMCPServers,
+    mcpServers,
+    mcpServerToolRestrictions,
     endpointType,
     selectedModel,
     proxySettings,
@@ -287,8 +309,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
     sessionStorage.setItem("selectedTags", JSON.stringify(selectedTags));
     sessionStorage.setItem("selectedVectorStores", JSON.stringify(selectedVectorStores));
     sessionStorage.setItem("selectedGuardrails", JSON.stringify(selectedGuardrails));
-    sessionStorage.setItem("selectedMCPTools", JSON.stringify(selectedMCPTools));
+    sessionStorage.setItem("selectedMCPServers", JSON.stringify(selectedMCPServers));
+    sessionStorage.setItem("mcpServerToolRestrictions", JSON.stringify(mcpServerToolRestrictions));
     sessionStorage.setItem("selectedVoice", selectedVoice);
+    sessionStorage.removeItem("selectedMCPTools"); // Clean up old key
 
     if (selectedModel) {
       sessionStorage.setItem("selectedModel", selectedModel);
@@ -318,7 +342,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
     messageTraceId,
     responsesSessionId,
     useApiSessionManagement,
-    selectedMCPTools,
+    selectedMCPServers,
+    mcpServerToolRestrictions,
     selectedVoice,
   ]);
 
@@ -355,7 +380,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     };
 
     loadModels();
-    loadMCPTools();
+    loadMCPServers();
   }, [accessToken, userID, userRole, apiKeySource, apiKey, token]);
 
   // Fetch agents when A2A endpoint is selected
@@ -869,12 +894,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
             traceId,
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-            selectedMCPTools,
+            selectedMCPServers,
             updateChatImageUI,
             updateSearchResults,
             useAdvancedParams ? temperature : undefined,
             useAdvancedParams ? maxTokens : undefined,
             updateTotalLatency,
+            mcpServers,
+            mcpServerToolRestrictions,
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -940,12 +967,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
             traceId,
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-            selectedMCPTools, // Pass the selected tools array
+            selectedMCPServers, // Pass the selected servers array
             useApiSessionManagement ? responsesSessionId : null, // Only pass session ID if API mode is enabled
             handleResponseId, // Pass callback to capture new response ID
             handleMCPEvent, // Pass MCP event handler
             codeInterpreter.enabled, // Enable Code Interpreter tool
             codeInterpreter.setResult, // Handle code interpreter output
+            mcpServers,
+            mcpServerToolRestrictions,
           );
         } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
           const apiChatHistory = [
@@ -968,7 +997,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
             traceId,
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-            selectedMCPTools, // Pass the selected tools array
           );
         } else if (endpointType === EndpointType.EMBEDDINGS) {
           await makeOpenAIEmbeddingsRequest(
@@ -1329,13 +1357,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 />
               </div>
 
-              {/* MCP Tool Selection */}
+              {/* MCP Server Selection */}
               <div>
                 <Text className="font-medium block mb-2 text-gray-700 flex items-center">
-                  <ToolOutlined className="mr-2" /> MCP Tool
+                  <ToolOutlined className="mr-2" /> MCP Servers
                   <Tooltip
                     className="ml-1"
-                    title="Select MCP tools to use in your conversation."
+                    title="Select MCP servers to use in your conversation."
                   >
                     <InfoCircleOutlined />
                   </Tooltip>
@@ -1343,30 +1371,103 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 <Select
                   mode="multiple"
                   style={{ width: "100%" }}
-                  placeholder="Select MCP tools"
-                  value={selectedMCPTools}
-                  onChange={(value) => setSelectedMCPTools(value)}
-                  loading={isLoadingMCPTools}
-                  className="mb-4"
+                  placeholder="Select MCP servers"
+                  value={selectedMCPServers}
+                  onChange={(value) => {
+                    if (value.includes("__all__")) {
+                      setSelectedMCPServers(["__all__"]);
+                      setMCPServerToolRestrictions({});
+                    } else {
+                      setSelectedMCPServers(value);
+                      // Clean up tool restrictions for removed servers
+                      setMCPServerToolRestrictions(prev => {
+                        const updated = { ...prev };
+                        Object.keys(updated).forEach(serverId => {
+                          if (!value.includes(serverId)) delete updated[serverId];
+                        });
+                        return updated;
+                      });
+                      // Load tools for newly selected servers
+                      value.forEach(serverId => {
+                        if (!serverToolsMap[serverId]) {
+                          loadServerTools(serverId);
+                        }
+                      });
+                    }
+                  }}
+                  loading={isLoadingMCPServers}
+                  className="mb-2"
                   allowClear
                   optionLabelProp="label"
                   disabled={!MCP_SUPPORTED_ENDPOINTS.has(endpointType as EndpointType)}
                   maxTagCount="responsive"
                 >
-                  {Array.isArray(mcpTools) &&
-                    mcpTools.map((tool) => (
-                      <Select.Option
-                        key={tool.name}
-                        value={tool.name}
-                        label={<div className="font-medium">{tool.name}</div>}
-                      >
-                        <div className="flex flex-col py-1">
-                          <span className="font-medium">{tool.name}</span>
-                          <span className="text-xs text-gray-500 mt-1">{tool.description}</span>
-                        </div>
-                      </Select.Option>
-                    ))}
+                  {/* All MCP Servers option */}
+                  <Select.Option key="__all__" value="__all__" label="All MCP Servers">
+                    <div className="flex flex-col py-1">
+                      <span className="font-medium">All MCP Servers</span>
+                      <span className="text-xs text-gray-500 mt-1">Use all available MCP servers</span>
+                    </div>
+                  </Select.Option>
+
+                  {/* Individual servers */}
+                  {mcpServers.map((server) => (
+                    <Select.Option
+                      key={server.server_id}
+                      value={server.server_id}
+                      label={server.alias || server.server_name || server.server_id}
+                      disabled={selectedMCPServers.includes("__all__")}
+                    >
+                      <div className="flex flex-col py-1">
+                        <span className="font-medium">
+                          {server.alias || server.server_name || server.server_id}
+                        </span>
+                        {server.description && (
+                          <span className="text-xs text-gray-500 mt-1">{server.description}</span>
+                        )}
+                      </div>
+                    </Select.Option>
+                  ))}
                 </Select>
+
+                {/* Tool restrictions UI (optional) */}
+                {selectedMCPServers.length > 0 &&
+                  !selectedMCPServers.includes("__all__") &&
+                  MCP_SUPPORTED_ENDPOINTS.has(endpointType as EndpointType) && (
+                  <div className="mt-3 space-y-2">
+                    {selectedMCPServers.map(serverId => {
+                      const server = mcpServers.find(s => s.server_id === serverId);
+                      const tools = serverToolsMap[serverId] || [];
+                      if (tools.length === 0) return null;
+
+                      return (
+                        <div key={serverId} className="border rounded p-2">
+                          <Text className="text-xs text-gray-600 mb-1">
+                            Limit tools for {server?.alias || server?.server_name || serverId}:
+                          </Text>
+                          <Select
+                            mode="multiple"
+                            size="small"
+                            style={{ width: "100%" }}
+                            placeholder="All tools (default)"
+                            value={mcpServerToolRestrictions[serverId] || []}
+                            onChange={(selectedTools) => {
+                              setMCPServerToolRestrictions(prev => ({
+                                ...prev,
+                                [serverId]: selectedTools
+                              }));
+                            }}
+                            options={tools.map(tool => ({
+                              value: tool.name,
+                              label: tool.name
+                            }))}
+                            maxTagCount={2}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
               <div>
@@ -2041,53 +2142,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
           {generatedCode}
         </SyntaxHighlighter>
       </Modal>
-      {apiKeySource === "custom" && (
-        <Modal
-          title="Select MCP Tool"
-          visible={isMCPToolsModalVisible}
-          onCancel={() => setIsMCPToolsModalVisible(false)}
-          onOk={() => {
-            setIsMCPToolsModalVisible(false);
-            NotificationsManager.success("MCP tool selection updated");
-          }}
-          width={800}
-        >
-          {isLoadingMCPTools ? (
-            <div className="flex justify-center items-center py-8">
-              <Spin indicator={<LoadingOutlined style={{ fontSize: 24 }} spin />} />
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <Text className="text-gray-600 block mb-4">
-                Select the MCP tools you want to use in your conversation.
-              </Text>
-              <Select
-                mode="multiple"
-                style={{ width: "100%" }}
-                placeholder="Select MCP tools"
-                value={selectedMCPTools}
-                onChange={(value) => setSelectedMCPTools(value)}
-                optionLabelProp="label"
-                allowClear
-                maxTagCount="responsive"
-              >
-                {mcpTools.map((tool) => (
-                  <Select.Option
-                    key={tool.name}
-                    value={tool.name}
-                    label={<div className="font-medium">{tool.name}</div>}
-                  >
-                    <div className="flex flex-col py-1">
-                      <span className="font-medium">{tool.name}</span>
-                      <span className="text-xs text-gray-500 mt-1">{tool.description}</span>
-                    </div>
-                  </Select.Option>
-                ))}
-              </Select>
-            </div>
-          )}
-        </Modal>
-      )}
     </div>
   );
 };

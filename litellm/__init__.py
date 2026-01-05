@@ -136,6 +136,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "gitlab",
     "cloudzero",
     "posthog",
+    "levo",
 ]
 cold_storage_custom_logger: Optional[_custom_logger_compatible_callbacks_literal] = None
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
@@ -553,6 +554,8 @@ docker_model_runner_models: Set = set()
 amazon_nova_models: Set = set()
 stability_models: Set = set()
 github_copilot_models: Set = set()
+minimax_models: Set = set()
+aws_polly_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -801,6 +804,10 @@ def add_known_models():
             stability_models.add(key)
         elif value.get("litellm_provider") == "github_copilot":
             github_copilot_models.add(key)
+        elif value.get("litellm_provider") == "minimax":
+            minimax_models.add(key)
+        elif value.get("litellm_provider") == "aws_polly":
+            aws_polly_models.add(key)
 
 
 add_known_models()
@@ -1005,6 +1012,8 @@ models_by_provider: dict = {
     "amazon_nova": amazon_nova_models,
     "stability": stability_models,
     "github_copilot": github_copilot_models,
+    "minimax": minimax_models,
+    "aws_polly": aws_polly_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1049,8 +1058,8 @@ openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 openai_video_generation_models = ["sora-2"]
 
 # timeout is lazy-loaded via __getattr__
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
+# get_llm_provider is lazy-loaded via __getattr__
+# remove_index_from_tool_calls is lazy-loaded via __getattr__
 
 # Import KeyManagementSettings here (before utils import) because _key_management_settings
 # is accessed during import time in secret_managers/main.py (via dd_tracing -> datadog -> _service_logger -> utils)
@@ -1499,6 +1508,7 @@ if TYPE_CHECKING:
     get_first_chars_messages: Callable[..., str]
     get_provider_fields: Callable[..., List]
     get_valid_models: Callable[..., list]
+    remove_index_from_tool_calls: Callable[..., None]
 
     # Response types - truly lazy loaded only (not in main.py or elsewhere)
     ModelResponseListIterator: Type[Any]
@@ -1650,6 +1660,17 @@ def __getattr__(name: str) -> Any:
             LoggingCallbackManager = __getattr__("LoggingCallbackManager")
             _globals["logging_callback_manager"] = LoggingCallbackManager()
         return _globals["logging_callback_manager"]
+    
+    # Lazy load _service_logger module
+    if name == "_service_logger":
+        from ._lazy_imports import _get_litellm_globals
+        _globals = _get_litellm_globals()
+        # Check if already cached
+        if "_service_logger" not in _globals:
+            # Import the module lazily
+            import litellm._service_logger
+            _globals["_service_logger"] = litellm._service_logger
+        return _globals["_service_logger"]
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

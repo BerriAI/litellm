@@ -950,7 +950,7 @@ const OldModelDashboard: React.FC<ModelDashboardProps> = ({
     );
   };
 
-  const handleOk = () => {
+  const handleOk = async () => {
     console.log("🚀 handleOk called from model dashboard!");
     console.log("Current form values:", addModelForm.getFieldsValue());
 
@@ -1021,7 +1021,6 @@ const OldModelDashboard: React.FC<ModelDashboardProps> = ({
           {selectedModelId ? (
             <ModelInfoView
               modelId={selectedModelId}
-              editModel={true}
               onClose={() => {
                 setSelectedModelId(null);
                 setEditModel(false);
@@ -1030,8 +1029,6 @@ const OldModelDashboard: React.FC<ModelDashboardProps> = ({
               accessToken={accessToken}
               userID={userID}
               userRole={userRole}
-              setEditModalVisible={setEditModalVisible}
-              setSelectedModel={setSelectedModel}
               onModelUpdate={(updatedModel) => {
                 // Update the model in the modelData.data array
                 const updatedModelData = {
@@ -1327,7 +1324,6 @@ const OldModelDashboard: React.FC<ModelDashboardProps> = ({
                             getDisplayModelName,
                             handleEditClick,
                             handleRefreshClick,
-                            setEditModel,
                             expandedRows,
                             setExpandedRows,
                           )}
@@ -1354,7 +1350,6 @@ const OldModelDashboard: React.FC<ModelDashboardProps> = ({
                     credentials={credentialsList}
                     accessToken={accessToken}
                     userRole={userRole}
-                    premiumUser={premiumUser}
                   />
                 </TabPanel>
                 <TabPanel>

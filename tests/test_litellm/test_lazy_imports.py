@@ -33,6 +33,8 @@ from litellm._lazy_imports import (
     _lazy_import_llm_configs,
     TYPES_NAMES,
     _lazy_import_types,
+    LLM_PROVIDER_LOGIC_NAMES,
+    _lazy_import_llm_provider_logic,
 )
 
 
@@ -218,6 +220,9 @@ def test_unknown_attribute_raises_error():
     with pytest.raises(AttributeError):
         _lazy_import_types("unknown")
 
+    with pytest.raises(AttributeError):
+        _lazy_import_llm_provider_logic("unknown")
+
 
 def test_llm_config_lazy_imports():
     """Test that LLM config classes can be lazy imported."""
@@ -245,4 +250,17 @@ def test_types_lazy_imports():
         assert isinstance(obj, type), f"{name} should be a class"
 
         _verify_only_requested_name_imported(name, TYPES_NAMES)
+
+
+def test_llm_provider_logic_lazy_imports():
+    """Test that LLM provider logic functions can be lazy imported."""
+    for name in LLM_PROVIDER_LOGIC_NAMES:
+        _clear_names_from_globals(LLM_PROVIDER_LOGIC_NAMES)
+
+        func = _lazy_import_llm_provider_logic(name)
+        assert func is not None
+        assert callable(func)
+        assert name in litellm.__dict__
+
+        _verify_only_requested_name_imported(name, LLM_PROVIDER_LOGIC_NAMES)
 

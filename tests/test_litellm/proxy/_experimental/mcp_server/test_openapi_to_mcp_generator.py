@@ -5,6 +5,8 @@ This test suite ensures that:
 1. Parameter names with invalid Python identifiers are handled safely
 2. No exec() is used (security)
 3. All edge cases (hyphens, dots, keywords, special chars) work correctly
+4. Path traversal attacks are prevented
+5. Path parameters are properly URL encoded
 """
 
 import pytest
@@ -452,3 +454,69 @@ class TestExtractParameters:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestPathSecurity:
+    """Test path traversal security and URL encoding."""
+
+    @pytest.mark.asyncio
+    async def test_should_reject_path_traversal_inputs(self):
+        """Test that path traversal attacks (../admin) are rejected."""
+        operation = {
+            "parameters": [
+                {
+                    "name": "filename",
+                    "in": "path",
+                    "required": True,
+                    "schema": {"type": "string"},
+                }
+            ]
+        }
+
+        tool_function = create_tool_function(
+            path="/files/{filename}",
+            method="GET",
+            operation=operation,
+            base_url="https://example.com",
+        )
+
+        response = await tool_function(**{"filename": "../admin"})
+
+        assert "Invalid path parameter" in response
+
+    @pytest.mark.asyncio
+    async def test_should_encode_and_request_safe_path_parameters(self):
+        """Test that path parameters are properly URL encoded."""
+        operation = {
+            "parameters": [
+                {
+                    "name": "filename",
+                    "in": "path",
+                    "required": True,
+                    "schema": {"type": "string"},
+                }
+            ]
+        }
+
+        tool_function = create_tool_function(
+            path="/files/{filename}",
+            method="GET",
+            operation=operation,
+            base_url="https://example.com",
+        )
+
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_response = AsyncMock()
+            mock_response.text = "dummy-response"
+            mock_client.return_value.__aenter__.return_value.get = AsyncMock(
+                return_value=mock_response
+            )
+
+            response = await tool_function(**{"filename": "report 2024.json"})
+
+            assert response == "dummy-response"
+
+            # Verify URL was properly encoded
+            call_args = mock_client.return_value.__aenter__.return_value.get.call_args
+            url = call_args[0][0]
+            assert url == "https://example.com/files/report%202024.json"

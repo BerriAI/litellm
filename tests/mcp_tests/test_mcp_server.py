@@ -1057,7 +1057,7 @@ async def test_mcp_server_manager_config_integration_with_database():
     )
 
     # Test the add_update_server method (this tests our fix)
-    await test_manager.add_update_server(db_server)
+    await test_manager.add_server(db_server)
 
     # Verify the server was added with correct access_groups
     registry = test_manager.get_registry()
@@ -1381,7 +1381,7 @@ async def test_add_update_server_with_alias():
     mock_mcp_server.token_url = None
 
     # Add server to manager
-    await test_manager.add_update_server(mock_mcp_server)
+    await test_manager.add_server(mock_mcp_server)
 
     # Verify server was added with correct name (should use alias)
     assert "test-server-123" in test_manager.registry
@@ -1421,7 +1421,7 @@ async def test_add_update_server_without_alias():
     mock_mcp_server.token_url = None
 
     # Add server to manager
-    await test_manager.add_update_server(mock_mcp_server)
+    await test_manager.add_server(mock_mcp_server)
 
     # Verify server was added with correct name (should use server_name)
     assert "test-server-123" in test_manager.registry
@@ -1461,7 +1461,7 @@ async def test_add_update_server_fallback_to_server_id():
     mock_mcp_server.token_url = None
 
     # Add server to manager
-    await test_manager.add_update_server(mock_mcp_server)
+    await test_manager.add_server(mock_mcp_server)
 
     # Verify server was added with correct name (should use server_id)
     assert "test-server-123" in test_manager.registry

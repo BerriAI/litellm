@@ -229,6 +229,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         transport: mcpServer.transport,
         auth_type: mcpServer.auth_type,
         mcp_info: mcpServer.mcp_info,
+        authorization_url: mcpServer.authorization_url,
+        token_url: mcpServer.token_url,
+        registration_url: mcpServer.registration_url,
       };
 
       const toolsResponse = await testMCPToolsListRequest(accessToken, mcpServerConfig, oauthAccessToken);
@@ -493,6 +496,54 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                     placeholder="Add scopes"
                     className="rounded-lg"
                     size="large"
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      Authorization URL Override (optional)
+                      <Tooltip title="Optional override for the authorization endpoint.">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name="authorization_url"
+                >
+                  <TextInput
+                    placeholder="https://example.com/oauth/authorize"
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      Token URL Override (optional)
+                      <Tooltip title="Optional override for the token endpoint.">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name="token_url"
+                >
+                  <TextInput
+                    placeholder="https://example.com/oauth/token"
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      Registration URL Override (optional)
+                      <Tooltip title="Optional override for the dynamic client registration endpoint.">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name="registration_url"
+                >
+                  <TextInput
+                    placeholder="https://example.com/oauth/register"
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                   />
                 </Form.Item>
                 <div className="rounded-lg border border-dashed border-gray-300 p-4 space-y-2">

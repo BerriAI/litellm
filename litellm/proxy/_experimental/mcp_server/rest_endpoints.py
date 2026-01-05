@@ -1,5 +1,4 @@
 import importlib
-import traceback
 from typing import Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -347,17 +346,16 @@ if MCP_AVAILABLE:
 
         except Exception as e:
             verbose_logger.error(f"Error in MCP operation: {e}", exc_info=True)
-            stack_trace = traceback.format_exc()
             return {
                 "status": "error",
-                "message": f"An internal error has occurred: {str(e)}",
-                "stack_trace": stack_trace,
+                "message": "An internal error has occurred while testing the MCP server.",
             }
 
-    @router.post("/test/connection")
+    @router.post("/test/connection", dependencies=[Depends(user_api_key_auth)])
     async def test_connection(
         request: Request,
         new_mcp_server_request: NewMCPServerRequest,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
         Test if we can connect to the provided MCP server before adding it

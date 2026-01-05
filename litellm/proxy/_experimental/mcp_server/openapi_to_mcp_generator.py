@@ -3,7 +3,9 @@ This module is used to generate MCP tools from OpenAPI specs.
 """
 
 import json
+from pathlib import PurePosixPath
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
 import httpx
 
@@ -15,6 +17,29 @@ from litellm.proxy._experimental.mcp_server.tool_registry import (
 # Store the base URL and headers globally
 BASE_URL = ""
 HEADERS: Dict[str, str] = {}
+
+
+def _sanitize_path_parameter_value(param_value: Any, param_name: str) -> str:
+    """Ensure path params cannot introduce directory traversal."""
+    if param_value is None:
+        return ""
+
+    value_str = str(param_value)
+    if value_str == "":
+        return ""
+
+    normalized_value = value_str.replace("\\", "/")
+    if "/" in normalized_value:
+        raise ValueError(
+            f"Path parameter '{param_name}' must not contain path separators"
+        )
+
+    if any(part in {".", ".."} for part in PurePosixPath(normalized_value).parts):
+        raise ValueError(
+            f"Path parameter '{param_name}' cannot include '.' or '..' segments"
+        )
+
+    return quote(value_str, safe="")
 
 
 def load_openapi_spec(filepath: str) -> Dict[str, Any]:
@@ -144,12 +169,18 @@ def create_tool_function(
         url = base_url + path
 
         # Replace path parameters using original names from OpenAPI spec
+        # Apply path traversal validation and URL encoding
         for param_name in path_params:
             param_value = kwargs.get(param_name, "")
             if param_value:
+                try:
+                    # Sanitize and encode path parameter to prevent traversal attacks
+                    safe_value = _sanitize_path_parameter_value(param_value, param_name)
+                except ValueError as exc:
+                    return "Invalid path parameter: " + str(exc)
                 # Replace {param_name} or {{param_name}} in URL
-                url = url.replace("{" + param_name + "}", str(param_value))
-                url = url.replace("{{" + param_name + "}}", str(param_value))
+                url = url.replace("{" + param_name + "}", safe_value)
+                url = url.replace("{{" + param_name + "}}", safe_value)
 
         # Build query params using original parameter names
         params: Dict[str, Any] = {}

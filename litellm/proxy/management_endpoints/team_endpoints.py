@@ -732,6 +732,18 @@ async def new_team(  # noqa: PLR0915
         if prisma_client is None:
             raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
+        # Validate budget values are not negative
+        if data.max_budget is not None and data.max_budget < 0:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"max_budget cannot be negative. Received: {data.max_budget}"}
+            )
+        if data.team_member_budget is not None and data.team_member_budget < 0:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"team_member_budget cannot be negative. Received: {data.team_member_budget}"}
+            )
+
         # Check if license is over limit
         total_teams = await prisma_client.db.litellm_teamtable.count()
         if total_teams and _license_check.is_team_count_over_limit(
@@ -1169,7 +1181,7 @@ def validate_team_org_change(
     "/team/update", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
 @management_endpoint_wrapper
-async def update_team(
+async def update_team(   # noqa: PLR0915
     data: UpdateTeamRequest,
     http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -1253,6 +1265,18 @@ async def update_team(
         if data.team_id is None:
             raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
         verbose_proxy_logger.debug("/team/update - %s", data)
+
+        # Validate budget values are not negative
+        if data.max_budget is not None and data.max_budget < 0:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"max_budget cannot be negative. Received: {data.max_budget}"}
+            )
+        if data.team_member_budget is not None and data.team_member_budget < 0:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"team_member_budget cannot be negative. Received: {data.team_member_budget}"}
+            )
 
         existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
             where={"team_id": data.team_id}

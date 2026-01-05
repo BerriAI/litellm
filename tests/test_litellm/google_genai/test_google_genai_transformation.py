@@ -247,3 +247,122 @@ def test_responses_api_no_reasoning():
     
     # reasoning_effort should not be in result if not provided (filtered out as None)
     assert "reasoning_effort" not in result or result.get("reasoning_effort") is None
+
+
+def test_transform_generate_content_request_with_system_instruction():
+    """Test that systemInstruction parameter is properly included in the request"""
+    config = GoogleGenAIConfig()
+    
+    system_instruction = {
+        "parts": [{"text": "You are a helpful assistant"}]
+    }
+    
+    contents = [
+        {
+            "role": "user",
+            "parts": [{"text": "Hello"}]
+        }
+    ]
+    
+    generate_content_config_dict = {
+        "temperature": 1.0,
+        "maxOutputTokens": 100
+    }
+    
+    # Call transform_generate_content_request
+    result = config.transform_generate_content_request(
+        model="gemini-3-flash-preview",
+        contents=contents,
+        tools=None,
+        generate_content_config_dict=generate_content_config_dict,
+        system_instruction=system_instruction,
+    )
+    
+    # Verify that systemInstruction is in the request
+    assert "systemInstruction" in result, "systemInstruction should be in request body"
+    assert result["systemInstruction"] == system_instruction, "systemInstruction should match input"
+    assert result["model"] == "gemini-3-flash-preview"
+    assert result["contents"] == contents
+
+
+def test_transform_generate_content_request_without_system_instruction():
+    """Test that request works correctly without systemInstruction"""
+    config = GoogleGenAIConfig()
+    
+    contents = [
+        {
+            "role": "user",
+            "parts": [{"text": "Hello"}]
+        }
+    ]
+    
+    generate_content_config_dict = {
+        "temperature": 1.0
+    }
+    
+    # Call transform_generate_content_request without system_instruction
+    result = config.transform_generate_content_request(
+        model="gemini-3-flash-preview",
+        contents=contents,
+        tools=None,
+        generate_content_config_dict=generate_content_config_dict,
+        system_instruction=None,
+    )
+    
+    # Verify that systemInstruction is NOT in the request when not provided
+    assert "systemInstruction" not in result, "systemInstruction should not be in request when None"
+    assert result["model"] == "gemini-3-flash-preview"
+    assert result["contents"] == contents
+
+
+def test_transform_generate_content_request_system_instruction_with_tools():
+    """Test that systemInstruction works correctly alongside tools"""
+    config = GoogleGenAIConfig()
+    
+    system_instruction = {
+        "parts": [{"text": "You are a helpful assistant that uses tools"}]
+    }
+    
+    contents = [
+        {
+            "role": "user",
+            "parts": [{"text": "What's the weather?"}]
+        }
+    ]
+    
+    tools = [
+        {
+            "functionDeclarations": [
+                {
+                    "name": "get_weather",
+                    "description": "Get weather information",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {"type": "string"}
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+    
+    generate_content_config_dict = {
+        "temperature": 0.7
+    }
+    
+    # Call transform_generate_content_request with both system_instruction and tools
+    result = config.transform_generate_content_request(
+        model="gemini-3-flash-preview",
+        contents=contents,
+        tools=tools,
+        generate_content_config_dict=generate_content_config_dict,
+        system_instruction=system_instruction,
+    )
+    
+    # Verify that both systemInstruction and tools are in the request
+    assert "systemInstruction" in result, "systemInstruction should be in request body"
+    assert result["systemInstruction"] == system_instruction
+    assert "tools" in result, "tools should be in request body"
+    assert result["tools"] == tools
+    assert result["model"] == "gemini-3-flash-preview"
