@@ -3,21 +3,24 @@ import { Text } from "@tremor/react";
 import { Card, Statistic, Row, Col, Divider, Spin } from "antd";
 import { DollarOutlined, LoadingOutlined } from "@ant-design/icons";
 import { CostEstimateResponse } from "../types";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 interface CostResultsProps {
   result: CostEstimateResponse | null;
   loading: boolean;
 }
 
-const formatCurrency = (value: number | null | undefined): string => {
+const formatCost = (value: number | null | undefined): string => {
   if (value === null || value === undefined) return "-";
-  if (value < 0.01) return `$${value.toFixed(6)}`;
-  return `$${value.toFixed(4)}`;
+  if (value === 0) return "$0";
+  if (value < 0.0001) return `$${value.toExponential(2)}`;
+  if (value < 1) return `$${value.toFixed(4)}`;
+  return `$${formatNumberWithCommas(value, 2, true)}`;
 };
 
-const formatLargeCurrency = (value: number | null | undefined): string => {
+const formatRequests = (value: number | null | undefined): string => {
   if (value === null || value === undefined) return "-";
-  return `$${value.toFixed(2)}`;
+  return formatNumberWithCommas(value, 0, true);
 };
 
 const CostResults: React.FC<CostResultsProps> = ({ result, loading }) => {
@@ -61,7 +64,7 @@ const CostResults: React.FC<CostResultsProps> = ({ result, loading }) => {
           <Col span={6}>
             <Statistic
               title="Total Cost"
-              value={formatCurrency(result.cost_per_request)}
+              value={formatCost(result.cost_per_request)}
               valueStyle={{ color: "#1890ff", fontSize: "18px" }}
               prefix={<DollarOutlined />}
             />
@@ -69,21 +72,21 @@ const CostResults: React.FC<CostResultsProps> = ({ result, loading }) => {
           <Col span={6}>
             <Statistic
               title="Input Cost"
-              value={formatCurrency(result.input_cost_per_request)}
+              value={formatCost(result.input_cost_per_request)}
               valueStyle={{ fontSize: "16px" }}
             />
           </Col>
           <Col span={6}>
             <Statistic
               title="Output Cost"
-              value={formatCurrency(result.output_cost_per_request)}
+              value={formatCost(result.output_cost_per_request)}
               valueStyle={{ fontSize: "16px" }}
             />
           </Col>
           <Col span={6}>
             <Statistic
               title="Margin/Fee"
-              value={formatCurrency(result.margin_cost_per_request)}
+              value={formatCost(result.margin_cost_per_request)}
               valueStyle={{
                 fontSize: "16px",
                 color: result.margin_cost_per_request > 0 ? "#faad14" : undefined,
@@ -96,13 +99,13 @@ const CostResults: React.FC<CostResultsProps> = ({ result, loading }) => {
       {result.daily_cost !== null && (
         <Card
           size="small"
-          title={`Daily Costs (${result.num_requests_per_day?.toLocaleString()} requests/day)`}
+          title={`Daily Costs (${formatRequests(result.num_requests_per_day)} requests/day)`}
         >
           <Row gutter={16}>
             <Col span={6}>
               <Statistic
                 title="Total Daily"
-                value={formatLargeCurrency(result.daily_cost)}
+                value={formatCost(result.daily_cost)}
                 valueStyle={{ color: "#52c41a", fontSize: "18px" }}
                 prefix={<DollarOutlined />}
               />
@@ -110,21 +113,21 @@ const CostResults: React.FC<CostResultsProps> = ({ result, loading }) => {
             <Col span={6}>
               <Statistic
                 title="Input Cost"
-                value={formatLargeCurrency(result.daily_input_cost)}
+                value={formatCost(result.daily_input_cost)}
                 valueStyle={{ fontSize: "16px" }}
               />
             </Col>
             <Col span={6}>
               <Statistic
                 title="Output Cost"
-                value={formatLargeCurrency(result.daily_output_cost)}
+                value={formatCost(result.daily_output_cost)}
                 valueStyle={{ fontSize: "16px" }}
               />
             </Col>
             <Col span={6}>
               <Statistic
                 title="Margin/Fee"
-                value={formatLargeCurrency(result.daily_margin_cost)}
+                value={formatCost(result.daily_margin_cost)}
                 valueStyle={{
                   fontSize: "16px",
                   color: (result.daily_margin_cost ?? 0) > 0 ? "#faad14" : undefined,
@@ -138,13 +141,13 @@ const CostResults: React.FC<CostResultsProps> = ({ result, loading }) => {
       {result.monthly_cost !== null && (
         <Card
           size="small"
-          title={`Monthly Costs (${result.num_requests_per_month?.toLocaleString()} requests/month)`}
+          title={`Monthly Costs (${formatRequests(result.num_requests_per_month)} requests/month)`}
         >
           <Row gutter={16}>
             <Col span={6}>
               <Statistic
                 title="Total Monthly"
-                value={formatLargeCurrency(result.monthly_cost)}
+                value={formatCost(result.monthly_cost)}
                 valueStyle={{ color: "#722ed1", fontSize: "18px" }}
                 prefix={<DollarOutlined />}
               />
@@ -152,21 +155,21 @@ const CostResults: React.FC<CostResultsProps> = ({ result, loading }) => {
             <Col span={6}>
               <Statistic
                 title="Input Cost"
-                value={formatLargeCurrency(result.monthly_input_cost)}
+                value={formatCost(result.monthly_input_cost)}
                 valueStyle={{ fontSize: "16px" }}
               />
             </Col>
             <Col span={6}>
               <Statistic
                 title="Output Cost"
-                value={formatLargeCurrency(result.monthly_output_cost)}
+                value={formatCost(result.monthly_output_cost)}
                 valueStyle={{ fontSize: "16px" }}
               />
             </Col>
             <Col span={6}>
               <Statistic
                 title="Margin/Fee"
-                value={formatLargeCurrency(result.monthly_margin_cost)}
+                value={formatCost(result.monthly_margin_cost)}
                 valueStyle={{
                   fontSize: "16px",
                   color: (result.monthly_margin_cost ?? 0) > 0 ? "#faad14" : undefined,
@@ -181,11 +184,11 @@ const CostResults: React.FC<CostResultsProps> = ({ result, loading }) => {
         <div className="text-sm text-gray-500 mt-4">
           <Text className="font-medium">Token Pricing: </Text>
           {result.input_cost_per_token && (
-            <span>Input: ${(result.input_cost_per_token * 1000000).toFixed(2)}/1M tokens</span>
+            <span>Input: ${formatNumberWithCommas(result.input_cost_per_token * 1_000_000, 2)}/1M tokens</span>
           )}
           {result.input_cost_per_token && result.output_cost_per_token && " | "}
           {result.output_cost_per_token && (
-            <span>Output: ${(result.output_cost_per_token * 1000000).toFixed(2)}/1M tokens</span>
+            <span>Output: ${formatNumberWithCommas(result.output_cost_per_token * 1_000_000, 2)}/1M tokens</span>
           )}
         </div>
       )}
@@ -194,4 +197,3 @@ const CostResults: React.FC<CostResultsProps> = ({ result, loading }) => {
 };
 
 export default CostResults;
-
