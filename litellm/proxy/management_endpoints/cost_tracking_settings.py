@@ -10,7 +10,7 @@ PATCH /config/cost_margin_config - Update cost margin configuration
 POST /cost/estimate - Estimate cost for a given model and token counts
 """
 
-from typing import Dict, List, Optional, Union
+from typing import Dict, Union
 
 from fastapi import APIRouter, Depends, HTTPException
 
