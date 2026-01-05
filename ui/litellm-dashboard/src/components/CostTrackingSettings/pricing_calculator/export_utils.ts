@@ -89,7 +89,7 @@ export const exportToPDF = (result: CostEstimateResponse): void => {
       </style>
     </head>
     <body>
-      <h1>LLM Cost Estimate Report</h1>
+      <h1>🚅 LiteLLM Cost Estimate Report</h1>
       
       <div class="meta">
         <p><strong>Model:</strong> ${result.model}</p>
