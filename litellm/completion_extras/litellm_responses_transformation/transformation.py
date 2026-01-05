@@ -693,17 +693,17 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         # If string is passed, map with summary="concise"
         if reasoning_effort == "none":
-            return Reasoning(effort="none", summary="concise")  # type: ignore
+            return Reasoning(effort="none", summary="detailed")  # type: ignore
         elif reasoning_effort == "high":
-            return Reasoning(effort="high", summary="concise")
+            return Reasoning(effort="high", summary="detailed")
         elif reasoning_effort == "xhigh":
-            return Reasoning(effort="xhigh", summary="concise")  # type: ignore[typeddict-item]
+            return Reasoning(effort="xhigh", summary="detailed")  # type: ignore[typeddict-item]
         elif reasoning_effort == "medium":
-            return Reasoning(effort="medium", summary="concise")
+            return Reasoning(effort="medium", summary="detailed")
         elif reasoning_effort == "low":
-            return Reasoning(effort="low", summary="concise")
+            return Reasoning(effort="low", summary="detailed")
         elif reasoning_effort == "minimal":
-            return Reasoning(effort="minimal", summary="concise")
+            return Reasoning(effort="minimal", summary="detailed")
         return None
 
     def _transform_response_format_to_text_format(

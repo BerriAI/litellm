@@ -1030,7 +1030,7 @@ def test_map_reasoning_effort_adds_summary_detailed():
         
         assert result is not None, f"Result should not be None for effort={effort}"
         assert result["effort"] == effort, f"Effort should be {effort}"
-        assert result["summary"] == "concise", f"Summary should be 'detailed' for effort={effort}"
+        assert result["summary"] == "detailed", f"Summary should be 'detailed' for effort={effort}"
         
         print(f"✓ reasoning_effort='{effort}' correctly maps to effort='{effort}', summary='detailed'")
     
