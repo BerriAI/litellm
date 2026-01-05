@@ -214,7 +214,7 @@ export const exportToPDF = (result: CostEstimateResponse): void => {
 
 export const exportToCSV = (result: CostEstimateResponse): void => {
   const rows = [
-    ["LLM Cost Estimate Report"],
+    ["🚅 LiteLLM Cost Estimate Report"],
     [""],
     ["Configuration"],
     ["Model", result.model],
