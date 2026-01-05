@@ -764,6 +764,9 @@ def function_setup(  # noqa: PLR0915
         ## LOGGING SETUP
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
+        ## LAZY LOAD COROUTINE CHECKER ##
+        get_coroutine_checker = getattr(sys.modules[__name__], 'get_coroutine_checker')
+
         ## DYNAMIC CALLBACKS ##
         dynamic_callbacks: Optional[List[Union[str, Callable, "CustomLogger"]]] = (
             kwargs.pop("callbacks", None)
