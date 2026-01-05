@@ -89,7 +89,7 @@ export const exportToPDF = (result: CostEstimateResponse): void => {
       </style>
     </head>
     <body>
-      <h1>LLM Cost Estimate Report</h1>
+      <h1>🚅 LiteLLM Cost Estimate Report</h1>
       
       <div class="meta">
         <p><strong>Model:</strong> ${result.model}</p>
@@ -214,7 +214,7 @@ export const exportToPDF = (result: CostEstimateResponse): void => {
 
 export const exportToCSV = (result: CostEstimateResponse): void => {
   const rows = [
-    ["LLM Cost Estimate Report"],
+    ["🚅 LiteLLM Cost Estimate Report"],
     [""],
     ["Configuration"],
     ["Model", result.model],
