@@ -289,7 +289,7 @@ const sidebars = {
           label: "All Endpoints (Swagger)",
           href: "https://litellm-api.up.railway.app/",
         },
-  "proxy/enterprise",
+        "proxy/enterprise",
         {
           type: "category",
           label: "Authentication",
@@ -390,6 +390,9 @@ const sidebars = {
           items: [
             "proxy/cost_tracking",
             "proxy/custom_pricing",
+            "proxy/pricing_calculator",
+            "proxy/provider_margins",
+            "proxy/provider_discounts",
             "proxy/sync_models_github",
             "proxy/billing",
           ],
@@ -470,10 +473,10 @@ const sidebars = {
             "proxy/managed_finetuning",
           ]
         },
-          "generateContent",
-          "apply_guardrail",
-          "bedrock_invoke",
-          "interactions",
+        "generateContent",
+        "apply_guardrail",
+        "bedrock_invoke",
+        "interactions",
         {
           type: "category",
           label: "/images",
@@ -528,7 +531,14 @@ const sidebars = {
             "proxy/pass_through_guardrails"
           ]
         },
-        "rag_ingest",
+        {
+          type: "category",
+          label: "/rag",
+          items: [
+            "rag_ingest",
+            "rag_query",
+          ]
+        },
         "realtime",
         "rerank",
         "response_api",
@@ -664,6 +674,7 @@ const sidebars = {
             "providers/bedrock_agents",
             "providers/bedrock_writer",
             "providers/bedrock_batches",
+            "providers/aws_polly",
             "providers/bedrock_vector_store",
           ]
         },
@@ -673,9 +684,11 @@ const sidebars = {
         "providers/aleph_alpha",
         "providers/amazon_nova",
         "providers/anyscale",
+        "providers/apertis",
         "providers/baseten",
         "providers/bytez",
         "providers/cerebras",
+        "providers/chutes",
         "providers/clarifai",
         "providers/cloudflare_workers",
         "providers/codestral",
@@ -721,10 +734,12 @@ const sidebars = {
         "providers/meta_llama",
         "providers/milvus_vector_stores",
         "providers/mistral",
+        "providers/minimax",
         "providers/moonshot",
         "providers/morph",
         "providers/nebius",
         "providers/nlp_cloud",
+        "providers/nano-gpt",
         "providers/novita",
         { type: "doc", id: "providers/nscale", label: "Nscale (EU Sovereign)" },
         {
@@ -741,6 +756,7 @@ const sidebars = {
         "providers/ovhcloud",
         "providers/perplexity",
         "providers/petals",
+        "providers/poe",
         "providers/publicai",
         "providers/predibase",
         "providers/pydantic_ai_agent",
@@ -757,6 +773,8 @@ const sidebars = {
         },
         "providers/sambanova",
         "providers/sap",
+        "providers/stability",
+        "providers/synthetic",
         "providers/snowflake",
         "providers/togetherai",
         "providers/topaz",
@@ -783,6 +801,7 @@ const sidebars = {
           ]
         },
         "providers/xai",
+        "providers/xiaomi_mimo",
         "providers/xinference",
         "providers/zai",
       ],

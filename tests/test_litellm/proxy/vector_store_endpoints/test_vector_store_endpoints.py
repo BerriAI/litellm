@@ -1107,6 +1107,7 @@ async def test_resolve_embedding_config_from_db():
 async def test_new_vector_store_auto_resolves_embedding_config():
     """Test that new_vector_store auto-resolves embedding config when embedding_model is provided but config is not."""
     import json
+
     from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
     
     mock_prisma_client = MagicMock()

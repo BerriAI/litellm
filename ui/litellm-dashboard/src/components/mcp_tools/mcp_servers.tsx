@@ -1,11 +1,12 @@
 import { isAdminRole } from "@/utils/roles";
 import { QuestionCircleOutlined } from "@ant-design/icons";
-import { useQuery } from "@tanstack/react-query";
 import { Button, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
 import { Descriptions, Modal, Select, Tooltip, Typography } from "antd";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
+import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
+import { useMCPServerHealth } from "../../app/(dashboard)/hooks/mcpServers/useMCPServerHealth";
 import NotificationsManager from "../molecules/notifications_manager";
-import { deleteMCPServer, fetchMCPServers } from "../networking";
+import { deleteMCPServer } from "../networking";
 import { DataTable } from "../view_logs/table";
 import CreateMCPServer from "./create_mcp_server";
 import MCPConnect from "./mcp_connect";
@@ -19,19 +20,29 @@ const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
 const { Option } = Select;
 
 const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID }) => {
-  const {
-    data: mcpServers,
-    isLoading: isLoadingServers,
-    refetch,
-    dataUpdatedAt,
-  } = useQuery({
-    queryKey: ["mcpServers"],
-    queryFn: () => {
-      if (!accessToken) throw new Error("Access Token required");
-      return fetchMCPServers(accessToken);
-    },
-    enabled: !!accessToken,
-  }) as { data: MCPServer[]; isLoading: boolean; refetch: () => void; dataUpdatedAt: number };
+  const { data: mcpServers, isLoading: isLoadingServers, refetch } = useMCPServers();
+
+  // Fetch health status for all servers
+  const serverIds = useMemo(() => mcpServers?.map((server) => server.server_id), [mcpServers]);
+  const { data: healthStatuses, isLoading: isLoadingHealth } = useMCPServerHealth(serverIds);
+
+  // Merge health status data into servers
+  const serversWithHealth = useMemo(() => {
+    if (!mcpServers) return [];
+    if (!healthStatuses) return mcpServers;
+
+    const healthMap = new Map(healthStatuses.map((h) => [h.server_id, h.status]));
+
+    return mcpServers.map((server) => {
+      const healthStatus = healthMap.get(server.server_id);
+      return {
+        ...server,
+        status: healthStatus
+          ? (healthStatus as "healthy" | "unhealthy" | "unknown")
+          : server.status,
+      };
+    });
+  }, [mcpServers, healthStatuses]);
 
   // Log allowed_tools from fetched servers
   React.useEffect(() => {
@@ -77,10 +88,10 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
 
   // Get unique teams from all servers
   const uniqueTeams = React.useMemo(() => {
-    if (!mcpServers) return [];
+    if (!serversWithHealth) return [];
     const teamsSet = new Set<string>();
     const uniqueTeamsArray: Team[] = [];
-    mcpServers.forEach((server: MCPServer) => {
+    serversWithHealth.forEach((server: MCPServer) => {
       if (server.teams) {
         server.teams.forEach((team: Team) => {
           const teamKey = team.team_id;
@@ -92,17 +103,17 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       }
     });
     return uniqueTeamsArray;
-  }, [mcpServers]);
+  }, [serversWithHealth]);
 
   // Get unique MCP access groups from all servers
   const uniqueMcpAccessGroups = React.useMemo(() => {
-    if (!mcpServers) return [];
+    if (!serversWithHealth) return [];
     return Array.from(
       new Set(
-        mcpServers.flatMap((server) => server.mcp_access_groups).filter((group): group is string => group != null),
+        serversWithHealth.flatMap((server) => server.mcp_access_groups).filter((group): group is string => group != null),
       ),
     );
-  }, [mcpServers]);
+  }, [serversWithHealth]);
 
   // Handle team filter change
   const handleTeamChange = (teamId: string) => {
@@ -118,8 +129,8 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
 
   // Filtering logic for both team and access group
   const filterServers = (teamId: string, group: string) => {
-    if (!mcpServers) return setFilteredServers([]);
-    let filtered = mcpServers;
+    if (!serversWithHealth) return setFilteredServers([]);
+    let filtered = serversWithHealth;
     if (teamId === "personal") {
       setFilteredServers([]);
       return;
@@ -135,10 +146,10 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     setFilteredServers(filtered);
   };
 
-  // Initial and effect-based filtering (trigger on query data updates)
+  // Initial and effect-based filtering (trigger on query data updates and health data updates)
   useEffect(() => {
     filterServers(selectedTeam, selectedMcpAccessGroup);
-  }, [dataUpdatedAt]);
+  }, [serversWithHealth, selectedTeam, selectedMcpAccessGroup]);
 
   const columns = React.useMemo(
     () =>
@@ -153,8 +164,9 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           setEditServer(true);
         },
         handleDelete,
+        isLoadingHealth,
       ),
-    [userRole],
+    [userRole, isLoadingHealth],
   );
 
   function handleDelete(server_id: string) {
