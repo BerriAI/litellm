@@ -3834,7 +3834,12 @@ class CostEstimateRequest(LiteLLMPydanticObjectBase):
     model: str = Field(description="Model name (from /model_group/info)")
     input_tokens: int = Field(description="Expected input tokens per request", ge=0)
     output_tokens: int = Field(description="Expected output tokens per request", ge=0)
-    num_requests: int = Field(default=1, description="Number of requests", ge=1)
+    num_requests_per_day: Optional[int] = Field(
+        default=None, description="Number of requests per day", ge=0
+    )
+    num_requests_per_month: Optional[int] = Field(
+        default=None, description="Number of requests per month", ge=0
+    )
 
 
 class CostEstimateResponse(LiteLLMPydanticObjectBase):
@@ -3843,17 +3848,23 @@ class CostEstimateResponse(LiteLLMPydanticObjectBase):
     model: str
     input_tokens: int
     output_tokens: int
-    num_requests: int
+    num_requests_per_day: Optional[int] = None
+    num_requests_per_month: Optional[int] = None
     # Per-request costs
     cost_per_request: float = Field(description="Total cost per request (includes margin)")
     input_cost_per_request: float = Field(description="Input token cost per request (before margin)")
     output_cost_per_request: float = Field(description="Output token cost per request (before margin)")
     margin_cost_per_request: float = Field(default=0.0, description="Margin/fee added per request")
-    # Total costs (per-request * num_requests)
-    total_cost: float = Field(description="Total cost for all requests (includes margin)")
-    total_input_cost: float = Field(description="Total input token cost (before margin)")
-    total_output_cost: float = Field(description="Total output token cost (before margin)")
-    total_margin_cost: float = Field(default=0.0, description="Total margin/fee for all requests")
+    # Daily costs (if num_requests_per_day provided)
+    daily_cost: Optional[float] = Field(default=None, description="Total daily cost (includes margin)")
+    daily_input_cost: Optional[float] = Field(default=None, description="Daily input token cost")
+    daily_output_cost: Optional[float] = Field(default=None, description="Daily output token cost")
+    daily_margin_cost: Optional[float] = Field(default=None, description="Daily margin/fee")
+    # Monthly costs (if num_requests_per_month provided)
+    monthly_cost: Optional[float] = Field(default=None, description="Total monthly cost (includes margin)")
+    monthly_input_cost: Optional[float] = Field(default=None, description="Monthly input token cost")
+    monthly_output_cost: Optional[float] = Field(default=None, description="Monthly output token cost")
+    monthly_margin_cost: Optional[float] = Field(default=None, description="Monthly margin/fee")
     # Pricing info
     input_cost_per_token: Optional[float] = None
     output_cost_per_token: Optional[float] = None

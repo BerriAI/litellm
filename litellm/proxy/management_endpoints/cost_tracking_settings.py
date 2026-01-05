@@ -29,6 +29,24 @@ from litellm.types.utils import LlmProvidersSet
 router = APIRouter()
 
 
+def _calculate_period_costs(
+    num_requests, cost_per_request, input_cost, output_cost, margin_cost
+):
+    """
+    Calculate costs for a given number of requests.
+
+    Returns tuple of (total_cost, input_cost, output_cost, margin_cost) or all None if num_requests is None/0.
+    """
+    if not num_requests:
+        return None, None, None, None
+    return (
+        cost_per_request * num_requests,
+        input_cost * num_requests,
+        output_cost * num_requests,
+        margin_cost * num_requests,
+    )
+
+
 @router.get(
     "/config/cost_discount_config",
     tags=["Cost Tracking"],
@@ -375,13 +393,13 @@ async def estimate_cost(
     - model: Model name (e.g., "gpt-4", "claude-3-opus")
     - input_tokens: Expected input tokens per request
     - output_tokens: Expected output tokens per request
-    - num_requests: Number of requests (default: 1)
+    - num_requests_per_day: Number of requests per day (optional)
+    - num_requests_per_month: Number of requests per month (optional)
 
     Returns cost breakdown including:
-    - Input token cost
-    - Output token cost
-    - Margin/fee cost
-    - Total cost
+    - Per-request costs (input, output, margin)
+    - Daily costs (if num_requests_per_day provided)
+    - Monthly costs (if num_requests_per_month provided)
 
     Example:
     ```json
@@ -389,7 +407,8 @@ async def estimate_cost(
         "model": "gpt-4",
         "input_tokens": 1000,
         "output_tokens": 500,
-        "num_requests": 100
+        "num_requests_per_day": 100,
+        "num_requests_per_month": 3000
     }
     ```
     """
@@ -420,7 +439,7 @@ async def estimate_cost(
 
     # Use completion_cost which handles all the logic including margins/discounts
     try:
-        total_cost_per_request = completion_cost(
+        cost_per_request = completion_cost(
             completion_response=mock_response,
             model=request.model,
             litellm_logging_obj=litellm_logging_obj,
@@ -451,25 +470,44 @@ async def estimate_cost(
         output_cost_per_token = None
         custom_llm_provider = None
 
-    # Calculate totals based on number of requests
-    total_cost = total_cost_per_request * request.num_requests
-    total_input_cost = input_cost * request.num_requests
-    total_output_cost = output_cost * request.num_requests
-    total_margin_cost = margin_cost * request.num_requests
+    # Calculate daily and monthly costs
+    daily_cost, daily_input_cost, daily_output_cost, daily_margin_cost = (
+        _calculate_period_costs(
+            num_requests=request.num_requests_per_day,
+            cost_per_request=cost_per_request,
+            input_cost=input_cost,
+            output_cost=output_cost,
+            margin_cost=margin_cost,
+        )
+    )
+    monthly_cost, monthly_input_cost, monthly_output_cost, monthly_margin_cost = (
+        _calculate_period_costs(
+            num_requests=request.num_requests_per_month,
+            cost_per_request=cost_per_request,
+            input_cost=input_cost,
+            output_cost=output_cost,
+            margin_cost=margin_cost,
+        )
+    )
 
     return CostEstimateResponse(
         model=request.model,
         input_tokens=request.input_tokens,
         output_tokens=request.output_tokens,
-        num_requests=request.num_requests,
-        cost_per_request=total_cost_per_request,
+        num_requests_per_day=request.num_requests_per_day,
+        num_requests_per_month=request.num_requests_per_month,
+        cost_per_request=cost_per_request,
         input_cost_per_request=input_cost,
         output_cost_per_request=output_cost,
         margin_cost_per_request=margin_cost,
-        total_cost=total_cost,
-        total_input_cost=total_input_cost,
-        total_output_cost=total_output_cost,
-        total_margin_cost=total_margin_cost,
+        daily_cost=daily_cost,
+        daily_input_cost=daily_input_cost,
+        daily_output_cost=daily_output_cost,
+        daily_margin_cost=daily_margin_cost,
+        monthly_cost=monthly_cost,
+        monthly_input_cost=monthly_input_cost,
+        monthly_output_cost=monthly_output_cost,
+        monthly_margin_cost=monthly_margin_cost,
         input_cost_per_token=input_cost_per_token,
         output_cost_per_token=output_cost_per_token,
         provider=custom_llm_provider,

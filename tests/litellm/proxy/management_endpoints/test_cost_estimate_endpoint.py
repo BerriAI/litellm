@@ -14,21 +14,22 @@ class TestCostEstimateEndpoint:
     """Tests for the cost estimation endpoint."""
 
     @pytest.mark.asyncio
-    async def test_estimate_cost_uses_completion_cost(self):
+    async def test_estimate_cost_daily_and_monthly(self):
         """
-        Test that cost estimation uses completion_cost and returns breakdown.
+        Test that cost estimation calculates daily and monthly costs correctly.
         """
         request = CostEstimateRequest(
             model="gpt-4",
             input_tokens=1000,
             output_tokens=500,
-            num_requests=10,
+            num_requests_per_day=100,
+            num_requests_per_month=3000,
         )
 
         with patch(
             "litellm.proxy.management_endpoints.cost_tracking_settings.completion_cost"
         ) as mock_completion_cost:
-            mock_completion_cost.return_value = 0.066
+            mock_completion_cost.return_value = 0.06
 
             with patch("litellm.get_model_info") as mock_get_model_info:
                 mock_get_model_info.return_value = {
@@ -43,10 +44,9 @@ class TestCostEstimateEndpoint:
                 )
 
         assert response.model == "gpt-4"
-        assert response.cost_per_request == 0.066
-        assert response.total_cost == pytest.approx(0.66)
-        # Verify completion_cost was called
-        mock_completion_cost.assert_called_once()
+        assert response.cost_per_request == 0.06
+        assert response.daily_cost == pytest.approx(6.0)  # 0.06 * 100
+        assert response.monthly_cost == pytest.approx(180.0)  # 0.06 * 3000
 
     @pytest.mark.asyncio
     async def test_estimate_cost_model_not_found(self):
