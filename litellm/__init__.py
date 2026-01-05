@@ -26,7 +26,6 @@ from typing import (
     overload,
     Type,
 )
-from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
 from litellm.types.integrations.datadog import DatadogInitParams
 from litellm._logging import (
     set_verbose,
@@ -1532,6 +1531,9 @@ if TYPE_CHECKING:
 
     # Custom logger class (lazy-loaded)
     from litellm.integrations.custom_logger import CustomLogger
+    
+    # Datadog LLM observability params (lazy-loaded)
+    from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
     
     # Logging callback manager class and instance (lazy-loaded)
     from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
