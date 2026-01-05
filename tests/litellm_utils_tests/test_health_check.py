@@ -669,8 +669,6 @@ async def test_health_check_with_custom_llm_provider():
             mode="chat",
         )
         
-        print(f"response: {response}")
-        
         # Should succeed without "LLM Provider NOT provided" error
         assert "error" not in response
         assert isinstance(response, dict)
