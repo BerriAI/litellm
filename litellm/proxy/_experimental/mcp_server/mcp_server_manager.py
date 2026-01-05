@@ -260,6 +260,7 @@ class MCPServerManager:
                 allowed_params=server_config.get("allowed_params", None),
                 access_groups=server_config.get("access_groups", None),
                 static_headers=server_config.get("static_headers", None),
+                allow_all_keys=bool(server_config.get("allow_all_keys", False)),
             )
             self.config_mcp_servers[server_id] = new_server
 
@@ -549,6 +550,7 @@ class MCPServerManager:
             access_groups=getattr(mcp_server, "mcp_access_groups", None),
             allowed_tools=getattr(mcp_server, "allowed_tools", None),
             disallowed_tools=getattr(mcp_server, "disallowed_tools", None),
+            allow_all_keys=mcp_server.allow_all_keys,
         )
         return new_server
 
@@ -581,6 +583,14 @@ class MCPServerManager:
         all_servers = list(self.get_registry().values())
         return {server.server_id for server in all_servers}
 
+    def get_allow_all_keys_server_ids(self) -> List[str]:
+        """Return server IDs that bypass per-key restrictions."""
+        return [
+            server.server_id
+            for server in self.get_registry().values()
+            if server.allow_all_keys
+        ]
+
     async def get_allowed_mcp_servers(
         self, user_api_key_auth: Optional[UserAPIKeyAuth] = None
     ) -> List[str]:
@@ -593,6 +603,8 @@ class MCPServerManager:
         if user_api_key_auth and _user_has_admin_view(user_api_key_auth):
             return list(self.get_registry().keys())
 
+        allow_all_server_ids = self.get_allow_all_keys_server_ids()
+
         try:
             allowed_mcp_servers = await MCPRequestHandler.get_allowed_mcp_servers(
                 user_api_key_auth
@@ -600,14 +612,17 @@ class MCPServerManager:
             verbose_logger.debug(
                 f"Allowed MCP Servers for user api key auth: {allowed_mcp_servers}"
             )
-            if len(allowed_mcp_servers) == 0:
+            combined_servers = set(allowed_mcp_servers)
+            combined_servers.update(allow_all_server_ids)
+
+            if len(combined_servers) == 0:
                 verbose_logger.debug(
                     "No allowed MCP Servers found for user api key auth."
                 )
-            return allowed_mcp_servers
+            return list(combined_servers)
         except Exception as e:
             verbose_logger.warning(f"Failed to get allowed MCP servers: {str(e)}.")
-            return []
+            return allow_all_server_ids
 
     async def get_tools_for_server(self, server_id: str) -> List[MCPTool]:
         """
@@ -2238,6 +2253,7 @@ class MCPServerManager:
             authorization_url=server.authorization_url,
             token_url=server.token_url,
             registration_url=server.registration_url,
+            allow_all_keys=server.allow_all_keys,
         )
 
     async def get_all_mcp_servers_with_health_and_teams(
@@ -2331,6 +2347,7 @@ class MCPServerManager:
                 authorization_url=server.authorization_url,
                 token_url=server.token_url,
                 registration_url=server.registration_url,
+                allow_all_keys=server.allow_all_keys,
             )
             list_mcp_servers.append(mcp_server_table)
 

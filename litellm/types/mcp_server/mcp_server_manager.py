@@ -47,4 +47,5 @@ class MCPServer(BaseModel):
     args: Optional[List[str]] = None
     env: Optional[Dict[str, str]] = None
     access_groups: Optional[List[str]] = None
+    allow_all_keys: bool = False
     model_config = ConfigDict(arbitrary_types_allowed=True)

@@ -1058,6 +1058,110 @@ async def test_list_tools_multiple_servers_prefixed_names():
 
 
 @pytest.mark.asyncio
+async def test_mcp_manager_allows_public_servers_without_permissions():
+    try:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+        from litellm.proxy._types import MCPTransport
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    manager = MCPServerManager()
+    public_server = MCPServer(
+        server_id="public",
+        name="public",
+        transport=MCPTransport.http,
+        allow_all_keys=True,
+    )
+    manager.registry = {public_server.server_id: public_server}
+
+    with patch(
+        "litellm.proxy.management_endpoints.common_utils._user_has_admin_view",
+        return_value=False,
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPRequestHandler.get_allowed_mcp_servers",
+        AsyncMock(return_value=[]),
+    ):
+        allowed = await manager.get_allowed_mcp_servers(UserAPIKeyAuth())
+
+    assert allowed == ["public"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_manager_returns_public_when_permission_lookup_fails():
+    try:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+        from litellm.proxy._types import MCPTransport
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    manager = MCPServerManager()
+    public_server = MCPServer(
+        server_id="public",
+        name="public",
+        transport=MCPTransport.http,
+        allow_all_keys=True,
+    )
+    manager.registry = {public_server.server_id: public_server}
+
+    with patch(
+        "litellm.proxy.management_endpoints.common_utils._user_has_admin_view",
+        return_value=False,
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPRequestHandler.get_allowed_mcp_servers",
+        AsyncMock(side_effect=Exception("boom")),
+    ):
+        allowed = await manager.get_allowed_mcp_servers(UserAPIKeyAuth())
+
+    assert allowed == ["public"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_manager_merges_public_and_restricted_servers():
+    try:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+        from litellm.proxy._types import MCPTransport
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    manager = MCPServerManager()
+    public_server = MCPServer(
+        server_id="public",
+        name="public",
+        transport=MCPTransport.http,
+        allow_all_keys=True,
+    )
+    scoped_server = MCPServer(
+        server_id="restricted",
+        name="restricted",
+        transport=MCPTransport.http,
+    )
+    manager.registry = {
+        public_server.server_id: public_server,
+        scoped_server.server_id: scoped_server,
+    }
+
+    with patch(
+        "litellm.proxy.management_endpoints.common_utils._user_has_admin_view",
+        return_value=False,
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPRequestHandler.get_allowed_mcp_servers",
+        AsyncMock(return_value=["restricted"]),
+    ):
+        allowed = await manager.get_allowed_mcp_servers(UserAPIKeyAuth())
+
+    assert set(allowed) == {"public", "restricted"}
+
+
+@pytest.mark.asyncio
 async def test_call_mcp_tool_user_unauthorized_access():
     """Test that a user cannot call a tool from a server they don't have access to"""
     from fastapi import HTTPException
