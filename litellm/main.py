@@ -5288,7 +5288,7 @@ def embedding(  # noqa: PLR0915
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
-                litellm_params={},
+                litellm_params={"ssl_verify": kwargs.get("ssl_verify", None)},
             )
         else:
             raise LiteLLMUnknownProvider(

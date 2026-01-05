@@ -13,17 +13,32 @@ import httpx
 
 from litellm._logging import verbose_logger
 from litellm.caching.caching import InMemoryCache
-from litellm.secret_managers.main import get_secret_str
-
-from .common_utils import (
-    GIGACHAT_AUTH_URL,
-    GIGACHAT_SCOPE,
-    TOKEN_EXPIRY_BUFFER_MS,
-    GigaChatAuthError,
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.custom_httpx.http_handler import (
+    HTTPHandler,
+    _get_httpx_client,
+    get_async_httpx_client,
 )
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.utils import LlmProviders
+
+# GigaChat OAuth endpoint
+GIGACHAT_AUTH_URL = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+
+# Default scope for personal API access
+GIGACHAT_SCOPE = "GIGACHAT_API_PERS"
+
+# Token expiry buffer in milliseconds (refresh token 60s before expiry)
+TOKEN_EXPIRY_BUFFER_MS = 60000
 
 # Cache for access tokens
 _token_cache = InMemoryCache()
+
+
+class GigaChatAuthError(BaseLLMException):
+    """GigaChat authentication error."""
+
+    pass
 
 
 def _get_credentials() -> Optional[str]:
@@ -39,6 +54,11 @@ def _get_auth_url() -> str:
 def _get_scope() -> str:
     """Get GigaChat scope from environment or use default."""
     return get_secret_str("GIGACHAT_SCOPE") or GIGACHAT_SCOPE
+
+
+def _get_http_client() -> HTTPHandler:
+    """Get cached httpx client with SSL verification disabled."""
+    return _get_httpx_client(params={"ssl_verify": False})
 
 
 def get_access_token(
@@ -148,16 +168,14 @@ def _request_token_sync(
     verbose_logger.debug(f"Requesting GigaChat access token from {auth_url}")
 
     try:
-        with httpx.Client(verify=False) as client:
-            response = client.post(auth_url, headers=headers, data=data, timeout=30)
-            response.raise_for_status()
-            return _parse_token_response(response)
+        client = _get_http_client()
+        response = client.post(auth_url, headers=headers, data=data, timeout=30)
+        response.raise_for_status()
+        return _parse_token_response(response)
     except httpx.HTTPStatusError as e:
         raise GigaChatAuthError(
             status_code=e.response.status_code,
             message=f"GigaChat authentication failed: {e.response.text}",
-            response=e.response,
-            request=e.request,
         )
     except httpx.RequestError as e:
         raise GigaChatAuthError(
@@ -182,16 +200,17 @@ async def _request_token_async(
     verbose_logger.debug(f"Requesting GigaChat access token from {auth_url}")
 
     try:
-        async with httpx.AsyncClient(verify=False) as client:
-            response = await client.post(auth_url, headers=headers, data=data, timeout=30)
-            response.raise_for_status()
-            return _parse_token_response(response)
+        client = get_async_httpx_client(
+            llm_provider=LlmProviders.GIGACHAT,
+            params={"ssl_verify": False},
+        )
+        response = await client.post(auth_url, headers=headers, data=data, timeout=30)
+        response.raise_for_status()
+        return _parse_token_response(response)
     except httpx.HTTPStatusError as e:
         raise GigaChatAuthError(
             status_code=e.response.status_code,
             message=f"GigaChat authentication failed: {e.response.text}",
-            response=e.response,
-            request=e.request,
         )
     except httpx.RequestError as e:
         raise GigaChatAuthError(

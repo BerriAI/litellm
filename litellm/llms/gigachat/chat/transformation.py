@@ -18,8 +18,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
 from ..authenticator import get_access_token
-from ..common_utils import GIGACHAT_BASE_URL, GigaChatError
-from ..file_handler import get_file_handler
+from ..file_handler import upload_file_sync
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -27,6 +26,15 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+# GigaChat API endpoint
+GIGACHAT_BASE_URL = "https://gigachat.devices.sberbank.ru/api/v1"
+
+
+class GigaChatError(BaseLLMException):
+    """GigaChat API error."""
+
+    pass
 
 
 class GigaChatConfig(BaseConfig):
@@ -206,13 +214,10 @@ class GigaChatConfig(BaseConfig):
             file_id string or None if upload failed
         """
         try:
-            file_handler = get_file_handler()
-            credentials = self._current_credentials
-            api_base = self._current_api_base
-            return file_handler.upload_file_sync(
+            return upload_file_sync(
                 image_url=image_url,
-                credentials=credentials,
-                api_base=api_base,
+                credentials=self._current_credentials,
+                api_base=self._current_api_base,
             )
         except Exception as e:
             verbose_logger.error(f"Failed to upload image: {e}")
@@ -466,7 +471,3 @@ class GigaChatConfig(BaseConfig):
             sync_stream=sync_stream,
             json_mode=json_mode,
         )
-
-
-# Global config instance
-gigachat_chat_config = GigaChatConfig()

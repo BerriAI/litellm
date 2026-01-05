@@ -18,7 +18,15 @@ from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse
 
 from ..authenticator import get_access_token
-from ..common_utils import GIGACHAT_BASE_URL, GigaChatError
+
+# GigaChat API endpoint
+GIGACHAT_BASE_URL = "https://gigachat.devices.sberbank.ru/api/v1"
+
+
+class GigaChatEmbeddingError(BaseLLMException):
+    """GigaChat Embedding API error."""
+
+    pass
 
 
 class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
@@ -198,11 +206,7 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
         """Return GigaChat-specific error class."""
-        return GigaChatError(
+        return GigaChatEmbeddingError(
             status_code=status_code,
             message=error_message,
         )
-
-
-# Singleton instance
-gigachat_embedding_config = GigaChatEmbeddingConfig()
