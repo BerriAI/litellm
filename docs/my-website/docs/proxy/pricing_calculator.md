@@ -72,6 +72,13 @@ The calculator automatically updates as you change values. View the cost breakdo
 
 ![View cost estimates](https://colony-recorder.s3.amazonaws.com/files/2026-01-05/4436cd11-df58-47cb-9742-c0d08865a61c/ascreenshot_f961298a4231464ea841bc4d184f731e_text_export.jpeg)
 
+### Step 8: Export the Report
+
+Click the **Export** button to download your cost estimate. You can export as:
+
+- **PDF** - Opens a print dialog to save as PDF (great for sharing with stakeholders)
+- **CSV** - Downloads a spreadsheet-compatible file for further analysis
+
 ## Cost Breakdown Details
 
 The Pricing Calculator shows:
