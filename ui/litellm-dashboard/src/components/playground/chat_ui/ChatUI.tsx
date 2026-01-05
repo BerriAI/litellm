@@ -118,6 +118,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
     return disabledPersonalKeyCreation ? "custom" : "session";
   });
   const [apiKey, setApiKey] = useState<string>(() => sessionStorage.getItem("apiKey") || "");
+  const [customProxyBaseUrl, setCustomProxyBaseUrl] = useState<string>(
+    () => sessionStorage.getItem("customProxyBaseUrl") || ""
+  );
   const [inputMessage, setInputMessage] = useState("");
   const [chatHistory, setChatHistory] = useState<MessageType[]>(() => {
     try {
@@ -1109,6 +1112,26 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     value={apiKey}
                     icon={KeyOutlined}
                   />
+                )}
+              </div>
+
+              <div>
+                <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+                  <SettingOutlined className="mr-2" /> Custom Proxy Base URL
+                </Text>
+                <TextInput
+                  placeholder="Optional: Enter custom proxy URL (e.g., http://localhost:5000)"
+                  onValueChange={(value) => {
+                    setCustomProxyBaseUrl(value);
+                    sessionStorage.setItem("customProxyBaseUrl", value);
+                  }}
+                  value={customProxyBaseUrl}
+                  icon={ApiOutlined}
+                />
+                {customProxyBaseUrl && (
+                  <Text className="text-xs text-gray-500 mt-1">
+                    API calls will be sent to: {customProxyBaseUrl}
+                  </Text>
                 )}
               </div>
 
