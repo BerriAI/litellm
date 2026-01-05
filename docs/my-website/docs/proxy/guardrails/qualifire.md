@@ -4,7 +4,7 @@ import TabItem from '@theme/TabItem';
 
 # Qualifire
 
-Use [Qualifire](https://docs.qualifire.ai) to evaluate LLM outputs for quality, safety, and reliability. Detect prompt injections, hallucinations, PII, harmful content, and validate that your AI follows instructions.
+Use [Qualifire](https://qualifire.ai) to evaluate LLM outputs for quality, safety, and reliability. Detect prompt injections, hallucinations, PII, harmful content, and validate that your AI follows instructions.
 
 ## Quick Start
 
@@ -59,7 +59,7 @@ guardrails:
 
 - `pre_call` Run **before** LLM call, on **input**
 - `post_call` Run **after** LLM call, on **input & output**
-- `during_call` Run **during** LLM call, on **input** Same as `pre_call` but runs in parallel as LLM call. Response not returned until guardrail check completes
+- `during_call` Run **during** LLM call, on **input**. Same as `pre_call` but runs in parallel as LLM call. Response not returned until guardrail check completes
 
 ### 3. Start LiteLLM Gateway
 
