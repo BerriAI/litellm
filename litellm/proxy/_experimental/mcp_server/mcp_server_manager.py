@@ -30,6 +30,7 @@ from pydantic import AnyUrl
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.types.utils import CallTypes
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -1676,11 +1677,11 @@ class MCPServerManager:
         )
 
         try:
-            # Use standard pre_call_hook with call_type="mcp_call"
+            # Use standard pre_call_hook
             modified_data = await proxy_logging_obj.pre_call_hook(
                 user_api_key_dict=user_api_key_auth,  # type: ignore
                 data=synthetic_llm_data,
-                call_type="mcp_call",  # type: ignore
+                call_type=CallTypes.call_mcp_tool.value,
             )
             if modified_data:
                 # Convert response back to MCP format and apply modifications
@@ -1737,7 +1738,7 @@ class MCPServerManager:
             proxy_logging_obj.during_call_hook(
                 user_api_key_dict=user_api_key_auth,
                 data=synthetic_llm_data,
-                call_type="mcp_call",  # type: ignore
+                call_type=CallTypes.call_mcp_tool.value,
             )
         )
 
@@ -1893,7 +1894,7 @@ class MCPServerManager:
         #########################################################
         # Pre MCP Tool Call Hook
         # Allow validation and modification of tool calls before execution
-        # Using standard pre_call_hook with call_type="mcp_call"
+        # Using standard pre_call_hook
         #########################################################
         if proxy_logging_obj:
             await self.pre_call_tool_check(
