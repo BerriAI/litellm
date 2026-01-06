@@ -18,6 +18,7 @@ export async function makeAnthropicMessagesRequest(
   vector_store_ids?: string[],
   guardrails?: string[],
   selectedMCPTools?: string[],
+  customBaseUrl?: string,
 ) {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
@@ -28,7 +29,7 @@ export async function makeAnthropicMessagesRequest(
     console.log = function () {};
   }
 
-  const proxyBaseUrl = getProxyBaseUrl();
+  const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
 
   // Prepare headers with tags and trace ID
   const headers: Record<string, string> = {};
