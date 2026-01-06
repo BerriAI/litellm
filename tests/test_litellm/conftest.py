@@ -26,7 +26,7 @@ def event_loop():
 
 
 
-@pytest.fixture(scope="function", autouse=True)
+@pytest.fixture(scope="module", autouse=True)
 def setup_and_teardown():
     """
     This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.

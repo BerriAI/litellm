@@ -1,25 +1,5 @@
 "use client";
 import React, { useEffect, useState } from "react";
-import {
-  Badge,
-  Card,
-  Table,
-  Metric,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-  Text,
-  Title,
-  Icon,
-  Accordion,
-  AccordionBody,
-  AccordionHeader,
-  List,
-  ListItem,
-} from "@tremor/react";
-import { Statistic } from "antd";
 import { modelAvailableCall } from "./networking";
 
 interface ViewUserTeamProps {

@@ -194,7 +194,7 @@ def create_async_task(**completion_kwargs):
     By default a standard set of arguments are used for the litellm.acompletion function.
     """
     completion_args = {
-        "model": "azure/gpt-4.1-nano",
+        "model": "azure/gpt-4.1-mini",
         "api_version": "2024-02-01",
         "messages": [{"role": "user", "content": "This is a test"}],
         "max_tokens": 5,
@@ -1019,7 +1019,7 @@ generation_params = {
                 ],
             },
         },
-        "user_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+        "user_api_key": "sk-test-mock-api-key-123",
         "litellm_api_version": "0.0.0",
         "user_api_key_user_id": "default_user_id",
         "user_api_key_spend": 0.0,
@@ -1142,7 +1142,7 @@ def test_langfuse_prompt_type(prompt):
                 ],
             },
         },
-        "user_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+        "user_api_key": "sk-test-mock-api-key-123",
         "litellm_api_version": "0.0.0",
         "user_api_key_user_id": "default_user_id",
         "user_api_key_spend": 0.0,

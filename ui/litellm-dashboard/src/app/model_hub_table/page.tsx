@@ -1,13 +1,13 @@
 "use client";
-import React, { Suspense, useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { modelHubCall } from "@/components/networking";
-import ModelHubTable from "@/components/model_hub_table";
+import ModelHubTable from "@/components/AIHub/ModelHubTable";
 
 export default function PublicModelHubTable() {
   const searchParams = useSearchParams()!;
   const key = searchParams.get("key");
   const [accessToken, setAccessToken] = useState<string | null>(null);
+  console.log("PublicModelHubTable accessToken:", accessToken);
 
   useEffect(() => {
     if (!key) {

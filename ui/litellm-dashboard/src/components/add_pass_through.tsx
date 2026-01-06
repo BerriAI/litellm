@@ -2,50 +2,32 @@
  * Modal to add fallbacks to the proxy router config
  */
 
-import React, { useState, useEffect, useRef } from "react";
-import { Button, TextInput, Grid, Col, Switch } from "@tremor/react";
+import React, { useState } from "react";
+import { Button, TextInput, Switch } from "@tremor/react";
 import {
-  Select,
-  SelectItem,
-  MultiSelect,
-  MultiSelectItem,
   Card,
-  Metric,
-  Text,
   Title,
   Subtitle,
-  Accordion,
-  AccordionHeader,
-  AccordionBody,
 } from "@tremor/react";
 import { createPassThroughEndpoint } from "./networking";
 import {
-  Button as Button2,
   Modal,
   Form,
-  Input,
-  InputNumber,
   Select as Select2,
-  message,
   Tooltip,
   Alert,
-  Divider,
-  Collapse,
 } from "antd";
 import NumericalInput from "./shared/numerical_input";
 import {
   InfoCircleOutlined,
   ApiOutlined,
-  ExclamationCircleOutlined,
-  CheckCircleOutlined,
-  CopyOutlined,
 } from "@ant-design/icons";
-import { keyCreateCall, slackBudgetAlertsHealthCheck, modelAvailableCall } from "./networking";
-import { list } from "postcss";
 import KeyValueInput from "./key_value_input";
 import { passThroughItem } from "./pass_through_settings";
 import RoutePreview from "./route_preview";
 import NotificationsManager from "./molecules/notifications_manager";
+import PassThroughSecuritySection from "./common_components/PassThroughSecuritySection";
+import PassThroughGuardrailsSection from "./common_components/PassThroughGuardrailsSection";
 const { Option } = Select2;
 
 interface AddFallbacksProps {
@@ -53,12 +35,14 @@ interface AddFallbacksProps {
   accessToken: string;
   passThroughItems: passThroughItem[];
   setPassThroughItems: React.Dispatch<React.SetStateAction<passThroughItem[]>>;
+  premiumUser?: boolean;
 }
 
 const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
   accessToken,
   setPassThroughItems,
   passThroughItems,
+  premiumUser = false,
 }) => {
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -67,12 +51,14 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
   const [pathValue, setPathValue] = useState("");
   const [targetValue, setTargetValue] = useState("");
   const [includeSubpath, setIncludeSubpath] = useState(true);
-
+  const [authEnabled, setAuthEnabled] = useState(false);
+  const [guardrails, setGuardrails] = useState<Record<string, { request_fields?: string[]; response_fields?: string[] } | null>>({});
   const handleCancel = () => {
     form.resetFields();
     setPathValue("");
     setTargetValue("");
     setIncludeSubpath(true);
+    setGuardrails({});
     setIsModalVisible(false);
   };
 
@@ -90,6 +76,16 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
     console.log("addPassThrough called with:", formValues);
     setIsLoading(true);
     try {
+      // Remove auth field if not premium user
+      if (!premiumUser && 'auth' in formValues) {
+        delete formValues.auth;
+      }
+      
+      // Add guardrails to formValues (only if not empty)
+      if (guardrails && Object.keys(guardrails).length > 0) {
+        formValues.guardrails = guardrails;
+      }
+      
       console.log(`formValues: ${JSON.stringify(formValues)}`);
 
       const response = await createPassThroughEndpoint(accessToken, formValues);
@@ -105,6 +101,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
       setPathValue("");
       setTargetValue("");
       setIncludeSubpath(true);
+      setGuardrails({});
       setIsModalVisible(false);
     } catch (error) {
       NotificationsManager.fromBackend("Error creating pass-through endpoint: " + error);
@@ -252,6 +249,23 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                 <KeyValueInput />
               </Form.Item>
             </Card>
+
+            {/* Security Section */}
+            <PassThroughSecuritySection
+              premiumUser={premiumUser}
+              authEnabled={authEnabled}
+              onAuthChange={(checked) => {
+                setAuthEnabled(checked);
+                form.setFieldsValue({ auth: checked });
+              }}
+            />
+
+            {/* Guardrails Section */}
+            <PassThroughGuardrailsSection
+              accessToken={accessToken}
+              value={guardrails}
+              onChange={setGuardrails}
+            />
 
             {/* Billing Section */}
             <Card className="p-6">

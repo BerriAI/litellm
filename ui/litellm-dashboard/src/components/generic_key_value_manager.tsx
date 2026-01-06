@@ -1,7 +1,6 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useCallback } from "react";
 import { Card, Title, Text, Table, TableHead, TableRow, TableHeaderCell, TableCell, TableBody } from "@tremor/react";
-import { message, Input } from "antd";
-import { EditOutlined, DeleteOutlined, SaveOutlined, CloseOutlined } from "@ant-design/icons";
+import { Input } from "antd";
 import { ChevronDownIcon, ChevronRightIcon, PlusCircleIcon } from "@heroicons/react/outline";
 import NotificationManager from "./molecules/notifications_manager";
 

@@ -1,7 +1,7 @@
 import asyncio
 import traceback
 from datetime import datetime
-from typing import Any, Optional, Union, cast
+from typing import Any, List, Optional, Union, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -80,10 +80,25 @@ class _ProxyDBLogger(CustomLogger):
 
         if "litellm_params" not in request_data:
             request_data["litellm_params"] = {}
+        
+        existing_litellm_params = request_data.get("litellm_params", {})
+        existing_litellm_metadata = existing_litellm_params.get("metadata", {}) or {}
+        
+        # Preserve tags from existing metadata
+        if existing_litellm_metadata.get("tags"):
+            existing_metadata["tags"] = existing_litellm_metadata.get("tags")
+        
         request_data["litellm_params"]["proxy_server_request"] = (
-            request_data.get("proxy_server_request") or {}
+            request_data.get("proxy_server_request") or existing_litellm_params.get("proxy_server_request") or {}
         )
         request_data["litellm_params"]["metadata"] = existing_metadata
+        
+        # Preserve model name and custom_llm_provider
+        if "model" not in request_data:
+            request_data["model"] = existing_litellm_params.get("model") or request_data.get("model", "")
+        if "custom_llm_provider" not in request_data:
+            request_data["custom_llm_provider"] = existing_litellm_params.get("custom_llm_provider") or request_data.get("custom_llm_provider", "")
+        
         await proxy_logging_obj.db_spend_update_writer.update_database(
             token=user_api_key_dict.api_key,
             response_cost=0.0,
@@ -131,6 +146,9 @@ class _ProxyDBLogger(CustomLogger):
                 if sl_object is not None
                 else kwargs.get("response_cost", None)
             )
+            tags: Optional[List[str]] = (
+                sl_object.get("request_tags", None) if sl_object is not None else None
+            )
 
             if response_cost is not None:
                 user_api_key = metadata.get("user_api_key", None)
@@ -172,6 +190,7 @@ class _ProxyDBLogger(CustomLogger):
                             response_cost=response_cost,
                             team_id=team_id,
                             parent_otel_span=parent_otel_span,
+                            tags=tags,
                         )
                     )
 
@@ -181,10 +200,6 @@ class _ProxyDBLogger(CustomLogger):
                         end_user_id=end_user_id,
                         response_cost=response_cost,
                         max_budget=end_user_max_budget,
-                    )
-                else:
-                    raise Exception(
-                        "User API key and team id and user id missing from custom callback."
                     )
             else:
                 if kwargs["stream"] is not True or (

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Card, Title, Text, Divider, Button, TextInput } from "@tremor/react";
-import { Typography, Spin, message, Switch, Select, Form } from "antd";
+import { Typography, Spin, Switch, Select } from "antd";
 import { getDefaultTeamSettings, updateDefaultTeamSettings, modelAvailableCall } from "./networking";
 import BudgetDurationDropdown, { getBudgetDurationLabel } from "./common_components/budget_duration_dropdown";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
@@ -123,6 +123,9 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken, userID, 
           onChange={(value) => handleTextInputChange(key, value)}
           className="mt-2"
         >
+          <Option key="no-default-models" value="no-default-models">
+            No Default Models
+          </Option>
           {availableModels.map((model: string) => (
             <Option key={model} value={model}>
               {getModelDisplayName(model)}

@@ -207,7 +207,6 @@ class BaseOpenAILLM:
         ssl_config = get_ssl_configuration()
 
         return httpx.AsyncClient(
-            limits=httpx.Limits(max_connections=1000, max_keepalive_connections=100),
             verify=ssl_config,
             transport=AsyncHTTPHandler._create_async_transport(
                 ssl_context=ssl_config
@@ -228,7 +227,6 @@ class BaseOpenAILLM:
         ssl_config = get_ssl_configuration()
 
         return httpx.Client(
-            limits=httpx.Limits(max_connections=1000, max_keepalive_connections=100),
             verify=ssl_config,
             follow_redirects=True,
         )

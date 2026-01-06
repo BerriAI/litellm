@@ -1,34 +1,28 @@
 "use client";
-import React, { useState, useEffect } from "react";
-import {
-  userInfoCall,
-  modelAvailableCall,
-  getTotalSpendCall,
-  getProxyUISettings,
-  Organization,
-  organizationListCall,
-  DEFAULT_ORGANIZATION,
-  keyInfoCall,
-  getProxyBaseUrl,
-} from "./networking";
-import { fetchTeams } from "./common_components/fetch_teams";
-import { Grid, Col, Card, Text, Title } from "@tremor/react";
-import CreateKey from "./organisms/create_key_button";
-import ViewKeyTable from "./templates/view_key_table";
-import ViewUserSpend from "./view_user_spend";
-import ViewUserTeam from "./view_user_team";
-import DashboardTeam from "./dashboard_default_team";
-import Onboarding from "../app/onboarding/page";
-import { useSearchParams, useRouter } from "next/navigation";
-import { Team } from "./key_team_helpers/key_list";
-import { jwtDecode } from "jwt-decode";
-import { Typography } from "antd";
 import { clearTokenCookies } from "@/utils/cookieUtils";
-import { clearMCPAuthTokens } from "./mcp_tools/mcp_auth_storage";
+import { Col, Grid } from "@tremor/react";
+import { Typography } from "antd";
+import { jwtDecode } from "jwt-decode";
+import { useSearchParams } from "next/navigation";
+import React, { useEffect, useState } from "react";
+import Onboarding from "../app/onboarding/page";
+import { fetchTeams } from "./common_components/fetch_teams";
+import { KeyResponse, Team } from "./key_team_helpers/key_list";
+import {
+  getProxyBaseUrl,
+  getProxyUISettings,
+  keyInfoCall,
+  modelAvailableCall,
+  Organization,
+  userInfoCall,
+} from "./networking";
+import CreateKey from "./organisms/create_key_button";
+import { VirtualKeysTable } from "./VirtualKeysPage/VirtualKeysTable";
 
 export interface ProxySettings {
   PROXY_BASE_URL: string | null;
   PROXY_LOGOUT_URL: string | null;
+  LITELLM_UI_API_DOC_BASE_URL?: string | null;
   DEFAULT_TEAM_DISABLED: boolean;
   SSO_ENABLED: boolean;
   DISABLE_EXPENSIVE_DB_QUERIES: boolean;
@@ -56,7 +50,7 @@ interface UserDashboardProps {
   setUserRole: React.Dispatch<React.SetStateAction<string>>;
   setUserEmail: React.Dispatch<React.SetStateAction<string | null>>;
   setTeams: React.Dispatch<React.SetStateAction<Team[] | null>>;
-  setKeys: React.Dispatch<React.SetStateAction<Object[] | null>>;
+  setKeys: (keys: KeyResponse[]) => void;
   premiumUser: boolean;
   organizations: Organization[] | null;
   addKey: (data: any) => void;
@@ -66,7 +60,7 @@ interface UserDashboardProps {
 type TeamInterface = {
   models: any[];
   team_id: null;
-  team_alias: String;
+  team_alias: string;
 };
 
 const UserDashboard: React.FC<UserDashboardProps> = ({
@@ -98,13 +92,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   const [teamSpend, setTeamSpend] = useState<number | null>(null);
   const [userModels, setUserModels] = useState<string[]>([]);
   const [proxySettings, setProxySettings] = useState<ProxySettings | null>(null);
-  const defaultTeam: TeamInterface = {
-    models: [],
-    team_alias: "Default Team",
-    team_id: null,
-  };
   const [selectedTeam, setSelectedTeam] = useState<any | null>(null);
-  const [selectedKeyAlias, setSelectedKeyAlias] = useState<string | null>(null);
   // check if window is not undefined
   if (typeof window !== "undefined") {
     window.addEventListener("beforeunload", function () {
@@ -358,34 +346,12 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
         <Col numColSpan={1} className="flex flex-col gap-2">
           <CreateKey
             key={selectedTeam ? selectedTeam.team_id : null}
-            userID={userID}
             team={selectedTeam as Team | null}
             teams={teams as Team[]}
-            userRole={userRole}
-            accessToken={accessToken}
             data={keys}
             addKey={addKey}
-            premiumUser={premiumUser}
           />
-
-          <ViewKeyTable
-            userID={userID}
-            userRole={userRole}
-            accessToken={accessToken}
-            selectedTeam={selectedTeam ? selectedTeam : null}
-            setSelectedTeam={setSelectedTeam}
-            selectedKeyAlias={selectedKeyAlias}
-            setSelectedKeyAlias={setSelectedKeyAlias}
-            data={keys}
-            setData={setKeys}
-            premiumUser={premiumUser}
-            teams={teams}
-            currentOrg={currentOrg}
-            setCurrentOrg={setCurrentOrg}
-            organizations={organizations}
-            createClicked={createClicked}
-            setAccessToken={setAccessToken}
-          />
+          <VirtualKeysTable teams={teams} organizations={organizations} />
         </Col>
       </Grid>
     </div>

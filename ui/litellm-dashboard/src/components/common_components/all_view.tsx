@@ -9,7 +9,6 @@ import {
   Text,
   Badge,
   Icon,
-  Button,
   Card,
 } from "@tremor/react";
 import { Tooltip } from "antd";

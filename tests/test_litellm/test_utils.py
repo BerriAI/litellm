@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from jsonschema import validate
@@ -23,6 +23,7 @@ from litellm.utils import (
     TextCompletionStreamWrapper,
     get_llm_provider,
     get_optional_params_image_gen,
+    is_cached_message,
 )
 
 # Adds the parent directory to the system path
@@ -386,7 +387,7 @@ def test_anthropic_web_search_in_model_info():
 
     supported_models = [
         "anthropic/claude-3-7-sonnet-20250219",
-        "anthropic/claude-3-5-sonnet-latest",
+        "anthropic/claude-sonnet-4-5-20250929",
         "anthropic/claude-3-5-sonnet-20241022",
         "anthropic/claude-3-5-haiku-20241022",
         "anthropic/claude-3-5-haiku-latest",
@@ -449,6 +450,7 @@ def validate_model_cost_values(model_data, exceptions=None):
         "input_cost_per_request",
         "input_cost_per_audio_token",
         "output_cost_per_audio_token",
+        "output_cost_per_image_token",
         "input_cost_per_audio_per_second",
         "input_cost_per_video_per_second",
         "input_cost_per_token_above_128k_tokens",
@@ -546,6 +548,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_read_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_read_input_audio_token_cost": {"type": "number"},
+                "cache_read_input_image_token_cost": {"type": "number"},
                 "deprecation_date": {"type": "string"},
                 "input_cost_per_audio_per_second": {"type": "number"},
                 "input_cost_per_audio_per_second_above_128k_tokens": {"type": "number"},
@@ -554,6 +557,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_character_above_128k_tokens": {"type": "number"},
                 "input_cost_per_image": {"type": "number"},
                 "input_cost_per_image_above_128k_tokens": {"type": "number"},
+                "input_cost_per_image_token": {"type": "number"},
                 "input_cost_per_token_above_200k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_flex": {"type": "number"},
                 "cache_read_input_token_cost_priority": {"type": "number"},
@@ -577,6 +581,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 },
                 "input_cost_per_video_per_second_above_128k_tokens": {"type": "number"},
                 "input_dbu_cost_per_token": {"type": "number"},
+                "annotation_cost_per_page": {"type": "number"},
+                "ocr_cost_per_page": {"type": "number"},
+                "code_interpreter_cost_per_session": {"type": "number"},
                 "litellm_provider": {"type": "string"},
                 "max_audio_length_hours": {"type": "number"},
                 "max_audio_per_prompt": {"type": "number"},
@@ -598,25 +605,41 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "audio_transcription",
                         "chat",
                         "completion",
+                        "container",
+                        "image_edit",
                         "embedding",
                         "image_generation",
                         "video_generation",
                         "moderation",
                         "rerank",
                         "responses",
+                        "ocr",
+                        "search",
+                        "vector_store",
                     ],
                 },
                 "output_cost_per_audio_token": {"type": "number"},
                 "output_cost_per_character": {"type": "number"},
                 "output_cost_per_character_above_128k_tokens": {"type": "number"},
                 "output_cost_per_image": {"type": "number"},
+                "output_cost_per_image_token": {"type": "number"},
                 "output_cost_per_pixel": {"type": "number"},
                 "output_cost_per_second": {"type": "number"},
                 "output_cost_per_token": {"type": "number"},
                 "output_cost_per_token_above_128k_tokens": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens": {"type": "number"},
+                "output_cost_per_image_above_1024_and_1024_pixels": {"type": "number"},
+                "output_cost_per_image_above_1024_and_1024_pixels_and_premium_image": {
+                    "type": "number"
+                },
+                "output_cost_per_image_above_512_and_512_pixels": {"type": "number"},
+                "output_cost_per_image_above_512_and_512_pixels_and_premium_image": {
+                    "type": "number"
+                },
+                "output_cost_per_image_premium_image": {"type": "number"},
                 "output_cost_per_token_batches": {"type": "number"},
                 "output_cost_per_reasoning_token": {"type": "number"},
+                "output_cost_per_video_per_second": {"type": "number"},
                 "output_db_cost_per_token": {"type": "number"},
                 "output_dbu_cost_per_token": {"type": "number"},
                 "output_vector_size": {"type": "number"},
@@ -659,6 +682,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/batch",
                             "/v1/audio/transcriptions",
                             "/v1/audio/speech",
+                            "/v1/ocr",
                         ],
                     },
                 },
@@ -692,6 +716,12 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "enum": ["text", "image", "audio", "code", "video"],
                     },
                 },
+                "supported_resolutions": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                    },
+                },
                 "supports_native_streaming": {"type": "boolean"},
                 "tiered_pricing": {
                     "type": "array",
@@ -708,8 +738,14 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "output_cost_per_token": {"type": "number"},
                             "cache_read_input_token_cost": {"type": "number"},
                             "output_cost_per_reasoning_token": {"type": "number"},
+                            "max_results_range": {
+                                "type": "array",
+                                "items": {"type": "number"},
+                                "minItems": 2,
+                                "maxItems": 2,
+                            },
+                            "input_cost_per_query": {"type": "number"},
                         },
-                        "required": ["range"],
                         "additionalProperties": False,
                     },
                 },
@@ -846,6 +882,20 @@ def test_check_provider_match():
     assert litellm.utils._check_provider_match(model_info, "openai") is False
 
 
+def test_get_provider_rerank_config():
+    """
+    Test the get_provider_rerank_config function for various providers
+    """
+    from litellm import HostedVLLMRerankConfig
+    from litellm.utils import LlmProviders, ProviderConfigManager
+
+    # Test for hosted_vllm provider
+    config = ProviderConfigManager.get_provider_rerank_config(
+        "my_model", LlmProviders.HOSTED_VLLM, "http://localhost", []
+    )
+    assert isinstance(config, HostedVLLMRerankConfig)
+
+
 # Models that should be skipped during testing
 OLD_PROVIDERS = ["aleph_alpha", "palm"]
 SKIP_MODELS = [
@@ -854,8 +904,6 @@ SKIP_MODELS = [
     "jamba",
     "deepinfra",
     "mistral.",
-    "groq/llama-guard-3-8b",
-    "groq/gemma2-9b-it",
 ]
 
 # Bedrock models to block - organized by type
@@ -1186,7 +1234,7 @@ class TestProxyFunctionCalling:
         ), "Custom model names return False without proxy config context"
 
         # Case 2: Model name that can be resolved (matches pattern)
-        resolvable_model = "litellm_proxy/claude-3-5-sonnet-latest"
+        resolvable_model = "litellm_proxy/claude-sonnet-4-5-20250929"
         result = supports_function_calling(resolvable_model)
         assert result is True, "Resolvable model names work with fallback logic"
 
@@ -1197,7 +1245,7 @@ class TestProxyFunctionCalling:
         
         ✅ WORKS (with current fallback logic):
            - litellm_proxy/gpt-4
-           - litellm_proxy/claude-3-5-sonnet-latest
+           - litellm_proxy/claude-sonnet-4-5-20250929
            - litellm_proxy/anthropic/claude-3-haiku-20240307
            
         ❌ DOESN'T WORK (requires proxy server config):
@@ -2456,7 +2504,7 @@ class TestGetValidModelsWithCLI:
 
     def test_get_valid_models_with_cli_pattern(self):
         """Test get_valid_models with litellm_proxy provider and CLI token pattern"""
-        
+
         # Mock the HTTP request that get_valid_models makes to the proxy
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -2465,19 +2513,21 @@ class TestGetValidModelsWithCLI:
                 {"id": "gpt-3.5-turbo", "object": "model"},
                 {"id": "gpt-4", "object": "model"},
                 {"id": "litellm_proxy/gemini/gemini-2.5-flash", "object": "model"},
-                {"id": "claude-3-sonnet", "object": "model"}
+                {"id": "claude-3-sonnet", "object": "model"},
             ]
         }
 
-        with patch.object(litellm.module_level_client, "get", return_value=mock_response) as mock_get:
+        with patch.object(
+            litellm.module_level_client, "get", return_value=mock_response
+        ) as mock_get:
             # Test the exact pattern used in cli_token_usage.py
             result = litellm.get_valid_models(
                 check_provider_endpoint=True,
                 custom_llm_provider="litellm_proxy",
                 api_key="sk-test-cli-key-123",
-                api_base="http://localhost:4000/"
+                api_base="http://localhost:4000/",
             )
-            
+
             # Verify the function returns a list of model names
             assert isinstance(result, list)
             assert len(result) == 4
@@ -2487,7 +2537,7 @@ class TestGetValidModelsWithCLI:
             # Note: This model already had the prefix, so it gets double-prefixed
             assert "litellm_proxy/litellm_proxy/gemini/gemini-2.5-flash" in result
             assert "litellm_proxy/claude-3-sonnet" in result
-            
+
             # Verify the HTTP request was made with correct parameters
             mock_get.assert_called_once()
             _, call_kwargs = mock_get.call_args
@@ -2500,3 +2550,240 @@ class TestGetValidModelsWithCLI:
             assert "headers" in call_kwargs
             headers = call_kwargs["headers"]
             assert headers.get("Authorization") == "Bearer sk-test-cli-key-123"
+
+
+class TestIsCachedMessage:
+    """Test is_cached_message function for context caching detection.
+
+    Fixes GitHub issue #17821 - TypeError when content is string instead of list.
+    """
+
+    def test_string_content_returns_false(self):
+        """String content should return False without crashing."""
+        message = {"role": "user", "content": "Hello world"}
+        assert is_cached_message(message) is False
+
+    def test_none_content_returns_false(self):
+        """None content should return False."""
+        message = {"role": "user", "content": None}
+        assert is_cached_message(message) is False
+
+    def test_missing_content_returns_false(self):
+        """Message without content key should return False."""
+        message = {"role": "user"}
+        assert is_cached_message(message) is False
+
+    def test_list_content_without_cache_control_returns_false(self):
+        """List content without cache_control should return False."""
+        message = {"role": "user", "content": [{"type": "text", "text": "Hello"}]}
+        assert is_cached_message(message) is False
+
+    def test_list_content_with_cache_control_returns_true(self):
+        """List content with cache_control ephemeral should return True."""
+        message = {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Hello",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }
+        assert is_cached_message(message) is True
+
+    def test_list_with_non_dict_items_skips_them(self):
+        """List content with non-dict items should skip them gracefully."""
+        message = {
+            "role": "user",
+            "content": ["string_item", 123, {"type": "text", "text": "Hello"}],
+        }
+        assert is_cached_message(message) is False
+
+    def test_list_with_mixed_items_finds_cached(self):
+        """Mixed content list should find cached item."""
+        message = {
+            "role": "user",
+            "content": [
+                "string_item",
+                {"type": "image", "url": "..."},
+                {
+                    "type": "text",
+                    "text": "cached",
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        }
+        assert is_cached_message(message) is True
+
+    def test_wrong_cache_control_type_returns_false(self):
+        """Non-ephemeral cache_control type should return False."""
+        message = {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Hello",
+                    "cache_control": {"type": "permanent"},
+                }
+            ],
+        }
+        assert is_cached_message(message) is False
+
+    def test_empty_list_content_returns_false(self):
+        """Empty list content should return False."""
+        message = {"role": "user", "content": []}
+        assert is_cached_message(message) is False
+
+
+@pytest.mark.asyncio
+class TestProxyLoggingBudgetAlerts:
+    """Test budget_alerts method in ProxyLogging class."""
+
+    async def test_budget_alerts_when_alerting_is_none(self):
+        """Test that budget_alerts returns early when alerting is None."""
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = None
+        proxy_logging.slack_alerting_instance = AsyncMock()
+        proxy_logging.email_logging_instance = AsyncMock()
+
+        user_info = MagicMock()
+
+        # Should return without calling any alerting instances
+        await proxy_logging.budget_alerts(type="user_budget", user_info=user_info)
+
+        # Verify no calls were made
+        proxy_logging.slack_alerting_instance.budget_alerts.assert_not_called()
+        proxy_logging.email_logging_instance.budget_alerts.assert_not_called()
+
+    async def test_budget_alerts_with_slack_only(self):
+        """Test that budget_alerts calls slack_alerting_instance when slack is in alerting."""
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = ["slack"]
+        proxy_logging.slack_alerting_instance = AsyncMock()
+
+        user_info = MagicMock()
+
+        await proxy_logging.budget_alerts(type="token_budget", user_info=user_info)
+
+        proxy_logging.slack_alerting_instance.budget_alerts.assert_called_once_with(
+            type="token_budget", user_info=user_info
+        )
+
+    async def test_budget_alerts_with_email_only(self):
+        """Test that budget_alerts calls email_logging_instance when email is in alerting."""
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = ["email"]
+        proxy_logging.email_logging_instance = AsyncMock()
+
+        user_info = MagicMock()
+
+        await proxy_logging.budget_alerts(type="team_budget", user_info=user_info)
+
+        proxy_logging.email_logging_instance.budget_alerts.assert_called_once_with(
+            type="team_budget", user_info=user_info
+        )
+
+    async def test_budget_alerts_with_email_when_instance_is_none(self):
+        """Test that budget_alerts does not call email_logging_instance when it is None."""
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = ["email"]
+        proxy_logging.email_logging_instance = None
+
+        user_info = MagicMock()
+
+        # Should not raise an error
+        await proxy_logging.budget_alerts(type="organization_budget", user_info=user_info)
+
+    async def test_budget_alerts_with_both_slack_and_email(self):
+        """Test that budget_alerts calls both slack and email instances when both are in alerting."""
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = ["slack", "email"]
+        proxy_logging.slack_alerting_instance = AsyncMock()
+        proxy_logging.email_logging_instance = AsyncMock()
+
+        user_info = MagicMock()
+
+        await proxy_logging.budget_alerts(type="proxy_budget", user_info=user_info)
+
+        proxy_logging.slack_alerting_instance.budget_alerts.assert_called_once_with(
+            type="proxy_budget", user_info=user_info
+        )
+        proxy_logging.email_logging_instance.budget_alerts.assert_called_once_with(
+            type="proxy_budget", user_info=user_info
+        )
+
+    @pytest.mark.parametrize(
+        "alert_type",
+        [
+            "token_budget",
+            "user_budget",
+            "soft_budget",
+            "team_budget",
+            "organization_budget",
+            "proxy_budget",
+            "projected_limit_exceeded",
+        ],
+    )
+    async def test_budget_alerts_with_all_alert_types(self, alert_type):
+        """Test that budget_alerts works with all supported alert types."""
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = ["slack", "email"]
+        proxy_logging.slack_alerting_instance = AsyncMock()
+        proxy_logging.email_logging_instance = AsyncMock()
+
+        user_info = MagicMock()
+
+        await proxy_logging.budget_alerts(type=alert_type, user_info=user_info)
+
+        proxy_logging.slack_alerting_instance.budget_alerts.assert_called_once_with(
+            type=alert_type, user_info=user_info
+        )
+        proxy_logging.email_logging_instance.budget_alerts.assert_called_once_with(
+            type=alert_type, user_info=user_info
+        )
+
+
+def test_azure_ai_claude_provider_config():
+    """Test that Azure AI Claude models return AzureAnthropicConfig for proper tool transformation."""
+    from litellm import AzureAIStudioConfig, AzureAnthropicConfig
+    from litellm.utils import ProviderConfigManager
+
+    # Claude models should return AzureAnthropicConfig
+    config = ProviderConfigManager.get_provider_chat_config(
+        model="claude-sonnet-4-5",
+        provider=LlmProviders.AZURE_AI,
+    )
+    assert isinstance(config, AzureAnthropicConfig)
+
+    # Test case-insensitive matching
+    config = ProviderConfigManager.get_provider_chat_config(
+        model="Claude-Opus-4",
+        provider=LlmProviders.AZURE_AI,
+    )
+    assert isinstance(config, AzureAnthropicConfig)
+
+    # Non-Claude models should return AzureAIStudioConfig
+    config = ProviderConfigManager.get_provider_chat_config(
+        model="mistral-large",
+        provider=LlmProviders.AZURE_AI,
+    )
+    assert isinstance(config, AzureAIStudioConfig)

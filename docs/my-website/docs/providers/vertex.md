@@ -12,7 +12,7 @@ import TabItem from '@theme/TabItem';
 | Provider Route on LiteLLM | `vertex_ai/` |
 | Link to Provider Doc | [Vertex AI ↗](https://cloud.google.com/vertex-ai) |
 | Base URL | 1. Regional endpoints<br/>`https://{vertex_location}-aiplatform.googleapis.com/`<br/>2. Global endpoints (limited availability)<br/>`https://aiplatform.googleapis.com/`|
-| Supported Operations | [`/chat/completions`](#sample-usage), `/completions`, [`/embeddings`](#embedding-models), [`/audio/speech`](#text-to-speech-apis), [`/fine_tuning`](#fine-tuning-apis), [`/batches`](#batch-apis), [`/files`](#batch-apis), [`/images`](#image-generation-models) |
+| Supported Operations | [`/chat/completions`](#sample-usage), `/completions`, [`/embeddings`](#embedding-models), [`/audio/speech`](#text-to-speech-apis), [`/fine_tuning`](#fine-tuning-apis), [`/batches`](#batch-apis), [`/files`](#batch-apis), [`/images`](#image-generation-models), [`/rerank`](#rerank-api) |
 
 
 <br />
@@ -191,7 +191,7 @@ print(json.loads(completion.choices[0].message.content))
 model_list:
   - model_name: gemini-2.5-pro
     litellm_params:
-      model: vertex_ai/gemini-1.5-pro
+      model: vertex_ai/gemini-2.5-pro
       vertex_project: "project-id"
       vertex_location: "us-central1"
       vertex_credentials: "/path/to/service_account.json" # [OPTIONAL] Do this OR `!gcloud auth application-default login` - run this to add vertex credentials to your env
@@ -277,7 +277,7 @@ except JSONSchemaValidationError as e:
 model_list:
   - model_name: gemini-2.5-pro
     litellm_params:
-      model: vertex_ai/gemini-1.5-pro
+      model: vertex_ai/gemini-2.5-pro
       vertex_project: "project-id"
       vertex_location: "us-central1"
       vertex_credentials: "/path/to/service_account.json" # [OPTIONAL] Do this OR `!gcloud auth application-default login` - run this to add vertex credentials to your env
@@ -981,11 +981,158 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 
 ### **Context Caching**
 
-Use Vertex AI context caching is supported by calling provider api directly. (Unified Endpoint support coming soon.).
+#### Unified Endpoint
+
+Use Vertex AI context caching in the same way as [**Google AI Studio -  Context Caching**](../providers/gemini.md#context-caching)
+
+
+##### Example usage
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion 
+
+for _ in range(2): 
+    resp = completion(
+        model="vertex_ai/gemini-2.5-pro",
+        messages=[
+        # System Message
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Here is the full text of a complex legal agreement" * 4000,
+                        "cache_control": {"type": "ephemeral"}, # 👈 KEY CHANGE
+                    }
+                ],
+            },
+            # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What are the key terms and conditions in this agreement?",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }]
+    )
+
+    print(resp.usage) # 👈 2nd usage block will be less, since cached tokens used
+```
+
+</TabItem>
+<TabItem value="sdk-ttl" label="SDK with Custom TTL">
+
+```python
+from litellm import completion 
+
+# Cache for 2 hours (7200 seconds)
+resp = completion(
+    model="vertex_ai/gemini-2.5-pro",
+    messages=[
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement" * 4000,
+                    "cache_control": {
+                        "type": "ephemeral", 
+                        "ttl": "7200s"  # 👈 Cache for 2 hours
+                    },
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {
+                        "type": "ephemeral",
+                        "ttl": "3600s"  # 👈 This TTL will be ignored (first one is used)
+                    },
+                }
+            ],
+        }
+    ]
+)
+
+print(resp.usage)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: gemini-2.5-pro
+    litellm_params:
+      model: vertex_ai/gemini-2.5-pro
+      vertex_project: "project-id"
+      vertex_location: "us-central1"
+      vertex_credentials: "/path/to/service_account.json"
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "gemini-2.5-flash",
+    "messages": [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Long cache message (must be >= 1024 tokens)",
+                    "cache_control": {
+                        "type": "ephemeral",
+                        "ttl": "7200s"
+                    }
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What is the text about?"
+                }
+            ]
+        }
+    ]
+}'
+
+```
+
+</TabItem>
+</Tabs>
+
+#### Calling provider api directly
 
 [**Go straight to provider**](../pass_through/vertex_ai.md#context-caching)
 
-#### 1. Create the Cache
+##### 1. Create the Cache
 
 First, create the cache by sending a `POST` request to the `cachedContents` endpoint via the LiteLLM proxy.
 
@@ -1011,7 +1158,7 @@ curl http://0.0.0.0:4000/vertex_ai/v1/projects/{project_id}/locations/{location}
 </TabItem>
 </Tabs>
 
-#### 2. Get the Cache Name from the Response
+##### 2. Get the Cache Name from the Response
 
 Vertex AI will return a response containing the `name` of the cached content. This name is the identifier for your cached data.
 
@@ -1030,7 +1177,7 @@ Vertex AI will return a response containing the `name` of the cached content. Th
 }
 ```
 
-#### 3. Use the Cached Content
+##### 3. Use the Cached Content
 
 Use the `name` from the response as `cachedContent` or `cached_content` in subsequent API calls to reuse the cached information. This is passed in the body of your request to `/chat/completions`.
 
@@ -1457,6 +1604,56 @@ litellm.vertex_location = "us-central1 # Your Location
 | gemini-2.5-flash-preview-09-2025   | `completion('gemini-2.5-flash-preview-09-2025', messages)`, `completion('vertex_ai/gemini-2.5-flash-preview-09-2025', messages)` |
 | gemini-2.5-flash-lite-preview-09-2025   | `completion('gemini-2.5-flash-lite-preview-09-2025', messages)`, `completion('vertex_ai/gemini-2.5-flash-lite-preview-09-2025', messages)` |
 
+## Private Service Connect (PSC) Endpoints
+
+LiteLLM supports Vertex AI models deployed to Private Service Connect (PSC) endpoints, allowing you to use custom `api_base` URLs for private deployments.
+
+### Usage
+
+```python
+from litellm import completion
+
+# Use PSC endpoint with custom api_base
+response = completion(
+    model="vertex_ai/1234567890",  # Numeric endpoint ID
+    messages=[{"role": "user", "content": "Hello!"}],
+    api_base="http://10.96.32.8",  # Your PSC endpoint
+    vertex_project="my-project-id",
+    vertex_location="us-central1",
+    use_psc_endpoint_format=True
+)
+```
+
+**Key Features:**
+- Supports both numeric endpoint IDs and custom model names
+- Works with both completion and embedding endpoints
+- Automatically constructs full PSC URL: `{api_base}/v1/projects/{project}/locations/{location}/endpoints/{model}:{endpoint}`
+- Compatible with streaming requests
+
+### Configuration
+
+Add PSC endpoints to your `config.yaml`:
+
+```yaml
+model_list:
+  - model_name: psc-gemini
+    litellm_params:
+      model: vertex_ai/1234567890  # Numeric endpoint ID
+      api_base: "http://10.96.32.8"  # Your PSC endpoint
+      vertex_project: "my-project-id"
+      vertex_location: "us-central1"
+      vertex_credentials: "/path/to/service_account.json"
+      use_psc_endpoint_format: True
+  - model_name: psc-embedding
+    litellm_params:
+      model: vertex_ai/text-embedding-004
+      api_base: "http://10.96.32.8"  # Your PSC endpoint
+      vertex_project: "my-project-id"
+      vertex_location: "us-central1"
+      vertex_credentials: "/path/to/service_account.json"
+      use_psc_endpoint_format: True
+```
+
 ## Fine-tuned Models
 
 You can call fine-tuned Vertex AI Gemini models through LiteLLM
@@ -1594,7 +1791,7 @@ response = litellm.completion(
                           {
                               "type": "image_url",
                               "image_url": {
-                              "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                              "url": "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png"
                               }
                           }
                       ]
@@ -2403,355 +2600,6 @@ print(response)
 </TabItem>
 </Tabs>
 
-
-## **Gemini TTS (Text-to-Speech) Audio Output**
-
-:::info
-
-LiteLLM supports Gemini TTS models on Vertex AI that can generate audio responses using the OpenAI-compatible `audio` parameter format.
-
-:::
-
-### Supported Models
-
-LiteLLM supports Gemini TTS models with audio capabilities on Vertex AI (e.g. `vertex_ai/gemini-2.5-flash-preview-tts` and `vertex_ai/gemini-2.5-pro-preview-tts`). For the complete list of available TTS models and voices, see the [official Gemini TTS documentation](https://ai.google.dev/gemini-api/docs/speech-generation).
-
-### Limitations
-
-:::warning
-
-**Important Limitations**:
-- Gemini TTS models only support the `pcm16` audio format
-- **Streaming support has not been added** to TTS models yet
-- The `modalities` parameter must be set to `['audio']` for TTS requests
-
-:::
-
-### Quick Start
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-from litellm import completion
-import json
-
-## GET CREDENTIALS
-file_path = 'path/to/vertex_ai_service_account.json'
-
-# Load the JSON file
-with open(file_path, 'r') as file:
-    vertex_credentials = json.load(file)
-
-# Convert to JSON string
-vertex_credentials_json = json.dumps(vertex_credentials)
-
-response = completion(
-    model="vertex_ai/gemini-2.5-flash-preview-tts",
-    messages=[{"role": "user", "content": "Say hello in a friendly voice"}],
-    modalities=["audio"],  # Required for TTS models
-    audio={
-        "voice": "Kore",
-        "format": "pcm16"  # Required: must be "pcm16"
-    },
-    vertex_credentials=vertex_credentials_json
-)
-
-print(response)
-```
-
-</TabItem>
-<TabItem value="proxy" label="PROXY">
-
-1. Setup config.yaml
-
-```yaml
-model_list:
-  - model_name: gemini-tts-flash
-    litellm_params:
-      model: vertex_ai/gemini-2.5-flash-preview-tts
-      vertex_project: "your-project-id"
-      vertex_location: "us-central1"
-      vertex_credentials: "/path/to/service_account.json"
-  - model_name: gemini-tts-pro
-    litellm_params:
-      model: vertex_ai/gemini-2.5-pro-preview-tts
-      vertex_project: "your-project-id"
-      vertex_location: "us-central1"
-      vertex_credentials: "/path/to/service_account.json"
-```
-
-2. Start proxy
-
-```bash
-litellm --config /path/to/config.yaml
-```
-
-3. Make TTS request
-
-```bash
-curl http://0.0.0.0:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
-  -d '{
-    "model": "gemini-tts-flash",
-    "messages": [{"role": "user", "content": "Say hello in a friendly voice"}],
-    "modalities": ["audio"],
-    "audio": {
-      "voice": "Kore",
-      "format": "pcm16"
-    }
-  }'
-```
-
-</TabItem>
-</Tabs>
-
-### Advanced Usage
-
-You can combine TTS with other Gemini features:
-
-```python
-response = completion(
-    model="vertex_ai/gemini-2.5-pro-preview-tts",
-    messages=[
-        {"role": "system", "content": "You are a helpful assistant that speaks clearly."},
-        {"role": "user", "content": "Explain quantum computing in simple terms"}
-    ],
-    modalities=["audio"],
-    audio={
-        "voice": "Charon",
-        "format": "pcm16"
-    },
-    temperature=0.7,
-    max_tokens=150,
-    vertex_credentials=vertex_credentials_json
-)
-```
-
-For more information about Gemini's TTS capabilities and available voices, see the [official Gemini TTS documentation](https://ai.google.dev/gemini-api/docs/speech-generation).
-
-## **Text to Speech APIs**
-
-:::info
-
-LiteLLM supports calling [Vertex AI Text to Speech API](https://console.cloud.google.com/vertex-ai/generative/speech/text-to-speech) in the OpenAI text to speech API format
-
-:::
-
-
-
-### Usage - Basic
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-Vertex AI does not support passing a `model` param - so passing `model=vertex_ai/` is the only required param
-
-**Sync Usage**
-
-```python
-speech_file_path = Path(__file__).parent / "speech_vertex.mp3"
-response = litellm.speech(
-    model="vertex_ai/",
-    input="hello what llm guardrail do you have",
-)
-response.stream_to_file(speech_file_path)
-```
-
-**Async Usage**
-```python
-speech_file_path = Path(__file__).parent / "speech_vertex.mp3"
-response = litellm.aspeech(
-    model="vertex_ai/",
-    input="hello what llm guardrail do you have",
-)
-response.stream_to_file(speech_file_path)
-```
-
-</TabItem>
-<TabItem value="proxy" label="LiteLLM PROXY (Unified Endpoint)">
-
-1. Add model to config.yaml
-```yaml
-model_list:
-  - model_name: vertex-tts
-    litellm_params:
-      model: vertex_ai/ # Vertex AI does not support passing a `model` param - so passing `model=vertex_ai/` is the only required param
-      vertex_project: "adroit-crow-413218"
-      vertex_location: "us-central1"
-      vertex_credentials: adroit-crow-413218-a956eef1a2a8.json 
-
-litellm_settings:
-  drop_params: True
-```
-
-2. Start Proxy 
-
-```
-$ litellm --config /path/to/config.yaml
-```
-
-3. Make Request use OpenAI Python SDK
-
-
-```python
-import openai
-
-client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
-
-# see supported values for "voice" on vertex here: 
-# https://console.cloud.google.com/vertex-ai/generative/speech/text-to-speech
-response = client.audio.speech.create(
-    model = "vertex-tts",
-    input="the quick brown fox jumped over the lazy dogs",
-    voice={'languageCode': 'en-US', 'name': 'en-US-Studio-O'}
-)
-print("response from proxy", response)
-```
-
-</TabItem>
-</Tabs>
-
-
-### Usage - `ssml` as input
-
-Pass your `ssml` as input to the `input` param, if it contains `<speak>`, it will be automatically detected and passed as `ssml` to the Vertex AI API
-
-If you need to force your `input` to be passed as `ssml`, set `use_ssml=True`
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-Vertex AI does not support passing a `model` param - so passing `model=vertex_ai/` is the only required param
-
-
-```python
-speech_file_path = Path(__file__).parent / "speech_vertex.mp3"
-
-
-ssml = """
-<speak>
-    <p>Hello, world!</p>
-    <p>This is a test of the <break strength="medium" /> text-to-speech API.</p>
-</speak>
-"""
-
-response = litellm.speech(
-    input=ssml,
-    model="vertex_ai/test",
-    voice={
-        "languageCode": "en-UK",
-        "name": "en-UK-Studio-O",
-    },
-    audioConfig={
-        "audioEncoding": "LINEAR22",
-        "speakingRate": "10",
-    },
-)
-response.stream_to_file(speech_file_path)
-```
-
-</TabItem>
-
-<TabItem value="proxy" label="LiteLLM PROXY (Unified Endpoint)">
-
-```python
-import openai
-
-client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
-
-ssml = """
-<speak>
-    <p>Hello, world!</p>
-    <p>This is a test of the <break strength="medium" /> text-to-speech API.</p>
-</speak>
-"""
-
-# see supported values for "voice" on vertex here: 
-# https://console.cloud.google.com/vertex-ai/generative/speech/text-to-speech
-response = client.audio.speech.create(
-    model = "vertex-tts",
-    input=ssml,
-    voice={'languageCode': 'en-US', 'name': 'en-US-Studio-O'},
-)
-print("response from proxy", response)
-```
-
-</TabItem>
-</Tabs>
-
-
-### Forcing SSML Usage
-
-You can force the use of SSML by setting the `use_ssml` parameter to `True`. This is useful when you want to ensure that your input is treated as SSML, even if it doesn't contain the `<speak>` tags.
-
-Here are examples of how to force SSML usage:
-
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-Vertex AI does not support passing a `model` param - so passing `model=vertex_ai/` is the only required param
-
-
-```python
-speech_file_path = Path(__file__).parent / "speech_vertex.mp3"
-
-
-ssml = """
-<speak>
-    <p>Hello, world!</p>
-    <p>This is a test of the <break strength="medium" /> text-to-speech API.</p>
-</speak>
-"""
-
-response = litellm.speech(
-    input=ssml,
-    use_ssml=True,
-    model="vertex_ai/test",
-    voice={
-        "languageCode": "en-UK",
-        "name": "en-UK-Studio-O",
-    },
-    audioConfig={
-        "audioEncoding": "LINEAR22",
-        "speakingRate": "10",
-    },
-)
-response.stream_to_file(speech_file_path)
-```
-
-</TabItem>
-
-<TabItem value="proxy" label="LiteLLM PROXY (Unified Endpoint)">
-
-```python
-import openai
-
-client = openai.OpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
-
-ssml = """
-<speak>
-    <p>Hello, world!</p>
-    <p>This is a test of the <break strength="medium" /> text-to-speech API.</p>
-</speak>
-"""
-
-# see supported values for "voice" on vertex here: 
-# https://console.cloud.google.com/vertex-ai/generative/speech/text-to-speech
-response = client.audio.speech.create(
-    model = "vertex-tts",
-    input=ssml, # pass as None since OpenAI SDK requires this param
-    voice={'languageCode': 'en-US', 'name': 'en-US-Studio-O'},
-    extra_body={"use_ssml": True},
-)
-print("response from proxy", response)
-```
-
-</TabItem>
-</Tabs>
-
 ## **Fine Tuning APIs**
 
 
@@ -2788,7 +2636,7 @@ finetune_settings:
 ft_job = await client.fine_tuning.jobs.create(
     model="gemini-1.0-pro-002",                  # Vertex model you want to fine-tune
     training_file="gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl",                 # file_id from create file response
-    extra_body={"custom_llm_provider": "vertex_ai"}, # tell litellm proxy which provider to use
+    extra_headers={"custom-llm-provider": "vertex_ai"}, # tell litellm proxy which provider to use
 )
 ```
 </TabItem>
@@ -2799,8 +2647,8 @@ ft_job = await client.fine_tuning.jobs.create(
 curl http://localhost:4000/v1/fine_tuning/jobs \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer sk-1234" \
+    -H "custom-llm-provider: vertex_ai" \
     -d '{
-    "custom_llm_provider": "vertex_ai",
     "model": "gemini-1.0-pro-002",
     "training_file": "gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl"
     }'
@@ -2828,9 +2676,7 @@ ft_job = client.fine_tuning.jobs.create(
         "learning_rate_multiplier": 0.1,    # learning_rate_multiplier on Vertex
         "adapter_size": "ADAPTER_SIZE_ONE"  # type: ignore, vertex specific hyperparameter
     },
-    extra_body={
-        "custom_llm_provider": "vertex_ai",
-    },
+    extra_headers={"custom-llm-provider": "vertex_ai"},
 )
 ```
 </TabItem>
@@ -2841,8 +2687,8 @@ ft_job = client.fine_tuning.jobs.create(
 curl http://localhost:4000/v1/fine_tuning/jobs \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer sk-1234" \
+    -H "custom-llm-provider: vertex_ai" \
     -d '{
-    "custom_llm_provider": "vertex_ai",
     "model": "gemini-1.0-pro-002",
     "training_file": "gs://cloud-samples-data/ai-platform/generative_ai/sft_train_data.jsonl",
     "hyperparameters": {
@@ -2967,3 +2813,101 @@ Once that's done, when you deploy the new container in the Google Cloud Run serv
 
 
 s/o @[Darien Kindlund](https://www.linkedin.com/in/kindlund/) for this tutorial
+
+## **Rerank API**
+
+Vertex AI supports reranking through the Discovery Engine API, providing semantic ranking capabilities for document retrieval.
+
+### Setup
+
+Set your Google Cloud project ID:
+
+```bash
+export VERTEXAI_PROJECT="your-project-id"
+```
+
+### Usage
+
+```python
+from litellm import rerank
+
+# Using the latest model (recommended)
+response = rerank(
+    model="vertex_ai/semantic-ranker-default@latest",
+    query="What is Google Gemini?",
+    documents=[
+        "Gemini is a cutting edge large language model created by Google.",
+        "The Gemini zodiac symbol often depicts two figures standing side-by-side.",
+        "Gemini is a constellation that can be seen in the night sky."
+    ],
+    top_n=2,
+    return_documents=True  # Set to False for ID-only responses
+)
+
+# Using specific model versions
+response_v003 = rerank(
+    model="vertex_ai/semantic-ranker-default-003",
+    query="What is Google Gemini?",
+    documents=documents,
+    top_n=2
+)
+
+print(response.results)
+```
+
+### Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `model` | string | Model name (e.g., `vertex_ai/semantic-ranker-default@latest`) |
+| `query` | string | Search query |
+| `documents` | list | Documents to rank |
+| `top_n` | int | Number of top results to return |
+| `return_documents` | bool | Return full content (True) or IDs only (False) |
+
+### Supported Models
+
+- `semantic-ranker-default@latest`
+- `semantic-ranker-fast@latest` 
+- `semantic-ranker-default-003`
+- `semantic-ranker-default-002`
+
+For detailed model specifications, see the [Google Cloud ranking API documentation](https://cloud.google.com/generative-ai-app-builder/docs/ranking#rank_or_rerank_a_set_of_records_according_to_a_query).
+
+### Proxy Usage
+
+Add to your `config.yaml`:
+
+```yaml
+model_list:
+  - model_name: semantic-ranker-default@latest
+    litellm_params:
+      model: vertex_ai/semantic-ranker-default@latest
+      vertex_ai_project: "your-project-id"
+      vertex_ai_location: "us-central1"
+      vertex_ai_credentials: "path/to/service-account.json" 
+```
+
+Start the proxy:
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+Test with curl:
+
+```bash
+curl http://0.0.0.0:4000/rerank \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "semantic-ranker-default@latest",
+    "query": "What is Google Gemini?",
+    "documents": [
+      "Gemini is a cutting edge large language model created by Google.",
+      "The Gemini zodiac symbol often depicts two figures standing side-by-side.",
+      "Gemini is a constellation that can be seen in the night sky."
+    ],
+    "top_n": 2
+  }'
+```

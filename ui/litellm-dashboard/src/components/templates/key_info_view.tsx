@@ -1,36 +1,25 @@
-import React, { useEffect, useState } from "react";
-import {
-  Card,
-  Text,
-  Button,
-  Grid,
-  Col,
-  Tab,
-  TabList,
-  TabGroup,
-  TabPanel,
-  TabPanels,
-  Title,
-  Badge,
-  TextInput,
-  Select as TremorSelect,
-} from "@tremor/react";
-import { ArrowLeftIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
-import { keyDeleteCall, keyUpdateCall } from "../networking";
-import { KeyResponse } from "../key_team_helpers/key_list";
-import { Form, Input, InputNumber, Select, Tooltip, Button as AntdButton } from "antd";
-import NotificationManager from "../molecules/notifications_manager";
-import { KeyEditView } from "./key_edit_view";
-import { RegenerateKeyModal } from "../organisms/regenerate_key_modal";
-import { rolesWithWriteAccess } from "../../utils/roles";
-import ObjectPermissionsView from "../object_permissions_view";
-import LoggingSettingsView from "../logging_settings_view";
-import { copyToClipboard as utilCopyToClipboard, formatNumberWithCommas } from "@/utils/dataUtils";
-import { extractLoggingSettings, formatMetadataForDisplay } from "../key_info_utils";
-import { CopyIcon, CheckIcon } from "lucide-react";
-import { callback_map, mapInternalToDisplayNames, mapDisplayToInternalNames } from "../callback_info_helpers";
-import { parseErrorMessage } from "../shared/errorUtils";
+import useTeams from "@/app/(dashboard)/hooks/useTeams";
+import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
+import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
+import { ArrowLeftIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
+import { Badge, Button, Card, Grid, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
+import { Button as AntdButton, Form, Tooltip } from "antd";
+import { CheckIcon, CopyIcon } from "lucide-react";
+import { useEffect, useState } from "react";
+import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } from "../../utils/roles";
+import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "../callback_info_helpers";
 import AutoRotationView from "../common_components/AutoRotationView";
+import DeleteResourceModal from "../common_components/DeleteResourceModal";
+import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
+import { KeyResponse } from "../key_team_helpers/key_list";
+import LoggingSettingsView from "../logging_settings_view";
+import NotificationManager from "../molecules/notifications_manager";
+import { keyDeleteCall, keyUpdateCall } from "../networking";
+import ObjectPermissionsView from "../object_permissions_view";
+import { RegenerateKeyModal } from "../organisms/regenerate_key_modal";
+import { parseErrorMessage } from "../shared/errorUtils";
+import { KeyEditView } from "./key_edit_view";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 interface KeyInfoViewProps {
   keyId: string;
@@ -38,32 +27,31 @@ interface KeyInfoViewProps {
   keyData: KeyResponse | undefined;
   onKeyDataUpdate?: (data: Partial<KeyResponse>) => void;
   onDelete?: () => void;
-  accessToken: string | null;
-  userID: string | null;
-  userRole: string | null;
   teams: any[] | null;
-  premiumUser: boolean;
-  setAccessToken?: (token: string) => void;
   backButtonText?: string;
 }
 
+/**
+ * ─────────────────────────────────────────────────────────────────────────
+ * @deprecated
+ * This component is being DEPRECATED in favor of src/app/(dashboard)/virtual-keys/components/KeyInfoView.tsx
+ * Please contribute to the new refactor.
+ * ─────────────────────────────────────────────────────────────────────────
+ */
 export default function KeyInfoView({
-  keyId,
   onClose,
   keyData,
-  accessToken,
-  userID,
-  userRole,
   teams,
   onKeyDataUpdate,
   onDelete,
-  premiumUser,
-  setAccessToken,
   backButtonText = "Back to Keys",
 }: KeyInfoViewProps) {
+  const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
+  const { teams: teamsData } = useTeams();
   const [isEditing, setIsEditing] = useState(false);
   const [form] = Form.useForm();
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
   const [isRegenerateModalOpen, setIsRegenerateModalOpen] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
@@ -115,6 +103,9 @@ export default function KeyInfoView({
         delete formValues.prompts;
       }
 
+      // Handle max budget empty string
+      formValues.max_budget = mapEmptyStringToNull(formValues.max_budget);
+
       // Handle object_permission updates
       if (formValues.vector_stores !== undefined) {
         formValues.object_permission = {
@@ -136,12 +127,45 @@ export default function KeyInfoView({
         delete formValues.mcp_servers_and_groups;
       }
 
+      // Handle MCP tool permissions
+      if (formValues.mcp_tool_permissions !== undefined) {
+        const mcpToolPermissions = formValues.mcp_tool_permissions || {};
+        if (Object.keys(mcpToolPermissions).length > 0) {
+          formValues.object_permission = {
+            ...formValues.object_permission,
+            mcp_tool_permissions: mcpToolPermissions,
+          };
+        }
+        delete formValues.mcp_tool_permissions;
+      }
+
+      // Handle agent permissions
+      if (formValues.agents_and_groups !== undefined) {
+        const { agents, accessGroups } = formValues.agents_and_groups || { agents: [], accessGroups: [] };
+        formValues.object_permission = {
+          ...formValues.object_permission,
+          agents: agents || [],
+          agent_access_groups: accessGroups || [],
+        };
+        delete formValues.agents_and_groups;
+      }
+
+      formValues.max_budget = mapEmptyStringToNull(formValues.max_budget);
+      formValues.tpm_limit = mapEmptyStringToNull(formValues.tpm_limit);
+      formValues.rpm_limit = mapEmptyStringToNull(formValues.rpm_limit);
+      formValues.max_parallel_requests = mapEmptyStringToNull(formValues.max_parallel_requests);
+
       // Convert metadata back to an object if it exists and is a string
       if (formValues.metadata && typeof formValues.metadata === "string") {
         try {
           const parsedMetadata = JSON.parse(formValues.metadata);
+          // Ensure tags are controlled via dedicated field, not in metadata textarea
+          if ("tags" in parsedMetadata) {
+            delete parsedMetadata["tags"];
+          }
           formValues.metadata = {
             ...parsedMetadata,
+            ...(Array.isArray(formValues.tags) && formValues.tags.length > 0 ? { tags: formValues.tags } : {}),
             ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
             ...(formValues.logging_settings ? { logging: formValues.logging_settings } : {}),
             ...(formValues.disabled_callbacks?.length > 0
@@ -156,8 +180,11 @@ export default function KeyInfoView({
           return;
         }
       } else {
+        const baseMetadata = formValues.metadata || {};
+        const { tags: _omitTags, ...rest } = baseMetadata;
         formValues.metadata = {
-          ...(formValues.metadata || {}),
+          ...rest,
+          ...(Array.isArray(formValues.tags) && formValues.tags.length > 0 ? { tags: formValues.tags } : {}),
           ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
           ...(formValues.logging_settings ? { logging: formValues.logging_settings } : {}),
           ...(formValues.disabled_callbacks?.length > 0
@@ -168,6 +195,10 @@ export default function KeyInfoView({
         };
       }
 
+      // tags are merged into metadata; do not send as top-level field
+      if ("tags" in formValues) {
+        delete formValues.tags;
+      }
       delete formValues.logging_settings;
 
       // Convert budget_duration to API format
@@ -199,6 +230,7 @@ export default function KeyInfoView({
 
   const handleDelete = async () => {
     try {
+      setDeleteLoading(true);
       if (!accessToken) return;
       await keyDeleteCall(accessToken as string, currentKeyData.token || currentKeyData.token_id);
       NotificationManager.success("Key deleted successfully");
@@ -209,9 +241,11 @@ export default function KeyInfoView({
     } catch (error) {
       console.error("Error deleting the key:", error);
       NotificationManager.fromBackend(error);
+    } finally {
+      setDeleteLoading(false);
+      setIsDeleteModalOpen(false);
+      setDeleteConfirmInput("");
     }
-    // Reset the confirmation input
-    setDeleteConfirmInput("");
   };
 
   const copyToClipboard = async (text: string, key: string) => {
@@ -264,6 +298,16 @@ export default function KeyInfoView({
     });
     return `${dateStr} at ${timeStr}`;
   };
+  console.log("userRole", userRole);
+
+  const canModifyKey =
+    isProxyAdminRole(userRole || "") ||
+    (teamsData &&
+      isUserTeamAdminForSingleTeam(
+        teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0],
+        userID || "",
+      )) ||
+    (userID === currentKeyData.user_id && userRole !== "Internal Viewer");
 
   return (
     <div className="w-full h-screen p-4">
@@ -272,7 +316,7 @@ export default function KeyInfoView({
           <Button icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
             {backButtonText}
           </Button>
-          <Title>{currentKeyData.key_alias || "API Key"}</Title>
+          <Title>{currentKeyData.key_alias || "Virtual Key"}</Title>
 
           <div className="flex items-center cursor-pointer mb-2 space-y-6">
             <div>
@@ -313,7 +357,7 @@ export default function KeyInfoView({
             )}
           </div>
         </div>
-        {userRole && rolesWithWriteAccess.includes(userRole) && (
+        {canModifyKey && (
           <div className="flex gap-2">
             <Tooltip
               title={!premiumUser ? "This is a LiteLLM Enterprise feature, and requires a valid key to use." : ""}
@@ -334,7 +378,7 @@ export default function KeyInfoView({
               icon={TrashIcon}
               variant="secondary"
               onClick={() => setIsDeleteModalOpen(true)}
-              className="flex items-center"
+              className="flex items-center text-red-500 border-red-500 hover:text-red-700"
             >
               Delete Key
             </Button>
@@ -347,97 +391,44 @@ export default function KeyInfoView({
         selectedToken={currentKeyData}
         visible={isRegenerateModalOpen}
         onClose={() => setIsRegenerateModalOpen(false)}
-        accessToken={accessToken}
-        premiumUser={premiumUser}
-        setAccessToken={setAccessToken}
         onKeyUpdate={handleRegenerateKeyUpdate}
       />
 
       {/* Delete Confirmation Modal */}
-      {isDeleteModalOpen &&
-        (() => {
-          const keyName = currentKeyData?.key_alias || currentKeyData?.token_id || "API Key";
-          const isValid = deleteConfirmInput === keyName;
-          return (
-            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-              <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl min-h-[380px] py-6 overflow-hidden transform transition-all flex flex-col justify-between">
-                <div>
-                  <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
-                    <h3 className="text-lg font-semibold text-gray-900">Delete Key</h3>
-                    <button
-                      onClick={() => {
-                        setIsDeleteModalOpen(false);
-                        setDeleteConfirmInput("");
-                      }}
-                      className="text-gray-400 hover:text-gray-500 focus:outline-none"
-                    >
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    </button>
-                  </div>
-                  <div className="px-6 py-4">
-                    <div className="flex items-start gap-3 p-4 bg-red-50 border border-red-100 rounded-md mb-5">
-                      <div className="text-red-500 mt-0.5">
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.082 16.5c-.77.833.192 2.5 1.732 2.5z"
-                          />
-                        </svg>
-                      </div>
-                      <div>
-                        <p className="text-base font-medium text-red-600">
-                          Warning: You are about to delete this API key.
-                        </p>
-                        <p className="text-base text-red-600 mt-2">
-                          This action is irreversible and will immediately revoke access for any applications using this
-                          key.
-                        </p>
-                      </div>
-                    </div>
-                    <p className="text-base text-gray-600 mb-5">Are you sure you want to delete this API key?</p>
-                    <div className="mb-5">
-                      <label className="block text-base font-medium text-gray-700 mb-2">
-                        {`Type `}
-                        <span className="underline">{keyName}</span>
-                        {` to confirm deletion:`}
-                      </label>
-                      <input
-                        type="text"
-                        value={deleteConfirmInput}
-                        onChange={(e) => setDeleteConfirmInput(e.target.value)}
-                        placeholder="Enter key name exactly"
-                        className="w-full px-4 py-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-base"
-                        autoFocus
-                      />
-                    </div>
-                  </div>
-                </div>
-                <div className="px-6 py-4 bg-gray-50 flex justify-end gap-4">
-                  <button
-                    onClick={() => {
-                      setIsDeleteModalOpen(false);
-                      setDeleteConfirmInput("");
-                    }}
-                    className="px-5 py-3 bg-white border border-gray-300 rounded-md text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={handleDelete}
-                    disabled={!isValid}
-                    className={`px-5 py-3 rounded-md text-base font-medium text-white focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 ${isValid ? "bg-red-600 hover:bg-red-700" : "bg-red-300 cursor-not-allowed"}`}
-                  >
-                    Delete Key
-                  </button>
-                </div>
-              </div>
-            </div>
-          );
-        })()}
+      <DeleteResourceModal
+        isOpen={isDeleteModalOpen}
+        title="Delete Key"
+        alertMessage="This action is irreversible and will immediately revoke access for any applications using this key."
+        message="Are you sure you want to delete this Virtual Key?"
+        resourceInformationTitle="Key Information"
+        resourceInformation={[
+          {
+            label: "Key Alias",
+            value: currentKeyData?.key_alias || "-",
+          },
+          {
+            label: "Key ID",
+            value: currentKeyData?.token_id || currentKeyData?.token || "-",
+            code: true,
+          },
+          {
+            label: "Team ID",
+            value: currentKeyData?.team_id || "-",
+            code: true,
+          },
+          {
+            label: "Spend",
+            value: currentKeyData?.spend ? `$${formatNumberWithCommas(currentKeyData.spend, 4)}` : "$0.0000",
+          },
+        ]}
+        onCancel={() => {
+          setIsDeleteModalOpen(false);
+          setDeleteConfirmInput("");
+        }}
+        onOk={handleDelete}
+        confirmLoading={deleteLoading}
+        requiredConfirmation={currentKeyData?.key_alias}
+      />
 
       <TabGroup>
         <TabList className="mb-4">
@@ -520,9 +511,7 @@ export default function KeyInfoView({
               <div className="flex justify-between items-center mb-4">
                 <Title>Key Settings</Title>
                 {!isEditing && userRole && rolesWithWriteAccess.includes(userRole) && (
-                  <Button variant="light" onClick={() => setIsEditing(true)}>
-                    Edit Settings
-                  </Button>
+                  <Button onClick={() => setIsEditing(true)}>Edit Settings</Button>
                 )}
               </div>
 
@@ -611,6 +600,19 @@ export default function KeyInfoView({
                   </div>
 
                   <div>
+                    <Text className="font-medium">Tags</Text>
+                    <div className="flex flex-wrap gap-2 mt-1">
+                      {Array.isArray(currentKeyData.metadata?.tags) && currentKeyData.metadata.tags.length > 0
+                        ? currentKeyData.metadata.tags.map((tag, index) => (
+                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
+                              {tag}
+                            </span>
+                          ))
+                        : "No tags specified"}
+                    </div>
+                  </div>
+
+                  <div>
                     <Text className="font-medium">Prompts</Text>
                     <Text>
                       {Array.isArray(currentKeyData.metadata?.prompts) && currentKeyData.metadata.prompts.length > 0
@@ -620,6 +622,31 @@ export default function KeyInfoView({
                             </span>
                           ))
                         : "No prompts specified"}
+                    </Text>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Allowed Pass Through Routes</Text>
+                    <Text>
+                      {Array.isArray(currentKeyData.metadata?.allowed_passthrough_routes) &&
+                      currentKeyData.metadata.allowed_passthrough_routes.length > 0
+                        ? currentKeyData.metadata.allowed_passthrough_routes.map((route, index) => (
+                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
+                              {route}
+                            </span>
+                          ))
+                        : "No pass through routes specified"}
+                    </Text>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Disable Global Guardrails</Text>
+                    <Text>
+                      {currentKeyData.metadata?.disable_global_guardrails === true ? (
+                        <Badge color="yellow">Enabled - Global guardrails bypassed</Badge>
+                      ) : (
+                        <Badge color="green">Disabled - Global guardrails active</Badge>
+                      )}
                     </Text>
                   </div>
 
@@ -665,7 +692,7 @@ export default function KeyInfoView({
                   <div>
                     <Text className="font-medium">Metadata</Text>
                     <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
-                      {formatMetadataForDisplay(currentKeyData.metadata)}
+                      {formatMetadataForDisplay(stripTagsFromMetadata(currentKeyData.metadata))}
                     </pre>
                   </div>
 

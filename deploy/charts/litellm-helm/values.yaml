@@ -3,6 +3,7 @@
 # Declare variables to be passed into your templates.
 
 replicaCount: 1
+# numWorkers: 2
 
 image:
   # Use "ghcr.io/berriai/litellm-database" for optimized image with database
@@ -29,14 +30,26 @@ serviceAccount:
 
 # annotations for litellm deployment
 deploymentAnnotations: {}
+deploymentLabels: {}
 # annotations for litellm pods
 podAnnotations: {}
 podLabels: {}
 
+terminationGracePeriodSeconds: 90
+topologySpreadConstraints:
+  []
+  # - maxSkew: 1
+  #   topologyKey: kubernetes.io/hostname
+  #   whenUnsatisfiable: DoNotSchedule
+  #   labelSelector:
+  #     matchLabels:
+  #       app: litellm
+
 # At the time of writing, the litellm docker image requires write access to the
 #  filesystem on startup so that prisma can install some dependencies.
 podSecurityContext: {}
-securityContext: {}
+securityContext:
+  {}
   # capabilities:
   #   drop:
   #     - ALL
@@ -47,13 +60,15 @@ securityContext: {}
 # A list of Kubernetes Secret objects that will be exported to the LiteLLM proxy
 #  pod as environment variables.  These secrets can then be referenced in the
 #  configuration file (or "litellm" ConfigMap) with `os.environ/<Env Var Name>`
-environmentSecrets: []
+environmentSecrets:
+  []
   # - litellm-env-secret
 
 # A list of Kubernetes ConfigMap objects that will be exported to the LiteLLM proxy
 #  pod as environment variables.  The ConfigMap kv-pairs can then be referenced in the
 #  configuration file (or "litellm" ConfigMap) with `os.environ/<Env Var Name>`
-environmentConfigMaps: []
+environmentConfigMaps:
+  []
   # - litellm-env-configmap
 
 service:
@@ -72,7 +87,9 @@ separateHealthPort: 8081
 ingress:
   enabled: false
   className: "nginx"
-  annotations: {}
+  labels: {}
+  annotations:
+    {}
     # kubernetes.io/ingress.class: nginx
     # kubernetes.io/tls-acme: "true"
   hosts:
@@ -119,7 +136,8 @@ proxy_config:
   general_settings:
     master_key: os.environ/PROXY_MASTER_KEY
 
-resources: {}
+resources:
+  {}
   # We usually recommend not to specify default resources and to leave this as a conscious
   # choice for the user. This also increases chances charts run on environments with little
   # resources, such as Minikube. If you do want to specify resources, uncomment the following
@@ -221,7 +239,7 @@ migrationJob:
   #    cpu: 100m
   #    memory: 100Mi
   extraContainers: []
-  
+
   # Hook configuration
   hooks:
     argocd:
@@ -230,21 +248,51 @@ migrationJob:
       enabled: false
 
 # Additional environment variables to be added to the deployment as a map of key-value pairs
-envVars: {
-    # USE_DDTRACE: "true"
-}
+envVars: {}
 
+# USE_DDTRACE: "true"
 # Additional environment variables to be added to the deployment as a list of k8s env vars
-extraEnvVars: {
-    # - name: EXTRA_ENV_VAR
-    #   value: EXTRA_ENV_VAR_VALUE
-}
+extraEnvVars: {}
 
+# if you want to override the container command, you can do so here
+command: {}
+# if you want to override the container args, you can do so here
+args: {}
+
+# - name: EXTRA_ENV_VAR
+#   value: EXTRA_ENV_VAR_VALUE
+# Additional Kubernetes resources to deploy with litellm
+extraResources: []
+
+# - apiVersion: v1
+#   kind: ConfigMap
+#   metadata:
+#     name: my-extra-config
+#   data:
+#     foo: bar
 # Pod Disruption Budget
 pdb:
   enabled: false
   # Set exactly one of the following. If both are set, minAvailable takes precedence.
-  minAvailable: null     # e.g. "50%" or 1
-  maxUnavailable: null   # e.g. 1 or "20%"
+  minAvailable: null # e.g. "50%" or 1
+  maxUnavailable: null # e.g. 1 or "20%"
   annotations: {}
   labels: {}
+
+serviceMonitor:
+  enabled: false
+  labels:
+    {}
+    # test: test
+  annotations:
+    {}
+    # kubernetes.io/test: test
+  interval: 15s
+  scrapeTimeout: 10s
+  relabelings: []
+  # - targetLabel: __meta_kubernetes_pod_node_name
+  #   replacement: $1
+  #   action: replace
+  namespaceSelector:
+    matchNames: []
+    # - test-namespace

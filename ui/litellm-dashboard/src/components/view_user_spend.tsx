@@ -1,28 +1,8 @@
 "use client";
 import React, { useEffect, useState } from "react";
-import { keyDeleteCall, getTotalSpendCall } from "./networking";
-import { StatusOnlineIcon, TrashIcon } from "@heroicons/react/outline";
-import { Accordion, AccordionHeader, AccordionList, DonutChart } from "@tremor/react";
-import {
-  Badge,
-  Card,
-  Table,
-  Metric,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-  Text,
-  Title,
-  Icon,
-  AccordionBody,
-  List,
-  ListItem,
-} from "@tremor/react";
-import { Statistic } from "antd";
-import { spendUsersCall, modelAvailableCall } from "./networking";
+import { modelAvailableCall } from "./networking";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 // Define the props type
 interface UserSpendData {
@@ -31,22 +11,12 @@ interface UserSpendData {
   // Add other properties if needed
 }
 interface ViewUserSpendProps {
-  userID: string | null;
-  userRole: string | null;
-  accessToken: string | null;
   userSpend: number | null;
   userMaxBudget: number | null;
   selectedTeam: any | null;
 }
-const ViewUserSpend: React.FC<ViewUserSpendProps> = ({
-  userID,
-  userRole,
-  accessToken,
-  userSpend,
-  userMaxBudget,
-  selectedTeam,
-}) => {
-  console.log(`userSpend: ${userSpend}`);
+const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userSpend, userMaxBudget, selectedTeam }) => {
+  const { accessToken, userRole, userId: userID } = useAuthorized();
   let [spend, setSpend] = useState(userSpend !== null ? userSpend : 0.0);
   const [maxBudget, setMaxBudget] = useState(
     selectedTeam ? Number(formatNumberWithCommas(selectedTeam.max_budget, 4)) : null,
@@ -90,6 +60,8 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({
           setMaxBudget(selectedTeam.max_budget);
         }
       }
+    } else {
+      setMaxBudget(userMaxBudget);
     }
   }, [selectedTeam, userMaxBudget]);
   const [userModels, setUserModels] = useState([]);

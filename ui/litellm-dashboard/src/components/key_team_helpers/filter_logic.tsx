@@ -4,9 +4,9 @@ import { keyListCall, Organization } from "../networking";
 import { Team } from "../key_team_helpers/key_list";
 import { useQuery } from "@tanstack/react-query";
 import { fetchAllKeyAliases, fetchAllOrganizations, fetchAllTeams } from "./filter_helpers";
-import { Setter } from "@/types";
 import { debounce } from "lodash";
 import { defaultPageSize } from "../constants";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export interface FilterState {
   "Team ID": string;
@@ -22,12 +22,10 @@ export function useFilterLogic({
   keys,
   teams,
   organizations,
-  accessToken,
 }: {
   keys: KeyResponse[];
   teams: Team[] | null;
   organizations: Organization[] | null;
-  accessToken: string | null;
 }) {
   const defaultFilters: FilterState = {
     "Team ID": "",
@@ -37,6 +35,7 @@ export function useFilterLogic({
     "Sort By": "created_at",
     "Sort Order": "desc",
   };
+  const { accessToken } = useAuthorized();
   const [filters, setFilters] = useState<FilterState>(defaultFilters);
   const [allTeams, setAllTeams] = useState<Team[]>(teams || []);
   const [allOrganizations, setAllOrganizations] = useState<Organization[]>(organizations || []);

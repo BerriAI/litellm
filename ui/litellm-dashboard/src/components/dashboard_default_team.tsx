@@ -4,7 +4,7 @@ import { ProxySettings, UserInfo } from "./user_dashboard";
 import { getProxyUISettings } from "./networking";
 
 interface DashboardTeamProps {
-  teams: Object[] | null;
+  teams: object[] | null;
   setSelectedTeam: React.Dispatch<React.SetStateAction<any | null>>;
   userRole: string | null;
   proxySettings: ProxySettings | null;
@@ -17,7 +17,7 @@ interface DashboardTeamProps {
 type TeamInterface = {
   models: any[];
   team_id: null;
-  team_alias: String;
+  team_alias: string;
   max_budget: number | null;
 };
 
@@ -69,7 +69,8 @@ const DashboardTeam: React.FC<DashboardTeamProps> = ({
       <Title>Select Team</Title>
 
       <Text>
-        If you belong to multiple teams, this setting controls which team is used by default when creating new API Keys.
+        If you belong to multiple teams, this setting controls which team is used by default when creating new Virtual
+        Keys.
       </Text>
       <Text className="mt-3 mb-3">
         <b>Default Team:</b> If no team_id is set for a key, it will be grouped under here.

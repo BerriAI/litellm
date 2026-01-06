@@ -1,5 +1,5 @@
 import React from "react";
-import { Modal, message, Typography } from "antd";
+import { Modal, Typography } from "antd";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import { Text, Button } from "@tremor/react";
 import NotificationsManager from "./molecules/notifications_manager";

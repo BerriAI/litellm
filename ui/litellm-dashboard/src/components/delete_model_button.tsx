@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import { Grid, Col, Icon } from "@tremor/react";
 import { Title } from "@tremor/react";
-import { Modal, message } from "antd";
+import { Modal } from "antd";
 import { modelDeleteCall } from "./networking";
 import { TrashIcon } from "@heroicons/react/outline";
 import NotificationsManager from "./molecules/notifications_manager";

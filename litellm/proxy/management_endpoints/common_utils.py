@@ -2,7 +2,9 @@ from typing import Any, Dict, Optional, Union
 
 from litellm.proxy._types import (
     KeyRequestBase,
+    LiteLLM_ManagementEndpoint_MetadataFields,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
+    LiteLLM_OrganizationTable,
     LiteLLM_TeamTable,
     LitellmUserRoles,
     UserAPIKeyAuth,
@@ -30,7 +32,11 @@ def _is_user_team_admin(
 
 
 def _set_object_metadata_field(
-    object_data: Union[LiteLLM_TeamTable, KeyRequestBase],
+    object_data: Union[
+        LiteLLM_TeamTable,
+        KeyRequestBase,
+        LiteLLM_OrganizationTable,
+    ],
     field_name: str,
     value: Any,
 ) -> None:
@@ -44,6 +50,7 @@ def _set_object_metadata_field(
     """
     if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
         _premium_user_check(field_name)
+
     object_data.metadata = object_data.metadata or {}
     object_data.metadata[field_name] = value
 
@@ -121,3 +128,39 @@ async def _upsert_budget_and_membership(
             },
         },
     )
+
+
+def _update_metadata_field(updated_kv: dict, field_name: str) -> None:
+    """
+    Helper function to update metadata fields that require premium user checks in the update endpoint
+
+    Args:
+        updated_kv: The key-value dict being used for the update
+        field_name: Name of the metadata field being updated
+    """
+    if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+        _premium_user_check()
+
+    if field_name in updated_kv and updated_kv[field_name] is not None:
+        # remove field from updated_kv
+        _value = updated_kv.pop(field_name)
+        if "metadata" in updated_kv and updated_kv["metadata"] is not None:
+            updated_kv["metadata"][field_name] = _value
+        else:
+            updated_kv["metadata"] = {field_name: _value}
+
+
+def _update_metadata_fields(updated_kv: dict) -> None:
+    """
+    Helper function to update all metadata fields (both premium and standard).
+
+    Args:
+        updated_kv: The key-value dict being used for the update
+    """
+    for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+        if field in updated_kv and updated_kv[field] is not None:
+            _update_metadata_field(updated_kv=updated_kv, field_name=field)
+
+    for field in LiteLLM_ManagementEndpoint_MetadataFields:
+        if field in updated_kv and updated_kv[field] is not None:
+            _update_metadata_field(updated_kv=updated_kv, field_name=field)

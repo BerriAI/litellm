@@ -2,21 +2,9 @@
  * UI for controlling slack alerting settings
  */
 import React, { useState, useEffect } from "react";
-import {
-  Table,
-  TableHead,
-  TableRow,
-  TableHeaderCell,
-  TableCell,
-  Button,
-  Icon,
-  Badge,
-  TableBody,
-  Text,
-} from "@tremor/react";
-import { InputNumber, message } from "antd";
+
+
 import { alertingSettingsCall, updateConfigFieldSetting } from "../networking";
-import { TrashIcon, CheckCircleIcon } from "@heroicons/react/outline";
 import DynamicForm from "./dynamic_form";
 import NotificationsManager from "../molecules/notifications_manager";
 interface alertingSettingsItem {

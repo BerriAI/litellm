@@ -1,8 +1,5 @@
-import OpenAI from "openai";
-import React from "react";
-import NotificationManager from "./molecules/notifications_manager";
-
 export enum Providers {
+  A2A_Agent = "A2A Agent",
   AIML = "AI/ML API",
   Bedrock = "Amazon Bedrock",
   Anthropic = "Anthropic",
@@ -18,12 +15,15 @@ export enum Providers {
   Deepgram = "Deepgram",
   Deepseek = "Deepseek",
   ElevenLabs = "ElevenLabs",
+  FalAI = "Fal AI",
   FireworksAI = "Fireworks AI",
   Google_AI_Studio = "Google AI Studio",
   GradientAI = "GradientAI",
   Groq = "Groq",
   Hosted_Vllm = "vllm",
+  Infinity = "Infinity",
   JinaAI = "Jina AI",
+  MiniMax = "MiniMax",
   MistralAI = "Mistral AI",
   Ollama = "Ollama",
   OpenAI = "OpenAI",
@@ -33,6 +33,7 @@ export enum Providers {
   Openrouter = "Openrouter",
   Oracle = "Oracle Cloud Infrastructure (OCI)",
   Perplexity = "Perplexity",
+  RunwayML = "RunwayML",
   Sambanova = "Sambanova",
   Snowflake = "Snowflake",
   TogetherAI = "TogetherAI",
@@ -41,9 +42,12 @@ export enum Providers {
   VolcEngine = "VolcEngine",
   Voyage = "Voyage AI",
   xAI = "xAI",
+  SAP = "SAP Generative AI Hub",
+  Watsonx = "Watsonx",
 }
 
 export const provider_map: Record<string, string> = {
+  A2A_Agent: "a2a_agent",
   AIML: "aiml",
   OpenAI: "openai",
   OpenAI_Text: "text-completion-openai",
@@ -53,6 +57,7 @@ export const provider_map: Record<string, string> = {
   Google_AI_Studio: "gemini",
   Bedrock: "bedrock",
   Groq: "groq",
+  MiniMax: "minimax",
   MistralAI: "mistral",
   Cohere: "cohere",
   OpenAI_Compatible: "openai",
@@ -67,6 +72,7 @@ export const provider_map: Record<string, string> = {
   Cerebras: "cerebras",
   Sambanova: "sambanova",
   Perplexity: "perplexity",
+  RunwayML: "runwayml",
   TogetherAI: "together_ai",
   Openrouter: "openrouter",
   Oracle: "oci",
@@ -76,17 +82,22 @@ export const provider_map: Record<string, string> = {
   Triton: "triton",
   Deepgram: "deepgram",
   ElevenLabs: "elevenlabs",
+  FalAI: "fal_ai",
   SageMaker: "sagemaker_chat",
   Voyage: "voyage",
   JinaAI: "jina_ai",
   VolcEngine: "volcengine",
   DeepInfra: "deepinfra",
   Hosted_Vllm: "hosted_vllm",
+  Infinity: "infinity",
+  SAP: "sap",
+  Watsonx: "watsonx",
 };
 
-const asset_logos_folder = "/ui/assets/logos/";
+const asset_logos_folder = "../ui/assets/logos/";
 
 export const providerLogoMap: Record<string, string> = {
+  [Providers.A2A_Agent]: `${asset_logos_folder}a2a_agent.png`,
   [Providers.AIML]: `${asset_logos_folder}aiml_api.svg`,
   [Providers.Anthropic]: `${asset_logos_folder}anthropic.svg`,
   [Providers.AssemblyAI]: `${asset_logos_folder}assemblyai_small.png`,
@@ -103,6 +114,8 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.Groq]: `${asset_logos_folder}groq.svg`,
   [Providers.Google_AI_Studio]: `${asset_logos_folder}google.svg`,
   [Providers.Hosted_Vllm]: `${asset_logos_folder}vllm.png`,
+  [Providers.Infinity]: `${asset_logos_folder}infinity.png`,
+  [Providers.MiniMax]: `${asset_logos_folder}minimax.svg`,
   [Providers.MistralAI]: `${asset_logos_folder}mistral.svg`,
   [Providers.Ollama]: `${asset_logos_folder}ollama.svg`,
   [Providers.OpenAI]: `${asset_logos_folder}openai_small.svg`,
@@ -112,6 +125,7 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.Openrouter]: `${asset_logos_folder}openrouter.svg`,
   [Providers.Oracle]: `${asset_logos_folder}oracle.svg`,
   [Providers.Perplexity]: `${asset_logos_folder}perplexity-ai.svg`,
+  [Providers.RunwayML]: `${asset_logos_folder}runwayml.png`,
   [Providers.Sambanova]: `${asset_logos_folder}sambanova.svg`,
   [Providers.Snowflake]: `${asset_logos_folder}snowflake.svg`,
   [Providers.TogetherAI]: `${asset_logos_folder}togetherai.svg`,
@@ -121,10 +135,12 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.Triton]: `${asset_logos_folder}nvidia_triton.png`,
   [Providers.Deepgram]: `${asset_logos_folder}deepgram.png`,
   [Providers.ElevenLabs]: `${asset_logos_folder}elevenlabs.png`,
+  [Providers.FalAI]: `${asset_logos_folder}fal_ai.jpg`,
   [Providers.Voyage]: `${asset_logos_folder}voyage.webp`,
   [Providers.JinaAI]: `${asset_logos_folder}jina.png`,
   [Providers.VolcEngine]: `${asset_logos_folder}volcengine.png`,
   [Providers.DeepInfra]: `${asset_logos_folder}deepinfra.png`,
+  [Providers.SAP]: `${asset_logos_folder}sap.png`,
 };
 
 export const getProviderLogoAndName = (providerValue: string): { logo: string; displayName: string } => {
@@ -171,7 +187,7 @@ export const getPlaceholder = (selectedProvider: string): string => {
   } else if (selectedProvider == Providers.Azure_AI_Studio) {
     return "azure_ai/command-r-plus";
   } else if (selectedProvider == Providers.Azure) {
-    return "azure/my-deployment";
+    return "my-deployment";
   } else if (selectedProvider == Providers.Oracle) {
     return "oci/xai.grok-4";
   } else if (selectedProvider == Providers.Snowflake) {
@@ -184,6 +200,12 @@ export const getPlaceholder = (selectedProvider: string): string => {
     return "volcengine/<any-model-on-volcengine>";
   } else if (selectedProvider == Providers.DeepInfra) {
     return "deepinfra/<any-model-on-deepinfra>";
+  } else if (selectedProvider == Providers.FalAI) {
+    return "fal_ai/fal-ai/flux-pro/v1.1-ultra";
+  } else if (selectedProvider == Providers.RunwayML) {
+    return "runwayml/gen4_turbo";
+  } else if (selectedProvider === Providers.Watsonx) {
+    return "watsonx/ibm/granite-3-3-8b-instruct";
   } else {
     return "gpt-3.5-turbo";
   }

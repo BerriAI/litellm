@@ -1,12 +1,13 @@
 import React from "react";
-import { Form, Switch, Select, Input, Tooltip } from "antd";
-import { Text, Button, Accordion, AccordionHeader, AccordionBody, TextInput } from "@tremor/react";
-import { Row, Col, Typography, Card } from "antd";
+import { Form, Switch, Select, Tooltip } from "antd";
+import { Text, Accordion, AccordionHeader, AccordionBody, TextInput } from "@tremor/react";
+import { Row, Col, Typography } from "antd";
 import TextArea from "antd/es/input/TextArea";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Team } from "../key_team_helpers/key_list";
-import TeamDropdown from "../common_components/team_dropdown";
 import CacheControlSettings from "./cache_control_settings";
+import { Tag } from "../tag_management/types";
+import { formItemValidateJSON } from "../../utils/textUtils";
 const { Link } = Typography;
 
 interface AdvancedSettingsProps {
@@ -14,6 +15,7 @@ interface AdvancedSettingsProps {
   setShowAdvancedSettings: (show: boolean) => void;
   teams?: Team[] | null;
   guardrailsList: string[];
+  tagsList: Record<string, Tag>;
 }
 
 const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
@@ -21,6 +23,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
   setShowAdvancedSettings,
   teams,
   guardrailsList,
+  tagsList,
 }) => {
   const [form] = Form.useForm();
   const [customPricing, setCustomPricing] = React.useState(false);
@@ -36,18 +39,6 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
       return Promise.reject("Please enter a valid positive number");
     }
     return Promise.resolve();
-  };
-
-  const validateJSON = (_: any, value: string) => {
-    if (!value) {
-      return Promise.resolve();
-    }
-    try {
-      JSON.parse(value);
-      return Promise.resolve();
-    } catch (error) {
-      return Promise.reject("Please enter valid JSON");
-    }
   };
 
   // Handle custom pricing changes
@@ -146,6 +137,19 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
               />
             </Form.Item>
 
+            <Form.Item label="Tags" name="tags" className="mb-4">
+              <Select
+                mode="tags"
+                style={{ width: "100%" }}
+                placeholder="Select or enter tags"
+                options={Object.values(tagsList).map((tag) => ({
+                  value: tag.name,
+                  label: tag.name,
+                  title: tag.description || tag.name,
+                }))}
+              />
+            </Form.Item>
+
             {customPricing && (
               <div className="ml-6 pl-4 border-l-2 border-gray-200">
                 <Form.Item label="Pricing Model" name="pricing_model" className="mb-4">
@@ -218,7 +222,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
               name="litellm_extra_params"
               tooltip="Optional litellm params used for making a litellm.completion() call."
               className="mb-4 mt-4"
-              rules={[{ validator: validateJSON }]}
+              rules={[{ validator: formItemValidateJSON }]}
             >
               <TextArea
                 rows={4}
@@ -245,7 +249,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
               name="model_info_params"
               tooltip="Optional model info params. Returned when calling `/model/info` endpoint."
               className="mb-0"
-              rules={[{ validator: validateJSON }]}
+              rules={[{ validator: formItemValidateJSON }]}
             >
               <TextArea
                 rows={4}

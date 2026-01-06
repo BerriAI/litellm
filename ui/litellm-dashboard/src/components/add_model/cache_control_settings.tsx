@@ -1,5 +1,5 @@
 import React from "react";
-import { Form, Switch, Select, Input, Typography } from "antd";
+import { Form, Switch, Select, Typography } from "antd";
 import { PlusOutlined, MinusCircleOutlined } from "@ant-design/icons";
 import NumericalInput from "../shared/numerical_input";
 
@@ -111,7 +111,6 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
                         type="number"
                         placeholder="Optional"
                         step={1}
-                        min={0}
                         onChange={() => {
                           const values = form.getFieldValue("cache_control_points");
                           updateCacheControlPoints(values);

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from litellm._logging import verbose_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.types.mcp import MCPAuth
 
 MCP_AVAILABLE: bool = True
 try:
@@ -69,19 +70,24 @@ if MCP_AVAILABLE:
             for tool in tools
         ]
 
-    async def _get_tools_for_single_server(server, server_auth_header):
+    async def _get_tools_for_single_server(
+        server,
+        server_auth_header,
+        raw_headers: Optional[Dict[str, str]] = None,
+    ):
         """Helper function to get tools for a single server."""
         tools = await global_mcp_server_manager._get_tools_from_server(
             server=server,
             mcp_auth_header=server_auth_header,
             add_prefix=False,
+            raw_headers=raw_headers,
         )
-        
+
         # Filter tools based on allowed_tools configuration
         # Only filter if allowed_tools is explicitly configured (not None and not empty)
         if server.allowed_tools is not None and len(server.allowed_tools) > 0:
             tools = filter_tools_by_allowed_tools(tools, server)
-        
+
         return _create_tool_response_objects(tools, server.mcp_info)
 
     ########################################################
@@ -120,6 +126,7 @@ if MCP_AVAILABLE:
         try:
             # Extract auth headers from request
             headers = request.headers
+            raw_headers_from_request = dict(headers)
             mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(
                 headers
             )
@@ -146,7 +153,7 @@ if MCP_AVAILABLE:
 
                 try:
                     list_tools_result = await _get_tools_for_single_server(
-                        server, server_auth_header
+                        server, server_auth_header, raw_headers_from_request
                     )
                 except Exception as e:
                     verbose_logger.exception(
@@ -167,7 +174,7 @@ if MCP_AVAILABLE:
 
                     try:
                         tools_result = await _get_tools_for_single_server(
-                            server, server_auth_header
+                            server, server_auth_header, raw_headers_from_request
                         )
                         list_tools_result.extend(tools_result)
                     except Exception as e:
@@ -212,6 +219,9 @@ if MCP_AVAILABLE:
 
         from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
         from litellm.proxy.proxy_server import add_litellm_data_to_request, proxy_config
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
 
         try:
             data = await request.json()
@@ -221,7 +231,30 @@ if MCP_AVAILABLE:
                 user_api_key_dict=user_api_key_dict,
                 proxy_config=proxy_config,
             )
-            return await call_mcp_tool(**data)
+
+            # FIX: Extract MCP auth headers from request
+            # The UI sends bearer token in x-mcp-auth header and server-specific headers,
+            # but they weren't being extracted and passed to call_mcp_tool.
+            # This fix ensures auth headers are properly extracted from the HTTP request
+            # and passed through to the MCP server for authentication.
+            headers = request.headers
+            raw_headers_from_request = dict(headers)
+            mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(
+                headers
+            )
+            mcp_server_auth_headers = (
+                MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
+            )
+
+            # Add extracted headers to data dict to pass to call_mcp_tool
+            if mcp_auth_header:
+                data["mcp_auth_header"] = mcp_auth_header
+            if mcp_server_auth_headers:
+                data["mcp_server_auth_headers"] = mcp_server_auth_headers
+            data["raw_headers"] = raw_headers_from_request
+
+            result = await call_mcp_tool(**data)
+            return result
         except BlockedPiiEntityError as e:
             verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {str(e)}")
             raise HTTPException(
@@ -268,7 +301,13 @@ if MCP_AVAILABLE:
         NewMCPServerRequest,
     )
 
-    async def _execute_with_mcp_client(request: NewMCPServerRequest, operation):
+    async def _execute_with_mcp_client(
+        request: NewMCPServerRequest,
+        operation,
+        mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
+        oauth2_headers: Optional[Dict[str, str]] = None,
+        raw_headers: Optional[Dict[str, str]] = None,
+    ):
         """
         Common helper to create MCP client, execute operation, and ensure proper cleanup.
 
@@ -279,58 +318,100 @@ if MCP_AVAILABLE:
         Returns:
             Operation result or error response
         """
-        client = None
         try:
+            server_model = MCPServer(
+                server_id=request.server_id or "",
+                name=request.alias or request.server_name or "",
+                url=request.url,
+                transport=request.transport,
+                auth_type=request.auth_type,
+                mcp_info=request.mcp_info,
+                command=request.command,
+                args=request.args,
+                env=request.env,
+            )
+
+            stdio_env = global_mcp_server_manager._build_stdio_env(
+                server_model, raw_headers
+            )
+
             client = global_mcp_server_manager._create_mcp_client(
-                server=MCPServer(
-                    server_id=request.server_id or "",
-                    name=request.alias or request.server_name or "",
-                    url=request.url,
-                    transport=request.transport,
-                    auth_type=request.auth_type,
-                    mcp_info=request.mcp_info,
-                ),
-                mcp_auth_header=None,
+                server=server_model,
+                mcp_auth_header=mcp_auth_header,
+                extra_headers=oauth2_headers,
+                stdio_env=stdio_env,
             )
 
             return await operation(client)
 
         except Exception as e:
             verbose_logger.error(f"Error in MCP operation: {e}", exc_info=True)
-            return {"status": "error", "message": "An internal error has occurred."}
-        finally:
-            # Ensure client is properly disconnected before response is sent
-            if client is not None:
-                try:
-                    await client.disconnect()
-                except Exception as e:
-                    verbose_logger.warning(f"Error disconnecting MCP client: {e}")
+            return {
+                "status": "error",
+                "message": "An internal error has occurred while testing the MCP server.",
+            }
 
-    @router.post("/test/connection")
+    @router.post("/test/connection", dependencies=[Depends(user_api_key_auth)])
     async def test_connection(
-        request: NewMCPServerRequest,
+        request: Request,
+        new_mcp_server_request: NewMCPServerRequest,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
         Test if we can connect to the provided MCP server before adding it
         """
 
         async def _test_connection_operation(client):
-            await client.connect()
+            async def _noop(session):
+                return "ok"
+
+            await client.run_with_session(_noop)
             return {"status": "ok"}
 
-        return await _execute_with_mcp_client(request, _test_connection_operation)
+        return await _execute_with_mcp_client(
+            new_mcp_server_request,
+            _test_connection_operation,
+            raw_headers=dict(request.headers),
+        )
 
     @router.post("/test/tools/list")
     async def test_tools_list(
-        request: NewMCPServerRequest,
+        request: Request,
+        new_mcp_server_request: NewMCPServerRequest,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
         Preview tools available from MCP server before adding it
         """
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+
+        headers = request.headers
+
+        mcp_auth_header: Optional[str] = None
+        if new_mcp_server_request.auth_type in {
+            MCPAuth.api_key,
+            MCPAuth.bearer_token,
+            MCPAuth.basic,
+            MCPAuth.authorization,
+        }:
+            credentials = getattr(new_mcp_server_request, "credentials", None)
+            if isinstance(credentials, dict):
+                mcp_auth_header = credentials.get("auth_value")
+
+        oauth2_headers: Optional[Dict[str, str]] = None
+        if new_mcp_server_request.auth_type == MCPAuth.oauth2:
+            oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers)
 
         async def _list_tools_operation(client):
-            list_tools_result: List[MCPTool] = await client.list_tools()
+            async def _list_tools_session_operation(session):
+                return await session.list_tools()
+
+            list_tools_response = await client.run_with_session(
+                _list_tools_session_operation
+            )
+            list_tools_result: List[MCPTool] = list_tools_response.tools
             model_dumped_tools: List[dict] = [
                 tool.model_dump() for tool in list_tools_result
             ]
@@ -340,4 +421,10 @@ if MCP_AVAILABLE:
                 "message": "Successfully retrieved tools",
             }
 
-        return await _execute_with_mcp_client(request, _list_tools_operation)
+        return await _execute_with_mcp_client(
+            new_mcp_server_request,
+            _list_tools_operation,
+            mcp_auth_header=mcp_auth_header,
+            oauth2_headers=oauth2_headers,
+            raw_headers=dict(request.headers),
+        )

@@ -2,23 +2,28 @@ import Image from '@theme/IdealImage';
 
 # Custom LLM Pricing
 
-Use this to register custom pricing for models. 
+## Overview
 
-There's 2 ways to track cost: 
-- cost per token
-- cost per second
+LiteLLM provides flexible cost tracking and pricing customization for all LLM providers:
+
+- **Custom Pricing** - Override default model costs or set pricing for custom models
+- **Cost Per Token** - Track costs based on input/output tokens (most common)
+- **Cost Per Second** - Track costs based on runtime (e.g., Sagemaker)
+- **[Provider Discounts](./provider_discounts.md)** - Apply percentage-based discounts to specific providers
+- **[Provider Margins](./provider_margins.md)** - Add fees/margins to LLM costs for internal billing
+- **Base Model Mapping** - Ensure accurate cost tracking for Azure deployments
 
 By default, the response cost is accessible in the logging object via `kwargs["response_cost"]` on success (sync + async). [**Learn More**](../observability/custom_callback.md)
 
 :::info
 
-LiteLLM already has pricing for any model in our [model cost map](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json). 
+LiteLLM already has pricing for 100+ models in our [model cost map](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json). 
 
 :::
 
 ## Cost Per Second (e.g. Sagemaker)
 
-### Usage with LiteLLM Proxy Server
+#### Usage with LiteLLM Proxy Server
 
 **Step 1: Add pricing to config.yaml**
 ```yaml
@@ -47,7 +52,7 @@ litellm /path/to/config.yaml
 
 ## Cost Per Token (e.g. Azure)
 
-### Usage with LiteLLM Proxy Server
+#### Usage with LiteLLM Proxy Server
 
 ```yaml
 model_list:

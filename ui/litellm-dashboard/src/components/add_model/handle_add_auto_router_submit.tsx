@@ -1,4 +1,3 @@
-import { message } from "antd";
 import { modelCreateCall, Model } from "../networking";
 import NotificationManager from "../molecules/notifications_manager";
 

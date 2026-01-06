@@ -18,11 +18,27 @@ class TagConfig(TagBase):
 
 
 class TagNewRequest(TagBase):
-    pass
+    budget_id: Optional[str] = None
+    # Budget fields - if budget_id is None, create a new budget with these params
+    max_budget: Optional[float] = None
+    soft_budget: Optional[float] = None
+    max_parallel_requests: Optional[int] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    model_max_budget: Optional[Dict] = None
+    budget_duration: Optional[str] = None
 
 
 class TagUpdateRequest(TagBase):
-    pass
+    budget_id: Optional[str] = None
+    # Budget fields - if provided, will update the budget
+    max_budget: Optional[float] = None
+    soft_budget: Optional[float] = None
+    max_parallel_requests: Optional[int] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    model_max_budget: Optional[Dict] = None
+    budget_duration: Optional[str] = None
 
 
 class TagDeleteRequest(BaseModel):

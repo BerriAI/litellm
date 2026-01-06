@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from "react";
-import { Card, Form, Button, Input, InputNumber, Select as AntdSelect, Space, Tooltip, Collapse } from "antd";
+import { Card, Button, Input, InputNumber, Select as AntdSelect, Tooltip, Collapse } from "antd";
 import { PlusOutlined, DeleteOutlined, InfoCircleOutlined, DownOutlined } from "@ant-design/icons";
-import { Text, TextInput } from "@tremor/react";
-import { ModelGroup } from "../chat_ui/llm_calls/fetch_models";
+import { Text } from "@tremor/react";
+import { ModelGroup } from "../playground/llm_calls/fetch_models";
 
 const { TextArea } = Input;
 const { Panel } = Collapse;

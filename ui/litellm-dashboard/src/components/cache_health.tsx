@@ -1,5 +1,5 @@
 import React from "react";
-import { Card, Text, Button, TabGroup, TabList, Tab, TabPanel, TabPanels } from "@tremor/react";
+import { Text, Button, TabGroup, TabList, Tab, TabPanel, TabPanels } from "@tremor/react";
 import { CheckCircleIcon, XCircleIcon, ClipboardCopyIcon } from "@heroicons/react/outline";
 import { ResponseTimeIndicator } from "./response_time_indicator";
 
