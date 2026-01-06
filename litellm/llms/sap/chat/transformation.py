@@ -91,6 +91,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             "Authorization": access_token,
             "AI-Resource-Group": self.resource_group,
             "Content-Type": "application/json",
+            "AI-Client-Type": "LiteLLM",
         }
 
     @property
