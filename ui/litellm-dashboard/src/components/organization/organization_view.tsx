@@ -23,7 +23,7 @@ import {
 } from "@tremor/react";
 import { Button, Form, Input, Select } from "antd";
 import { CheckIcon, CopyIcon } from "lucide-react";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import UserSearchModal from "../common_components/user_search_modal";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
@@ -41,6 +41,8 @@ import ObjectPermissionsView from "../object_permissions_view";
 import NumericalInput from "../shared/numerical_input";
 import MemberModal from "../team/EditMembership";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { createTeamAliasMap } from "@/utils/teamUtils";
 
 interface OrganizationInfoProps {
   organizationId: string;
@@ -71,6 +73,9 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [isOrgSaving, setIsOrgSaving] = useState(false);
   const canEditOrg = is_org_admin || is_proxy_admin;
+  const { data: teams } = useTeams();
+
+  const teamAliasMap = useMemo(() => createTeamAliasMap(teams), [teams]);
 
   const fetchOrgInfo = async () => {
     try {
@@ -310,7 +315,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                 <div className="mt-2 flex flex-wrap gap-2">
                   {orgData.teams?.map((team, index) => (
                     <Badge key={index} color="red">
-                      {team.team_id}
+                      {teamAliasMap[team.team_id] || team.team_id}
                     </Badge>
                   ))}
                 </div>

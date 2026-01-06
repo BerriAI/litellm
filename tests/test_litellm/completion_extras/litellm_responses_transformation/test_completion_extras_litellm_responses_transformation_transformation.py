@@ -1007,3 +1007,91 @@ def test_multiple_tool_calls_in_single_choice():
     assert tool_calls[2]["function"]["name"] == "get_horoscope"
 
     print("✓ Multiple tool calls are correctly grouped in a single choice")
+
+
+def test_map_reasoning_effort_adds_summary_detailed():
+    """
+    Test that _map_reasoning_effort behavior with reasoning_auto_summary flag.
+    
+    By default (flag=False), summary should NOT be added to avoid:
+    1. Breaking for users without verified OpenAI orgs (400 errors)
+    2. Making requests more expensive by including summary reasoning tokens
+    
+    When flag is enabled (flag=True or env var), summary="detailed" is added.
+    """
+    import os
+
+    import litellm
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Test all string effort levels - DEFAULT BEHAVIOR (no summary)
+    effort_levels = ["none", "low", "medium", "high", "xhigh", "minimal"]
+    
+    # Save original flag value
+    original_flag = litellm.reasoning_auto_summary
+    original_env = os.environ.get("LITELLM_REASONING_AUTO_SUMMARY")
+    
+    try:
+        # Test 1: Default behavior (flag=False, no env var) - NO summary
+        litellm.reasoning_auto_summary = False
+        if "LITELLM_REASONING_AUTO_SUMMARY" in os.environ:
+            del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
+        
+        for effort in effort_levels:
+            result = handler._map_reasoning_effort(effort)
+            
+            assert result is not None, f"Result should not be None for effort={effort}"
+            assert result["effort"] == effort, f"Effort should be {effort}"
+            assert "summary" not in result, f"Summary should NOT be present by default for effort={effort}"
+            
+            print(f"✓ reasoning_effort='{effort}' correctly maps to effort='{effort}' (no summary by default)")
+        
+        # Test 2: With flag enabled - summary IS added
+        litellm.reasoning_auto_summary = True
+        
+        for effort in effort_levels:
+            result = handler._map_reasoning_effort(effort)
+            
+            assert result is not None, f"Result should not be None for effort={effort}"
+            assert result["effort"] == effort, f"Effort should be {effort}"
+            assert result["summary"] == "detailed", f"Summary should be 'detailed' when flag is enabled for effort={effort}"
+            
+            print(f"✓ reasoning_effort='{effort}' correctly maps to effort='{effort}', summary='detailed' (flag enabled)")
+        
+        # Test 3: With env var enabled (flag disabled) - summary IS added
+        litellm.reasoning_auto_summary = False
+        os.environ["LITELLM_REASONING_AUTO_SUMMARY"] = "true"
+        
+        result = handler._map_reasoning_effort("high")
+        assert result["summary"] == "detailed", "Summary should be 'detailed' when env var is enabled"
+        print("✓ LITELLM_REASONING_AUTO_SUMMARY env var works correctly")
+        
+        # Test 4: Dict input is passed through as-is (no modification)
+        litellm.reasoning_auto_summary = False
+        if "LITELLM_REASONING_AUTO_SUMMARY" in os.environ:
+            del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
+        
+        dict_input = {"effort": "high", "summary": "custom_summary"}
+        result_dict = handler._map_reasoning_effort(dict_input)
+        assert result_dict["effort"] == "high"
+        assert result_dict["summary"] == "custom_summary"
+        print("✓ Dict input is passed through without modification")
+        
+        # Test 5: None/unknown values return None
+        result_unknown = handler._map_reasoning_effort("unknown_value")
+        assert result_unknown is None
+        print("✓ Unknown reasoning_effort values return None")
+        
+        print("✓ All reasoning_effort behaviors work correctly with flag/env var control")
+    
+    finally:
+        # Restore original values
+        litellm.reasoning_auto_summary = original_flag
+        if original_env is not None:
+            os.environ["LITELLM_REASONING_AUTO_SUMMARY"] = original_env
+        elif "LITELLM_REASONING_AUTO_SUMMARY" in os.environ:
+            del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]

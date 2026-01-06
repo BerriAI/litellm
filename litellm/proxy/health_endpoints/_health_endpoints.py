@@ -4,7 +4,7 @@ import os
 import time
 import traceback
 from datetime import datetime, timedelta
-from typing import Dict, Literal, Optional, Union
+from typing import Any, Dict, Literal, Optional, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -16,6 +16,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     AlertType,
     CallInfo,
+    EnterpriseLicenseData,
     Litellm_EntityType,
     ProxyErrorTypes,
     ProxyException,
@@ -958,6 +959,91 @@ async def shared_health_check_status_endpoint(
                 "error": f"Failed to retrieve shared health check status: {str(e)}"
             },
         )
+
+
+def _read_license_data() -> Optional[Dict[str, Any]]:
+    from litellm.proxy.proxy_server import (
+        _license_check,
+        premium_user_data,
+    )
+
+    license_data: Optional[EnterpriseLicenseData] = (
+        premium_user_data or _license_check.airgapped_license_data
+    )
+
+    if (
+        license_data is None
+        and getattr(_license_check, "license_str", None)
+        and getattr(_license_check, "public_key", None)
+    ):
+        try:
+            verification_result = _license_check.verify_license_without_api_request(
+                public_key=_license_check.public_key,
+                license_key=_license_check.license_str,
+            )
+            if verification_result is True:
+                license_data = _license_check.airgapped_license_data
+        except Exception:
+            pass
+
+    if license_data is None:
+        return None
+    return cast(Dict[str, Any], license_data)
+
+
+def _read_allowed_features(license_data: Dict[str, Any]) -> list:
+    raw_allowed_features = license_data.get("allowed_features")
+    if isinstance(raw_allowed_features, list):
+        return list(raw_allowed_features)
+    if raw_allowed_features is None:
+        return []
+    return [raw_allowed_features]
+
+
+@router.get(
+    "/health/license",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def health_license_endpoint(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """Return metadata about the configured LiteLLM license without exposing the key."""
+    from litellm.proxy.proxy_server import (
+        _license_check,
+        premium_user,
+    )
+
+    license_data = _read_license_data()
+    has_license = bool(getattr(_license_check, "license_str", None))
+    license_type = "enterprise" if premium_user else "community"
+
+    if license_data is None:
+        return {
+            "has_license": has_license,
+            "license_type": license_type,
+            "expiration_date": None,
+            "allowed_features": [],
+            "limits": {
+                "max_users": None,
+                "max_teams": None,
+            },
+        }
+
+    expiration_date = license_data.get("expiration_date")
+    max_users = license_data.get("max_users")
+    max_teams = license_data.get("max_teams")
+
+    return {
+        "has_license": has_license,
+        "license_type": license_type,
+        "expiration_date": expiration_date,
+        "allowed_features": _read_allowed_features(license_data),
+        "limits": {
+            "max_users": max_users,
+            "max_teams": max_teams,
+        },
+    }
 
 
 db_health_cache = {"status": "unknown", "last_updated": datetime.now()}

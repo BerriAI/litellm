@@ -101,6 +101,7 @@ class BaseConfig(ABC):
                 ),
             )
             and v is not None
+            and not callable(v)  # Filter out any callable objects including mocks
         }
 
     def get_json_schema_from_pydantic_object(

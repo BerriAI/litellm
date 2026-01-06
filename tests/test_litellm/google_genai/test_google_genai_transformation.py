@@ -247,3 +247,203 @@ def test_responses_api_no_reasoning():
     
     # reasoning_effort should not be in result if not provided (filtered out as None)
     assert "reasoning_effort" not in result or result.get("reasoning_effort") is None
+
+
+def test_transform_generate_content_request_with_system_instruction():
+    """Test that systemInstruction parameter is properly included in the request"""
+    config = GoogleGenAIConfig()
+    
+    system_instruction = {
+        "parts": [{"text": "You are a helpful assistant"}]
+    }
+    
+    contents = [
+        {
+            "role": "user",
+            "parts": [{"text": "Hello"}]
+        }
+    ]
+    
+    generate_content_config_dict = {
+        "temperature": 1.0,
+        "maxOutputTokens": 100
+    }
+    
+    # Call transform_generate_content_request
+    result = config.transform_generate_content_request(
+        model="gemini-3-flash-preview",
+        contents=contents,
+        tools=None,
+        generate_content_config_dict=generate_content_config_dict,
+        system_instruction=system_instruction,
+    )
+    
+    # Verify that systemInstruction is in the request
+    assert "systemInstruction" in result, "systemInstruction should be in request body"
+    assert result["systemInstruction"] == system_instruction, "systemInstruction should match input"
+    assert result["model"] == "gemini-3-flash-preview"
+    assert result["contents"] == contents
+
+
+def test_transform_generate_content_request_without_system_instruction():
+    """Test that request works correctly without systemInstruction"""
+    config = GoogleGenAIConfig()
+    
+    contents = [
+        {
+            "role": "user",
+            "parts": [{"text": "Hello"}]
+        }
+    ]
+    
+    generate_content_config_dict = {
+        "temperature": 1.0
+    }
+    
+    # Call transform_generate_content_request without system_instruction
+    result = config.transform_generate_content_request(
+        model="gemini-3-flash-preview",
+        contents=contents,
+        tools=None,
+        generate_content_config_dict=generate_content_config_dict,
+        system_instruction=None,
+    )
+    
+    # Verify that systemInstruction is NOT in the request when not provided
+    assert "systemInstruction" not in result, "systemInstruction should not be in request when None"
+    assert result["model"] == "gemini-3-flash-preview"
+    assert result["contents"] == contents
+
+
+def test_transform_generate_content_request_system_instruction_with_tools():
+    """Test that systemInstruction works correctly alongside tools"""
+    config = GoogleGenAIConfig()
+    
+    system_instruction = {
+        "parts": [{"text": "You are a helpful assistant that uses tools"}]
+    }
+    
+    contents = [
+        {
+            "role": "user",
+            "parts": [{"text": "What's the weather?"}]
+        }
+    ]
+    
+    tools = [
+        {
+            "functionDeclarations": [
+                {
+                    "name": "get_weather",
+                    "description": "Get weather information",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {"type": "string"}
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+    
+    generate_content_config_dict = {
+        "temperature": 0.7
+    }
+    
+    # Call transform_generate_content_request with both system_instruction and tools
+    result = config.transform_generate_content_request(
+        model="gemini-3-flash-preview",
+        contents=contents,
+        tools=tools,
+        generate_content_config_dict=generate_content_config_dict,
+        system_instruction=system_instruction,
+    )
+    
+    # Verify that both systemInstruction and tools are in the request
+    assert "systemInstruction" in result, "systemInstruction should be in request body"
+    assert result["systemInstruction"] == system_instruction
+    assert "tools" in result, "tools should be in request body"
+    assert result["tools"] == tools
+    assert result["model"] == "gemini-3-flash-preview"
+
+
+def test_validate_environment_with_dict_api_key():
+    """
+    Test that validate_environment correctly handles api_key as a dict.
+    
+    This happens when using custom api_base with Gemini - the auth_header
+    is returned as {"x-goog-api-key": "sk-test"} and should be merged into
+    headers instead of being set as a header value.
+    
+    Regression test for: https://github.com/BerriAI/litellm/issues/xxxxx
+    """
+    config = GoogleGenAIConfig()
+    
+    # Simulate the case where auth_header is a dict (custom api_base scenario)
+    auth_header_dict = {"x-goog-api-key": "sk-test-key-123"}
+    
+    result = config.validate_environment(
+        api_key=auth_header_dict,
+        headers=None,
+        model="gemini-2.5-pro",
+        litellm_params={}
+    )
+    
+    # The dict should be merged into headers, not set as a value
+    assert "x-goog-api-key" in result, "x-goog-api-key should be in headers"
+    assert result["x-goog-api-key"] == "sk-test-key-123", "API key should be the string value, not a dict"
+    assert isinstance(result["x-goog-api-key"], str), "Header value should be a string, not a dict"
+    assert "Content-Type" in result, "Content-Type should be in headers"
+    assert result["Content-Type"] == "application/json"
+
+
+def test_validate_environment_with_string_api_key():
+    """
+    Test that validate_environment correctly handles api_key as a string.
+    
+    This is the normal case when using standard Gemini API.
+    """
+    config = GoogleGenAIConfig()
+    
+    # Normal case: api_key is a string
+    api_key_string = "sk-test-key-456"
+    
+    result = config.validate_environment(
+        api_key=api_key_string,
+        headers=None,
+        model="gemini-2.5-pro",
+        litellm_params={}
+    )
+    
+    # The string should be set as the header value
+    assert "x-goog-api-key" in result, "x-goog-api-key should be in headers"
+    assert result["x-goog-api-key"] == "sk-test-key-456", "API key should match input"
+    assert isinstance(result["x-goog-api-key"], str), "Header value should be a string"
+    assert "Content-Type" in result, "Content-Type should be in headers"
+
+
+def test_validate_environment_with_extra_headers():
+    """
+    Test that validate_environment correctly merges extra headers with dict api_key.
+    """
+    config = GoogleGenAIConfig()
+    
+    # Custom api_base scenario with additional headers
+    auth_header_dict = {"x-goog-api-key": "sk-test-key-789"}
+    extra_headers = {"X-Custom-Header": "custom-value"}
+    
+    result = config.validate_environment(
+        api_key=auth_header_dict,
+        headers=extra_headers,
+        model="gemini-2.5-pro",
+        litellm_params={}
+    )
+    
+    # Both the auth dict and extra headers should be merged
+    assert "x-goog-api-key" in result, "x-goog-api-key should be in headers"
+    assert result["x-goog-api-key"] == "sk-test-key-789", "API key should be correctly set"
+    assert isinstance(result["x-goog-api-key"], str), "Header value should be a string"
+    assert "X-Custom-Header" in result, "Extra headers should be merged"
+    assert result["X-Custom-Header"] == "custom-value"
+    assert "Content-Type" in result

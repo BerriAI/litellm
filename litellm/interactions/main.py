@@ -272,17 +272,29 @@ def create(
             model=model,
         )
         
-        if interactions_api_config is None:
-            raise ValueError(
-                f"Interactions API is not supported for provider: {custom_llm_provider}. "
-                "Currently only 'gemini' is supported."
-            )
-        
         # Get optional params using utility (similar to responses API pattern)
         local_vars.update(kwargs)
         optional_params = InteractionsAPIRequestUtils.get_requested_interactions_api_optional_params(
             local_vars
         )
+        
+        # Check if this is a bridge provider (litellm_responses) - similar to responses API
+        # Either provider is explicitly "litellm_responses" or no config found (bridge to responses)
+        if custom_llm_provider == "litellm_responses" or interactions_api_config is None:
+            # Bridge to litellm.responses() for non-native providers
+            from litellm.interactions.litellm_responses_transformation.handler import (
+                LiteLLMResponsesInteractionsHandler,
+            )
+            handler = LiteLLMResponsesInteractionsHandler()
+            return handler.interactions_api_handler(
+                model=model or "",
+                input=input,
+                optional_params=optional_params,
+                custom_llm_provider=custom_llm_provider,
+                _is_async=_is_async,
+                stream=stream,
+                **kwargs,
+            )
         
         litellm_logging_obj.update_environment_variables(
             model=model,

@@ -268,16 +268,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
 
               {/* Content */}
               <div className="p-6 h-full">
-                <KeyInfoView
-                  keyId={selectedKey}
-                  onClose={handleClose}
-                  keyData={keyData}
-                  accessToken={accessToken}
-                  userID={userID}
-                  userRole={userRole}
-                  teams={teams}
-                  premiumUser={premiumUser}
-                />
+                <KeyInfoView keyId={selectedKey} onClose={handleClose} keyData={keyData} teams={teams} />
               </div>
             </div>
           </div>

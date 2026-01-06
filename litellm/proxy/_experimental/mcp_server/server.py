@@ -709,7 +709,8 @@ if MCP_AVAILABLE:
 
         extra_headers: Optional[Dict[str, str]] = None
         if server.auth_type == MCPAuth.oauth2:
-            extra_headers = oauth2_headers
+            # Copy to avoid mutating the original dict (important for parallel fetching)
+            extra_headers = oauth2_headers.copy() if oauth2_headers else None
 
         if server.extra_headers and raw_headers:
             if extra_headers is None:
@@ -755,11 +756,10 @@ if MCP_AVAILABLE:
         # Decide whether to add prefix based on number of allowed servers
         add_prefix = not (len(allowed_mcp_servers) == 1)
 
-        # Get tools from each allowed server
-        all_tools = []
-        for server in allowed_mcp_servers:
+        async def _fetch_and_filter_server_tools(server: MCPServer) -> List[MCPTool]:
+            """Fetch and filter tools from a single server with error handling."""
             if server is None:
-                continue
+                return []
 
             server_auth_header, extra_headers = _prepare_mcp_server_headers(
                 server=server,
@@ -775,6 +775,7 @@ if MCP_AVAILABLE:
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
                     add_prefix=add_prefix,
+                    raw_headers=raw_headers,
                 )
 
                 filtered_tools = filter_tools_by_allowed_tools(tools, server)
@@ -785,16 +786,24 @@ if MCP_AVAILABLE:
                     user_api_key_auth=user_api_key_auth,
                 )
 
-                all_tools.extend(filtered_tools)
-
                 verbose_logger.debug(
                     f"Successfully fetched {len(tools)} tools from server {server.name}, {len(filtered_tools)} after filtering"
                 )
+                return filtered_tools
             except Exception as e:
                 verbose_logger.exception(
                     f"Error getting tools from server {server.name}: {str(e)}"
                 )
-                # Continue with other servers instead of failing completely
+                return []
+
+        # Fetch tools from all servers in parallel
+        tasks = [
+            _fetch_and_filter_server_tools(server) for server in allowed_mcp_servers
+        ]
+        results = await asyncio.gather(*tasks)
+
+        # Flatten results into single list
+        all_tools: List[MCPTool] = [tool for tools in results for tool in tools]
 
         verbose_logger.info(
             f"Successfully fetched {len(all_tools)} tools total from all MCP servers"
@@ -854,6 +863,7 @@ if MCP_AVAILABLE:
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
                     add_prefix=add_prefix,
+                    raw_headers=raw_headers,
                 )
 
                 all_prompts.extend(prompts)
@@ -912,6 +922,7 @@ if MCP_AVAILABLE:
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
                     add_prefix=add_prefix,
+                    raw_headers=raw_headers,
                 )
                 all_resources.extend(resources)
 
@@ -969,6 +980,7 @@ if MCP_AVAILABLE:
                         mcp_auth_header=server_auth_header,
                         extra_headers=extra_headers,
                         add_prefix=add_prefix,
+                        raw_headers=raw_headers,
                     )
                 )
                 all_resource_templates.extend(resource_templates)
@@ -1392,6 +1404,7 @@ if MCP_AVAILABLE:
             arguments=arguments,
             mcp_auth_header=server_auth_header,
             extra_headers=extra_headers,
+            raw_headers=raw_headers,
         )
 
     async def mcp_read_resource(
@@ -1440,6 +1453,7 @@ if MCP_AVAILABLE:
             url=url,
             mcp_auth_header=server_auth_header,
             extra_headers=extra_headers,
+            raw_headers=raw_headers,
         )
 
     def _get_standard_logging_mcp_tool_call(

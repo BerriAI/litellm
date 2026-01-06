@@ -47,9 +47,6 @@ interface ModelInfoViewProps {
   accessToken: string | null;
   userID: string | null;
   userRole: string | null;
-  editModel: boolean;
-  setEditModalVisible: (visible: boolean) => void;
-  setSelectedModel: (model: any) => void;
   onModelUpdate?: (updatedModel: any) => void;
   modelAccessGroups: string[] | null;
 }
@@ -61,9 +58,6 @@ export default function ModelInfoView({
   accessToken,
   userID,
   userRole,
-  editModel,
-  setEditModalVisible,
-  setSelectedModel,
   onModelUpdate,
   modelAccessGroups,
 }: ModelInfoViewProps) {
@@ -86,7 +80,7 @@ export default function ModelInfoView({
   const isAdmin = userRole === "Admin";
   const isAutoRouter = modelData?.litellm_params?.auto_router_config != null;
 
-  const { data: modelsInfoData } = useModelsInfo(accessToken, userID, userRole);
+  const { data: modelsInfoData } = useModelsInfo();
   console.log("modelsInfoData, ", modelsInfoData);
   const usingExistingCredential =
     modelData?.litellm_params?.litellm_credential_name != null &&

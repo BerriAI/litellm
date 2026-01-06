@@ -8,12 +8,13 @@ forward_client_headers_to_llm_api were not being passed to Bedrock rerank provid
 import json
 import os
 import sys
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 import litellm
+from litellm.llms.bedrock.base_aws_llm import Boto3CredentialsInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 # Mock response for Bedrock rerank
@@ -47,6 +48,19 @@ test_documents = [
 ]
 
 
+def create_mock_credentials():
+    """Create mock AWS credentials for testing"""
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+    return Boto3CredentialsInfo(
+        credentials=mock_credentials,
+        aws_region_name="us-east-1",
+        aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
+    )
+
+
 @pytest.mark.parametrize(
     "model",
     [
@@ -73,7 +87,17 @@ def test_bedrock_rerank_header_forwarding_sync(model):
         "X-Test-Header": "test-value",
     }
     
-    with patch.object(client, "post") as mock_post:
+    # Mock AWS credentials and SigV4 auth
+    mock_credentials_info = create_mock_credentials()
+    
+    with patch.object(client, "post") as mock_post, \
+         patch("litellm.llms.bedrock.rerank.handler.BedrockRerankHandler._get_boto_credentials_from_optional_params", return_value=mock_credentials_info), \
+         patch("botocore.auth.SigV4Auth") as mock_sigv4:
+        
+        # Mock SigV4Auth to not actually sign the request
+        mock_sigv4_instance = MagicMock()
+        mock_sigv4.return_value = mock_sigv4_instance
+        
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.text = json.dumps(bedrock_rerank_response)
@@ -152,9 +176,17 @@ async def test_bedrock_rerank_header_forwarding_async(model):
         "X-Test-Header": "test-value",
     }
     
-    from unittest.mock import AsyncMock
+    # Mock AWS credentials and SigV4 auth
+    mock_credentials_info = create_mock_credentials()
     
-    with patch.object(client, "post", new_callable=AsyncMock) as mock_post:
+    with patch.object(client, "post", new_callable=AsyncMock) as mock_post, \
+         patch("litellm.llms.bedrock.rerank.handler.BedrockRerankHandler._get_boto_credentials_from_optional_params", return_value=mock_credentials_info), \
+         patch("botocore.auth.SigV4Auth") as mock_sigv4:
+        
+        # Mock SigV4Auth to not actually sign the request
+        mock_sigv4_instance = MagicMock()
+        mock_sigv4.return_value = mock_sigv4_instance
+        
         mock_response = AsyncMock()
         mock_response.status_code = 200
         mock_response.text = json.dumps(bedrock_rerank_response)
@@ -223,7 +255,17 @@ def test_bedrock_rerank_extra_headers_and_headers_merge():
     # Explicit extra_headers
     explicit_headers = {"X-Explicit-Header": "ExplicitValue"}
     
-    with patch.object(client, "post") as mock_post:
+    # Mock AWS credentials and SigV4 auth
+    mock_credentials_info = create_mock_credentials()
+    
+    with patch.object(client, "post") as mock_post, \
+         patch("litellm.llms.bedrock.rerank.handler.BedrockRerankHandler._get_boto_credentials_from_optional_params", return_value=mock_credentials_info), \
+         patch("botocore.auth.SigV4Auth") as mock_sigv4:
+        
+        # Mock SigV4Auth to not actually sign the request
+        mock_sigv4_instance = MagicMock()
+        mock_sigv4.return_value = mock_sigv4_instance
+        
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.text = json.dumps(bedrock_rerank_response)

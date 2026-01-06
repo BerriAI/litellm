@@ -1,31 +1,22 @@
-import React, { useEffect, useState } from "react";
-import { Button, Text, TextInput, Title, Grid, Col } from "@tremor/react";
-import { Modal, Form, InputNumber } from "antd";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { Button, Col, Grid, Text, TextInput, Title } from "@tremor/react";
+import { Form, InputNumber, Modal } from "antd";
 import { add } from "date-fns";
-import { regenerateKeyCall } from "../networking";
-import { KeyResponse } from "../key_team_helpers/key_list";
+import { useEffect, useState } from "react";
 import { CopyToClipboard } from "react-copy-to-clipboard";
+import { KeyResponse } from "../key_team_helpers/key_list";
 import NotificationManager from "../molecules/notifications_manager";
+import { regenerateKeyCall } from "../networking";
 
 interface RegenerateKeyModalProps {
   selectedToken: KeyResponse | null;
   visible: boolean;
   onClose: () => void;
-  accessToken: string | null;
-  premiumUser: boolean;
-  setAccessToken?: (token: string) => void;
   onKeyUpdate?: (updatedKeyData: Partial<KeyResponse>) => void;
 }
 
-export function RegenerateKeyModal({
-  selectedToken,
-  visible,
-  onClose,
-  accessToken,
-  premiumUser,
-  setAccessToken,
-  onKeyUpdate,
-}: RegenerateKeyModalProps) {
+export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdate }: RegenerateKeyModalProps) {
+  const { accessToken } = useAuthorized();
   const [form] = Form.useForm();
   const [regeneratedKey, setRegeneratedKey] = useState<string | null>(null);
   const [regenerateFormData, setRegenerateFormData] = useState<any>(null);
@@ -131,14 +122,6 @@ export function RegenerateKeyModal({
       };
 
       console.log("Updated key data with new token:", updatedKeyData); // Debug log
-
-      // If user regenerated their own auth key, update both local and global access tokens
-      if (isOwnKey) {
-        setCurrentAccessToken(response.key); // Update local token immediately
-        if (setAccessToken) {
-          setAccessToken(response.key); // Update global token
-        }
-      }
 
       // Update the parent component with new key data
       if (onKeyUpdate) {

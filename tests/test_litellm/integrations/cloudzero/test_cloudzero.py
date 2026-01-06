@@ -9,6 +9,7 @@ from litellm.integrations.cloudzero.cz_stream_api import CloudZeroStreamer
 from litellm.integrations.cloudzero.database import LiteLLMDatabase
 
 
+
 class TestCloudZeroHourlyExport:
     @pytest.mark.asyncio
     async def test_hourly_export(self):
@@ -47,7 +48,13 @@ class TestCloudZeroHourlyExport:
             {
                 "team_id": ["a3d6b0bb-098f-4260-81d6-fabae695b622"],
                 "key_alias": ["key_1"],
-                "token": ["c1465c9a821f420927b3d81972323fb516745bc93a4a54ceca0ce6ddf6100c39"],
+                "token": ["sk-test-cloudzero-token-010"],
+            }
+        )
+        user_mock_data = pl.LazyFrame(
+            {
+                "user_id": ["069e8205-8f55-44fd-870b-0c036cab600c"],
+                "user_email": ["user@example.com"],
             }
         )
 
@@ -64,6 +71,7 @@ class TestCloudZeroHourlyExport:
                     LiteLLM_DailyUserSpend=spend_mock_data,
                     LiteLLM_VerificationToken=verification_mock_data,
                     LiteLLM_TeamTable=team_mock_data,
+                    LiteLLM_UserTable=user_mock_data,
                 )
                 result = sql_context.execute(query).collect()
 
