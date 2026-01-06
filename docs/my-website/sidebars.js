@@ -55,6 +55,7 @@ const sidebars = {
         "proxy/guardrails/test_playground",
         "proxy/guardrails/litellm_content_filter",
         ...[
+          "proxy/guardrails/qualifire",
           "proxy/guardrails/aim_security",
           "proxy/guardrails/onyx_security",
           "proxy/guardrails/aporia_api",
