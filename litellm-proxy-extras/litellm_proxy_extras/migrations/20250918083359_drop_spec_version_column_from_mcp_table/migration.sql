@@ -5,4 +5,4 @@
 
 */
 -- AlterTable
-ALTER TABLE "public"."LiteLLM_MCPServerTable" DROP COLUMN "spec_version";
+ALTER TABLE "LiteLLM_MCPServerTable" DROP COLUMN "spec_version";

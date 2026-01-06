@@ -57,3 +57,52 @@ class RedisClusterCache(RedisCache):
         """
         async_redis_cluster_client = self.init_async_client()
         return await async_redis_cluster_client.mget_nonatomic(keys=keys)  # type: ignore
+    
+    async def test_connection(self) -> dict:
+        """
+        Test the Redis Cluster connection.
+        
+        Returns:
+            dict: {"status": "success" | "failed", "message": str, "error": Optional[str]}
+        """
+        try:
+            import redis.asyncio as redis_async
+            from redis.cluster import ClusterNode
+
+            # Create ClusterNode objects from startup_nodes
+            cluster_kwargs = self.redis_kwargs.copy()
+            startup_nodes = cluster_kwargs.pop("startup_nodes", [])
+            
+            new_startup_nodes: List[ClusterNode] = []
+            for item in startup_nodes:
+                new_startup_nodes.append(ClusterNode(**item))
+            
+            # Create a fresh Redis Cluster client with current settings
+            redis_client = redis_async.RedisCluster(
+                startup_nodes=new_startup_nodes, **cluster_kwargs  # type: ignore
+            )
+            
+            # Test the connection
+            ping_result = await redis_client.ping()  # type: ignore[attr-defined]
+
+            # Close the connection
+            await redis_client.aclose()  # type: ignore[attr-defined]
+            
+            if ping_result:
+                return {
+                    "status": "success",
+                    "message": "Redis Cluster connection test successful"
+                }
+            else:
+                return {
+                    "status": "failed",
+                    "message": "Redis Cluster ping returned False"
+                }
+        except Exception as e:
+            from litellm._logging import verbose_logger
+            verbose_logger.error(f"Redis Cluster connection test failed: {str(e)}")
+            return {
+                "status": "failed",
+                "message": f"Redis Cluster connection failed: {str(e)}",
+                "error": str(e)
+            }

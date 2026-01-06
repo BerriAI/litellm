@@ -1,5 +1,5 @@
 ---
-title: "[Preview] v1.77.5-stable - MCP OAuth 2.0 Support"
+title: "v1.77.5-stable - MCP OAuth 2.0 Support"
 slug: "v1-77-5"
 date: 2025-09-29T10:00:00
 authors:
@@ -25,6 +25,10 @@ import TabItem from '@theme/TabItem';
 <TabItem value="docker" label="Docker">
 
 ``` showLineNumbers title="docker run litellm"
+docker run \
+-e STORE_MODEL_IN_DB=True \
+-p 4000:4000 \
+docker.litellm.ai/berriai/litellm:v1.77.5-stable
 ```
 
 </TabItem>
@@ -32,6 +36,7 @@ import TabItem from '@theme/TabItem';
 <TabItem value="pip" label="Pip">
 
 ``` showLineNumbers title="pip install litellm"
+pip install litellm==1.77.5
 ```
 
 </TabItem>
@@ -44,7 +49,41 @@ import TabItem from '@theme/TabItem';
 - **MCP OAuth 2.0 Support** - Enhanced authentication for Model Context Protocol integrations
 - **Scheduled Key Rotations** - Automated key rotation capabilities for enhanced security
 - **New Gemini 2.5 Flash & Flash-lite Models** - Latest September 2025 preview models with improved pricing and features
-- **Performance Improvements** - Critical InMemoryCache unbounded growth resolution
+- **Performance Improvements** - 54% RPS improvement
+
+---
+
+### Performance Improvements - 54% RPS Improvement
+
+<Image img={require('../../img/release_notes/perf_77_5.png')}  style={{ width: '800px', height: 'auto' }} />
+
+<br/>
+
+This release brings a 54% RPS improvement (1,040 → 1,602 RPS, aggregated) per instance. 
+
+The improvement comes from fixing O(n²) inefficiencies in the LiteLLM Router, primarily caused by repeated use of `in` statements inside loops over large arrays. 
+
+Tests were run with a database-only setup (no cache hits).
+
+#### Test Setup
+
+All benchmarks were executed using Locust with 1,000 concurrent users and a ramp-up of 500. The environment was configured to stress the routing layer and eliminate caching as a variable.
+
+**System Specs**
+
+- **CPU:** 8 vCPUs
+- **Memory:** 32 GB RAM
+
+**Configuration (config.yaml)**
+
+View the complete configuration: [gist.github.com/AlexsanderHamir/config.yaml](https://gist.github.com/AlexsanderHamir/53f7d554a5d2afcf2c4edb5b6be68ff4)
+
+**Load Script (no_cache_hits.py)**
+
+View the complete load testing script: [gist.github.com/AlexsanderHamir/no_cache_hits.py](https://gist.github.com/AlexsanderHamir/42c33d7a4dc7a57f56a78b560dee3a42)
+
+---
+
 
 ## New Models / Updated Models
 

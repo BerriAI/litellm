@@ -1,5 +1,7 @@
 from datetime import datetime
-from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Union, Type
+from typing import TYPE_CHECKING, Dict, List, Optional, Type, Union
+
+from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -12,11 +14,11 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.javelin import (
+    JavelinGuardInput,
     JavelinGuardRequest,
     JavelinGuardResponse,
-    JavelinGuardInput,
 )
-from fastapi import HTTPException
+from litellm.types.utils import CallTypesLiteral, GuardrailStatus
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
@@ -81,6 +83,7 @@ class JavelinGuardrail(CustomGuardrail):
     async def call_javelin_guard(
         self,
         request: JavelinGuardRequest,
+        event_type: GuardrailEventHooks,
     ) -> JavelinGuardResponse:
         """
         Call the Javelin guard API.
@@ -95,7 +98,7 @@ class JavelinGuardrail(CustomGuardrail):
         if self.application:
             headers["x-javelin-application"] = self.application
 
-        status: Literal["success", "failure", "blocked"] = "failure"
+        status: GuardrailStatus = "guardrail_failed_to_respond"
         javelin_response: Optional[JavelinGuardResponse] = None
         exception_str = ""
 
@@ -122,7 +125,7 @@ class JavelinGuardrail(CustomGuardrail):
             status = "success"
             return javelin_response
         except Exception as e:
-            status = "failure"
+            status = "guardrail_failed_to_respond"
             exception_str = str(e)
             return {"assessments": []}
         finally:
@@ -156,6 +159,7 @@ class JavelinGuardrail(CustomGuardrail):
                 start_time=start_time.timestamp(),
                 end_time=datetime.now().timestamp(),
                 duration=(datetime.now() - start_time).total_seconds(),
+                event_type=event_type,
             )
 
     async def async_pre_call_hook(
@@ -163,26 +167,16 @@ class JavelinGuardrail(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         cache: litellm.DualCache,
         data: Dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Optional[Union[Exception, str, Dict]]:
         """
         Pre-call hook for the Javelin guardrail.
         """
-        from litellm.proxy.common_utils.callback_utils import (
-            add_guardrail_to_applied_guardrails_header,
-        )
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             get_last_user_message,
+        )
+        from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_to_applied_guardrails_header,
         )
 
         verbose_proxy_logger.debug("Javelin Guardrail: pre_call_hook")
@@ -216,7 +210,9 @@ class JavelinGuardrail(CustomGuardrail):
             config=self.config if self.config else {},
         )
 
-        javelin_response = await self.call_javelin_guard(request=javelin_guard_request)
+        javelin_response = await self.call_javelin_guard(
+            request=javelin_guard_request, event_type=GuardrailEventHooks.pre_call
+        )
 
         assessments = javelin_response.get("assessments", [])
         reject_prompt = ""

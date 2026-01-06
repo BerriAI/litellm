@@ -3,7 +3,7 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -257,41 +257,57 @@ class TestDataDogLLMObsLogger:
             logger = DataDogLLMObsLogger()
 
         # Test embedding operations
-        assert logger._get_datadog_span_kind(CallTypes.embedding.value) == "embedding"
-        assert logger._get_datadog_span_kind(CallTypes.aembedding.value) == "embedding"
+        assert logger._get_datadog_span_kind(CallTypes.embedding.value, "123") == "embedding"
+        assert logger._get_datadog_span_kind(CallTypes.aembedding.value, "123") == "embedding"
 
         # Test LLM completion operations
-        assert logger._get_datadog_span_kind(CallTypes.completion.value) == "llm"
-        assert logger._get_datadog_span_kind(CallTypes.acompletion.value) == "llm"
-        assert logger._get_datadog_span_kind(CallTypes.text_completion.value) == "llm"
-        assert logger._get_datadog_span_kind(CallTypes.generate_content.value) == "llm"
+        assert logger._get_datadog_span_kind(CallTypes.completion.value, None) == "llm"
+        assert logger._get_datadog_span_kind(CallTypes.acompletion.value, None) == "llm"
+        assert logger._get_datadog_span_kind(CallTypes.text_completion.value, None) == "llm"
+        assert logger._get_datadog_span_kind(CallTypes.generate_content.value, None) == "llm"
         assert (
-            logger._get_datadog_span_kind(CallTypes.anthropic_messages.value) == "llm"
+            logger._get_datadog_span_kind(CallTypes.anthropic_messages.value, None) == "llm"
         )
+        assert logger._get_datadog_span_kind(CallTypes.responses.value, None) == "llm"
+        assert logger._get_datadog_span_kind(CallTypes.aresponses.value, None) == "llm"
 
         # Test tool operations
-        assert logger._get_datadog_span_kind(CallTypes.call_mcp_tool.value) == "tool"
+        assert logger._get_datadog_span_kind(CallTypes.call_mcp_tool.value, "123") == "tool"
 
         # Test retrieval operations
         assert (
-            logger._get_datadog_span_kind(CallTypes.get_assistants.value) == "retrieval"
+            logger._get_datadog_span_kind(CallTypes.get_assistants.value, "123") == "retrieval"
         )
         assert (
-            logger._get_datadog_span_kind(CallTypes.file_retrieve.value) == "retrieval"
+            logger._get_datadog_span_kind(CallTypes.file_retrieve.value, "123") == "retrieval"
         )
         assert (
-            logger._get_datadog_span_kind(CallTypes.retrieve_batch.value) == "retrieval"
+            logger._get_datadog_span_kind(CallTypes.retrieve_batch.value, "123") == "retrieval"
         )
 
         # Test task operations
-        assert logger._get_datadog_span_kind(CallTypes.create_batch.value) == "task"
-        assert logger._get_datadog_span_kind(CallTypes.image_generation.value) == "task"
-        assert logger._get_datadog_span_kind(CallTypes.moderation.value) == "task"
-        assert logger._get_datadog_span_kind(CallTypes.transcription.value) == "task"
+        assert logger._get_datadog_span_kind(CallTypes.create_batch.value, "123") == "task"
+        assert logger._get_datadog_span_kind(CallTypes.image_generation.value, "123") == "task"
+        assert logger._get_datadog_span_kind(CallTypes.moderation.value, "123") == "task"
+        assert logger._get_datadog_span_kind(CallTypes.transcription.value, "123") == "task"
 
         # Test default fallback
-        assert logger._get_datadog_span_kind("unknown_call_type") == "llm"
-        assert logger._get_datadog_span_kind(None) == "llm"
+        assert logger._get_datadog_span_kind("unknown_call_type", None) == "llm"
+        assert logger._get_datadog_span_kind(None, None) == "llm"
+
+    def test_datadog_span_kind_defaults_without_parent(self, mock_env_vars):
+        """Test that non-llm kinds fallback to llm when no parent span is provided"""
+        from litellm.types.utils import CallTypes
+
+        with patch(
+            "litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"
+        ), patch("asyncio.create_task"):
+            logger = DataDogLLMObsLogger()
+
+        # Tool/task/retrieval span kinds should fallback to llm when parent_id missing
+        assert logger._get_datadog_span_kind(CallTypes.call_mcp_tool.value, None) == "llm"
+        assert logger._get_datadog_span_kind(CallTypes.create_batch.value, None) == "llm"
+        assert logger._get_datadog_span_kind(CallTypes.get_assistants.value, None) == "llm"
 
     @pytest.mark.asyncio
     async def test_async_log_failure_event(self, mock_env_vars):
@@ -406,13 +422,13 @@ async def test_dd_llms_obs_redaction(mock_env_vars):
 
     assert (
         dd_llms_obs_logger.logged_standard_logging_payload["messages"][0]["content"]
-        == LiteLLMCommonStrings.redacted_by_litellm.value
+        == "redacted-by-litellm"
     )
     assert (
         dd_llms_obs_logger.logged_standard_logging_payload["response"]["choices"][0][
             "message"
         ]["content"]
-        == LiteLLMCommonStrings.redacted_by_litellm.value
+        == "redacted-by-litellm"
     )
 
     assert test_s3_logger.logged_standard_logging_payload["messages"] == [
@@ -528,7 +544,7 @@ def create_standard_logging_payload_with_latency_metrics() -> StandardLoggingPay
         error_information=None,
         model_parameters={"stream": True},
         hidden_params=hidden_params,
-        guardrail_information=guardrail_info,
+        guardrail_information=[ guardrail_info ],
         trace_id="test-trace-id-latency",
         custom_llm_provider="openai",
     )
@@ -607,11 +623,11 @@ def test_latency_metrics_edge_cases(mock_env_vars):
 
         # Test case 3: Missing guardrail duration should not crash
         standard_payload = create_standard_logging_payload_with_cache()
-        standard_payload["guardrail_information"] = StandardLoggingGuardrailInformation(
+        standard_payload["guardrail_information"] = [StandardLoggingGuardrailInformation(
             guardrail_name="test",
             guardrail_status="success",
             # duration is missing
-        )
+        )]
         metadata = logger._get_dd_llm_obs_payload_metadata(standard_payload)
         assert "guardrail_overhead_time_ms" not in metadata
 
@@ -644,20 +660,20 @@ def test_guardrail_information_in_metadata(mock_env_vars):
 
         # Verify the guardrail information structure
         guardrail_info = metadata["guardrail_information"]
-        assert guardrail_info["guardrail_name"] == "test_guardrail"
-        assert guardrail_info["guardrail_status"] == "success"
-        assert guardrail_info["duration"] == 0.5
+        assert guardrail_info[0]["guardrail_name"] == "test_guardrail"
+        assert guardrail_info[0]["guardrail_status"] == "success"
+        assert guardrail_info[0]["duration"] == 0.5
 
         # Verify input/output fields are present
-        assert "guardrail_request" in guardrail_info
-        assert "guardrail_response" in guardrail_info
+        assert "guardrail_request" in guardrail_info[0]
+        assert "guardrail_response" in guardrail_info[0]
 
         # Validate the input/output content
-        assert guardrail_info["guardrail_request"]["input"] == "test input message"
-        assert guardrail_info["guardrail_request"]["user_id"] == "test_user"
-        assert guardrail_info["guardrail_response"]["output"] == "filtered output"
-        assert guardrail_info["guardrail_response"]["flagged"] is False
-        assert guardrail_info["guardrail_response"]["score"] == 0.1
+        assert guardrail_info[0]["guardrail_request"]["input"] == "test input message"
+        assert guardrail_info[0]["guardrail_request"]["user_id"] == "test_user"
+        assert guardrail_info[0]["guardrail_response"]["output"] == "filtered output"
+        assert guardrail_info[0]["guardrail_response"]["flagged"] is False
+        assert guardrail_info[0]["guardrail_response"]["score"] == 0.1
 
 
 def create_standard_logging_payload_with_tool_calls() -> StandardLoggingPayload:
@@ -796,7 +812,7 @@ class TestDataDogLLMObsLoggerToolCalls:
             from litellm.types.utils import CallTypes
 
             assert (
-                logger._get_datadog_span_kind(CallTypes.call_mcp_tool.value) == "tool"
+                logger._get_datadog_span_kind(CallTypes.call_mcp_tool.value, "123") == "tool"
             )
 
     def test_tool_call_payload_creation(self, mock_env_vars):

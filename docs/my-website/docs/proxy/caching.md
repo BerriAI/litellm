@@ -271,13 +271,15 @@ export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account-key.json"
 #### Step 2: Add Redis Credentials to .env
 Set either `REDIS_URL` or the `REDIS_HOST` in your os environment, to enable caching.
 
-```shell
-REDIS_URL = ""        # REDIS_URL='redis://username:password@hostname:port/database'
-## OR ##
-REDIS_HOST = ""       # REDIS_HOST='redis-18841.c274.us-east-1-3.ec2.cloud.redislabs.com'
-REDIS_PORT = ""       # REDIS_PORT='18841'
-REDIS_PASSWORD = ""   # REDIS_PASSWORD='liteLlmIsAmazing'
-```
+  ```shell
+  REDIS_URL = ""        # REDIS_URL='redis://username:password@hostname:port/database'
+  ## OR ## 
+  REDIS_HOST = ""       # REDIS_HOST='redis-18841.c274.us-east-1-3.ec2.cloud.redislabs.com'
+  REDIS_PORT = ""       # REDIS_PORT='18841'
+  REDIS_PASSWORD = ""   # REDIS_PASSWORD='liteLlmIsAmazing'
+  REDIS_USERNAME = ""   # REDIS_USERNAME='my-redis-username' [OPTIONAL] if your redis server requires a username
+  REDIS_SSL = "True"    # REDIS_SSL='True' to enable SSL by default is False
+  ```
 
 **Additional kwargs**  
 You can pass in any additional redis.Redis arg, by storing the variable + value in your os
@@ -1101,7 +1103,22 @@ cache_params:
   gcs_path: cache/ # [OPTIONAL] GCS path prefix for cache objects
 ```
 
-## Advanced - user api key cache ttl
+## Provider-Specific Optional Parameters Caching
+
+By default, LiteLLM only includes standard OpenAI parameters in cache keys. However, some providers (like Vertex AI) use additional parameters that affect the output but aren't included in the standard cache key generation.
+
+### Enable Provider-Specific Parameter Caching
+
+Add this setting to your `config.yaml` to include provider-specific optional parameters in cache keys:
+
+```yaml
+litellm_settings:
+  cache: True
+  cache_params:
+    type: "redis"
+  enable_caching_on_provider_specific_optional_params: True  # Include provider-specific params in cache keys
+```
+## Advanced - user api key cache ttl 
 
 Configure how long the in-memory cache stores the key object (prevents db requests)
 

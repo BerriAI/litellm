@@ -218,8 +218,14 @@ async def patch_model(
             prisma_client=prisma_client,
             premium_user=premium_user,
         )
-        # Create update dictionary only for provided fields
-        update_data = update_db_model(db_model=db_model, updated_patch=patch_data)
+
+        # Handle team model updates with proper alias management
+        update_data = await _update_team_model_in_db(
+            db_model=db_model,
+            patch_data=patch_data,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+        )
 
         # Add metadata about update
         update_data["updated_by"] = (
@@ -281,7 +287,7 @@ async def _add_model_to_db(
 ) -> Optional[LiteLLM_ProxyModelTable]:
     # encrypt litellm params #
     _litellm_params_dict = model_params.litellm_params.dict(exclude_none=True)
-    _orignal_litellm_model_name = model_params.litellm_params.model
+    _original_litellm_model_name = model_params.litellm_params.model
     for k, v in _litellm_params_dict.items():
         encrypted_value = encrypt_value_helper(
             value=v, new_encryption_key=new_encryption_key
@@ -359,6 +365,143 @@ async def _add_team_model_to_db(
     )
 
     return model_response
+
+
+async def _update_team_model_in_db(
+    db_model: Deployment,
+    patch_data: updateDeployment,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+) -> PrismaCompatibleUpdateDBModel:
+    """
+    Handle team model updates with proper alias management.
+    
+    If patch_data contains a team_id:
+    - Creates unique internal model_name and team alias
+    - Adds model to team object
+    - Preserves team_public_model_name for external reference
+    """
+    # Validate team_id if present in patch_data
+    from litellm.proxy.proxy_server import premium_user
+    
+    await ModelManagementAuthChecks.allow_team_model_action(
+        model_params=patch_data,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+        premium_user=premium_user,
+    )
+    
+    patch_team_id = patch_data.model_info.team_id if patch_data.model_info else None
+    
+    # No team_id in patch, proceed with standard update
+    if patch_team_id is None:
+        return update_db_model(db_model=db_model, updated_patch=patch_data)
+    
+    # Determine public model name
+    public_model_name = _get_public_model_name(
+        patch_data=patch_data,
+        db_model=db_model,
+    )
+    
+    # Ensure model_info exists and set team_public_model_name
+    if patch_data.model_info is None:
+        from litellm.types.router import ModelInfo
+        patch_data.model_info = ModelInfo()
+    patch_data.model_info.team_public_model_name = public_model_name
+    
+    # Check if team assignment is new or changed
+    db_team_id = db_model.model_info.team_id if db_model.model_info else None
+    is_new_team_assignment = db_team_id != patch_team_id
+    
+    if is_new_team_assignment:
+        await _setup_new_team_model_assignment(
+            team_id=patch_team_id,
+            public_model_name=public_model_name,
+            patch_data=patch_data,
+            user_api_key_dict=user_api_key_dict,
+        )
+    else:
+        await _update_existing_team_model_assignment(
+            team_id=patch_team_id,
+            public_model_name=public_model_name,
+            db_model=db_model,
+            patch_data=patch_data,
+            user_api_key_dict=user_api_key_dict,
+        )
+    
+    return update_db_model(db_model=db_model, updated_patch=patch_data)
+
+
+def _get_public_model_name(
+    patch_data: updateDeployment,
+    db_model: Deployment,
+) -> str:
+    """Determine the public model name from patch or existing model."""
+    if patch_data.model_name:
+        return patch_data.model_name
+    
+    if db_model.model_info and db_model.model_info.team_public_model_name:
+        return db_model.model_info.team_public_model_name
+    
+    return db_model.model_name
+
+
+async def _setup_new_team_model_assignment(
+    team_id: str,
+    public_model_name: str,
+    patch_data: updateDeployment,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """Set up a new team model with unique name, alias, and team membership."""
+    unique_model_name = f"model_name_{team_id}_{uuid.uuid4()}"
+    patch_data.model_name = unique_model_name
+    
+    await update_team(
+        data=UpdateTeamRequest(
+            team_id=team_id,
+            model_aliases={public_model_name: unique_model_name},
+        ),
+        user_api_key_dict=user_api_key_dict,
+        http_request=Request(scope={"type": "http"}),
+    )
+    
+    await team_model_add(
+        data=TeamModelAddRequest(
+            team_id=team_id,
+            models=[public_model_name],
+        ),
+        http_request=Request(scope={"type": "http"}),
+        user_api_key_dict=user_api_key_dict,
+    )
+
+
+async def _update_existing_team_model_assignment(
+    team_id: str,
+    public_model_name: str,
+    db_model: Deployment,
+    patch_data: updateDeployment,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """Update an existing team model if the public name changed."""
+    old_public_name = (
+        db_model.model_info.team_public_model_name
+        if db_model.model_info
+        else None
+    )
+    
+    # Update alias only if public name changed
+    if old_public_name and public_model_name != old_public_name:
+        await update_team(
+            data=UpdateTeamRequest(
+                team_id=team_id,
+                model_aliases={public_model_name: db_model.model_name},
+            ),
+            user_api_key_dict=user_api_key_dict,
+            http_request=Request(scope={"type": "http"}),
+        )
+    
+    # Keep existing unique model_name
+    patch_data.model_name = None
 
 
 class ModelManagementAuthChecks:
@@ -678,6 +821,40 @@ async def add_new_model(
     model_params: Deployment,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    Add a new model to the proxy.
+
+    Parameters:
+    - model_name: str - The name users will use to call this model (required)
+    - litellm_params: dict - LiteLLM-specific parameters (required)
+        - model: str - The actual model identifier, e.g., "azure/my-deployment-name" (required - this is the only required field in litellm_params)
+        - api_key: str - API key for the provider (optional)
+        - api_base: str - API base URL (optional)
+        - Other optional params: api_version, timeout, max_retries, etc.
+    - model_info: dict - Additional model metadata returned in /v1/model/info (optional)
+
+    Example curl:
+
+    ```bash
+    curl -L -X POST 'http://0.0.0.0:4000/model/new' \
+    -H 'Authorization: Bearer LITELLM_VIRTUAL_KEY' \
+    -H 'Content-Type: application/json' \
+    -d '{
+      "model_name": "my-azure-model",
+      "litellm_params": {
+        "model": "azure/my-deployment-name",
+        "api_key": "my-azure-api-key",
+        "api_base": "https://my-endpoint.openai.azure.com"
+      },
+      "model_info": {
+        "my_custom_key": "my_custom_value"
+      }
+    }'
+    ```
+
+    Returns:
+    - The created model entry with model_id
+    """
     from litellm.proxy.proxy_server import (
         general_settings,
         premium_user,

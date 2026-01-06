@@ -8,10 +8,14 @@ from fastapi.responses import ORJSONResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    get_str_from_messages,
+)
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.route_llm_request import route_request
+from litellm.types.llms.openai import ChatCompletionUserMessage
 
 router = APIRouter()
 
@@ -108,9 +112,22 @@ async def image_generation(
             data["model"] = litellm.model_alias_map[data["model"]]
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
+        prompt_value = data.get("prompt")
+        if prompt_value is not None:
+            # Reformat the image prompt as a chat message so guardrails can process it.
+            user_message: ChatCompletionUserMessage = {
+                "role": "user",
+                "content": prompt_value,
+            }
+            data["messages"] = [user_message]
         data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict, data=data, call_type="image_generation"
         )
+
+        messages = data.get("messages")
+        if isinstance(messages, list) and messages:
+            data["prompt"] = get_str_from_messages(messages)
+        data.pop("messages", None)
 
         ## ROUTE TO CORRECT ENDPOINT ##
         llm_call = await route_request(
@@ -198,9 +215,11 @@ async def image_generation(
 async def image_edit_api(
     request: Request,
     fastapi_response: Response,
-    image: List[UploadFile] = File(...),
-    mask: Optional[List[UploadFile]] = File(None),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    image: Optional[List[UploadFile]] = File(None),
+    image_array: Optional[List[UploadFile]] = File(None, alias="image[]"),
+    mask: Optional[List[UploadFile]] = File(None),
+    mask_array: Optional[List[UploadFile]] = File(None, alias="mask[]"),
     model: Optional[str] = None,
 ):
     """
@@ -216,6 +235,18 @@ async def image_edit_api(
         -F 'prompt=Create a studio ghibli image of this'
     ```
     """
+    if image is not None and image_array is not None:
+        raise HTTPException(status_code=422, detail="Cannot specify both 'image' and 'image[]'")
+    if mask is not None and mask_array is not None:
+        raise HTTPException(status_code=422, detail="Cannot specify both 'mask' and 'mask[]'")
+    if image is None and image_array is not None:
+        image = image_array
+    if mask is None and mask_array is not None:
+        mask = mask_array
+
+    if image is None:
+        raise HTTPException(status_code=422, detail="Field required: image")
+
     from litellm.proxy.proxy_server import (
         _read_request_body,
         general_settings,

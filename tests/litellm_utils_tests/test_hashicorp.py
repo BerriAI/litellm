@@ -17,9 +17,22 @@ from litellm._uuid import uuid
 
 verbose_logger.setLevel(logging.DEBUG)
 
+# Minimal setup for module-level instantiation
+import litellm.proxy.proxy_server
+litellm.proxy.proxy_server.premium_user = True
+
 from litellm.secret_managers.hashicorp_secret_manager import HashicorpSecretManager
 
-hashicorp_secret_manager = HashicorpSecretManager()
+
+@pytest.fixture
+def hashicorp_secret_manager():
+    """Provide a fresh HashicorpSecretManager per test to avoid shared state."""
+    manager = HashicorpSecretManager()
+    manager.vault_addr = "https://test-cluster-public-vault-0f98180c.e98296b2.z1.hashicorp.cloud:8200"
+    manager.vault_namespace = "admin"
+    manager.vault_mount_name = "secret"
+    manager.vault_path_prefix = None
+    return manager
 
 
 mock_vault_response = {
@@ -63,7 +76,7 @@ mock_write_response = {
 }
 
 
-def test_hashicorp_secret_manager_get_secret():
+def test_hashicorp_secret_manager_get_secret(hashicorp_secret_manager):
     with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.get") as mock_get:
         # Configure the mock response using MagicMock
         mock_response = MagicMock()
@@ -88,7 +101,7 @@ def test_hashicorp_secret_manager_get_secret():
 
 
 @pytest.mark.asyncio
-async def test_hashicorp_secret_manager_write_secret():
+async def test_hashicorp_secret_manager_write_secret(hashicorp_secret_manager):
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
     ) as mock_post:
@@ -132,7 +145,47 @@ async def test_hashicorp_secret_manager_write_secret():
 
 
 @pytest.mark.asyncio
-async def test_hashicorp_secret_manager_delete_secret():
+async def test_hashicorp_secret_manager_write_secret_with_team_overrides(
+    hashicorp_secret_manager,
+):
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
+    ) as mock_post:
+        mock_response = MagicMock()
+        mock_response.json.return_value = mock_write_response
+        mock_response.raise_for_status.return_value = None
+        mock_post.return_value = mock_response
+
+        secret_value = "value-mock"
+        team_settings = {
+            "namespace": "team-namespace",
+            "mount": "kv-team",
+            "path_prefix": "teams/custom",
+            "data": "password",
+        }
+
+        response = await hashicorp_secret_manager.async_write_secret(
+            secret_name="team-secret",
+            secret_value=secret_value,
+            optional_params=team_settings,
+        )
+
+        assert response == mock_write_response
+        mock_post.assert_called_once()
+
+        called_url = mock_post.call_args[1]["url"]
+        expected_url = (
+            f"{hashicorp_secret_manager.vault_addr}/v1/"
+            "team-namespace/kv-team/data/teams/custom/team-secret"
+        )
+        assert called_url == expected_url
+
+        json_data = mock_post.call_args[1]["json"]
+        assert json_data["data"] == {"password": secret_value}
+
+
+@pytest.mark.asyncio
+async def test_hashicorp_secret_manager_delete_secret(hashicorp_secret_manager):
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.delete"
     ) as mock_delete:
@@ -165,7 +218,42 @@ async def test_hashicorp_secret_manager_delete_secret():
         )
 
 
-def test_hashicorp_secret_manager_tls_cert_auth(monkeypatch):
+@pytest.mark.asyncio
+async def test_hashicorp_secret_manager_delete_secret_with_team_overrides(
+    hashicorp_secret_manager,
+):
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.delete"
+    ) as mock_delete:
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_delete.return_value = mock_response
+
+        team_settings = {
+            "namespace": "team-namespace",
+            "mount": "kv-team",
+            "path_prefix": "teams/custom",
+        }
+
+        response = await hashicorp_secret_manager.async_delete_secret(
+            secret_name="team-secret", optional_params=team_settings
+        )
+
+        assert response == {
+            "status": "success",
+            "message": "Secret team-secret deleted successfully",
+        }
+
+        mock_delete.assert_called_once()
+        called_url = mock_delete.call_args[1]["url"]
+        expected_url = (
+            f"{hashicorp_secret_manager.vault_addr}/v1/"
+            "team-namespace/kv-team/data/teams/custom/team-secret"
+        )
+        assert called_url == expected_url
+
+
+def test_hashicorp_secret_manager_tls_cert_auth(monkeypatch, hashicorp_secret_manager):
     monkeypatch.setenv("HCP_VAULT_TOKEN", "test-client-token-12345")
     print("HCP_VAULT_TOKEN=", os.getenv("HCP_VAULT_TOKEN"))
     # Mock both httpx.post and httpx.Client
@@ -211,3 +299,84 @@ def test_hashicorp_secret_manager_tls_cert_auth(monkeypatch):
 
         # Verify the token was cached
         assert test_manager.cache.get_cache("hcp_vault_token") == "test-client-token-12345"
+
+
+def test_hashicorp_secret_manager_approle_auth(monkeypatch, hashicorp_secret_manager):
+    """
+    Test AppRole authentication makes the expected POST request to the correct URL.
+    """
+    monkeypatch.setenv("HCP_VAULT_TOKEN", "test-token-12345")
+    
+    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "auth": {
+                "client_token": "hvs.approle-token-67890",
+                "lease_duration": 2764800,
+                "renewable": True,
+            }
+        }
+        mock_response.raise_for_status.return_value = None
+        mock_post.return_value = mock_response
+
+        test_manager = HashicorpSecretManager()
+        test_manager.approle_role_id = "test-role-id-123"
+        test_manager.approle_secret_id = "test-secret-id-456"
+        test_manager.approle_mount_path = "approle"
+        
+        token = test_manager._auth_via_approle()
+
+        assert token == "hvs.approle-token-67890"
+        
+        expected_headers = {}
+        if test_manager.vault_namespace:
+            expected_headers["X-Vault-Namespace"] = test_manager.vault_namespace
+        
+        mock_post.assert_called_once_with(
+            url=f"{test_manager.vault_addr}/v1/auth/approle/login",
+            headers=expected_headers,
+            json={
+                "role_id": "test-role-id-123",
+                "secret_id": "test-secret-id-456",
+            },
+        )
+
+        assert test_manager.cache.get_cache("hcp_vault_approle_token") == "hvs.approle-token-67890"
+
+
+def test_hashicorp_custom_mount_and_prefix(hashicorp_secret_manager):
+    """Test URL construction with custom mount name and path prefix using get_url method."""
+    # Save original values
+    original_mount = hashicorp_secret_manager.vault_mount_name
+    original_prefix = hashicorp_secret_manager.vault_path_prefix
+    original_namespace = hashicorp_secret_manager.vault_namespace
+    
+    try:
+        # Test that existing manager uses default "secret" mount and namespace "admin"
+        url = hashicorp_secret_manager.get_url("my-secret")
+        assert "/secret/data/" in url
+        assert "my-secret" in url
+        
+        # Test custom mount name
+        hashicorp_secret_manager.vault_mount_name = "kv"
+        hashicorp_secret_manager.vault_path_prefix = None
+        hashicorp_secret_manager.vault_namespace = None
+        url = hashicorp_secret_manager.get_url("my-secret")
+        assert url == f"{hashicorp_secret_manager.vault_addr}/v1/kv/data/my-secret"
+        
+        # Test path prefix
+        hashicorp_secret_manager.vault_mount_name = "secret"
+        hashicorp_secret_manager.vault_path_prefix = "myapp"
+        url = hashicorp_secret_manager.get_url("my-secret")
+        assert url == f"{hashicorp_secret_manager.vault_addr}/v1/secret/data/myapp/my-secret"
+        
+        # Test both custom mount and prefix
+        hashicorp_secret_manager.vault_mount_name = "kv"
+        hashicorp_secret_manager.vault_path_prefix = "production"
+        url = hashicorp_secret_manager.get_url("my-secret")
+        assert url == f"{hashicorp_secret_manager.vault_addr}/v1/kv/data/production/my-secret"
+    finally:
+        # Restore original values
+        hashicorp_secret_manager.vault_mount_name = original_mount
+        hashicorp_secret_manager.vault_path_prefix = original_prefix
+        hashicorp_secret_manager.vault_namespace = original_namespace

@@ -18,6 +18,7 @@ from litellm.router_utils.cooldown_handlers import (
     _should_run_cooldown_logic,
     _should_cooldown_deployment,
     cast_exception_status_to_int,
+    _is_cooldown_required,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
@@ -30,6 +31,7 @@ from litellm import Router
 from litellm.router_utils.cooldown_handlers import _should_cooldown_deployment
 
 load_dotenv()
+
 
 @pytest.mark.asyncio
 async def test_router_cooldown_event_callback_no_deployment():
@@ -397,3 +399,73 @@ def test_mixed_success_failure(mock_failures, mock_successes, router):
     assert (
         should_cooldown is False
     ), "Should not cooldown when failure rate is below threshold"
+
+
+def test_is_cooldown_required_empty_string_exception_status(testing_litellm_router):
+    """
+    Test that _is_cooldown_required returns False when exception_status is an empty string
+    """
+    result = _is_cooldown_required(
+        litellm_router_instance=testing_litellm_router,
+        model_id="test_deployment",
+        exception_status="",
+    )
+
+    assert (
+        result is False
+    ), "Should not require cooldown when exception_status is empty string"
+
+
+def test_should_cooldown_deployment_minimum_request_threshold(testing_litellm_router):
+    """
+    Test that error rate cooldown does NOT trigger on first failure.
+
+    Fixes GitHub issue #17418: Error Rate Cooldown Triggers on First Failed Request
+
+    The problem: With DEFAULT_FAILURE_THRESHOLD_PERCENT=0.5 (50%), a deployment
+    gets cooled down after just 1 failed request because 1/1 = 100% > 50%.
+
+    The fix: Add a minimum request threshold (DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS)
+    before applying error rate cooldown.
+    """
+    from litellm.constants import DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS
+
+    # Get a deployment that's not a single-deployment model group
+    # (test_deployment_2 and test_deployment_3 are both for "test_deployment" model)
+    available_deployment = testing_litellm_router.get_available_deployment(
+        model="test_deployment"
+    )
+    assert available_deployment is not None
+    deployment_id = available_deployment["model_info"]["id"]
+
+    # Simulate only 1 failure (below minimum threshold)
+    # This should NOT trigger cooldown even though 100% > 50%
+    increment_deployment_failures_for_current_minute(
+        litellm_router_instance=testing_litellm_router, deployment_id=deployment_id
+    )
+
+    _exception = litellm.exceptions.InternalServerError(
+        "Internal error", "openai", "gpt-3.5-turbo"
+    )
+
+    # With only 1 request, should NOT cooldown (below minimum threshold)
+    should_cooldown = _should_cooldown_deployment(
+        testing_litellm_router, deployment_id, 500, _exception
+    )
+    assert (
+        should_cooldown is False
+    ), f"Should NOT cooldown with only 1 failed request (below minimum threshold of {DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS})"
+
+    # Now add more failures to reach the minimum threshold
+    for _ in range(DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS - 1):
+        increment_deployment_failures_for_current_minute(
+            litellm_router_instance=testing_litellm_router, deployment_id=deployment_id
+        )
+
+    # Now with enough requests (all failures), it SHOULD trigger cooldown
+    should_cooldown = _should_cooldown_deployment(
+        testing_litellm_router, deployment_id, 500, _exception
+    )
+    assert (
+        should_cooldown is True
+    ), f"Should cooldown when we have {DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS} failed requests (100% failure rate)"

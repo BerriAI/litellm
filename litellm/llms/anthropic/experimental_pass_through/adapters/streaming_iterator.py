@@ -31,7 +31,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     sent_first_chunk: bool = False
     sent_content_block_start: bool = False
     sent_content_block_finish: bool = False
-    current_content_block_type: Literal["text", "tool_use"] = "text"
+    current_content_block_type: Literal["text", "tool_use", "thinking"] = "text"
     sent_last_message: bool = False
     holding_chunk: Optional[Any] = None
     holding_stop_reason_chunk: Optional[Any] = None
@@ -270,7 +270,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             processed_chunk.get("delta", {}).get("stop_reason")
                             is not None
                         ):
-
                             self.holding_stop_reason_chunk = processed_chunk
                         else:
                             self.chunk_queue.append(processed_chunk)
@@ -376,6 +375,13 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         )
 
         if block_type != self.current_content_block_type:
+            self.current_content_block_type = block_type
+            self.current_content_block_start = content_block_start
+            return True
+
+        # For parallel tool calls, we'll necessarily have a new content block
+        # if we get a function name since it signals a new tool call
+        if block_type == "tool_use" and content_block_start.get("name"):
             self.current_content_block_type = block_type
             self.current_content_block_start = content_block_start
             return True

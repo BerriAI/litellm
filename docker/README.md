@@ -28,7 +28,7 @@ Replace `your-secret-key` with a strong, randomly generated secret.
 Once you have set the `MASTER_KEY`, you can build and run the containers using the following command:
 
 ```bash
-docker-compose up -d --build
+docker compose up -d --build
 ```
 
 This command will:
@@ -42,13 +42,13 @@ This command will:
 You can check the status of the running containers with the following command:
 
 ```bash
-docker-compose ps
+docker compose ps
 ```
 
 To view the logs of the `litellm` container, run:
 
 ```bash
-docker-compose logs -f litellm
+docker compose logs -f litellm
 ```
 
 ### 4. Stopping the Application
@@ -56,8 +56,32 @@ docker-compose logs -f litellm
 To stop the running containers, use the following command:
 
 ```bash
-docker-compose down
+docker compose down
 ```
+
+## Hardened / Offline Testing
+
+To ensure changes are safe for non-root, read-only root filesystems and restricted egress, always validate with the hardened compose file:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.hardened.yml build --no-cache
+docker compose -f docker-compose.yml -f docker-compose.hardened.yml up -d
+```
+
+This setup:
+- Builds from `docker/Dockerfile.non_root` with Prisma engines and Node toolchain baked into the image.
+- Runs the proxy as a non-root user with a read-only rootfs and only two writable tmpfs mounts:
+  - `/app/cache` (Prisma/NPM cache; backing `PRISMA_BINARY_CACHE_DIR`, `NPM_CONFIG_CACHE`, `XDG_CACHE_HOME`)
+  - `/app/migrations` (Prisma migration workspace; backing `LITELLM_MIGRATION_DIR`)
+- Routes all outbound traffic through a local Squid proxy that denies egress, so Prisma migrations must use the cached CLI and engines.
+
+You should also verify offline Prisma behaviour with:
+
+```bash
+docker run --rm --network none --entrypoint prisma ghcr.io/berriai/litellm:main-stable --version
+```
+
+This command should succeed (showing engine versions) even with `--network none`, confirming that Prisma binaries are available without network access.
 
 ## Troubleshooting
 

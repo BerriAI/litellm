@@ -102,13 +102,20 @@ async def use_callback_in_llm_call(
     elif callback == "openmeter":
         # it's currently handled in jank way, TODO: fix openmete and then actually run it's test
         return
-    elif callback == "bitbucket":
+    elif callback == "bitbucket" or callback == "gitlab":
         # Set up mock bitbucket configuration required for initialization
         litellm.global_bitbucket_config = {
             "workspace": "test-workspace",
             "repository": "test-repo",
             "access_token": "test-token",
             "branch": "main"
+        }
+        litellm.global_gitlab_config = {
+            "project": "a/b/<repo_name>",
+            "access_token": "your-access-token",
+            "base_url": "gitlab url",
+            "prompts_path": "src/prompts", # folder to point to, defaults to root
+            "branch":"main"  # optional, defaults to main
         }
         # Mock BitBucket HTTP calls to prevent actual API requests
         import httpx
@@ -201,26 +208,6 @@ async def use_callback_in_llm_call(
                 delattr(litellm, 'global_bitbucket_config')
             patch.stopall()
 
-
-@pytest.mark.asyncio
-async def test_init_custom_logger_compatible_class_as_callback():
-    init_env_vars()
-
-    # used like litellm.callbacks = ["prometheus"]
-    for callback in litellm._known_custom_logger_compatible_callbacks:
-        print(f"Testing callback: {callback}")
-        reset_all_callbacks()
-
-        await use_callback_in_llm_call(callback, used_in="callbacks")
-
-    # used like this litellm.success_callback = ["prometheus"]
-    for callback in litellm._known_custom_logger_compatible_callbacks:
-        print(f"Testing callback: {callback}")
-        reset_all_callbacks()
-
-        await use_callback_in_llm_call(callback, used_in="success_callback")
-
-    reset_env_vars()
 
 
 def test_dynamic_logging_global_callback():

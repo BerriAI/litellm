@@ -19,14 +19,15 @@ The Azure Text Moderation configuration component allows users to configure Azur
 The main configuration component that renders the complete UI for Azure text moderation settings.
 
 **Props:**
+
 ```typescript
 interface AzureTextModerationConfigurationProps {
-  categories: string[];                                    // Available categories
-  selectedCategories: string[];                          // Currently selected categories
-  globalSeverityThreshold: number;                       // Global threshold (0, 2, 4, 6)
-  categorySpecificThresholds: {[key: string]: number};  // Per-category overrides
-  onCategorySelect: (category: string) => void;         // Category selection handler
-  onGlobalSeverityChange: (threshold: number) => void;  // Global threshold handler
+  categories: string[]; // Available categories
+  selectedCategories: string[]; // Currently selected categories
+  globalSeverityThreshold: number; // Global threshold (0, 2, 4, 6)
+  categorySpecificThresholds: { [key: string]: number }; // Per-category overrides
+  onCategorySelect: (category: string) => void; // Category selection handler
+  onGlobalSeverityChange: (threshold: number) => void; // Global threshold handler
   onCategorySeverityChange: (category: string, threshold: number) => void; // Per-category handler
 }
 ```
@@ -38,19 +39,17 @@ A complete example showing how to integrate the configuration component with sta
 ### Usage Example
 
 ```tsx
-import React, { useState } from 'react';
-import { AzureTextModerationConfiguration, AZURE_TEXT_MODERATION_CATEGORIES } from './guardrails';
+import React, { useState } from "react";
+import { AzureTextModerationConfiguration, AZURE_TEXT_MODERATION_CATEGORIES } from "./guardrails";
 
 const MyComponent = () => {
-  const [selectedCategories, setSelectedCategories] = useState<string[]>(['Hate', 'Violence']);
+  const [selectedCategories, setSelectedCategories] = useState<string[]>(["Hate", "Violence"]);
   const [globalSeverityThreshold, setGlobalSeverityThreshold] = useState<number>(2);
-  const [categorySpecificThresholds, setCategorySpecificThresholds] = useState<{[key: string]: number}>({});
+  const [categorySpecificThresholds, setCategorySpecificThresholds] = useState<{ [key: string]: number }>({});
 
   const handleCategorySelect = (category: string) => {
-    setSelectedCategories(prev => 
-      prev.includes(category) 
-        ? prev.filter(c => c !== category)
-        : [...prev, category]
+    setSelectedCategories((prev) =>
+      prev.includes(category) ? prev.filter((c) => c !== category) : [...prev, category],
     );
   };
 
@@ -65,14 +64,14 @@ const MyComponent = () => {
 
   return (
     <AzureTextModerationConfiguration
-      categories={AZURE_TEXT_MODERATION_CATEGORIES.map(c => c.name)}
+      categories={AZURE_TEXT_MODERATION_CATEGORIES.map((c) => c.name)}
       selectedCategories={selectedCategories}
       globalSeverityThreshold={globalSeverityThreshold}
       categorySpecificThresholds={categorySpecificThresholds}
       onCategorySelect={handleCategorySelect}
       onGlobalSeverityChange={setGlobalSeverityThreshold}
-      onCategorySeverityChange={(category, threshold) => 
-        setCategorySpecificThresholds(prev => ({ ...prev, [category]: threshold }))
+      onCategorySeverityChange={(category, threshold) =>
+        setCategorySpecificThresholds((prev) => ({ ...prev, [category]: threshold }))
       }
     />
   );
@@ -84,7 +83,7 @@ const MyComponent = () => {
 The component supports Azure's severity levels:
 
 - **Level 0 (Safe)**: Content is appropriate and safe
-- **Level 2 (Low)**: Content may be inappropriate in some contexts  
+- **Level 2 (Low)**: Content may be inappropriate in some contexts
 - **Level 4 (Medium)**: Content is inappropriate and should be filtered
 - **Level 6 (High)**: Content is harmful and should be blocked
 
@@ -123,4 +122,4 @@ The existing PII configuration component provides similar functionality for conf
 - `azure_text_moderation_example.tsx` - Usage example
 - `pii_configuration.tsx` - PII configuration component
 - `pii_components.tsx` - PII UI components
-- `types.ts` - PII TypeScript interfaces 
+- `types.ts` - PII TypeScript interfaces

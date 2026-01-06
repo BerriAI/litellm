@@ -354,6 +354,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_BASE.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
     ]
 
     litellm_deployment_successful_fallbacks = [
@@ -426,13 +427,13 @@ class PrometheusMetricLabels:
 
     # Buffer monitoring metrics - these typically don't need additional labels
     litellm_pod_lock_manager_size: List[str] = []
-    
+
     litellm_in_memory_daily_spend_update_queue_size: List[str] = []
-    
+
     litellm_redis_daily_spend_update_queue_size: List[str] = []
-    
+
     litellm_in_memory_spend_update_queue_size: List[str] = []
-    
+
     litellm_redis_spend_update_queue_size: List[str] = []
 
     @staticmethod

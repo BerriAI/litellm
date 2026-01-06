@@ -201,6 +201,10 @@ class MessageAttributes:
     """
     The id of the tool call.
     """
+    MESSAGE_REASONING_SUMMARY = "message.reasoning_summary"
+    """
+    The reasoning summary from the model's chain-of-thought process.
+    """
 
 
 class MessageContentAttributes:
@@ -387,3 +391,42 @@ class OpenInferenceLLMProviderValues(Enum):
     GOOGLE = "google"
     AZURE = "azure"
     AWS = "aws"
+
+
+class ErrorAttributes:
+    """
+    Attributes for error information in spans.
+    
+    These attributes follow OpenTelemetry semantic conventions for exceptions
+    and are used to record error information from StandardLoggingPayloadErrorInformation.
+    """
+
+    ERROR_TYPE = "error.type"
+    """
+    The type/class of the error (e.g., 'ValueError', 'OpenAIError', 'RateLimitError').
+    Corresponds to StandardLoggingPayloadErrorInformation.error_class
+    """
+
+    ERROR_MESSAGE = "error.message"
+    """
+    The error message describing what went wrong.
+    Corresponds to StandardLoggingPayloadErrorInformation.error_message
+    """
+
+    ERROR_CODE = "error.code"
+    """
+    The error code (e.g., HTTP status code like '500', '429', or provider-specific codes).
+    Corresponds to StandardLoggingPayloadErrorInformation.error_code
+    """
+
+    ERROR_STACK_TRACE = "error.stack_trace"
+    """
+    The full stack trace of the error.
+    Corresponds to StandardLoggingPayloadErrorInformation.traceback
+    """
+
+    ERROR_LLM_PROVIDER = "error.llm_provider"
+    """
+    The LLM provider where the error occurred (e.g., 'openai', 'anthropic', 'azure').
+    Corresponds to StandardLoggingPayloadErrorInformation.llm_provider
+    """

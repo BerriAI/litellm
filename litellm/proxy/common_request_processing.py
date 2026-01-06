@@ -38,6 +38,7 @@ from litellm.proxy.common_utils.callback_utils import (
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+from litellm.types.utils import ServerToolUse
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
@@ -46,6 +47,7 @@ if TYPE_CHECKING:
 else:
     ProxyConfig = Any
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 
 
 async def _parse_event_data_for_error(event_line: Union[str, bytes]) -> Optional[int]:
@@ -175,6 +177,30 @@ async def create_streaming_response(
     )
 
 
+def _get_cost_breakdown_from_logging_obj(
+    litellm_logging_obj: Optional[LiteLLMLoggingObj],
+) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
+    """
+    Extract discount and margin information from logging object's cost breakdown.
+
+    Returns:
+        Tuple of (original_cost, discount_amount, margin_total_amount, margin_percent)
+    """
+    if not litellm_logging_obj or not hasattr(litellm_logging_obj, "cost_breakdown"):
+        return None, None, None, None
+
+    cost_breakdown = litellm_logging_obj.cost_breakdown
+    if not cost_breakdown:
+        return None, None, None, None
+
+    original_cost = cost_breakdown.get("original_cost")
+    discount_amount = cost_breakdown.get("discount_amount")
+    margin_total_amount = cost_breakdown.get("margin_total_amount")
+    margin_percent = cost_breakdown.get("margin_percent")
+
+    return original_cost, discount_amount, margin_total_amount, margin_percent
+
+
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict):
         self.data = data
@@ -194,10 +220,30 @@ class ProxyBaseLLMRequestProcessing:
         fastest_response_batch_completion: Optional[bool] = None,
         request_data: Optional[dict] = {},
         timeout: Optional[Union[float, int, httpx.Timeout]] = None,
+        litellm_logging_obj: Optional[LiteLLMLoggingObj] = None,
         **kwargs,
     ) -> dict:
         exclude_values = {"", None, "None"}
         hidden_params = hidden_params or {}
+
+        # Extract discount and margin info from cost_breakdown if available
+        original_cost, discount_amount, margin_total_amount, margin_percent = _get_cost_breakdown_from_logging_obj(
+            litellm_logging_obj=litellm_logging_obj
+        )
+
+        # Calculate updated spend for header (include current response_cost)
+        current_spend = user_api_key_dict.spend or 0.0
+        updated_spend = current_spend
+        if response_cost is not None:
+            try:
+                # Convert response_cost to float if it's a string
+                cost_value = float(response_cost) if isinstance(response_cost, str) else response_cost
+                if cost_value > 0:
+                    updated_spend = current_spend + cost_value
+            except (ValueError, TypeError):
+                # If conversion fails, use original spend
+                pass
+
         headers = {
             "x-litellm-call-id": call_id,
             "x-litellm-model-id": model_id,
@@ -208,10 +254,22 @@ class ProxyBaseLLMRequestProcessing:
             "x-litellm-version": version,
             "x-litellm-model-region": model_region,
             "x-litellm-response-cost": str(response_cost),
+            "x-litellm-response-cost-original": (
+                str(original_cost) if original_cost is not None else None
+            ),
+            "x-litellm-response-cost-discount-amount": (
+                str(discount_amount) if discount_amount is not None else None
+            ),
+            "x-litellm-response-cost-margin-amount": (
+                str(margin_total_amount) if margin_total_amount is not None else None
+            ),
+            "x-litellm-response-cost-margin-percent": (
+                str(margin_percent) if margin_percent is not None else None
+            ),
             "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
             "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
             "x-litellm-key-max-budget": str(user_api_key_dict.max_budget),
-            "x-litellm-key-spend": str(user_api_key_dict.spend),
+            "x-litellm-key-spend": str(updated_spend),
             "x-litellm-response-duration-ms": str(
                 hidden_params.get("_response_ms", None)
             ),
@@ -255,14 +313,18 @@ class ProxyBaseLLMRequestProcessing:
         proxy_config: ProxyConfig,
         route_type: Literal[
             "acompletion",
+            "aembedding",
             "aresponses",
             "_arealtime",
             "aget_responses",
             "adelete_responses",
             "acancel_responses",
+            "acompact_responses",
             "acreate_batch",
             "aretrieve_batch",
+            "alist_batches",
             "afile_content",
+            "afile_retrieve",
             "atext_completion",
             "acreate_fine_tuning_job",
             "acancel_fine_tuning_job",
@@ -275,6 +337,33 @@ class ProxyBaseLLMRequestProcessing:
             "allm_passthrough_route",
             "avector_store_search",
             "avector_store_create",
+            "avector_store_file_create",
+            "avector_store_file_list",
+            "avector_store_file_retrieve",
+            "avector_store_file_content",
+            "avector_store_file_update",
+            "avector_store_file_delete",
+            "aocr",
+            "asearch",
+            "avideo_generation",
+            "avideo_list",
+            "avideo_status",
+            "avideo_content",
+            "avideo_remix",
+            "acreate_container",
+            "alist_containers",
+            "aingest",
+            "aretrieve_container",
+            "adelete_container",
+            "acreate_skill",
+            "alist_skills",
+            "aget_skill",
+            "adelete_skill",
+            "anthropic_messages",
+            "acreate_interaction",
+            "aget_interaction",
+            "adelete_interaction",
+            "acancel_interaction",
         ],
         version: Optional[str] = None,
         user_model: Optional[str] = None,
@@ -283,8 +372,10 @@ class ProxyBaseLLMRequestProcessing:
         user_max_tokens: Optional[int] = None,
         user_api_base: Optional[str] = None,
         model: Optional[str] = None,
+        llm_router: Optional[Router] = None,
     ) -> Tuple[dict, LiteLLMLoggingObj]:
         start_time = datetime.now()  # start before calling guardrail hooks
+
         self.data = await add_litellm_data_to_request(
             data=self.data,
             request=request,
@@ -320,6 +411,15 @@ class ProxyBaseLLMRequestProcessing:
         ):
             self.data["model"] = litellm.model_alias_map[self.data["model"]]
 
+        # Check key-specific aliases
+        if (
+            isinstance(self.data["model"], str)
+            and user_api_key_dict.aliases
+            and isinstance(user_api_key_dict.aliases, dict)
+            and self.data["model"] in user_api_key_dict.aliases
+        ):
+            self.data["model"] = user_api_key_dict.aliases[self.data["model"]]
+
         self.data["litellm_call_id"] = request.headers.get(
             "x-litellm-call-id", str(uuid.uuid4())
         )
@@ -352,11 +452,13 @@ class ProxyBaseLLMRequestProcessing:
         user_api_key_dict: UserAPIKeyAuth,
         route_type: Literal[
             "acompletion",
+            "aembedding",
             "aresponses",
             "_arealtime",
             "aget_responses",
             "adelete_responses",
             "acancel_responses",
+            "acompact_responses",
             "atext_completion",
             "aimage_edit",
             "alist_input_items",
@@ -365,11 +467,38 @@ class ProxyBaseLLMRequestProcessing:
             "allm_passthrough_route",
             "avector_store_search",
             "avector_store_create",
+            "avector_store_file_create",
+            "avector_store_file_list",
+            "avector_store_file_retrieve",
+            "avector_store_file_content",
+            "avector_store_file_update",
+            "avector_store_file_delete",
+            "aocr",
+            "asearch",
+            "avideo_generation",
+            "avideo_list",
+            "avideo_status",
+            "avideo_content",
+            "avideo_remix",
+            "acreate_container",
+            "alist_containers",
+            "aingest",
+            "aretrieve_container",
+            "adelete_container",
+            "acreate_skill",
+            "alist_skills",
+            "aget_skill",
+            "adelete_skill",
+            "anthropic_messages",
+            "acreate_interaction",
+            "aget_interaction",
+            "adelete_interaction",
+            "acancel_interaction",
         ],
         proxy_logging_obj: ProxyLogging,
         general_settings: dict,
         proxy_config: ProxyConfig,
-        select_data_generator: Callable,
+        select_data_generator: Optional[Callable] = None,
         llm_router: Optional[Router] = None,
         model: Optional[str] = None,
         user_model: Optional[str] = None,
@@ -379,6 +508,7 @@ class ProxyBaseLLMRequestProcessing:
         user_api_base: Optional[str] = None,
         version: Optional[str] = None,
         is_streaming_request: Optional[bool] = False,
+        contents: Optional[list] = None,  # Add contents parameter
     ) -> Any:
         """
         Common request processing logic for both chat completions and responses API endpoints
@@ -404,6 +534,7 @@ class ProxyBaseLLMRequestProcessing:
             user_api_base=user_api_base,
             model=model,
             route_type=route_type,
+            llm_router=llm_router,
         )
 
         tasks = []
@@ -416,6 +547,10 @@ class ProxyBaseLLMRequestProcessing:
                 ),
             )
         )
+
+        # Pass contents if provided
+        if contents:
+            self.data["contents"] = contents
 
         ### ROUTE THE REQUEST ###
         # Do not change this - it should be a constant time fetch - ALWAYS
@@ -438,6 +573,13 @@ class ProxyBaseLLMRequestProcessing:
 
         hidden_params = getattr(response, "_hidden_params", {}) or {}
         model_id = hidden_params.get("model_id", None) or ""
+
+        # Fallback: extract model_id from litellm_metadata if not in hidden_params
+        if not model_id:
+            litellm_metadata = self.data.get("litellm_metadata", {}) or {}
+            model_info = litellm_metadata.get("model_info", {}) or {}
+            model_id = model_info.get("id", "") or ""
+
         cache_key = hidden_params.get("cache_key", None) or ""
         api_base = hidden_params.get("api_base", None) or ""
         response_cost = hidden_params.get("response_cost", None) or ""
@@ -471,6 +613,7 @@ class ProxyBaseLLMRequestProcessing:
                 fastest_response_batch_completion=fastest_response_batch_completion,
                 request_data=self.data,
                 hidden_params=hidden_params,
+                litellm_logging_obj=logging_obj,
                 **additional_headers,
             )
             if route_type == "allm_passthrough_route":
@@ -495,7 +638,21 @@ class ProxyBaseLLMRequestProcessing:
                         status_code=response.status_code,
                         headers=custom_headers,
                     )
-            else:
+            elif route_type == "anthropic_messages":
+                selected_data_generator = (
+                    ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+                        response=response,
+                        user_api_key_dict=user_api_key_dict,
+                        request_data=self.data,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+                )
+                return await create_streaming_response(
+                    generator=selected_data_generator,
+                    media_type="text/event-stream",
+                    headers=custom_headers,
+                )
+            elif select_data_generator:
                 selected_data_generator = select_data_generator(
                     response=response,
                     user_api_key_dict=user_api_key_dict,
@@ -530,6 +687,7 @@ class ProxyBaseLLMRequestProcessing:
                 fastest_response_batch_completion=fastest_response_batch_completion,
                 request_data=self.data,
                 hidden_params=hidden_params,
+                litellm_logging_obj=logging_obj,
                 **additional_headers,
             )
         )
@@ -638,11 +796,15 @@ class ProxyBaseLLMRequestProcessing:
         verbose_proxy_logger.exception(
             f"litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - {str(e)}"
         )
-        await proxy_logging_obj.post_call_failure_hook(
+        # Allow callbacks to transform the error response
+        transformed_exception = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
             request_data=self.data,
         )
+        # Use transformed exception if callback returned one, otherwise use original
+        if transformed_exception is not None:
+            e = transformed_exception
         litellm_debug_info = getattr(e, "litellm_debug_info", "")
         verbose_proxy_logger.debug(
             "\033[1;31mAn error occurred: %s %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
@@ -656,16 +818,25 @@ class ProxyBaseLLMRequestProcessing:
         _litellm_logging_obj: Optional[LiteLLMLoggingObj] = self.data.get(
             "litellm_logging_obj", None
         )
+
+        # Attempt to get model_id from logging object
+        #
+        # Note: We check the direct model_info path first (not nested in metadata) because that's where the router sets it.
+        # The nested metadata path is only a fallback for cases where model_info wasn't set at the top level.
+        model_id = self.maybe_get_model_id(_litellm_logging_obj)
+
         custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=user_api_key_dict,
             call_id=(
                 _litellm_logging_obj.litellm_call_id if _litellm_logging_obj else None
             ),
+            model_id=model_id,
             version=version,
             response_cost=0,
             model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
             request_data=self.data,
             timeout=timeout,
+            litellm_logging_obj=_litellm_logging_obj,
         )
         headers = getattr(e, "headers", {}) or {}
         headers.update(custom_headers)
@@ -676,26 +847,68 @@ class ProxyBaseLLMRequestProcessing:
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                provider_specific_fields=getattr(e, "provider_specific_fields", None),
                 headers=headers,
             )
+        elif isinstance(e, httpx.HTTPStatusError):
+            # Handle httpx.HTTPStatusError - extract actual error from response
+            # This matches the original behavior before the refactor in commit 511d435f6f
+            error_body = await e.response.aread()
+            error_text = error_body.decode("utf-8")
+
+            raise HTTPException(
+                status_code=e.response.status_code,
+                detail={"error": error_text},
+            )
         error_msg = f"{str(e)}"
+        # Check for AttributeError in various places:
+        # 1. Direct AttributeError (already handled above)
+        # 2. In underlying exception (__cause__, __context__, original_exception)
+        has_attribute_error = (
+            (
+                isinstance(e, Exception)
+                and isinstance(getattr(e, "__cause__", None), AttributeError)
+            )
+            or (
+                isinstance(e, Exception)
+                and isinstance(getattr(e, "__context__", None), AttributeError)
+            )
+            or (
+                isinstance(e, Exception)
+                and isinstance(getattr(e, "original_exception", None), AttributeError)
+            )
+        )
+
+        if has_attribute_error:
+            raise ProxyException(
+                message=f"Invalid request format: {error_msg}",
+                type="invalid_request_error",
+                param=None,
+                code=status.HTTP_400_BAD_REQUEST,
+                headers=headers,
+            )
         raise ProxyException(
             message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
             openai_code=getattr(e, "code", None),
             code=getattr(e, "status_code", 500),
+            provider_specific_fields=getattr(e, "provider_specific_fields", None),
             headers=headers,
         )
 
     @staticmethod
     def _get_pre_call_type(
-        route_type: Literal["acompletion", "aresponses"],
-    ) -> Literal["completion", "responses"]:
+        route_type: Literal["acompletion", "aembedding", "aresponses", "allm_passthrough_route"],
+    ) -> Literal["completion", "embeddings", "responses", "allm_passthrough_route"]:
         if route_type == "acompletion":
             return "completion"
+        elif route_type == "aembedding":
+            return "embeddings"
         elif route_type == "aresponses":
             return "responses"
+        elif route_type == "allm_passthrough_route":
+            return "allm_passthrough_route"
 
     #########################################################
     # Proxy Level Streaming Data Generator
@@ -729,12 +942,13 @@ class ProxyBaseLLMRequestProcessing:
         """
         Anthropic /messages and Google /generateContent streaming data generator require SSE events
         """
-        from litellm.types.utils import ModelResponse, ModelResponseStream
 
         verbose_proxy_logger.debug("inside generator")
         try:
             str_so_far = ""
-            async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
+            async for (
+                chunk
+            ) in proxy_logging_obj.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=user_api_key_dict,
                 response=response,
                 request_data=request_data,
@@ -754,6 +968,14 @@ class ProxyBaseLLMRequestProcessing:
                     response_str = litellm.get_response_string(response_obj=chunk)
                     str_so_far += response_str
 
+                # Inject cost into Anthropic-style SSE usage for /v1/messages for any provider
+                model_name = request_data.get("model", "")
+                chunk = (
+                    ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
+                        chunk, model_name
+                    )
+                )
+
                 # Format chunk using helper function
                 yield ProxyBaseLLMRequestProcessing.return_sse_chunk(chunk)
         except Exception as e:
@@ -762,11 +984,15 @@ class ProxyBaseLLMRequestProcessing:
                     str(e)
                 )
             )
-            await proxy_logging_obj.post_call_failure_hook(
+            # Allow callbacks to transform the error response
+            transformed_exception = await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=e,
                 request_data=request_data,
             )
+            # Use transformed exception if callback returned one, otherwise use original
+            if transformed_exception is not None:
+                e = transformed_exception
             verbose_proxy_logger.debug(
                 f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`"
             )
@@ -785,3 +1011,213 @@ class ProxyBaseLLMRequestProcessing:
             )
             error_returned = json.dumps({"error": proxy_exception.to_dict()})
             yield f"{STREAM_SSE_DATA_PREFIX}{error_returned}\n\n"
+
+    @staticmethod
+    def _process_chunk_with_cost_injection(chunk: Any, model_name: str) -> Any:
+        """
+        Process a streaming chunk and inject cost information if enabled.
+
+        Args:
+            chunk: The streaming chunk (dict, str, bytes, or bytearray)
+            model_name: Model name for cost calculation
+
+        Returns:
+            The processed chunk with cost information injected if applicable
+        """
+        if not getattr(litellm, "include_cost_in_streaming_usage", False):
+            return chunk
+
+        try:
+            if isinstance(chunk, dict):
+                maybe_modified = (
+                    ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(
+                        chunk, model_name
+                    )
+                )
+                if maybe_modified is not None:
+                    return maybe_modified
+            elif isinstance(chunk, (bytes, bytearray)):
+                # Decode to str, inject, and rebuild as bytes
+                try:
+                    s = chunk.decode("utf-8", errors="ignore")
+                    maybe_mod = (
+                        ProxyBaseLLMRequestProcessing._inject_cost_into_sse_frame_str(
+                            s, model_name
+                        )
+                    )
+                    if maybe_mod is not None:
+                        return (
+                            maybe_mod + ("" if maybe_mod.endswith("\n\n") else "\n\n")
+                        ).encode("utf-8")
+                except Exception:
+                    pass
+            elif isinstance(chunk, str):
+                # Try to parse SSE frame and inject cost into the data line
+                maybe_mod = (
+                    ProxyBaseLLMRequestProcessing._inject_cost_into_sse_frame_str(
+                        chunk, model_name
+                    )
+                )
+                if maybe_mod is not None:
+                    # Ensure trailing frame separator
+                    return (
+                        maybe_mod
+                        if maybe_mod.endswith("\n\n")
+                        else (maybe_mod + "\n\n")
+                    )
+        except Exception:
+            # Never break streaming on optional cost injection
+            pass
+
+        return chunk
+
+    @staticmethod
+    def _inject_cost_into_sse_frame_str(
+        frame_str: str, model_name: str
+    ) -> Optional[str]:
+        """
+        Inject cost information into an SSE frame string by modifying the JSON in the 'data:' line.
+
+        Args:
+            frame_str: SSE frame string that may contain multiple lines
+            model_name: Model name for cost calculation
+
+        Returns:
+            Modified SSE frame string with cost injected, or None if no modification needed
+        """
+        try:
+            # Split preserving lines
+            lines = frame_str.split("\n")
+            for idx, ln in enumerate(lines):
+                stripped_ln = ln.strip()
+                if stripped_ln.startswith("data:"):
+                    json_part = stripped_ln.split("data:", 1)[1].strip()
+                    if json_part and json_part != "[DONE]":
+                        obj = json.loads(json_part)
+                        maybe_modified = (
+                            ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(
+                                obj, model_name
+                            )
+                        )
+                        if maybe_modified is not None:
+                            # Replace just this line with updated JSON using safe_dumps
+                            lines[idx] = f"data: {safe_dumps(maybe_modified)}"
+                            return "\n".join(lines)
+            return None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _inject_cost_into_usage_dict(obj: dict, model_name: str) -> Optional[dict]:
+        """
+        Inject cost information into a usage dictionary for message_delta events.
+
+        Args:
+            obj: Dictionary containing the SSE event data
+            model_name: Model name for cost calculation
+
+        Returns:
+            Modified dictionary with cost injected, or None if no modification needed
+        """
+        if obj.get("type") == "message_delta" and isinstance(obj.get("usage"), dict):
+            _usage = obj["usage"]
+            prompt_tokens = int(_usage.get("input_tokens", 0) or 0)
+            completion_tokens = int(_usage.get("output_tokens", 0) or 0)
+            total_tokens = int(
+                _usage.get("total_tokens", prompt_tokens + completion_tokens)
+                or (prompt_tokens + completion_tokens)
+            )
+
+            # Extract additional usage fields
+            cache_creation_input_tokens = _usage.get("cache_creation_input_tokens")
+            cache_read_input_tokens = _usage.get("cache_read_input_tokens")
+            web_search_requests = _usage.get("web_search_requests")
+            completion_tokens_details = _usage.get("completion_tokens_details")
+            prompt_tokens_details = _usage.get("prompt_tokens_details")
+
+            usage_kwargs: dict[str, Any] = {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+            }
+
+            # Add optional named parameters
+            if completion_tokens_details is not None:
+                usage_kwargs["completion_tokens_details"] = completion_tokens_details
+            if prompt_tokens_details is not None:
+                usage_kwargs["prompt_tokens_details"] = prompt_tokens_details
+
+            # Handle web_search_requests by wrapping in ServerToolUse
+            if web_search_requests is not None:
+                usage_kwargs["server_tool_use"] = ServerToolUse(
+                    web_search_requests=web_search_requests
+                )
+
+            # Add cache-related fields to **params (handled by Usage.__init__)
+            if cache_creation_input_tokens is not None:
+                usage_kwargs["cache_creation_input_tokens"] = (
+                    cache_creation_input_tokens
+                )
+            if cache_read_input_tokens is not None:
+                usage_kwargs["cache_read_input_tokens"] = cache_read_input_tokens
+
+            _mr = ModelResponse(usage=Usage(**usage_kwargs))
+
+            try:
+                cost_val = litellm.completion_cost(
+                    completion_response=_mr,
+                    model=model_name,
+                )
+            except Exception:
+                cost_val = None
+
+            if cost_val is not None:
+                obj.setdefault("usage", {})["cost"] = cost_val
+                return obj
+        return None
+
+    def maybe_get_model_id(
+        self, _logging_obj: Optional[LiteLLMLoggingObj]
+    ) -> Optional[str]:
+        """
+        Get model_id from logging object or request metadata.
+
+        The router sets model_info.id when selecting a deployment. This tries multiple locations
+        where the ID might be stored depending on the request lifecycle stage.
+        """
+        model_id = None
+        if _logging_obj:
+            # 1. Try getting from litellm_params (updated during call)
+            if hasattr(_logging_obj, "litellm_params") and _logging_obj.litellm_params:
+                # First check direct model_info path (set by router.py with selected deployment)
+                model_info = _logging_obj.litellm_params.get("model_info") or {}
+                model_id = model_info.get("id", None)
+
+                # Fallback to nested metadata path
+                if not model_id:
+                    metadata = _logging_obj.litellm_params.get("metadata") or {}
+                    model_info = metadata.get("model_info") or {}
+                    model_id = model_info.get("id", None)
+
+            # 2. Fallback to kwargs (initial)
+            if not model_id:
+                _kwargs = getattr(_logging_obj, "kwargs", None)
+                if _kwargs:
+                    litellm_params = _kwargs.get("litellm_params", {})
+                    # First check direct model_info path
+                    model_info = litellm_params.get("model_info") or {}
+                    model_id = model_info.get("id", None)
+
+                    # Fallback to nested metadata path
+                    if not model_id:
+                        metadata = litellm_params.get("metadata") or {}
+                        model_info = metadata.get("model_info") or {}
+                        model_id = model_info.get("id", None)
+
+        # 3. Final fallback to self.data["litellm_metadata"] (for routes like /v1/responses that populate data before error)
+        if not model_id:
+            litellm_metadata = self.data.get("litellm_metadata", {}) or {}
+            model_info = litellm_metadata.get("model_info", {}) or {}
+            model_id = model_info.get("id", None)
+
+        return model_id

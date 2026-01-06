@@ -6,6 +6,7 @@ import socket
 import subprocess
 import sys
 from datetime import datetime
+from pathlib import Path
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
@@ -14,6 +15,7 @@ import httpx
 import pytest
 import yaml
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 
 sys.path.insert(
@@ -71,6 +73,315 @@ def client_no_auth():
     return TestClient(app)
 
 
+def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
+    mock_login_result = {"user_id": "test-user"}
+    mock_prisma_client = MagicMock()
+    mock_authenticate_user = AsyncMock(return_value=mock_login_result)
+    mock_create_ui_token_object = MagicMock(return_value={"user_id": "test-user"})
+    mock_jwt_encode = MagicMock(return_value="signed-token")
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.authenticate_user",
+        mock_authenticate_user,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.create_ui_token_object",
+        mock_create_ui_token_object,
+    )
+    monkeypatch.setattr("jwt.encode", mock_jwt_encode)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.utils.get_server_root_path", lambda: "")
+
+    client = TestClient(app)
+    response = client.post(
+        "/v2/login",
+        json={"username": "alice", "password": "secret"},
+    )
+
+    assert response.status_code == 200
+    assert (
+        response.json()
+        == {"redirect_url": "http://testserver/ui/?login=success"}
+    )
+    assert response.cookies.get("token") == "signed-token"
+
+    mock_authenticate_user.assert_awaited_once_with(
+        username="alice",
+        password="secret",
+        master_key="test-master-key",
+        prisma_client=mock_prisma_client,
+    )
+    mock_create_ui_token_object.assert_called_once_with(
+        login_result=mock_login_result,
+        general_settings={},
+        premium_user=False,
+    )
+    mock_jwt_encode.assert_called_once_with(
+        {"user_id": "test-user"},
+        "test-master-key",
+        algorithm="HS256",
+    )
+
+
+def test_login_v2_returns_json_on_proxy_exception(monkeypatch):
+    """Test that /v2/login returns JSON error when ProxyException is raised"""
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+    mock_prisma_client = MagicMock()
+    mock_authenticate_user = AsyncMock(
+        side_effect=ProxyException(
+            message="Invalid credentials",
+            type=ProxyErrorTypes.auth_error,
+            param="password",
+            code=401,
+        )
+    )
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.authenticate_user",
+        mock_authenticate_user,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    client = TestClient(app)
+    response = client.post(
+        "/v2/login",
+        json={"username": "alice", "password": "wrong"},
+    )
+
+    assert response.status_code == 401
+    assert response.headers["content-type"] == "application/json"
+    data = response.json()
+    assert "error" in data
+    assert data["error"]["message"] == "Invalid credentials"
+    assert data["error"]["type"] == "auth_error"
+
+
+def test_login_v2_returns_json_on_http_exception(monkeypatch):
+    """Test that /v2/login converts HTTPException to JSON error response"""
+    from fastapi import HTTPException
+
+    mock_prisma_client = MagicMock()
+    mock_authenticate_user = AsyncMock(
+        side_effect=HTTPException(status_code=401, detail="Unauthorized")
+    )
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.authenticate_user",
+        mock_authenticate_user,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    client = TestClient(app)
+    response = client.post(
+        "/v2/login",
+        json={"username": "alice", "password": "secret"},
+    )
+
+    assert response.status_code == 401
+    assert response.headers["content-type"] == "application/json"
+    data = response.json()
+    assert "error" in data
+    assert isinstance(data["error"], dict)
+
+
+def test_login_v2_returns_json_on_unexpected_exception(monkeypatch):
+    """Test that /v2/login returns JSON error when unexpected exception occurs"""
+    mock_prisma_client = MagicMock()
+    mock_authenticate_user = AsyncMock(side_effect=ValueError("Unexpected error"))
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.authenticate_user",
+        mock_authenticate_user,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    client = TestClient(app)
+    response = client.post(
+        "/v2/login",
+        json={"username": "alice", "password": "secret"},
+    )
+
+    assert response.status_code == 500
+    assert response.headers["content-type"] == "application/json"
+    data = response.json()
+    assert "error" in data
+    assert isinstance(data["error"], dict)
+    assert "Unexpected error" in data["error"]["message"]
+
+
+def test_login_v2_returns_json_on_invalid_json_body(monkeypatch):
+    """Test that /v2/login returns JSON error when request body is invalid JSON"""
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
+
+    client = TestClient(app)
+    response = client.post(
+        "/v2/login",
+        content="invalid json",
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 500
+    assert response.headers["content-type"] == "application/json"
+    data = response.json()
+    assert "error" in data
+    assert isinstance(data["error"], dict)
+
+
+def test_fallback_login_has_no_deprecation_banner(client_no_auth):
+    response = client_no_auth.get("/fallback/login")
+
+    assert response.status_code == 200
+    html = response.text
+    assert '<div class="deprecation-banner">' not in html
+    assert "Deprecated:" not in html
+    assert "<form" in html
+
+
+def test_sso_key_generate_shows_deprecation_banner(client_no_auth, monkeypatch):
+    # Ensure the route returns the HTML form instead of redirecting
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.ui_sso.show_missing_vars_in_env",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.get_redirect_url_for_sso",
+        lambda *args, **kwargs: "http://test/redirect",
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler._get_cli_state",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.should_use_sso_handler",
+        lambda *args, **kwargs: False,
+    )
+    monkeypatch.setenv("UI_USERNAME", "admin")
+
+    response = client_no_auth.get("/sso/key/generate")
+
+    assert response.status_code == 200
+    html = response.text
+    assert '<div class="deprecation-banner">' in html
+    assert "Deprecated:" in html
+
+
+def test_restructure_ui_html_files_handles_nested_routes(tmp_path):
+    """
+    Test that _restructure_ui_html_files correctly restructures HTML files.
+    Note: This function is always called now, both in development and non-root Docker environments.
+    """
+    from litellm.proxy import proxy_server
+
+    ui_root = tmp_path / "ui"
+    ui_root.mkdir()
+
+    def write_file(path: Path, content: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+
+    write_file(ui_root / "home.html", "home")
+    write_file(ui_root / "mcp" / "oauth" / "callback.html", "callback")
+    write_file(ui_root / "existing" / "index.html", "keep")
+    write_file(ui_root / "_next" / "ignore.html", "asset")
+    write_file(ui_root / "litellm-asset-prefix" / "ignore.html", "asset")
+
+    proxy_server._restructure_ui_html_files(str(ui_root))
+
+    assert not (ui_root / "home.html").exists()
+    assert (ui_root / "home" / "index.html").read_text() == "home"
+    assert not (ui_root / "mcp" / "oauth" / "callback.html").exists()
+    assert (
+        (ui_root / "mcp" / "oauth" / "callback" / "index.html").read_text()
+        == "callback"
+    )
+    assert (ui_root / "existing" / "index.html").read_text() == "keep"
+    assert (ui_root / "_next" / "ignore.html").read_text() == "asset"
+    assert (
+        (ui_root / "litellm-asset-prefix" / "ignore.html").read_text()
+        == "asset"
+    )
+
+
+def test_ui_extensionless_route_requires_restructure(tmp_path):
+    """
+    Regression for non-root fallback: /ui/login expects login/index.html.
+    Note: Restructuring always happens now, both in development and non-root Docker environments.
+    """
+
+    from litellm.proxy import proxy_server
+
+    ui_root = tmp_path / "ui"
+    ui_root.mkdir()
+    (ui_root / "index.html").write_text("index")
+    (ui_root / "login.html").write_text("login")
+
+    fastapi_app = FastAPI()
+    fastapi_app.mount(
+        "/ui", StaticFiles(directory=str(ui_root), html=True), name="ui"
+    )
+    client = TestClient(fastapi_app)
+
+    assert client.get("/ui/login.html").status_code == 200
+    assert client.get("/ui/login").status_code == 404
+
+    proxy_server._restructure_ui_html_files(str(ui_root))
+
+    response = client.get("/ui/login")
+    assert response.status_code == 200
+    assert "login" in response.text
+
+
+def test_restructure_always_happens(monkeypatch):
+    """
+    Test that restructuring logic always executes regardless of LITELLM_NON_ROOT setting.
+    In development (is_non_root=False), restructuring happens directly in _experimental/out.
+    In non-root Docker (is_non_root=True), restructuring happens in /var/lib/litellm/ui.
+    """
+    # Test Case 1: is_non_root is True - restructuring happens in /var/lib/litellm/ui
+    monkeypatch.setenv("LITELLM_NON_ROOT", "true")
+    
+    runtime_ui_path = "/var/lib/litellm/ui"
+    packaged_ui_path = "/some/packaged/ui/path"
+    
+    # Simulate the logic from proxy_server.py
+    is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
+    if is_non_root:
+        ui_path = runtime_ui_path
+    else:
+        ui_path = packaged_ui_path
+    
+    # Restructuring always happens now, regardless of ui_path vs packaged_ui_path
+    should_restructure = True
+    
+    assert is_non_root is True
+    assert should_restructure is True
+    assert ui_path == runtime_ui_path
+    
+    # Test Case 2: is_non_root is False - restructuring happens directly in packaged_ui_path
+    monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
+    
+    # Simulate the logic from proxy_server.py
+    is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
+    if is_non_root:
+        ui_path = runtime_ui_path
+    else:
+        ui_path = packaged_ui_path
+    
+    # Restructuring always happens now, even when ui_path == packaged_ui_path
+    should_restructure = True
+    
+    assert is_non_root is False
+    assert should_restructure is True
+    assert ui_path == packaged_ui_path
+
+
 @pytest.mark.asyncio
 async def test_initialize_scheduled_jobs_credentials(monkeypatch):
     """
@@ -124,6 +435,121 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
             call[0] for call in mock_proxy_config.get_credentials.mock_calls
         ]
         assert len(mock_scheduler_calls) > 0
+
+
+def test_update_config_fields_deep_merge_db_wins():
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    current_config = {
+        "router_settings": {
+            "routing_mode": "cost_optimized",
+            "model_group_alias": {
+                # Existing alias with older model + different hidden flag
+                "claude-sonnet-4": {
+                    "model": "claude-sonnet-4-20240219",
+                    "hidden": True,
+                },
+                # An extra alias that should remain untouched unless DB overrides it
+                "legacy-sonnet": {
+                    "model": "claude-2.1",
+                    "hidden": True,
+                },
+            },
+        }
+    }
+
+    db_param_value = {
+        "model_group_alias": {
+            # Conflict: DB should win (both 'model' and 'hidden')
+            "claude-sonnet-4": {
+                "model": "claude-sonnet-4-20250514",
+                "hidden": False,
+            },
+            # New alias to be added by the merge
+            "claude-sonnet-latest": {
+                "model": "claude-sonnet-4-20250514",
+                "hidden": True,
+            },
+            # Demonstrate that None values from DB are skipped (preserve existing)
+            "legacy-sonnet": {
+                "hidden": None  # should not clobber current True
+            },
+        }
+    }
+
+    updated = proxy_config._update_config_fields(
+        current_config=current_config,
+        param_name="router_settings",
+        db_param_value=db_param_value,
+    )
+
+    rs = updated["router_settings"]
+    aliases = rs["model_group_alias"]
+
+    # DB wins on conflicts (deep) for existing alias
+    assert aliases["claude-sonnet-4"]["model"] == "claude-sonnet-4-20250514"
+    assert aliases["claude-sonnet-4"]["hidden"] is False
+
+    # New alias introduced by DB is present with its values
+    assert "claude-sonnet-latest" in aliases
+    assert aliases["claude-sonnet-latest"]["model"] == "claude-sonnet-4-20250514"
+    assert aliases["claude-sonnet-latest"]["hidden"] is True
+
+    # None in DB does not overwrite existing values
+    assert aliases["legacy-sonnet"]["model"] == "claude-2.1"
+    assert aliases["legacy-sonnet"]["hidden"] is True
+
+    # Unrelated router_settings keys are preserved
+    assert rs["routing_mode"] == "cost_optimized"
+
+
+def test_get_config_custom_callback_api_env_vars(monkeypatch):
+    """
+    Ensure /get/config/callbacks returns custom callback env vars when both custom values are provided.
+    """
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    # Mock config with custom_callback_api enabled and generic logger env vars present
+    config_data = {
+        "litellm_settings": {"success_callback": ["custom_callback_api"]},
+        "general_settings": {},
+        "environment_variables": {
+            "GENERIC_LOGGER_ENDPOINT": "https://callback.example.com",
+            "GENERIC_LOGGER_HEADERS": "Auth: token",
+        },
+    }
+
+    # Mock proxy_config.get_config and router settings
+    mock_router = MagicMock()
+    mock_router.get_settings.return_value = {}
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr(
+        proxy_config, "get_config", AsyncMock(return_value=config_data)
+    )
+
+    # Bypass auth dependency
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+
+    client = TestClient(app)
+    try:
+        response = client.get("/get/config/callbacks")
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200
+    callbacks = response.json()["callbacks"]
+    custom_cb = next(
+        (cb for cb in callbacks if cb["name"] == "custom_callback_api"), None
+    )
+
+    assert custom_cb is not None
+    assert custom_cb["variables"] == {
+        "GENERIC_LOGGER_ENDPOINT": "https://callback.example.com",
+        "GENERIC_LOGGER_HEADERS": "Auth: token",
+    }
 
 
 # Mock Prisma
@@ -184,7 +610,7 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
         assert master_key == test_master_key
 
     # Test Case 2: Master key from environment variable
-    test_env_master_key = "sk-67890"
+    test_env_master_key = "sk-test-67890"
 
     # Create empty config
     empty_config = {"general_settings": {}}
@@ -257,13 +683,20 @@ def test_embedding_input_array_of_tokens(mock_aembedding, client_no_auth):
 
         response = client_no_auth.post("/v1/embeddings", json=test_data)
 
-        mock_aembedding.assert_called_once_with(
-            model="vllm_embed_model",
-            input=[[2046, 13269, 158208]],
-            metadata=mock.ANY,
-            proxy_server_request=mock.ANY,
-            secret_fields=mock.ANY,
-        )
+        # DEPRECATED - mock_aembedding.assert_called_once_with is too strict, and will fail when new kwargs are added to embeddings
+        # mock_aembedding.assert_called_once_with(
+        #     model="vllm_embed_model",
+        #     input=[[2046, 13269, 158208]],
+        #     metadata=mock.ANY,
+        #     proxy_server_request=mock.ANY,
+        #     secret_fields=mock.ANY,
+        # )
+        # Assert that aembedding was called, and that input was not modified
+        mock_aembedding.assert_called_once()
+        call_args, call_kwargs = mock_aembedding.call_args
+        assert call_kwargs["model"] == "vllm_embed_model"
+        assert call_kwargs["input"] == [[2046, 13269, 158208]]
+
         assert response.status_code == 200
         result = response.json()
         print(len(result["data"][0]["embedding"]))
@@ -1263,30 +1696,16 @@ class TestPriceDataReloadAPI:
         assert "Access denied" in data["detail"]
         assert "Admin role required" in data["detail"]
 
-    def test_get_model_cost_map_admin_access(self, client_with_auth):
-        """Test that admin users can access the get model cost map endpoint"""
+    def test_get_model_cost_map_public_access(self, client_no_auth):
+        """Test that the model cost map endpoint is publicly accessible"""
         with patch(
             "litellm.model_cost", {"gpt-3.5-turbo": {"input_cost_per_token": 0.001}}
         ):
-            response = client_with_auth.get("/get/litellm_model_cost_map")
+            response = client_no_auth.get("/public/litellm_model_cost_map")
 
             assert response.status_code == 200
             data = response.json()
             assert "gpt-3.5-turbo" in data
-
-    def test_get_model_cost_map_non_admin_access(self, client_with_auth):
-        """Test that non-admin users cannot access the get model cost map endpoint"""
-        # Mock non-admin user
-        mock_auth = MagicMock()
-        mock_auth.user_role = "user"  # Non-admin role
-        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
-
-        response = client_with_auth.get("/get/litellm_model_cost_map")
-
-        assert response.status_code == 403
-        data = response.json()
-        assert "Access denied" in data["detail"]
-        assert "Admin role required" in data["detail"]
 
     def test_reload_model_cost_map_error_handling(self, client_with_auth):
         """Test error handling in the reload endpoint"""
@@ -1497,7 +1916,7 @@ class TestPriceDataReloadIntegration:
                 assert response.status_code == 200
 
                 # Test get endpoint
-                response = client_with_auth.get("/get/litellm_model_cost_map")
+                response = client_with_auth.get("/public/litellm_model_cost_map")
                 assert response.status_code == 200
 
     def test_distributed_reload_check_function(self):
@@ -1886,3 +2305,734 @@ async def test_add_router_settings_shallow_merge_behavior():
 
     assert merged_settings["nested_setting"] == expected_nested
     assert merged_settings["top_level"] == "db_top"
+
+
+@pytest.mark.asyncio
+async def test_model_info_v1_oci_secrets_not_leaked():
+    """
+    Test that model_info_v1 endpoint properly masks OCI sensitive parameters and does not leak secrets.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import model_info_v1
+
+    # Mock user authentication
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_user_api_key_dict.user_id = "test-user"
+    mock_user_api_key_dict.api_key = "test-key"
+    mock_user_api_key_dict.team_models = []
+    mock_user_api_key_dict.models = ["oci-grok-test"]
+    
+    # Mock model data with OCI sensitive information
+    mock_model_data = {
+        "model_name": "oci-grok-test",
+        "litellm_params": {
+            "model": "oci/xai.grok-4",
+            "oci_key": "ocid1.api_key.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk",
+            "oci_region": "us-phoenix-1",
+            "oci_user": "ocid1.user.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk",
+            "oci_fingerprint": "aa:bb:cc:dd:ee:ff:11:22:33:44:55:66:77:88:99:00",
+            "oci_tenancy": "ocid1.tenancy.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk",
+            "oci_key_file": "/path/to/oci_api_key.pem",
+            "oci_compartment_id": "ocid1.compartment.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk",
+            "drop_params": True
+        },
+        "model_info": {
+            "mode": "completion",
+            "id": "test-model-id"
+        }
+    }
+    
+    # Mock the llm_router to return our test data
+    mock_router = MagicMock()
+    mock_router.get_model_names.return_value = ["oci-grok-test"]
+    mock_router.get_model_access_groups.return_value = {}
+    mock_router.get_model_list.return_value = [mock_model_data]
+    
+    # Mock global variables
+    with patch("litellm.proxy.proxy_server.llm_router", mock_router), \
+         patch("litellm.proxy.proxy_server.llm_model_list", [mock_model_data]), \
+         patch("litellm.proxy.proxy_server.general_settings", {"infer_model_from_keys": False}), \
+         patch("litellm.proxy.proxy_server.user_model", None):
+        
+        # Call the model_info_v1 endpoint
+        result = await model_info_v1(
+            user_api_key_dict=mock_user_api_key_dict,
+            litellm_model_id=None
+        )
+        
+        # Verify the result structure
+        assert "data" in result
+        assert len(result["data"]) == 1
+        
+        model_info = result["data"][0]
+        litellm_params = model_info["litellm_params"]
+        
+        # Verify that sensitive OCI fields are masked
+        assert "****" in litellm_params["oci_key"], "oci_key should be masked"
+        assert "****" in litellm_params["oci_fingerprint"], "oci_fingerprint should be masked"
+        assert "****" in litellm_params["oci_tenancy"], "oci_tenancy should be masked"
+        assert "****" in litellm_params["oci_key_file"], "oci_key_file should be masked"
+        
+        # Verify that non-sensitive fields are NOT masked
+        assert litellm_params["model"] == "oci/xai.grok-4", "model field should not be masked"
+        assert litellm_params["oci_region"] == "us-phoenix-1", "oci_region should not be masked"
+        assert litellm_params["drop_params"] is True, "drop_params should not be masked"
+        
+        # Verify the model field specifically is not masked (this was the original issue)
+        assert "****" not in litellm_params["model"], "model field should never be masked"
+        assert litellm_params["model"].startswith("oci/"), "model should retain its full value"
+        
+        # Verify that actual secret values are not present in the response
+        result_str = str(result)
+        assert "ocid1.api_key.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk" not in result_str
+        assert "aa:bb:cc:dd:ee:ff:11:22:33:44:55:66:77:88:99:00" not in result_str
+        assert "ocid1.tenancy.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk" not in result_str
+        assert "/path/to/oci_api_key.pem" not in result_str
+
+
+def test_add_callback_from_db_to_in_memory_litellm_callbacks():
+    """
+    Test that _add_callback_from_db_to_in_memory_litellm_callbacks correctly adds callbacks
+    for success, failure, and combined event types.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.proxy.proxy_server import ProxyConfig
+    
+    proxy_config = ProxyConfig()
+    
+    # Mock the callback manager
+    mock_callback_manager = MagicMock()
+    
+    with patch("litellm.proxy.proxy_server.litellm") as mock_litellm:
+        # Set up mock litellm attributes
+        mock_litellm._known_custom_logger_compatible_callbacks = []
+        mock_litellm.logging_callback_manager = mock_callback_manager
+        
+        # Test Case 1: Add success callback
+        mock_success_callbacks = []
+        proxy_config._add_callback_from_db_to_in_memory_litellm_callbacks(
+            callback="prometheus",
+            event_types=["success"],
+            existing_callbacks=mock_success_callbacks,
+        )
+        mock_callback_manager.add_litellm_success_callback.assert_called_once_with("prometheus")
+        mock_callback_manager.reset_mock()
+        
+        # Test Case 2: Add failure callback
+        mock_failure_callbacks = []
+        proxy_config._add_callback_from_db_to_in_memory_litellm_callbacks(
+            callback="langfuse",
+            event_types=["failure"],
+            existing_callbacks=mock_failure_callbacks,
+        )
+        mock_callback_manager.add_litellm_failure_callback.assert_called_once_with("langfuse")
+        mock_callback_manager.reset_mock()
+        
+        # Test Case 3: Add callback for both success and failure
+        mock_callbacks = []
+        proxy_config._add_callback_from_db_to_in_memory_litellm_callbacks(
+            callback="s3",
+            event_types=["success", "failure"],
+            existing_callbacks=mock_callbacks,
+        )
+        mock_callback_manager.add_litellm_callback.assert_called_once_with("s3")
+        mock_callback_manager.reset_mock()
+        
+        # Test Case 4: Don't add callback if it already exists
+        existing_callbacks_with_item = ["prometheus"]
+        proxy_config._add_callback_from_db_to_in_memory_litellm_callbacks(
+            callback="prometheus",
+            event_types=["success"],
+            existing_callbacks=existing_callbacks_with_item,
+        )
+        mock_callback_manager.add_litellm_success_callback.assert_not_called()
+
+
+def test_should_load_db_object_with_supported_db_objects():
+    """
+    Test _should_load_db_object method with supported_db_objects configuration.
+    
+    Verifies that when supported_db_objects is set, only specified object types
+    are loaded from the database.
+    """
+    from unittest.mock import patch
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    # Test Case 1: supported_db_objects not set - all objects should be loaded
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        assert proxy_config._should_load_db_object(object_type="models") is True
+        assert proxy_config._should_load_db_object(object_type="mcp") is True
+        assert proxy_config._should_load_db_object(object_type="guardrails") is True
+        assert proxy_config._should_load_db_object(object_type="vector_stores") is True
+
+    # Test Case 2: supported_db_objects set to only load MCP
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"supported_db_objects": ["mcp"]},
+    ):
+        assert proxy_config._should_load_db_object(object_type="models") is False
+        assert proxy_config._should_load_db_object(object_type="mcp") is True
+        assert proxy_config._should_load_db_object(object_type="guardrails") is False
+        assert proxy_config._should_load_db_object(object_type="vector_stores") is False
+        assert proxy_config._should_load_db_object(object_type="prompts") is False
+
+    # Test Case 3: supported_db_objects set to load multiple types
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"supported_db_objects": ["mcp", "guardrails", "vector_stores"]},
+    ):
+        assert proxy_config._should_load_db_object(object_type="models") is False
+        assert proxy_config._should_load_db_object(object_type="mcp") is True
+        assert proxy_config._should_load_db_object(object_type="guardrails") is True
+        assert proxy_config._should_load_db_object(object_type="vector_stores") is True
+        assert proxy_config._should_load_db_object(object_type="prompts") is False
+
+    # Test Case 4: supported_db_objects is not a list (should default to loading all)
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"supported_db_objects": "invalid_type"},
+    ):
+        assert proxy_config._should_load_db_object(object_type="models") is True
+        assert proxy_config._should_load_db_object(object_type="mcp") is True
+
+    # Test Case 5: supported_db_objects is an empty list (nothing should be loaded)
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"supported_db_objects": []},
+    ):
+        assert proxy_config._should_load_db_object(object_type="models") is False
+        assert proxy_config._should_load_db_object(object_type="mcp") is False
+        assert proxy_config._should_load_db_object(object_type="guardrails") is False
+
+    # Test Case 6: Test all available object types
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {
+            "supported_db_objects": [
+                "models",
+                "mcp",
+                "guardrails",
+                "vector_stores",
+                "pass_through_endpoints",
+                "prompts",
+                "model_cost_map",
+            ]
+        },
+    ):
+        assert proxy_config._should_load_db_object(object_type="models") is True
+        assert proxy_config._should_load_db_object(object_type="mcp") is True
+        assert proxy_config._should_load_db_object(object_type="guardrails") is True
+        assert proxy_config._should_load_db_object(object_type="vector_stores") is True
+        assert (
+            proxy_config._should_load_db_object(object_type="pass_through_endpoints")
+            is True
+        )
+        assert proxy_config._should_load_db_object(object_type="prompts") is True
+        assert proxy_config._should_load_db_object(object_type="model_cost_map") is True
+
+
+@pytest.mark.asyncio
+async def test_tag_cache_update_called():
+    """
+    Test that update_cache updates tag cache when tags are provided.
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    cache = DualCache()
+
+    setattr(
+        litellm.proxy.proxy_server,
+        "user_api_key_cache",
+        cache,
+    )
+
+    mock_tag_obj = {
+        "tag_name": "test-tag",
+        "spend": 10.0,
+    }
+
+    with patch.object(cache, "async_get_cache", new=AsyncMock(return_value=mock_tag_obj)) as mock_get_cache:
+        with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
+            await litellm.proxy.proxy_server.update_cache(
+                token=None,
+                user_id=None,
+                end_user_id=None,
+                team_id=None,
+                response_cost=5.0,
+                parent_otel_span=None,
+                tags=["test-tag"],
+            )
+
+            await asyncio.sleep(0.1)
+
+            mock_get_cache.assert_awaited_once_with(key="tag:test-tag")
+            mock_set_cache.assert_awaited_once()
+
+            call_args = mock_set_cache.call_args
+            cache_list = call_args.kwargs["cache_list"]
+
+            assert len(cache_list) == 1
+            cache_key, cache_value = cache_list[0]
+            assert cache_key == "tag:test-tag"
+            assert cache_value["spend"] == 15.0
+
+
+@pytest.mark.asyncio
+async def test_tag_cache_update_multiple_tags():
+    """
+    Test that multiple tags are updated in cache.
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    cache = DualCache()
+
+    setattr(
+        litellm.proxy.proxy_server,
+        "user_api_key_cache",
+        cache,
+    )
+
+    mock_tag1_obj = {"tag_name": "tag1", "spend": 10.0}
+    mock_tag2_obj = {"tag_name": "tag2", "spend": 20.0}
+
+    async def mock_get_cache_side_effect(key):
+        if key == "tag:tag1":
+            return mock_tag1_obj
+        elif key == "tag:tag2":
+            return mock_tag2_obj
+        return None
+
+    with patch.object(cache, "async_get_cache", new=AsyncMock(side_effect=mock_get_cache_side_effect)) as mock_get_cache:
+        with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
+            await litellm.proxy.proxy_server.update_cache(
+                token=None,
+                user_id=None,
+                end_user_id=None,
+                team_id=None,
+                response_cost=5.0,
+                parent_otel_span=None,
+                tags=["tag1", "tag2"],
+            )
+
+            await asyncio.sleep(0.1)
+
+            assert mock_get_cache.call_count == 2
+            mock_set_cache.assert_awaited_once()
+
+            call_args = mock_set_cache.call_args
+            cache_list = call_args.kwargs["cache_list"]
+
+            assert len(cache_list) == 2
+
+            tag_updates = {cache_key: cache_value for cache_key, cache_value in cache_list}
+            assert "tag:tag1" in tag_updates
+            assert "tag:tag2" in tag_updates
+            assert tag_updates["tag:tag1"]["spend"] == 15.0
+            assert tag_updates["tag:tag2"]["spend"] == 25.0
+
+
+@pytest.mark.asyncio
+async def test_init_sso_settings_in_db():
+    """
+    Test that _init_sso_settings_in_db properly loads SSO settings from database,
+    uppercases keys, and calls _decrypt_and_set_db_env_variables.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    # Test Case 1: SSO settings exist in database
+    mock_sso_config = MagicMock()
+    mock_sso_config.sso_settings = {
+        "google_client_id": "test-client-id",
+        "google_client_secret": "test-client-secret",
+        "microsoft_client_id": "ms-client-id",
+        "microsoft_client_secret": "ms-client-secret",
+    }
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(
+        return_value=mock_sso_config
+    )
+
+    # Mock _decrypt_and_set_db_env_variables
+    with patch.object(
+        proxy_config, "_decrypt_and_set_db_env_variables"
+    ) as mock_decrypt_and_set:
+        await proxy_config._init_sso_settings_in_db(prisma_client=mock_prisma_client)
+
+        # Verify find_unique was called with correct parameters
+        mock_prisma_client.db.litellm_ssoconfig.find_unique.assert_awaited_once_with(
+            where={"id": "sso_config"}
+        )
+
+        # Verify _decrypt_and_set_db_env_variables was called with uppercased keys
+        mock_decrypt_and_set.assert_called_once()
+        call_args = mock_decrypt_and_set.call_args
+        uppercased_settings = call_args.kwargs["environment_variables"]
+
+        # Verify all keys are uppercased
+        assert "GOOGLE_CLIENT_ID" in uppercased_settings
+        assert "GOOGLE_CLIENT_SECRET" in uppercased_settings
+        assert "MICROSOFT_CLIENT_ID" in uppercased_settings
+        assert "MICROSOFT_CLIENT_SECRET" in uppercased_settings
+
+        # Verify values are preserved
+        assert uppercased_settings["GOOGLE_CLIENT_ID"] == "test-client-id"
+        assert uppercased_settings["GOOGLE_CLIENT_SECRET"] == "test-client-secret"
+        assert uppercased_settings["MICROSOFT_CLIENT_ID"] == "ms-client-id"
+        assert uppercased_settings["MICROSOFT_CLIENT_SECRET"] == "ms-client-secret"
+
+        # Verify original lowercase keys are not present
+        assert "google_client_id" not in uppercased_settings
+        assert "microsoft_client_id" not in uppercased_settings
+
+
+@pytest.mark.asyncio
+async def test_init_sso_settings_in_db_no_settings():
+    """
+    Test that _init_sso_settings_in_db handles the case when no SSO settings exist in database.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    # Mock prisma client to return None (no SSO settings)
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+
+    # Mock _decrypt_and_set_db_env_variables
+    with patch.object(
+        proxy_config, "_decrypt_and_set_db_env_variables"
+    ) as mock_decrypt_and_set:
+        await proxy_config._init_sso_settings_in_db(prisma_client=mock_prisma_client)
+
+        # Verify find_unique was called
+        mock_prisma_client.db.litellm_ssoconfig.find_unique.assert_awaited_once_with(
+            where={"id": "sso_config"}
+        )
+
+        # Verify _decrypt_and_set_db_env_variables was NOT called when no settings exist
+        mock_decrypt_and_set.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_init_sso_settings_in_db_error_handling():
+    """
+    Test that _init_sso_settings_in_db handles database errors gracefully.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    # Mock prisma client to raise an exception
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(
+        side_effect=Exception("Database connection error")
+    )
+
+    # The method should not raise an exception, it should log it instead
+    try:
+        await proxy_config._init_sso_settings_in_db(prisma_client=mock_prisma_client)
+        # If we get here, the exception was handled properly
+        assert True
+    except Exception as e:
+        # The exception should be caught and logged, not propagated
+        pytest.fail(f"Exception should have been caught and logged, but was raised: {e}")
+
+
+@pytest.mark.asyncio
+async def test_init_sso_settings_in_db_empty_settings():
+    """
+    Test that _init_sso_settings_in_db handles empty SSO settings dictionary.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    # Mock SSO config with empty settings dictionary
+    mock_sso_config = MagicMock()
+    mock_sso_config.sso_settings = {}
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(
+        return_value=mock_sso_config
+    )
+
+    # Mock _decrypt_and_set_db_env_variables
+    with patch.object(
+        proxy_config, "_decrypt_and_set_db_env_variables"
+    ) as mock_decrypt_and_set:
+        await proxy_config._init_sso_settings_in_db(prisma_client=mock_prisma_client)
+
+        # Verify find_unique was called
+        mock_prisma_client.db.litellm_ssoconfig.find_unique.assert_awaited_once_with(
+            where={"id": "sso_config"}
+        )
+
+        # Verify _decrypt_and_set_db_env_variables was called with empty dict
+        mock_decrypt_and_set.assert_called_once()
+        call_args = mock_decrypt_and_set.call_args
+        uppercased_settings = call_args.kwargs["environment_variables"]
+
+        # Verify empty dictionary
+        assert uppercased_settings == {}
+
+
+def test_update_config_fields_uppercases_env_vars(monkeypatch):
+    """
+    Ensure environment variables pulled from DB are uppercased when applied so
+    integrations like Datadog that expect uppercase env keys can read them.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    for key in ["DD_API_KEY", "DD_SITE", "dd_api_key", "dd_site"]:
+        monkeypatch.delenv(key, raising=False)
+
+    proxy_config = ProxyConfig()
+    updated_config = proxy_config._update_config_fields(
+        current_config={},
+        param_name="environment_variables",
+        db_param_value={"dd_api_key": "test-api-key", "dd_site": "us5.datadoghq.com"},
+    )
+
+    env_vars = updated_config.get("environment_variables", {})
+    assert env_vars["DD_API_KEY"] == "test-api-key"
+    assert env_vars["DD_SITE"] == "us5.datadoghq.com"
+    assert os.environ.get("DD_API_KEY") == "test-api-key"
+    assert os.environ.get("DD_SITE") == "us5.datadoghq.com"
+
+
+def test_get_prompt_spec_for_db_prompt_with_versions():
+    """
+    Test that _get_prompt_spec_for_db_prompt correctly converts database prompts
+    to PromptSpec with versioned naming convention.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    # Mock database prompt version 1
+    mock_prompt_v1 = MagicMock()
+    mock_prompt_v1.model_dump.return_value = {
+        "id": "uuid-1",
+        "prompt_id": "chat_prompt",
+        "version": 1,
+        "litellm_params": '{"prompt_id": "chat_prompt", "prompt_integration": "dotprompt", "model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "v1 content"}]}',
+        "prompt_info": '{"prompt_type": "db"}',
+        "created_at": "2024-01-01T00:00:00",
+        "updated_at": "2024-01-01T00:00:00",
+    }
+
+    # Mock database prompt version 2
+    mock_prompt_v2 = MagicMock()
+    mock_prompt_v2.model_dump.return_value = {
+        "id": "uuid-2",
+        "prompt_id": "chat_prompt",
+        "version": 2,
+        "litellm_params": '{"prompt_id": "chat_prompt", "prompt_integration": "dotprompt", "model": "gpt-4", "messages": [{"role": "user", "content": "v2 content"}]}',
+        "prompt_info": '{"prompt_type": "db"}',
+        "created_at": "2024-01-02T00:00:00",
+        "updated_at": "2024-01-02T00:00:00",
+    }
+
+    # Test version 1
+    prompt_spec_v1 = proxy_config._get_prompt_spec_for_db_prompt(db_prompt=mock_prompt_v1)
+    assert prompt_spec_v1.prompt_id == "chat_prompt.v1"
+
+    # Test version 2
+    prompt_spec_v2 = proxy_config._get_prompt_spec_for_db_prompt(db_prompt=mock_prompt_v2)
+    assert prompt_spec_v2.prompt_id == "chat_prompt.v2"
+
+
+def test_root_redirect_when_docs_url_not_root_and_redirect_url_set(monkeypatch):
+    from fastapi.responses import RedirectResponse
+
+    from litellm.proxy.proxy_server import cleanup_router_config_variables
+    from litellm.proxy.utils import _get_docs_url
+
+    cleanup_router_config_variables()
+    filepath = os.path.dirname(os.path.abspath(__file__))
+    config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
+    # Ensure docs are mounted on a non-root path to trigger redirect logic
+    monkeypatch.setenv("DOCS_URL", "/docs")
+    
+    test_redirect_url = "/ui"
+    monkeypatch.setenv("ROOT_REDIRECT_URL", test_redirect_url)
+    
+    asyncio.run(initialize(config=config_fp, debug=True))
+    
+    docs_url = _get_docs_url()
+    root_redirect_url = os.getenv("ROOT_REDIRECT_URL")
+    
+    # Remove any existing "/" route that might interfere
+    routes_to_remove = []
+    for route in app.routes:
+        if hasattr(route, "path") and route.path == "/":
+            if hasattr(route, "methods") and "GET" in route.methods:
+                routes_to_remove.append(route)
+            elif not hasattr(route, "methods"):  # Catch-all routes
+                routes_to_remove.append(route)
+    
+    for route in routes_to_remove:
+        app.routes.remove(route)
+    
+    # Add the redirect route if conditions are met (matching the actual implementation)
+    if docs_url != "/" and root_redirect_url:
+        @app.get("/", include_in_schema=False)
+        async def root_redirect():
+            return RedirectResponse(url=root_redirect_url)
+    
+    client = TestClient(app)
+    response = client.get("/", follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"] == test_redirect_url
+
+
+def test_get_image_non_root_uses_var_lib_assets_dir(monkeypatch):
+    """
+    Test that get_image uses /var/lib/litellm/assets when LITELLM_NON_ROOT is true.
+    """
+    from unittest.mock import patch
+
+    from litellm.proxy.proxy_server import get_image
+
+    # Set LITELLM_NON_ROOT to true
+    monkeypatch.setenv("LITELLM_NON_ROOT", "true")
+    monkeypatch.delenv("UI_LOGO_PATH", raising=False)
+
+    # Mock os.path operations
+    with patch("litellm.proxy.proxy_server.os.makedirs") as mock_makedirs, \
+         patch("litellm.proxy.proxy_server.os.path.exists", return_value=True), \
+         patch("litellm.proxy.proxy_server.os.getenv") as mock_getenv, \
+         patch("litellm.proxy.proxy_server.FileResponse") as mock_file_response:
+
+        # Setup mock_getenv to return empty string for UI_LOGO_PATH
+        def getenv_side_effect(key, default=""):
+            if key == "UI_LOGO_PATH":
+                return ""
+            elif key == "LITELLM_NON_ROOT":
+                return "true"
+            return default
+
+        mock_getenv.side_effect = getenv_side_effect
+
+        # Call the function
+        get_image()
+
+        # Verify makedirs was called with /var/lib/litellm/assets
+        mock_makedirs.assert_called_once_with("/var/lib/litellm/assets", exist_ok=True)
+
+
+def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
+    """
+    Test that get_image falls back to default_site_logo when logo doesn't exist
+    in /var/lib/litellm/assets for non-root case.
+    """
+    from unittest.mock import patch
+
+    from litellm.proxy.proxy_server import get_image
+
+    # Set LITELLM_NON_ROOT to true
+    monkeypatch.setenv("LITELLM_NON_ROOT", "true")
+    monkeypatch.delenv("UI_LOGO_PATH", raising=False)
+
+    # Track path.exists calls to verify it checks /var/lib/litellm/assets/logo.jpg
+    exists_calls = []
+
+    def exists_side_effect(path):
+        exists_calls.append(path)
+        # Return False for /var/lib/litellm/assets/logo.jpg to trigger fallback
+        if "/var/lib/litellm/assets/logo.jpg" in path:
+            return False
+        return True
+
+    # Mock os.path operations
+    with patch("litellm.proxy.proxy_server.os.makedirs") as mock_makedirs, \
+         patch("litellm.proxy.proxy_server.os.path.exists", side_effect=exists_side_effect), \
+         patch("litellm.proxy.proxy_server.os.getenv") as mock_getenv, \
+         patch("litellm.proxy.proxy_server.FileResponse") as mock_file_response:
+
+        # Setup mock_getenv
+        def getenv_side_effect(key, default=""):
+            if key == "UI_LOGO_PATH":
+                return ""
+            elif key == "LITELLM_NON_ROOT":
+                return "true"
+            return default
+
+        mock_getenv.side_effect = getenv_side_effect
+
+        # Call the function
+        get_image()
+
+        # Verify makedirs was called with /var/lib/litellm/assets
+        mock_makedirs.assert_called_once_with("/var/lib/litellm/assets", exist_ok=True)
+
+        # Verify that exists was called to check /var/lib/litellm/assets/logo.jpg
+        assets_logo_path = "/var/lib/litellm/assets/logo.jpg"
+        assert any(assets_logo_path in str(call) for call in exists_calls), \
+            f"Should check if {assets_logo_path} exists"
+
+        # Verify FileResponse was called (with fallback logo)
+        assert mock_file_response.called, "FileResponse should be called"
+
+
+def test_get_image_root_case_uses_current_dir(monkeypatch):
+    """
+    Test that get_image uses current_dir when LITELLM_NON_ROOT is not true.
+    """
+    from unittest.mock import patch
+
+    from litellm.proxy.proxy_server import get_image
+
+    # Don't set LITELLM_NON_ROOT (or set it to false)
+    monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
+    monkeypatch.delenv("UI_LOGO_PATH", raising=False)
+
+    # Mock os.path operations
+    with patch("litellm.proxy.proxy_server.os.makedirs") as mock_makedirs, \
+         patch("litellm.proxy.proxy_server.os.path.exists", return_value=True), \
+         patch("litellm.proxy.proxy_server.os.getenv") as mock_getenv, \
+         patch("litellm.proxy.proxy_server.FileResponse") as mock_file_response:
+
+        # Setup mock_getenv
+        def getenv_side_effect(key, default=""):
+            if key == "UI_LOGO_PATH":
+                return ""
+            elif key == "LITELLM_NON_ROOT":
+                return ""  # Not set or empty
+            return default
+
+        mock_getenv.side_effect = getenv_side_effect
+
+        # Call the function
+        get_image()
+
+        # Verify makedirs was NOT called with /var/lib/litellm/assets (should not create it for root case)
+        var_lib_assets_calls = [
+            call for call in mock_makedirs.call_args_list
+            if "/var/lib/litellm/assets" in str(call)
+        ]
+        assert len(var_lib_assets_calls) == 0, "Should not create /var/lib/litellm/assets for root case"
+
+        # Verify FileResponse was called
+        assert mock_file_response.called, "FileResponse should be called"

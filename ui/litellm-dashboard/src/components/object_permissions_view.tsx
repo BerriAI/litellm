@@ -2,12 +2,16 @@ import React from "react";
 import { Text } from "@tremor/react";
 import VectorStorePermissions from "./permissions/VectorStorePermissions";
 import MCPServerPermissions from "./permissions/MCPServerPermissions";
+import AgentPermissions from "./permissions/AgentPermissions";
 
 interface ObjectPermission {
   object_permission_id: string;
   mcp_servers: string[];
   mcp_access_groups?: string[];
+  mcp_tool_permissions?: Record<string, string[]>;
   vector_stores: string[];
+  agents?: string[];
+  agent_access_groups?: string[];
 }
 
 interface ObjectPermissionsViewProps {
@@ -17,8 +21,8 @@ interface ObjectPermissionsViewProps {
   accessToken?: string | null;
 }
 
-export function ObjectPermissionsView({ 
-  objectPermission, 
+export function ObjectPermissionsView({
+  objectPermission,
   variant = "card",
   className = "",
   accessToken,
@@ -26,17 +30,23 @@ export function ObjectPermissionsView({
   const vectorStores = objectPermission?.vector_stores || [];
   const mcpServers = objectPermission?.mcp_servers || [];
   const mcpAccessGroups = objectPermission?.mcp_access_groups || [];
+  const mcpToolPermissions = objectPermission?.mcp_tool_permissions || {};
+  const agents = objectPermission?.agents || [];
+  const agentAccessGroups = objectPermission?.agent_access_groups || [];
 
   const content = (
-    <div className={variant === "card" ? "grid grid-cols-1 md:grid-cols-2 gap-6" : "space-y-4"}>
-      <VectorStorePermissions 
-        vectorStores={vectorStores} 
-        accessToken={accessToken} 
-      />
+    <div className={variant === "card" ? "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" : "space-y-4"}>
+      <VectorStorePermissions vectorStores={vectorStores} accessToken={accessToken} />
       <MCPServerPermissions 
         mcpServers={mcpServers} 
-        mcpAccessGroups={mcpAccessGroups}
+        mcpAccessGroups={mcpAccessGroups} 
+        mcpToolPermissions={mcpToolPermissions}
         accessToken={accessToken} 
+      />
+      <AgentPermissions
+        agents={agents}
+        agentAccessGroups={agentAccessGroups}
+        accessToken={accessToken}
       />
     </div>
   );
@@ -47,9 +57,7 @@ export function ObjectPermissionsView({
         <div className="flex items-center gap-2 mb-6">
           <div>
             <Text className="font-semibold text-gray-900">Object Permissions</Text>
-            <Text className="text-xs text-gray-500">
-              Access control for Vector Stores and MCP Servers
-            </Text>
+            <Text className="text-xs text-gray-500">Access control for Vector Stores and MCP Servers</Text>
           </div>
         </div>
         {content}
@@ -65,4 +73,4 @@ export function ObjectPermissionsView({
   );
 }
 
-export default ObjectPermissionsView; 
+export default ObjectPermissionsView;

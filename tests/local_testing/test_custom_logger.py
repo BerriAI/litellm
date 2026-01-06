@@ -103,6 +103,24 @@ class TmpFunction:
         )
 
 
+def test_get_callback_env_vars():
+    env_vars = CustomLogger.get_callback_env_vars("langfuse")
+    assert env_vars == [
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+        "LANGFUSE_HOST",
+    ]
+
+    alias_env_vars = CustomLogger.get_callback_env_vars("langfuse_otel")
+    assert alias_env_vars == env_vars
+
+    missing_env_vars = CustomLogger.get_callback_env_vars("does_not_exist")
+    assert missing_env_vars == []
+
+    none_env_vars = CustomLogger.get_callback_env_vars(None)
+    assert none_env_vars == []
+
+
 @pytest.mark.asyncio
 async def test_async_chat_openai_stream():
     try:
@@ -160,7 +178,7 @@ def test_completion_azure_stream_moderation_failure():
         ]
         try:
             response = completion(
-                model="azure/gpt-4.1-nano",
+                model="azure/gpt-4.1-mini",
                 messages=messages,
                 mock_response="Exception: content_filter_policy",
                 stream=True,
@@ -195,7 +213,7 @@ def test_async_custom_handler_stream():
         async def test_1():
             nonlocal complete_streaming_response
             response = await litellm.acompletion(
-                model="azure/gpt-4.1-nano", messages=messages, stream=True
+                model="azure/gpt-4.1-mini", messages=messages, stream=True
             )
             async for chunk in response:
                 complete_streaming_response += (
@@ -239,7 +257,7 @@ def test_azure_completion_stream():
         complete_streaming_response = ""
 
         response = litellm.completion(
-            model="azure/gpt-4.1-nano", messages=messages, stream=True
+            model="azure/gpt-4.1-mini", messages=messages, stream=True
         )
         for chunk in response:
             complete_streaming_response += chunk["choices"][0]["delta"]["content"] or ""

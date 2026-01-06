@@ -1226,7 +1226,7 @@ async def test_s3_cache_stream_azure(sync_mode):
 
         if sync_mode:
             response1 = litellm.completion(
-                model="azure/gpt-4.1-nano",
+                model="azure/gpt-4.1-mini",
                 messages=messages,
                 max_tokens=40,
                 temperature=1,
@@ -1239,7 +1239,7 @@ async def test_s3_cache_stream_azure(sync_mode):
             print(response_1_content)
         else:
             response1 = await litellm.acompletion(
-                model="azure/gpt-4.1-nano",
+                model="azure/gpt-4.1-mini",
                 messages=messages,
                 max_tokens=40,
                 temperature=1,
@@ -1259,7 +1259,7 @@ async def test_s3_cache_stream_azure(sync_mode):
 
         if sync_mode:
             response2 = litellm.completion(
-                model="azure/gpt-4.1-nano",
+                model="azure/gpt-4.1-mini",
                 messages=messages,
                 max_tokens=40,
                 temperature=1,
@@ -1272,7 +1272,7 @@ async def test_s3_cache_stream_azure(sync_mode):
             print(response_2_content)
         else:
             response2 = await litellm.acompletion(
-                model="azure/gpt-4.1-nano",
+                model="azure/gpt-4.1-mini",
                 messages=messages,
                 max_tokens=40,
                 temperature=1,
@@ -1335,7 +1335,7 @@ async def test_s3_cache_acompletion_azure():
         print("s3 Cache: test for caching, streaming + completion")
 
         response1 = await litellm.acompletion(
-            model="azure/gpt-4.1-nano",
+            model="azure/gpt-4.1-mini",
             messages=messages,
             max_tokens=40,
             temperature=1,
@@ -1345,7 +1345,7 @@ async def test_s3_cache_acompletion_azure():
         time.sleep(2)
 
         response2 = await litellm.acompletion(
-            model="azure/gpt-4.1-nano",
+            model="azure/gpt-4.1-mini",
             messages=messages,
             max_tokens=40,
             temperature=1,
@@ -2634,6 +2634,7 @@ def test_redis_caching_multiple_namespaces():
         ), f"Expected different response ID for no namespace vs namespaced. Got {response_1.id} and {response_4.id}"
 
 
+@pytest.mark.flaky(retries=3, delay=1)
 def test_caching_with_reasoning_content():
     """
     Test that reasoning content is cached
@@ -2641,24 +2642,27 @@ def test_caching_with_reasoning_content():
 
     from litellm._uuid import uuid
 
-    messages = [{"role": "user", "content": f"what is litellm? {uuid.uuid4()}"}]
-    litellm.cache = Cache()
+    try:
+        messages = [{"role": "user", "content": f"what is litellm? {uuid.uuid4()}"}]
+        litellm.cache = Cache()
 
-    response_1 = completion(
-        model="anthropic/claude-3-7-sonnet-latest",
-        messages=messages,
-        thinking={"type": "enabled", "budget_tokens": 1024},
-    )
+        response_1 = completion(
+            model="anthropic/claude-3-7-sonnet-latest",
+            messages=messages,
+            thinking={"type": "enabled", "budget_tokens": 1024},
+        )
 
-    response_2 = completion(
-        model="anthropic/claude-3-7-sonnet-latest",
-        messages=messages,
-        thinking={"type": "enabled", "budget_tokens": 1024},
-    )
+        response_2 = completion(
+            model="anthropic/claude-3-7-sonnet-latest",
+            messages=messages,
+            thinking={"type": "enabled", "budget_tokens": 1024},
+        )
 
-    print(f"response 2: {response_2.model_dump_json(indent=4)}")
-    assert response_2._hidden_params["cache_hit"] == True
-    assert response_2.choices[0].message.reasoning_content is not None
+        print(f"response 2: {response_2.model_dump_json(indent=4)}")
+        assert response_2._hidden_params["cache_hit"] == True
+        assert response_2.choices[0].message.reasoning_content is not None
+    except litellm.InternalServerError as e:
+        pytest.skip(f"Anthropic API returned InternalServerError - {str(e)}")
 
 
 def test_caching_reasoning_args_miss():  # test in memory cache
@@ -2765,3 +2769,56 @@ def test_caching_thinking_args_hit():  # test in memory cache
     except Exception as e:
         print(f"error occurred: {traceback.format_exc()}")
         pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_cache_key_in_hidden_params_acompletion():
+    """
+    Test that cache_key is present in _hidden_params on cache hits for acompletion.
+    
+    Validates fix for missing x-litellm-cache-key header on proxy cache hits.
+    """
+    litellm.cache = Cache(
+        type="redis",
+        host=os.environ["REDIS_HOST"],
+        port=os.environ["REDIS_PORT"],
+        password=os.environ["REDIS_PASSWORD"],
+    )
+    
+    unique_content = f"test cache key hidden params {uuid.uuid4()}"
+    messages = [{"role": "user", "content": unique_content}]
+    
+    # First call - cache miss
+    response1 = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=messages,
+        mock_response="test response",
+        caching=True,
+    )
+    
+    print(f"Response 1 _hidden_params: {response1._hidden_params}")
+    assert response1._hidden_params.get("cache_hit") is not True
+    
+    await asyncio.sleep(0.5)
+    
+    # Second call - cache hit
+    response2 = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=messages,
+        mock_response="test response",
+        caching=True,
+    )
+    
+    print(f"Response 2 _hidden_params: {response2._hidden_params}")
+    
+    # Verify cache hit occurred
+    assert response2._hidden_params.get("cache_hit") is True
+    
+    # Verify cache_key is present in _hidden_params
+    assert "cache_key" in response2._hidden_params
+    assert response2._hidden_params["cache_key"] is not None
+    
+    # Verify both responses have same ID (cache hit)
+    assert response1.id == response2.id
+    
+    litellm.cache = None

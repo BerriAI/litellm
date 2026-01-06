@@ -251,29 +251,37 @@ def route_in_additonal_public_routes(current_route: str):
     - bool - True if the route is defined in public_routes
     - bool - False if the route is not defined in public_routes
 
+    Supports wildcard patterns (e.g., "/api/*" matches "/api/users", "/api/users/123")
 
     In order to use this the litellm config.yaml should have the following in general_settings:
 
     ```yaml
     general_settings:
         master_key: sk-1234
-        public_routes: ["LiteLLMRoutes.public_routes", "/spend/calculate"]
+        public_routes: ["LiteLLMRoutes.public_routes", "/spend/calculate", "/api/*"]
     ```
     """
-
-    # check if user is premium_user - if not do nothing
+    from litellm.proxy.auth.route_checks import RouteChecks
     from litellm.proxy.proxy_server import general_settings, premium_user
 
     try:
         if premium_user is not True:
             return False
-        # check if this is defined on the config
         if general_settings is None:
             return False
 
         routes_defined = general_settings.get("public_routes", [])
+
+        # Check exact match first
         if current_route in routes_defined:
             return True
+
+        # Check wildcard patterns
+        for route_pattern in routes_defined:
+            if RouteChecks._route_matches_wildcard_pattern(
+                route=current_route, pattern=route_pattern
+            ):
+                return True
 
         return False
     except Exception as e:
@@ -417,6 +425,12 @@ def bytes_to_mb(bytes_value: int):
 def get_key_model_rpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Optional[Dict[str, int]]:
+    """
+    Get the model rpm limit for a given api key
+    - check key metadata
+    - check key model max budget
+    - check team metadata
+    """
     if user_api_key_dict.metadata:
         if "model_rpm_limit" in user_api_key_dict.metadata:
             return user_api_key_dict.metadata["model_rpm_limit"]
@@ -426,7 +440,9 @@ def get_key_model_rpm_limit(
             if "rpm_limit" in budget and budget["rpm_limit"] is not None:
                 model_rpm_limit[model] = budget["rpm_limit"]
         return model_rpm_limit
-
+    elif user_api_key_dict.team_metadata:
+        if "model_rpm_limit" in user_api_key_dict.team_metadata:
+            return user_api_key_dict.team_metadata["model_rpm_limit"]
     return None
 
 
@@ -439,7 +455,34 @@ def get_key_model_tpm_limit(
     elif user_api_key_dict.model_max_budget:
         if "tpm_limit" in user_api_key_dict.model_max_budget:
             return user_api_key_dict.model_max_budget["tpm_limit"]
+    elif user_api_key_dict.team_metadata:
+        if "model_tpm_limit" in user_api_key_dict.team_metadata:
+            return user_api_key_dict.team_metadata["model_tpm_limit"]
+    return None
 
+
+def get_model_rate_limit_from_metadata(
+    user_api_key_dict: UserAPIKeyAuth,
+    metadata_accessor_key: Literal["team_metadata", "organization_metadata"],
+    rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
+) -> Optional[Dict[str, int]]:
+    if getattr(user_api_key_dict, metadata_accessor_key):
+        return getattr(user_api_key_dict, metadata_accessor_key).get(rate_limit_key)
+    return None
+  
+def get_team_model_rpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[Dict[str, int]]:
+    if user_api_key_dict.team_metadata:
+        return user_api_key_dict.team_metadata.get("model_rpm_limit")
+    return None
+
+
+def get_team_model_tpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[Dict[str, int]]:
+    if user_api_key_dict.team_metadata:
+        return user_api_key_dict.team_metadata.get("model_tpm_limit")
     return None
 
 
@@ -472,6 +515,7 @@ def _has_user_setup_sso():
     )
 
     return sso_setup
+
 
 def get_customer_user_header_from_mapping(user_id_mapping) -> Optional[str]:
     """Return the header_name mapped to CUSTOMER role, if any (dict-based)."""
@@ -522,7 +566,11 @@ def get_end_user_id_from_request_body(
             for header_name, header_value in request_headers.items():
                 if header_name.lower() == custom_header_name_to_check.lower():
                     user_id_from_header = header_value
-                    user_id_str = str(user_id_from_header) if user_id_from_header is not None else ""
+                    user_id_str = (
+                        str(user_id_from_header)
+                        if user_id_from_header is not None
+                        else ""
+                    )
                     if user_id_str.strip():
                         return user_id_str
 
@@ -567,6 +615,14 @@ def get_model_from_request(
         match = re.match(r"/openai/deployments/([^/]+)", route)
         if match:
             model = match.group(1)
+
+    # If still not found, extract from Vertex AI passthrough route
+    # Pattern: /vertex_ai/.../models/{model_id}:*
+    # Example: /vertex_ai/v1/.../models/gemini-1.5-pro:generateContent
+    if model is None and "/vertex" in route.lower():
+        vertex_match = re.search(r"/models/([^/:]+)", route)
+        if vertex_match:
+            model = vertex_match.group(1)
 
     return model
 

@@ -28,7 +28,7 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.75.5-stable
+docker.litellm.ai/berriai/litellm:v1.75.5-stable
 ```
 </TabItem>
 
@@ -50,6 +50,7 @@ pip install litellm==1.75.5.post2
 - **Oracle Cloud Infrastructure** - New LLM provider for calling models on Oracle Cloud Infrastructure.
 - **Digital Ocean's Gradient AI** - New LLM provider for calling models on Digital Ocean's Gradient AI platform.
 
+---
 
 ### Risk of Upgrade
 

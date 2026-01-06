@@ -117,7 +117,7 @@ async def test_pass_through_endpoint_rerank(client):
         {
             "path": "/v1/rerank",
             "target": "https://api.cohere.com/v1/rerank",
-            "headers": {"Authorization": f"bearer {_cohere_api_key}"},
+            "headers": {"Authorization": f"Bearer {_cohere_api_key}"},
         }
     ]
 
@@ -193,7 +193,7 @@ async def test_pass_through_endpoint_rpm_limit(
             "path": "/v1/rerank",
             "target": "https://api.cohere.com/v1/rerank",
             "auth": auth,
-            "headers": {"Authorization": f"bearer {_cohere_api_key}"},
+            "headers": {"Authorization": f"Bearer {_cohere_api_key}"},
         }
     ]
 
@@ -293,7 +293,7 @@ async def test_pass_through_endpoint_sequential_rpm_limit(
             "path": "/v1/rerank",
             "target": "https://api.cohere.com/v1/rerank",
             "auth": auth,
-            "headers": {"Authorization": f"bearer {_cohere_api_key}"},
+            "headers": {"Authorization": f"Bearer {_cohere_api_key}"},
         }
     ]
 
@@ -443,6 +443,10 @@ async def test_aaapass_through_endpoint_pass_through_keys_langfuse(
         }
 
         # Make a request to the pass-through endpoint
+        # For langfuse custom_auth_parser, the Authorization header must be valid base64
+        # Format: base64(public_key:secret_key) where public_key is the LiteLLM API key
+        import base64
+        auth_token = base64.b64encode(f"{mock_api_key}:anything".encode()).decode()
         response = client.post(
             "/api/public/ingestion",
             json=_json_data,

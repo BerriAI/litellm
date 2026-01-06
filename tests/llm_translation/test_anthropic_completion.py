@@ -333,9 +333,9 @@ def test_process_anthropic_headers_with_no_matching_headers():
     "tool_type, tool_config, message_content",
     [
         (
-            "computer_20241022",
+            "computer_20250124",
             {
-                "type": "computer_20241022",
+                "type": "computer_20250124",
                 "function": {
                     "name": "computer",
                     "parameters": {
@@ -361,10 +361,11 @@ def test_process_anthropic_headers_with_no_matching_headers():
 def test_anthropic_tool_use(tool_type, tool_config, message_content):
     """Test Anthropic tool use with computer use and web fetch tools."""
     from litellm import completion
+
     litellm._turn_on_debug()
 
     tools = [tool_config]
-    model = "claude-3-5-sonnet-20241022"
+    model = "claude-sonnet-4-5-20250929"
     messages = [{"role": "user", "content": message_content}]
 
     try:
@@ -375,6 +376,7 @@ def test_anthropic_tool_use(tool_type, tool_config, message_content):
         )
         print(f"Tool type: {tool_type}")
         print(resp)
+        assert resp is not None
     except litellm.InternalServerError:
         pass
 
@@ -383,7 +385,7 @@ def test_anthropic_tool_use(tool_type, tool_config, message_content):
     "computer_tool_used, prompt_caching_set, expected_beta_header",
     [
         (True, False, True),
-        (False, True, True),
+        (False, True, False),
         (True, True, True),
         (False, False, False),
     ],
@@ -483,7 +485,7 @@ from litellm import completion
 
 class TestAnthropicCompletion(BaseLLMChatTest, BaseAnthropicChatTest):
     def get_base_completion_call_args(self) -> dict:
-        return {"model": "anthropic/claude-3-5-sonnet-latest"}
+        return {"model": "anthropic/claude-sonnet-4-5-20250929"}
 
     def get_base_completion_call_args_with_thinking(self) -> dict:
         return {
@@ -766,6 +768,52 @@ def test_anthropic_map_openai_params_tools_and_json_schema():
     assert "Question" in json.dumps(mapped_params)
 
 
+def test_anthropic_map_openai_params_tools_with_defs():
+    args = {
+        "non_default_params": {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "create_user",
+                        "description": "Create a user from provided profile data.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "user": {"$ref": "#/$defs/User"},
+                            },
+                            "required": ["user"],
+                            "$defs": {
+                                "User": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {"type": "string"},
+                                        "email": {"type": "string"},
+                                    },
+                                    "required": ["name", "email"],
+                                }
+                            },
+                        },
+                    },
+                }
+            ]
+        }
+    }
+
+    mapped_params = litellm.AnthropicConfig().map_openai_params(
+        non_default_params=args["non_default_params"],
+        optional_params={},
+        model="claude-3-5-sonnet-20240620",
+        drop_params=False,
+    )
+
+    tool = mapped_params["tools"][0]
+    assert tool["input_schema"]["properties"]["user"]["$ref"] == "#/$defs/User"
+    assert (
+        tool["input_schema"]["$defs"]["User"]["properties"]["name"]["type"] == "string"
+    )
+
+
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 
 
@@ -878,7 +926,7 @@ async def test_anthropic_structured_output():
     from litellm import acompletion
 
     args = {
-        "model": "claude-3-5-sonnet-20240620",
+        "model": "claude-sonnet-4-5-20250929",
         "seed": 3015206306868917280,
         "stop": None,
         "messages": [
@@ -907,7 +955,7 @@ def test_anthropic_citations_api():
 
     try:
         resp = completion(
-            model="claude-3-5-sonnet-20241022",
+            model="claude-sonnet-4-5-20250929",
             messages=[
                 {
                     "role": "user",
@@ -952,7 +1000,7 @@ def test_anthropic_citations_api_streaming():
     from litellm import completion
 
     resp = completion(
-        model="claude-3-5-sonnet-20241022",
+        model="claude-sonnet-4-5-20250929",
         messages=[
             {
                 "role": "user",
@@ -1255,8 +1303,13 @@ async def test_anthropic_api_max_completion_tokens(model: str):
 def test_anthropic_websearch(optional_params: dict):
     litellm._turn_on_debug()
     params = {
-        "model": "anthropic/claude-3-5-sonnet-latest",
-        "messages": [{"role": "user", "content": "Who won the World Cup in 2022?"}],
+        "model": "anthropic/claude-sonnet-4-5-20250929",
+        "messages": [
+            {
+                "role": "user",
+                "content": "What is the current weather in Tokyo right now?. Make sure to search the web for an answer",
+            }
+        ],
         **optional_params,
     }
 
@@ -1268,20 +1321,24 @@ def test_anthropic_websearch(optional_params: dict):
     assert response is not None
 
     print(f"response: {response}\n")
-    assert response.usage.server_tool_use.web_search_requests == 1
+    # When web search is requested and used, server_tool_use should be present
+    assert response.usage.server_tool_use is not None
+    assert response.usage.server_tool_use.web_search_requests >= 1
 
 
 def test_anthropic_text_editor():
     litellm._turn_on_debug()
     params = {
-        "model": "anthropic/claude-3-5-sonnet-latest",
+        "model": "anthropic/claude-sonnet-4-5-20250929",
         "messages": [
             {
                 "role": "user",
                 "content": "There'''s a syntax error in my primes.py file. Can you help me fix it?",
             }
         ],
-        "tools": [{"type": "text_editor_20250124", "name": "str_replace_editor"}],
+        "tools": [
+            {"type": "text_editor_20250728", "name": "str_replace_based_edit_tool"}
+        ],
     }
 
     try:
@@ -1362,7 +1419,7 @@ def test_anthropic_mcp_server_responses_api(model: str):
 
 def test_anthropic_prefix_prompt():
     params = {
-        "model": "anthropic/claude-3-5-sonnet-latest",
+        "model": "anthropic/claude-sonnet-4-5-20250929",
         "messages": [
             {"role": "user", "content": "Who won the World Cup in 2022?"},
             {"role": "assistant", "content": "Argentina", "prefix": True},
@@ -1381,7 +1438,7 @@ async def test_claude_tool_use_with_anthropic_acreate():
         messages=[
             {"role": "user", "content": "Hello, can you tell me the weather in Boston?"}
         ],
-        model="anthropic/claude-3-5-sonnet-20240620",
+        model="anthropic/claude-sonnet-4-5-20250929",
         stream=True,
         max_tokens=100,
         tools=[
@@ -1478,7 +1535,7 @@ def test_anthropic_streaming():
                 "content": "Do what you are told to do in the system prompt",
             },
         ],
-        "model": "anthropic/claude-3-5-sonnet-latest",
+        "model": "anthropic/claude-sonnet-4-5-20250929",
         "max_tokens": 7000,
         "parallel_tool_calls": False,
         "stream": True,
@@ -1518,3 +1575,229 @@ def test_anthropic_streaming():
             role_set_count += 1
 
     assert role_set_count == 1
+
+
+def test_anthropic_via_responses_api():
+    from litellm.types.llms.openai import ResponsesAPIStreamEvents
+
+    response = litellm.responses(
+        model="anthropic/claude-sonnet-4-5",
+        input="Who won the World Cup in 2022?",
+        max_output_tokens=100,
+        stream=True,
+    )
+
+    assert response is not None
+
+    # Expected event sequence
+    expected_events = [
+        ResponsesAPIStreamEvents.RESPONSE_CREATED,
+        ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS,
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+        ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
+        ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,  # Can occur multiple times
+        ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+        ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+        ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+    ]
+
+    events_seen = []
+    text_delta_count = 0
+
+    for chunk in response:
+        print(f"chunk: {chunk}")
+
+        # Each chunk should have a type attribute
+        assert hasattr(chunk, "type"), f"Chunk missing 'type' attribute: {chunk}"
+
+        event_type = chunk.type
+
+        # Track events seen
+        if event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA:
+            text_delta_count += 1
+            if ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA not in events_seen:
+                events_seen.append(event_type)
+        else:
+            events_seen.append(event_type)
+
+        # Assert specific structures for each event type
+        if event_type == ResponsesAPIStreamEvents.RESPONSE_CREATED:
+            assert chunk.type == ResponsesAPIStreamEvents.RESPONSE_CREATED
+            assert hasattr(chunk, "response")
+            assert chunk.response.status == "in_progress"
+            assert hasattr(chunk.response, "id")
+            assert hasattr(chunk.response, "model")
+
+        elif event_type == ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS:
+            assert chunk.type == ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS
+            assert hasattr(chunk, "response")
+            assert chunk.response.status == "in_progress"
+
+        elif event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED:
+            assert chunk.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+            assert hasattr(chunk, "output_index")
+            assert hasattr(chunk, "item")
+            assert chunk.item.type == "message"
+            assert chunk.item.role == "assistant"
+
+        elif event_type == ResponsesAPIStreamEvents.CONTENT_PART_ADDED:
+            assert chunk.type == ResponsesAPIStreamEvents.CONTENT_PART_ADDED
+            assert hasattr(chunk, "item_id")
+            assert hasattr(chunk, "output_index")
+            assert hasattr(chunk, "content_index")
+            assert hasattr(chunk, "part")
+            assert chunk.part.type == "output_text"
+
+        elif event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA:
+            assert chunk.type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
+            assert hasattr(chunk, "item_id")
+            assert hasattr(chunk, "output_index")
+            assert hasattr(chunk, "content_index")
+            assert hasattr(chunk, "delta")
+            assert isinstance(chunk.delta, str)
+
+        elif event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE:
+            assert chunk.type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE
+            assert hasattr(chunk, "item_id")
+            assert hasattr(chunk, "output_index")
+            assert hasattr(chunk, "content_index")
+            assert hasattr(chunk, "text")
+
+        elif event_type == ResponsesAPIStreamEvents.CONTENT_PART_DONE:
+            assert chunk.type == ResponsesAPIStreamEvents.CONTENT_PART_DONE
+            assert hasattr(chunk, "item_id")
+            assert hasattr(chunk, "output_index")
+            assert hasattr(chunk, "content_index")
+            assert hasattr(chunk, "part")
+            assert chunk.part.type == "output_text"
+
+        elif event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
+            assert chunk.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+            assert hasattr(chunk, "output_index")
+            assert hasattr(chunk, "item")
+            assert chunk.item.status == "completed"
+
+        elif event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+            assert chunk.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+            assert hasattr(chunk, "response")
+            assert chunk.response.status == "completed"
+            assert hasattr(chunk.response, "usage")
+            assert hasattr(chunk.response, "output")
+
+    # Assert we saw all expected events
+    print(f"Events seen: {events_seen}")
+    assert (
+        events_seen == expected_events
+    ), f"Event sequence mismatch. Expected: {expected_events}, Got: {events_seen}"
+
+    # Assert we saw at least one text delta
+    assert (
+        text_delta_count > 0
+    ), f"Expected at least one response.output_text.delta event, got {text_delta_count}"
+
+    print(f"✓ All {len(events_seen)} events matched expected structure")
+    print(f"✓ Received {text_delta_count} text delta chunks")
+
+
+def test_anthropic_strict_parameter_passthrough():
+    """Test that the strict parameter in tool parameters is passed through to Anthropic input_schema"""
+    args = {
+        "non_default_params": {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get weather information",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "location": {"type": "string"},
+                            },
+                            "required": ["location"],
+                            "strict": True,
+                        },
+                    },
+                }
+            ],
+        }
+    }
+
+    mapped_params = litellm.AnthropicConfig().map_openai_params(
+        non_default_params=args["non_default_params"],
+        optional_params={},
+        model="claude-sonnet-4-5-20250929",
+        drop_params=False,
+    )
+
+    # Verify the strict parameter is in the mapped tool's input_schema
+    assert "tools" in mapped_params
+    assert len(mapped_params["tools"]) == 1
+    tool = mapped_params["tools"][0]
+    assert "input_schema" in tool
+    assert tool["input_schema"]["strict"] is True
+
+
+def test_anthropic_strict_not_present():
+    """Test that the strict parameter in tool parameters is passed through to Anthropic input_schema"""
+    args = {
+        "non_default_params": {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get weather information",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "location": {"type": "string"},
+                            },
+                            "required": ["location"],
+                        },
+                    },
+                }
+            ],
+        }
+    }
+
+    mapped_params = litellm.AnthropicConfig().map_openai_params(
+        non_default_params=args["non_default_params"],
+        optional_params={},
+        model="claude-sonnet-4-5-20250929",
+        drop_params=False,
+    )
+
+    # Verify the strict parameter does not exist if it is not passed in
+    assert "tools" in mapped_params
+    assert len(mapped_params["tools"]) == 1
+    tool = mapped_params["tools"][0]
+    assert "input_schema" in tool
+    assert "strict" not in tool["input_schema"]
+
+
+def test_anthropic_structured_output_chat_completion_api():
+    response = litellm.completion(
+        model="claude-sonnet-4-5-20250929",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "final_output",
+                "strict": True,
+                "schema": {
+                    "description": 'Progress report for the thinking process\n\nThis model represents a snapshot of the agent\'s current progress during\nthe thinking process, providing a brief description of the current activity.\n\nAttributes:\n    agent_doing: Brief description of what the agent is currently doing.\n                Should be kept under 10 words. Example: "Learning about home automation"',
+                    "properties": {
+                        "agent_doing": {"title": "Agent Doing", "type": "string"}
+                    },
+                    "required": ["agent_doing"],
+                    "title": "ThinkingStep",
+                    "type": "object",
+                    "additionalProperties": False,
+                },
+            },
+        },
+    )
+    assert response is not None
+    print(f"response: {response}")

@@ -1,89 +1,78 @@
-import React, { useState, useEffect } from "react"
-import {
-  Card,
-  Title,
-  Text,
-  Button as TremorButton,
-  Table,
-  TableHead,
-  TableHeaderCell,
-  TableBody,
-  TableRow,
-  TableCell,
-} from "@tremor/react"
-import { Button, message, Checkbox, Empty } from "antd"
-import { ReloadOutlined, SaveOutlined } from "@ant-design/icons"
-import { getTeamPermissionsCall, teamPermissionsUpdateCall } from "@/components/networking"
-import { getPermissionInfo } from "./permission_definitions"
+import { getTeamPermissionsCall, teamPermissionsUpdateCall } from "@/components/networking";
+import { ReloadOutlined, SaveOutlined } from "@ant-design/icons";
+import { Card, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Text, Title } from "@tremor/react";
+import { Button, Checkbox, Empty } from "antd";
+import React, { useEffect, useState } from "react";
 import NotificationsManager from "../molecules/notifications_manager";
+import { getPermissionInfo } from "./permission_definitions";
 
 interface MemberPermissionsProps {
-  teamId: string
-  accessToken: string | null
-  canEditTeam: boolean
+  teamId: string;
+  accessToken: string | null;
+  canEditTeam: boolean;
 }
 
 const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessToken, canEditTeam }) => {
-  const [permissions, setPermissions] = useState<string[]>([])
-  const [selectedPermissions, setSelectedPermissions] = useState<string[]>([])
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [hasChanges, setHasChanges] = useState(false)
+  const [permissions, setPermissions] = useState<string[]>([]);
+  const [selectedPermissions, setSelectedPermissions] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [hasChanges, setHasChanges] = useState(false);
 
   const fetchPermissions = async () => {
     try {
-      setLoading(true)
-      if (!accessToken) return
-      const response = await getTeamPermissionsCall(accessToken, teamId)
-      const allPermissions = response.all_available_permissions || []
-      setPermissions(allPermissions)
-      const teamPermissions = response.team_member_permissions || []
-      setSelectedPermissions(teamPermissions)
-      setHasChanges(false)
+      setLoading(true);
+      if (!accessToken) return;
+      const response = await getTeamPermissionsCall(accessToken, teamId);
+      const allPermissions = response.all_available_permissions || [];
+      setPermissions(allPermissions);
+      const teamPermissions = response.team_member_permissions || [];
+      setSelectedPermissions(teamPermissions);
+      setHasChanges(false);
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to load permissions")
-      console.error("Error fetching permissions:", error)
+      NotificationsManager.fromBackend("Failed to load permissions");
+      console.error("Error fetching permissions:", error);
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
 
   useEffect(() => {
-    fetchPermissions()
-  }, [teamId, accessToken])
+    fetchPermissions();
+  }, [teamId, accessToken]);
 
   const handlePermissionChange = (permission: string, checked: boolean) => {
     const newSelectedPermissions = checked
       ? [...selectedPermissions, permission]
-      : selectedPermissions.filter((p) => p !== permission)
-    setSelectedPermissions(newSelectedPermissions)
-    setHasChanges(true)
-  }
+      : selectedPermissions.filter((p) => p !== permission);
+    setSelectedPermissions(newSelectedPermissions);
+    setHasChanges(true);
+  };
 
   const handleSave = async () => {
     try {
-      if (!accessToken) return
-      setSaving(true)
-      await teamPermissionsUpdateCall(accessToken, teamId, selectedPermissions)
-      NotificationsManager.success("Permissions updated successfully")
-      setHasChanges(false)
+      if (!accessToken) return;
+      setSaving(true);
+      await teamPermissionsUpdateCall(accessToken, teamId, selectedPermissions);
+      NotificationsManager.success("Permissions updated successfully");
+      setHasChanges(false);
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to update permissions")
-      console.error("Error updating permissions:", error)
+      NotificationsManager.fromBackend("Failed to update permissions");
+      console.error("Error updating permissions:", error);
     } finally {
-      setSaving(false)
+      setSaving(false);
     }
-  }
+  };
 
   const handleReset = () => {
-    fetchPermissions()
-  }
+    fetchPermissions();
+  };
 
   if (loading) {
-    return <div className="p-6 text-center">Loading permissions...</div>
+    return <div className="p-6 text-center">Loading permissions...</div>;
   }
 
-  const hasPermissions = permissions.length > 0
+  const hasPermissions = permissions.length > 0;
 
   return (
     <Card className="bg-white shadow-md rounded-md p-6">
@@ -94,9 +83,9 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessTok
             <Button icon={<ReloadOutlined />} onClick={handleReset}>
               Reset
             </Button>
-            <TremorButton onClick={handleSave} loading={saving} className="flex items-center gap-2">
+            <Button onClick={handleSave} loading={saving} type="primary">
               <SaveOutlined /> Save Changes
-            </TremorButton>
+            </Button>
           </div>
         )}
       </div>
@@ -118,7 +107,7 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessTok
             </TableHead>
             <TableBody>
               {permissions.map((permission) => {
-                const permInfo = getPermissionInfo(permission)
+                const permInfo = getPermissionInfo(permission);
                 return (
                   <TableRow key={permission} className="hover:bg-gray-50 transition-colors">
                     <TableCell>
@@ -142,7 +131,7 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessTok
                       />
                     </TableCell>
                   </TableRow>
-                )
+                );
               })}
             </TableBody>
           </Table>
@@ -153,7 +142,7 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessTok
         </div>
       )}
     </Card>
-  )
-}
+  );
+};
 
-export default MemberPermissions
+export default MemberPermissions;

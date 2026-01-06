@@ -12,7 +12,12 @@ class CohereRerankV2Config(CohereRerankConfig):
     def __init__(self) -> None:
         pass
 
-    def get_complete_url(self, api_base: Optional[str], model: str) -> str:
+    def get_complete_url(
+        self, 
+        api_base: Optional[str], 
+        model: str,
+        optional_params: Optional[dict] = None,
+    ) -> str:
         if api_base:
             # Remove trailing slashes and ensure clean base URL
             api_base = api_base.rstrip("/")
@@ -44,25 +49,25 @@ class CohereRerankV2Config(CohereRerankConfig):
         return_documents: Optional[bool] = True,
         max_chunks_per_doc: Optional[int] = None,
         max_tokens_per_doc: Optional[int] = None,
-    ) -> OptionalRerankParams:
+    ) -> Dict:
         """
         Map Cohere rerank params
 
         No mapping required - returns all supported params
         """
-        return OptionalRerankParams(
+        return dict(OptionalRerankParams(
             query=query,
             documents=documents,
             top_n=top_n,
             rank_fields=rank_fields,
             return_documents=return_documents,
             max_tokens_per_doc=max_tokens_per_doc,
-        )
+        ))
 
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: OptionalRerankParams,
+        optional_rerank_params: Dict,
         headers: dict,
     ) -> dict:
         if "query" not in optional_rerank_params:

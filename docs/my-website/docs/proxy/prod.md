@@ -33,7 +33,7 @@ litellm_settings:
 
 Set slack webhook url in your env
 ```shell
-export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/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"
+export SLACK_WEBHOOK_URL="example-slack-webhook-url"
 ```
 
 Turn off FASTAPI's default info logs
@@ -62,13 +62,30 @@ These specifications provide:
 - Adequate memory for request processing and caching
 
 
-## 3. On Kubernetes - Use 1 Uvicorn worker [Suggested CMD]
+## 3. On Kubernetes — Match Uvicorn Workers to CPU Count [Suggested CMD]
 
-Use this Docker `CMD`. This will start the proxy with 1 Uvicorn Async Worker
+Use this Docker `CMD`. It automatically matches Uvicorn workers to the pod’s CPU count, ensuring each worker uses one core efficiently for better throughput and stable latency.
 
-(Ensure that you're not setting `run_gunicorn` or `num_workers` in the CMD). 
 ```shell
-CMD ["--port", "4000", "--config", "./proxy_server_config.yaml"]
+CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--num_workers", "$(nproc)"]
+```
+
+> **Optional:** If you observe gradual memory growth under sustained load, consider recycling workers after a fixed number of requests to mitigate leaks.
+> You can configure this either via CLI or environment variable:
+
+```shell
+# CLI
+CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--num_workers", "$(nproc)", "--max_requests_before_restart", "10000"]
+
+# or ENV (for deployment manifests / containers)
+export MAX_REQUESTS_BEFORE_RESTART=10000
+```
+
+> **Tip:** When using `--max_requests_before_restart`, the `--run_gunicorn` flag is more stable and mature as it uses Gunicorn's battle-tested worker recycling mechanism instead of Uvicorn's implementation.
+
+```shell
+# Use Gunicorn for more stable worker recycling
+CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--num_workers", "$(nproc)", "--run_gunicorn", "--max_requests_before_restart", "10000"]
 ```
 
 
