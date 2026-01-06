@@ -115,4 +115,58 @@ describe("chat_completion", () => {
       max_tokens: 100,
     });
   });
+
+  it("should configure MCP tools per server with restrictions", async () => {
+    const selectedMCPServers = ["server-1", "server-2"];
+    const mcpServers = [
+      { server_id: "server-1", alias: "alpha", server_name: "Alpha" },
+      { server_id: "server-2", server_name: "Beta" },
+    ];
+    const mcpServerToolRestrictions = {
+      "server-1": ["toolA", "toolB"],
+      "server-2": ["toolC"],
+    } as Record<string, string[]>;
+
+    await makeOpenAIChatCompletionRequest(
+      mockChatHistory,
+      mockUpdateUI,
+      "gpt-4",
+      "test-token",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      selectedMCPServers,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      mcpServers,
+      mcpServerToolRestrictions,
+    );
+
+    const callArgs = mockCreate.mock.calls[0][0];
+    expect(callArgs.tool_choice).toBe("auto");
+    expect(callArgs.tools).toEqual([
+      {
+        type: "mcp",
+        server_label: "litellm",
+        server_url: "litellm_proxy/mcp/alpha",
+        require_approval: "never",
+        allowed_tools: ["toolA", "toolB"],
+      },
+      {
+        type: "mcp",
+        server_label: "litellm",
+        server_url: "litellm_proxy/mcp/Beta",
+        require_approval: "never",
+        allowed_tools: ["toolC"],
+      },
+    ]);
+  });
 });

@@ -271,6 +271,99 @@ class TestProxyBaseLLMRequestProcessing:
         assert "x-litellm-response-cost-original" not in headers
         assert "x-litellm-response-cost-discount-amount" not in headers
 
+    def test_get_custom_headers_with_margin_info(self):
+        """
+        Test that margin headers are included when margin is applied.
+        """
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+
+        # Create mock user API key dict
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+        
+        # Create logging object with margin
+        logging_obj = LiteLLMLoggingObj(
+            model="gpt-4",
+            messages=[],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test-call-id-margin",
+            function_id="test-function",
+        )
+        logging_obj.set_cost_breakdown(
+            input_cost=0.00005,
+            output_cost=0.00005,
+            total_cost=0.00011,
+            cost_for_built_in_tools_cost_usd_dollar=0.0,
+            original_cost=0.0001,
+            margin_percent=0.10,
+            margin_total_amount=0.00001,
+        )
+        
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            response_cost=0.00011,
+            litellm_logging_obj=logging_obj,
+        )
+        
+        # Verify margin headers are present
+        assert "x-litellm-response-cost" in headers
+        assert float(headers["x-litellm-response-cost"]) == 0.00011
+        
+        assert "x-litellm-response-cost-margin-amount" in headers
+        assert float(headers["x-litellm-response-cost-margin-amount"]) == 0.00001
+        
+        assert "x-litellm-response-cost-margin-percent" in headers
+        assert float(headers["x-litellm-response-cost-margin-percent"]) == 0.10
+
+    def test_get_custom_headers_without_margin_info(self):
+        """
+        Test that when no margin is applied, margin headers are not included.
+        """
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+
+        # Create mock user API key dict
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+        
+        # Create logging object without margin
+        logging_obj = LiteLLMLoggingObj(
+            model="gpt-4",
+            messages=[],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test-call-id-no-margin",
+            function_id="test-function",
+        )
+        logging_obj.set_cost_breakdown(
+            input_cost=0.00005,
+            output_cost=0.00005,
+            total_cost=0.0001,
+            cost_for_built_in_tools_cost_usd_dollar=0.0,
+        )
+        
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            response_cost=0.0001,
+            litellm_logging_obj=logging_obj,
+        )
+        
+        # Verify margin headers are not present
+        assert "x-litellm-response-cost-margin-amount" not in headers
+        assert "x-litellm-response-cost-margin-percent" not in headers
+
     def test_get_cost_breakdown_from_logging_obj_helper(self):
         """
         Test the helper function that extracts cost breakdown information.
@@ -299,11 +392,39 @@ class TestProxyBaseLLMRequestProcessing:
             discount_amount=0.000005,
         )
         
-        original_cost, discount_amount = _get_cost_breakdown_from_logging_obj(logging_obj)
+        original_cost, discount_amount, margin_total_amount, margin_percent = _get_cost_breakdown_from_logging_obj(logging_obj)
         assert original_cost == 0.0001
         assert discount_amount == 0.000005
+        assert margin_total_amount is None
+        assert margin_percent is None
         
-        # Test with no discount info
+        # Test with margin info
+        logging_obj_with_margin = LiteLLMLoggingObj(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "test"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test-call-id-margin",
+            function_id="test-function-id-margin",
+        )
+        logging_obj_with_margin.set_cost_breakdown(
+            input_cost=0.00005,
+            output_cost=0.00005,
+            total_cost=0.00011,
+            cost_for_built_in_tools_cost_usd_dollar=0.0,
+            original_cost=0.0001,
+            margin_percent=0.10,
+            margin_total_amount=0.00001,
+        )
+        
+        original_cost, discount_amount, margin_total_amount, margin_percent = _get_cost_breakdown_from_logging_obj(logging_obj_with_margin)
+        assert original_cost == 0.0001
+        assert discount_amount is None
+        assert margin_total_amount == 0.00001
+        assert margin_percent == 0.10
+        
+        # Test with no discount or margin info
         logging_obj_no_discount = LiteLLMLoggingObj(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "test"}],
@@ -320,14 +441,18 @@ class TestProxyBaseLLMRequestProcessing:
             cost_for_built_in_tools_cost_usd_dollar=0.0,
         )
         
-        original_cost, discount_amount = _get_cost_breakdown_from_logging_obj(logging_obj_no_discount)
+        original_cost, discount_amount, margin_total_amount, margin_percent = _get_cost_breakdown_from_logging_obj(logging_obj_no_discount)
         assert original_cost is None
         assert discount_amount is None
+        assert margin_total_amount is None
+        assert margin_percent is None
         
         # Test with None logging object
-        original_cost, discount_amount = _get_cost_breakdown_from_logging_obj(None)
+        original_cost, discount_amount, margin_total_amount, margin_percent = _get_cost_breakdown_from_logging_obj(None)
         assert original_cost is None
         assert discount_amount is None
+        assert margin_total_amount is None
+        assert margin_percent is None
 
     def test_get_custom_headers_key_spend_includes_response_cost(self):
         """
