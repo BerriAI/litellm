@@ -108,7 +108,7 @@ Some MCP servers are meant to be shared broadly—think internal knowledge bases
 3. Toggle **Allow All LiteLLM Keys** on.
 
 <Image 
-  img={require('../img/mcp_ui.png')}
+  img={require('../img/mcp_allow_all_ui.png')}
   style={{width: '80%', display: 'block', margin: '1rem auto'}}
   alt="MCP server configuration in Admin UI"
 /> 
