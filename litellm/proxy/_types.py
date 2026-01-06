@@ -3734,6 +3734,7 @@ class BaseDailySpendTransaction(TypedDict):
     model_group: Optional[str]
     mcp_namespaced_tool_name: Optional[str]
     custom_llm_provider: Optional[str]
+    endpoint: Optional[str]
 
     # token count metrics
     prompt_tokens: int
