@@ -65,6 +65,7 @@ from litellm.responses.streaming_iterator import (
     ResponsesAPIStreamingIterator,
     SyncResponsesAPIStreamingIterator,
 )
+from litellm.types.utils import CallTypes
 from litellm.types.containers.main import (
     ContainerFileListResponse,
     ContainerListResponse,
@@ -2007,6 +2008,10 @@ class BaseLLMHTTPHandler:
         """
         Handles responses API requests.
         When _is_async=True, returns a coroutine instead of making the call directly.
+
+        Keeps the pre-transform request context for streaming so post-call hooks/metadata
+        (added for Responses API parity with chat) receive the original params instead of
+        the provider-shaped body that caused them to be skipped before.
         """
 
         if _is_async:
@@ -2063,6 +2068,18 @@ class BaseLLMHTTPHandler:
         if extra_body:
             data.update(extra_body)
 
+        # Preserve the OpenAI-style request context (not sent to the provider) for streaming
+        # hooks/metadata; the streaming iterator now consumes this to run deployment hooks
+        # with the same info as chat, including litellm_params.
+        request_context: Dict[str, Any] = {"input": input}
+        try:
+            request_context.update(response_api_optional_request_params)
+        except Exception:
+            pass
+        # Needed by streaming callbacks/metadata helpers to reconstruct api_base/model_id
+        # but never included in the outbound provider payload.
+        request_context["litellm_params"] = dict(litellm_params)
+
         ## LOGGING
         logging_obj.pre_call(
             input=input,
@@ -2100,6 +2117,8 @@ class BaseLLMHTTPHandler:
                         responses_api_provider_config=responses_api_provider_config,
                         litellm_metadata=litellm_metadata,
                         custom_llm_provider=custom_llm_provider,
+                        request_data=request_context,
+                        call_type=CallTypes.responses.value,
                     )
 
                 return SyncResponsesAPIStreamingIterator(
@@ -2109,6 +2128,8 @@ class BaseLLMHTTPHandler:
                     responses_api_provider_config=responses_api_provider_config,
                     litellm_metadata=litellm_metadata,
                     custom_llm_provider=custom_llm_provider,
+                    request_data=request_context,
+                    call_type=CallTypes.responses.value,
                 )
             else:
                 # For non-streaming requests
@@ -2192,6 +2213,18 @@ class BaseLLMHTTPHandler:
         if extra_body:
             data.update(extra_body)
 
+        # Preserve the OpenAI-style request context (not sent to the provider) for streaming
+        # hooks/metadata; the streaming iterator now consumes this to run deployment hooks
+        # with the same info as chat, including litellm_params.
+        request_context: Dict[str, Any] = {"input": input}
+        try:
+            request_context.update(response_api_optional_request_params)
+        except Exception:
+            pass
+        # Needed by streaming callbacks/metadata helpers to reconstruct api_base/model_id
+        # but never included in the outbound provider payload.
+        request_context["litellm_params"] = dict(litellm_params)
+
         ## LOGGING
         logging_obj.pre_call(
             input=input,
@@ -2230,6 +2263,8 @@ class BaseLLMHTTPHandler:
                         responses_api_provider_config=responses_api_provider_config,
                         litellm_metadata=litellm_metadata,
                         custom_llm_provider=custom_llm_provider,
+                        request_data=request_context,
+                        call_type=CallTypes.responses.value,
                     )
 
                 # Return the streaming iterator
@@ -2240,6 +2275,8 @@ class BaseLLMHTTPHandler:
                     responses_api_provider_config=responses_api_provider_config,
                     litellm_metadata=litellm_metadata,
                     custom_llm_provider=custom_llm_provider,
+                    request_data=request_context,
+                    call_type=CallTypes.responses.value,
                 )
             else:
                 # For non-streaming, proceed as before
