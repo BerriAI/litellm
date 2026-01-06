@@ -279,7 +279,9 @@ async def test_key_token_handling(monkeypatch):
 @pytest.mark.asyncio
 async def test_budget_reset_and_expires_at_first_of_month(monkeypatch):
     """
-    Test that when budget_duration, duration, and key_budget_duration are "1mo", budget_reset_at and expires are set to first of next month
+    Test that when budget_duration, duration, and key_budget_duration are "1mo":
+    - budget_reset_at is set to first of next month (standardized reset time)
+    - expires is set to approximately 1 month from creation time (exact duration)
     """
     mock_prisma_client = AsyncMock()
     mock_insert_data = AsyncMock(
@@ -299,7 +301,7 @@ async def test_budget_reset_and_expires_at_first_of_month(monkeypatch):
         return_value=MagicMock(token="hashed_token_123", litellm_budget_table=None)
     )
 
-    from datetime import datetime, timezone
+    from datetime import datetime, timedelta, timezone
 
     import pytest
 
@@ -324,7 +326,7 @@ async def test_budget_reset_and_expires_at_first_of_month(monkeypatch):
     # Get the current date
     now = datetime.now(timezone.utc)
 
-    # Calculate expected reset date (first of next month)
+    # Calculate expected reset date (first of next month) for budget_reset_at
     if now.month == 12:
         expected_month = 1
         expected_year = now.year + 1
@@ -332,19 +334,96 @@ async def test_budget_reset_and_expires_at_first_of_month(monkeypatch):
         expected_month = now.month + 1
         expected_year = now.year
 
-    # Verify budget_reset_at, expires is set to first of next month
-    for key in ["budget_reset_at", "expires"]:
-        response_date = response.get(key)
-        assert response_date is not None, f"{key} not found in response"
-        assert (
-            response_date.year == expected_year
-        ), f"Expected year {expected_year}, got {response_date.year} for {key}"
-        assert (
-            response_date.month == expected_month
-        ), f"Expected month {expected_month}, got {response_date.month} for {key}"
-        assert (
-            response_date.day == 1
-        ), f"Expected day 1, got {response_date.day} for {key}"
+    # Verify budget_reset_at is set to first of next month (standardized reset time)
+    budget_reset_at = response.get("budget_reset_at")
+    assert budget_reset_at is not None, "budget_reset_at not found in response"
+    assert (
+        budget_reset_at.year == expected_year
+    ), f"Expected year {expected_year}, got {budget_reset_at.year} for budget_reset_at"
+    assert (
+        budget_reset_at.month == expected_month
+    ), f"Expected month {expected_month}, got {budget_reset_at.month} for budget_reset_at"
+    assert (
+        budget_reset_at.day == 1
+    ), f"Expected day 1, got {budget_reset_at.day} for budget_reset_at"
+
+    # Verify expires is set to approximately 1 month from creation time (exact duration, not standardized)
+    expires = response.get("expires")
+    assert expires is not None, "expires not found in response"
+    # expires should be approximately 1 month from now (same day next month, same time)
+    # Allow for some variance due to test execution time
+    expected_expires_min = now + timedelta(days=28)
+    expected_expires_max = now + timedelta(days=32)
+    assert (
+        expected_expires_min <= expires <= expected_expires_max
+    ), f"Expected expires to be approximately 1 month from now, got {expires}"
+
+
+@pytest.mark.asyncio
+async def test_key_expiration_exact_duration_hours(monkeypatch):
+    """
+    Test that key expiration uses exact duration addition, not standardized reset times.
+    Specifically tests the bug where "12h" duration would expire at midnight instead of 12 hours from creation.
+    """
+    mock_prisma_client = AsyncMock()
+    mock_insert_data = AsyncMock(
+        return_value=MagicMock(token="hashed_token_123", litellm_budget_table=None)
+    )
+    mock_prisma_client.insert_data = mock_insert_data
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=None
+    )
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[]
+    )
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(
+        return_value=MagicMock(token="hashed_token_123", litellm_budget_table=None)
+    )
+
+    from datetime import datetime, timedelta, timezone
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_helper_fn,
+    )
+
+    # Use monkeypatch to set the prisma_client
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Test key generation with duration="12h"
+    # This should expire exactly 12 hours from creation, not at the next midnight/noon boundary
+    response = await generate_key_helper_fn(
+        request_type="user",
+        duration="12h",
+        user_id="test_user",
+    )
+
+    expires = response.get("expires")
+    assert expires is not None, "expires not found in response"
+
+    # Calculate expected expiration (approximately 12 hours from now)
+    # Allow for small variance due to test execution time
+    now = datetime.now(timezone.utc)
+    expected_expires_min = now + timedelta(hours=11, minutes=59)
+    expected_expires_max = now + timedelta(hours=12, minutes=1)
+
+    assert (
+        expected_expires_min <= expires <= expected_expires_max
+    ), f"Expected expires to be approximately 12 hours from now ({now}), got {expires}. Duration should be exact, not aligned to time boundaries."
+
+    # Verify it's NOT aligned to hour boundaries (e.g., not exactly at :00 minutes)
+    # If created at 2:30 PM, it should expire at 2:30 AM, not midnight
+    expires_minute = expires.minute
+    expires_second = expires.second
+    # If the expiration is exactly at :00:00, it might be aligned (though could be coincidence)
+    # More importantly, verify the duration is correct
+    time_diff = expires - now
+    hours_diff = time_diff.total_seconds() / 3600
+    assert (
+        11.9 <= hours_diff <= 12.1
+    ), f"Expected expiration to be approximately 12 hours from creation, got {hours_diff} hours"
 
 
 @pytest.mark.asyncio
@@ -3405,3 +3484,161 @@ async def test_can_modify_verification_token_personal_key_no_user_id(monkeypatch
     )
 
     assert result is False
+
+
+@pytest.mark.asyncio
+async def test_list_keys_with_expand_user():
+    """
+    Test that expand=user parameter correctly includes user information in the response.
+    """
+    mock_prisma_client = AsyncMock()
+
+    # Create mock keys with user_ids
+    mock_key1 = MagicMock()
+    mock_key1.token = "token1"
+    mock_key1.user_id = "user123"
+    mock_key1.dict.return_value = {
+        "token": "token1",
+        "user_id": "user123",
+        "key_alias": "key1",
+        "models": ["gpt-4"],
+    }
+
+    mock_key2 = MagicMock()
+    mock_key2.token = "token2"
+    mock_key2.user_id = "user456"
+    mock_key2.dict.return_value = {
+        "token": "token2",
+        "user_id": "user456",
+        "key_alias": "key2",
+        "models": ["gpt-3.5-turbo"],
+    }
+
+    mock_find_many_keys = AsyncMock(return_value=[mock_key1, mock_key2])
+    mock_count_keys = AsyncMock(return_value=2)
+
+    # Create mock users
+    mock_user1 = MagicMock()
+    mock_user1.user_id = "user123"
+    mock_user1.user_email = "user1@example.com"
+    mock_user1.dict.return_value = {
+        "user_id": "user123",
+        "user_email": "user1@example.com",
+        "user_alias": "User One",
+    }
+
+    mock_user2 = MagicMock()
+    mock_user2.user_id = "user456"
+    mock_user2.user_email = "user2@example.com"
+    mock_user2.dict.return_value = {
+        "user_id": "user456",
+        "user_email": "user2@example.com",
+        "user_alias": "User Two",
+    }
+
+    mock_find_many_users = AsyncMock(return_value=[mock_user1, mock_user2])
+
+    mock_prisma_client.db.litellm_verificationtoken.find_many = mock_find_many_keys
+    mock_prisma_client.db.litellm_verificationtoken.count = mock_count_keys
+    mock_prisma_client.db.litellm_usertable.find_many = mock_find_many_users
+
+    args = {
+        "prisma_client": mock_prisma_client,
+        "page": 1,
+        "size": 50,
+        "user_id": None,
+        "team_id": None,
+        "organization_id": None,
+        "key_alias": None,
+        "key_hash": None,
+        "exclude_team_id": None,
+        "return_full_object": False,  # This should be overridden by expand=user
+        "admin_team_ids": None,
+        "include_created_by_keys": False,
+        "expand": ["user"],  # Test the expand parameter
+    }
+
+    result = await _list_key_helper(**args)
+
+    # Verify that keys were fetched
+    mock_find_many_keys.assert_called_once()
+    mock_count_keys.assert_called_once()
+
+    # Verify that users were fetched
+    # Note: Order doesn't matter for the 'in' query, so we just check that both user_ids are present
+    call_args = mock_find_many_users.call_args
+    assert call_args is not None
+    where_clause = call_args.kwargs["where"]
+    assert "user_id" in where_clause
+    assert "in" in where_clause["user_id"]
+    user_ids_in_query = set(where_clause["user_id"]["in"])
+    assert user_ids_in_query == {"user123", "user456"}
+
+    # Verify response structure
+    assert len(result["keys"]) == 2
+    assert result["total_count"] == 2
+    assert result["current_page"] == 1
+    assert result["total_pages"] == 1
+
+    # Verify that user data is included in the response
+    # Since expand=user is specified, keys should be full objects
+    assert isinstance(result["keys"][0], UserAPIKeyAuth)
+    assert isinstance(result["keys"][1], UserAPIKeyAuth)
+
+    # Verify user data is attached to keys
+    assert result["keys"][0].user == {
+        "user_id": "user123",
+        "user_email": "user1@example.com",
+        "user_alias": "User One",
+    }
+    assert result["keys"][1].user == {
+        "user_id": "user456",
+        "user_email": "user2@example.com",
+        "user_alias": "User Two",
+    }
+
+
+@pytest.mark.asyncio
+async def test_generate_key_negative_max_budget():
+    """
+    Test that GenerateKeyRequest model allows negative max_budget values.
+    Validation is done at API level, not model level.
+    
+    This prevents GET requests from breaking when they receive data with negative budgets.
+    """
+    # Should not raise any errors at model level
+    request = GenerateKeyRequest(max_budget=-7.0)
+    assert request.max_budget == -7.0
+
+
+@pytest.mark.asyncio
+async def test_generate_key_negative_soft_budget():
+    """
+    Test that GenerateKeyRequest model allows negative soft_budget values.
+    Validation is done at API level, not model level.
+    """
+    # Should not raise any errors at model level
+    request = GenerateKeyRequest(soft_budget=-10.0)
+    assert request.soft_budget == -10.0
+
+
+@pytest.mark.asyncio
+async def test_generate_key_positive_budgets_accepted():
+    """
+    Test that GenerateKeyRequest accepts positive budget values.
+    """
+    # Should not raise any errors
+    request = GenerateKeyRequest(max_budget=100.0, soft_budget=50.0)
+    assert request.max_budget == 100.0
+    assert request.soft_budget == 50.0
+
+
+@pytest.mark.asyncio
+async def test_update_key_negative_max_budget():
+    """
+    Test that UpdateKeyRequest model allows negative max_budget values.
+    Validation is done at API level, not model level.
+    """
+    # Should not raise any errors at model level
+    request = UpdateKeyRequest(key="test-key", max_budget=-5.0)
+    assert request.max_budget == -5.0

@@ -497,6 +497,57 @@ def test_convert_gemini_messages():
     )
 
 
+def test_convert_gemini_tool_call_result_with_image_url():
+    """
+    Test that image_url content type in tool results is handled correctly for Gemini.
+    Fixes: https://github.com/BerriAI/litellm/issues/18187
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_result,
+    )
+    from litellm.types.llms.openai import ChatCompletionToolMessage
+
+    # Test with string image_url format
+    message_str_format = ChatCompletionToolMessage(
+        role="tool",
+        tool_call_id="call_123",
+        content=[{"type": "image_url", "image_url": "data:image/jpeg;base64,/9j/4AAQ"}],
+    )
+    last_message_with_tool_calls = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_123",
+                "type": "function",
+                "index": 0,
+                "function": {"name": "get_image", "arguments": "{}"},
+            }
+        ],
+    }
+
+    result = convert_to_gemini_tool_call_result(
+        message=message_str_format,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+    # Should have inline_data for the image
+    assert isinstance(result, list) and any("inline_data" in p for p in result)
+
+    # Test with dict image_url format (OpenAI standard)
+    message_dict_format = ChatCompletionToolMessage(
+        role="tool",
+        tool_call_id="call_456",
+        content=[{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ"}}],
+    )
+    last_message_with_tool_calls["tool_calls"][0]["id"] = "call_456"
+
+    result2 = convert_to_gemini_tool_call_result(
+        message=message_dict_format,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+    assert isinstance(result2, list) and any("inline_data" in p for p in result2)
+
+
 def test_bedrock_tools_unpack_defs():
     """
     Test that the unpack_defs method handles nested $ref inside anyOf items correctly

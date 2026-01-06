@@ -205,7 +205,15 @@ class LiteLLM_Proxy_MCP_Handler:
             else:
                 tool_name = getattr(mcp_tool, "name", None)
 
-            if tool_name and tool_name in allowed_tool_names:
+            if not tool_name:
+                continue
+
+            if tool_name in allowed_tool_names:
+                filtered_tools.append(mcp_tool)
+                continue
+
+            unprefixed_name, _ = split_server_prefix_from_name(tool_name)
+            if unprefixed_name in allowed_tool_names:
                 filtered_tools.append(mcp_tool)
 
         return filtered_tools

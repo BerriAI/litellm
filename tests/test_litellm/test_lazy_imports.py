@@ -33,6 +33,10 @@ from litellm._lazy_imports import (
     _lazy_import_llm_configs,
     TYPES_NAMES,
     _lazy_import_types,
+    LLM_PROVIDER_LOGIC_NAMES,
+    _lazy_import_llm_provider_logic,
+    UTILS_MODULE_NAMES,
+    _lazy_import_utils_module,
 )
 
 
@@ -43,11 +47,25 @@ def _clear_names_from_globals(names: tuple):
             del litellm.__dict__[name]
 
 
+def _clear_names_from_utils_globals(names: tuple):
+    """Clear all names from litellm.utils globals."""
+    for name in names:
+        if name in litellm.utils.__dict__:
+            del litellm.utils.__dict__[name]
+
+
 def _verify_only_requested_name_imported(name: str, all_names: tuple):
     """Verify that only the requested name is in globals, not the others."""
     for other_name in all_names:
         if other_name != name:
             assert other_name not in litellm.__dict__, f"{other_name} should not be imported when importing {name}"
+
+
+def _verify_only_requested_name_imported_in_utils(name: str, all_names: tuple):
+    """Verify that only the requested name is in utils globals, not the others."""
+    for other_name in all_names:
+        if other_name != name:
+            assert other_name not in litellm.utils.__dict__, f"{other_name} should not be imported when importing {name}"
 
 
 def test_cost_calculator_lazy_imports():
@@ -218,6 +236,12 @@ def test_unknown_attribute_raises_error():
     with pytest.raises(AttributeError):
         _lazy_import_types("unknown")
 
+    with pytest.raises(AttributeError):
+        _lazy_import_llm_provider_logic("unknown")
+
+    with pytest.raises(AttributeError):
+        _lazy_import_utils_module("unknown")
+
 
 def test_llm_config_lazy_imports():
     """Test that LLM config classes can be lazy imported."""
@@ -245,4 +269,29 @@ def test_types_lazy_imports():
         assert isinstance(obj, type), f"{name} should be a class"
 
         _verify_only_requested_name_imported(name, TYPES_NAMES)
+
+
+def test_llm_provider_logic_lazy_imports():
+    """Test that LLM provider logic functions can be lazy imported."""
+    for name in LLM_PROVIDER_LOGIC_NAMES:
+        _clear_names_from_globals(LLM_PROVIDER_LOGIC_NAMES)
+
+        func = _lazy_import_llm_provider_logic(name)
+        assert func is not None
+        assert callable(func)
+        assert name in litellm.__dict__
+
+        _verify_only_requested_name_imported(name, LLM_PROVIDER_LOGIC_NAMES)
+
+
+def test_utils_module_lazy_imports():
+    """Test that utils module attributes can be lazy imported."""
+    for name in UTILS_MODULE_NAMES:
+        _clear_names_from_utils_globals(UTILS_MODULE_NAMES)
+
+        obj = _lazy_import_utils_module(name)
+        assert obj is not None
+        assert name in litellm.utils.__dict__
+
+        _verify_only_requested_name_imported_in_utils(name, UTILS_MODULE_NAMES)
 
