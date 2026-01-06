@@ -58,20 +58,20 @@ run_secret_detection() {
     # Use --recursive for directory scanning and auto-confirm if prompted
     # .gitguardian.yaml will automatically exclude binary files, wheel files, etc.
     # GITGUARDIAN_API_KEY environment variable will be used for authentication
-    # echo y | ggshield secret scan path . --recursive || {
-    #     echo ""
-    #     echo "=========================================="
-    #     echo "ERROR: Secret Detection Failed"
-    #     echo "=========================================="
-    #     echo "ggshield has detected secrets in the codebase."
-    #     echo "Please review discovered secrets above, revoke any actively used secrets"
-    #     echo "from underlying systems and make changes to inject secrets dynamically at runtime."
-    #     echo ""
-    #     echo "For more information, see: https://docs.gitguardian.com/secrets-detection/"
-    #     echo "=========================================="
-    #     echo ""
-    #     exit 1
-    # }
+    echo y | ggshield secret scan path . --recursive || {
+        echo ""
+        echo "=========================================="
+        echo "ERROR: Secret Detection Failed"
+        echo "=========================================="
+        echo "ggshield has detected secrets in the codebase."
+        echo "Please review discovered secrets above, revoke any actively used secrets"
+        echo "from underlying systems and make changes to inject secrets dynamically at runtime."
+        echo ""
+        echo "For more information, see: https://docs.gitguardian.com/secrets-detection/"
+        echo "=========================================="
+        echo ""
+        exit 1
+    }
     
     echo "Secret detection scans completed successfully"
 }
@@ -128,6 +128,7 @@ run_grype_scans() {
         "GHSA-5j98-mcp5-4vw2"
         "CVE-2025-13836" # Python 3.13 HTTP response reading OOM/DoS - no fix available in base image
         "CVE-2025-12084" # Python 3.13 xml.dom.minidom quadratic algorithm - no fix available in base image
+        "CVE-2025-60876" # BusyBox wget HTTP request splitting - no fix available in Chainguard Wolfi base image
     )
 
     # Build JSON array of allowlisted CVE IDs for jq

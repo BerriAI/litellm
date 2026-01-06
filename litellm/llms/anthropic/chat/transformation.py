@@ -54,7 +54,10 @@ from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
 )
 from litellm.types.utils import Message as LitellmMessage
-from litellm.types.utils import PromptTokensDetailsWrapper, ServerToolUse
+from litellm.types.utils import (
+    PromptTokensDetailsWrapper,
+    ServerToolUse,
+)
 from litellm.utils import (
     ModelResponse,
     Usage,
@@ -204,9 +207,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )  # Relevant issue: https://github.com/BerriAI/litellm/issues/7755
 
     def get_cache_control_headers(self) -> dict:
+        # Anthropic no longer requires the prompt-caching beta header
+        # Prompt caching now works automatically when cache_control is used in messages
+        # Reference: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
         return {
             "anthropic-version": "2023-06-01",
-            "anthropic-beta": "prompt-caching-2024-07-31",
         }
 
     def _map_tool_choice(
@@ -1034,7 +1039,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             anthropic_messages = anthropic_messages_pt(
                 model=model,
                 messages=messages,
-                llm_provider="anthropic",
+                llm_provider=self.custom_llm_provider or "anthropic",
             )
         except Exception as e:
             raise AnthropicError(
