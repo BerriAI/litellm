@@ -1,3 +1,5 @@
+import { SSOSettingsValues } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
+
 /**
  * Processes SSO settings form values and transforms them into the payload format expected by the API
  * Handles role mappings transformation and field extraction
@@ -11,6 +13,7 @@ export const processSSOSettingsPayload = (formValues: Record<string, any>): Reco
     default_role,
     group_claim,
     use_role_mappings,
+    sso_provider,
     ...rest
   } = formValues;
 
@@ -18,8 +21,9 @@ export const processSSOSettingsPayload = (formValues: Record<string, any>): Reco
     ...rest,
   };
 
-  // Add role mappings if use_role_mappings is checked
-  if (use_role_mappings) {
+  // Add role mappings only if use_role_mappings is checked AND provider supports role mappings
+  const supportsRoleMappings = sso_provider === "okta" || sso_provider === "generic";
+  if (use_role_mappings && supportsRoleMappings) {
     // Helper function to split comma-separated string into array
     const splitTeams = (teams: string | undefined): string[] => {
       if (!teams || teams.trim() === "") return [];
@@ -51,4 +55,21 @@ export const processSSOSettingsPayload = (formValues: Record<string, any>): Reco
   }
 
   return payload;
+};
+
+// Determine the SSO provider based on the configuration
+export const detectSSOProvider = (values: SSOSettingsValues): string | null => {
+  if (values.google_client_id) return "google";
+  if (values.microsoft_client_id) return "microsoft";
+  if (values.generic_client_id) {
+    // Check if it looks like Okta/Auth0 based on endpoints
+    if (
+      values.generic_authorization_endpoint?.includes("okta") ||
+      values.generic_authorization_endpoint?.includes("auth0")
+    ) {
+      return "okta";
+    }
+    return "generic";
+  }
+  return null;
 };
