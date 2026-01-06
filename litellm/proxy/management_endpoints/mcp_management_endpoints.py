@@ -304,12 +304,13 @@ if MCP_AVAILABLE:
 
     ## FastAPI Routes
     def _get_user_mcp_management_mode() -> UserMCPManagementMode:
+        proxy_general_settings: dict = {}
         try:
             from litellm.proxy.proxy_server import (
                 general_settings as proxy_general_settings,
             )
         except Exception:
-            proxy_general_settings = None
+            pass
 
         mode = (proxy_general_settings or {}).get("user_mcp_management_mode")
         if mode == "view_all":
