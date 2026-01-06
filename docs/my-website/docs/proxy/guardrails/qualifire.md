@@ -8,13 +8,7 @@ Use [Qualifire](https://qualifire.ai) to evaluate LLM outputs for quality, safet
 
 ## Quick Start
 
-### 1. Install the Qualifire SDK
-
-```bash
-pip install qualifire
-```
-
-### 2. Define Guardrails on your LiteLLM config.yaml
+### 1. Define Guardrails on your LiteLLM config.yaml
 
 Define your guardrails under the `guardrails` section:
 
@@ -61,13 +55,13 @@ guardrails:
 - `post_call` Run **after** LLM call, on **input & output**
 - `during_call` Run **during** LLM call, on **input**. Same as `pre_call` but runs in parallel as LLM call. Response not returned until guardrail check completes
 
-### 3. Start LiteLLM Gateway
+### 2. Start LiteLLM Gateway
 
 ```shell
 litellm --config config.yaml --detailed_debug
 ```
 
-### 4. Test request
+### 3. Test request
 
 **[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
 
