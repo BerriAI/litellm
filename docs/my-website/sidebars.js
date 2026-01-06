@@ -737,6 +737,7 @@ const sidebars = {
         "providers/langgraph",
         "providers/lemonade",
         "providers/llamafile",
+        "providers/llamagate",
         "providers/lm_studio",
         "providers/meta_llama",
         "providers/milvus_vector_stores",
