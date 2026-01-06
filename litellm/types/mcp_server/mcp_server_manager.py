@@ -8,6 +8,13 @@ from litellm.proxy._types import MCPAuthType, MCPTransportType
 MCPInfo = Dict[str, Any]
 
 
+class MCPOAuthMetadata(BaseModel):
+    scopes: Optional[List[str]] = None
+    authorization_url: Optional[str] = None
+    token_url: Optional[str] = None
+    registration_url: Optional[str] = None
+
+
 class MCPServer(BaseModel):
     server_id: str
     name: str
@@ -42,4 +49,5 @@ class MCPServer(BaseModel):
     args: Optional[List[str]] = None
     env: Optional[Dict[str, str]] = None
     access_groups: Optional[List[str]] = None
+    allow_all_keys: bool = False
     model_config = ConfigDict(arbitrary_types_allowed=True)

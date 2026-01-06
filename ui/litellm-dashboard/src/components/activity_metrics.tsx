@@ -1,17 +1,27 @@
-import React from "react";
-import { Card, Grid, Text, Title } from "@tremor/react";
-import { AreaChart, BarChart } from "@tremor/react";
-import { DailyData, ModelActivityData, KeyMetricWithMetadata, TopApiKeyData } from "./usage/types";
-import { Collapse } from "antd";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { valueFormatter } from "../components/usage/utils/value_formatters";
-import { CustomTooltip, CustomLegend } from "./common_components/chartUtils";
+import { AreaChart, BarChart, Card, Grid, Text, Title } from "@tremor/react";
+import { Collapse } from "antd";
+import React from "react";
+import { CustomLegend, CustomTooltip } from "./common_components/chartUtils";
+import { DailyData, KeyMetricWithMetadata, ModelActivityData, TopApiKeyData } from "./UsagePage/types";
+import { valueFormatter } from "./UsagePage/utils/value_formatters";
+import { Team } from "./key_team_helpers/key_list";
+import { resolveTeamAliasFromTeamID } from "@/utils/teamUtils";
 
 interface ActivityMetricsProps {
   modelMetrics: Record<string, ModelActivityData>;
+  hidePromptCachingMetrics?: boolean;
 }
 
-const ModelSection = ({ modelName, metrics }: { modelName: string; metrics: ModelActivityData }) => {
+const ModelSection = ({
+  modelName,
+  metrics,
+  hidePromptCachingMetrics = false,
+}: {
+  modelName: string;
+  metrics: ModelActivityData;
+  hidePromptCachingMetrics?: boolean;
+}) => {
   return (
     <div className="space-y-2">
       {/* Summary Cards */}
@@ -38,10 +48,9 @@ const ModelSection = ({ modelName, metrics }: { modelName: string; metrics: Mode
         </Card>
       </Grid>
 
-      {/* Top API Keys Section */}
       {metrics.top_api_keys && metrics.top_api_keys.length > 0 && (
         <Card className="mt-4">
-          <Title>Top API Keys by Spend</Title>
+          <Title>Top Virtual Keys by Spend</Title>
           <div className="mt-3">
             <div className="grid grid-cols-1 gap-2">
               {metrics.top_api_keys.map((keyData, index) => (
@@ -139,35 +148,37 @@ const ModelSection = ({ modelName, metrics }: { modelName: string; metrics: Mode
           />
         </Card>
 
-        <Card>
-          <div className="flex justify-between items-center">
-            <Title>Prompt Caching Metrics</Title>
-            <CustomLegend
+        {!hidePromptCachingMetrics && (
+          <Card>
+            <div className="flex justify-between items-center">
+              <Title>Prompt Caching Metrics</Title>
+              <CustomLegend
+                categories={["metrics.cache_read_input_tokens", "metrics.cache_creation_input_tokens"]}
+                colors={["cyan", "purple"]}
+              />
+            </div>
+            <div className="mb-2">
+              <Text>Cache Read: {metrics.total_cache_read_input_tokens?.toLocaleString() || 0} tokens</Text>
+              <Text>Cache Creation: {metrics.total_cache_creation_input_tokens?.toLocaleString() || 0} tokens</Text>
+            </div>
+            <AreaChart
+              className="mt-4"
+              data={metrics.daily_data}
+              index="date"
               categories={["metrics.cache_read_input_tokens", "metrics.cache_creation_input_tokens"]}
               colors={["cyan", "purple"]}
+              valueFormatter={valueFormatter}
+              customTooltip={CustomTooltip}
+              showLegend={false}
             />
-          </div>
-          <div className="mb-2">
-            <Text>Cache Read: {metrics.total_cache_read_input_tokens?.toLocaleString() || 0} tokens</Text>
-            <Text>Cache Creation: {metrics.total_cache_creation_input_tokens?.toLocaleString() || 0} tokens</Text>
-          </div>
-          <AreaChart
-            className="mt-4"
-            data={metrics.daily_data}
-            index="date"
-            categories={["metrics.cache_read_input_tokens", "metrics.cache_creation_input_tokens"]}
-            colors={["cyan", "purple"]}
-            valueFormatter={valueFormatter}
-            customTooltip={CustomTooltip}
-            showLegend={false}
-          />
-        </Card>
+          </Card>
+        )}
       </Grid>
     </div>
   );
 };
 
-export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics }) => {
+export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, hidePromptCachingMetrics = false }) => {
   const modelNames = Object.keys(modelMetrics).sort((a, b) => {
     if (a === "") return 1;
     if (b === "") return -1;
@@ -315,7 +326,11 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics }
               </div>
             }
           >
-            <ModelSection modelName={modelName || "Unknown Model"} metrics={modelMetrics[modelName]} />
+            <ModelSection
+              modelName={modelName || "Unknown Model"}
+              metrics={modelMetrics[modelName]}
+              hidePromptCachingMetrics={hidePromptCachingMetrics}
+            />
           </Collapse.Panel>
         ))}
       </Collapse>
@@ -324,16 +339,21 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics }
 };
 
 // Helper function to format key label
-const formatKeyLabel = (modelData: KeyMetricWithMetadata, model: string): string => {
+export const formatKeyLabel = (modelData: KeyMetricWithMetadata, model: string, teams: Team[]): string => {
   const keyAlias = modelData.metadata.key_alias || `key-hash-${model}`;
   const teamId = modelData.metadata.team_id;
-  return teamId ? `${keyAlias} (team_id: ${teamId})` : keyAlias;
+  if (teamId) {
+    const teamAlias = resolveTeamAliasFromTeamID(teamId, teams);
+    return teamAlias ? `${keyAlias} (team: ${teamAlias})` : `${keyAlias} (team_id: ${teamId})`;
+  }
+  return keyAlias;
 };
 
 // Process data function
 export const processActivityData = (
   dailyActivity: { results: DailyData[] },
   key: "models" | "api_keys" | "mcp_servers",
+  teams: Team[] = [],
 ): Record<string, ModelActivityData> => {
   const modelMetrics: Record<string, ModelActivityData> = {};
 
@@ -341,7 +361,7 @@ export const processActivityData = (
     Object.entries(day.breakdown[key] || {}).forEach(([model, modelData]) => {
       if (!modelMetrics[model]) {
         modelMetrics[model] = {
-          label: key === "api_keys" ? formatKeyLabel(modelData as KeyMetricWithMetadata, model) : model,
+          label: key === "api_keys" ? formatKeyLabel(modelData as KeyMetricWithMetadata, model, teams) : model,
           total_requests: 0,
           total_successful_requests: 0,
           total_failed_requests: 0,
@@ -384,12 +404,12 @@ export const processActivityData = (
     });
   });
 
-  // Process API key breakdowns for each metric (skip if key is 'api_keys' to avoid duplication)
+  // Process Virtual Key breakdowns for each metric (skip if key is 'api_keys' to avoid duplication)
   if (key !== "api_keys") {
     Object.entries(modelMetrics).forEach(([model, _]) => {
       const apiKeyBreakdown: Record<string, TopApiKeyData> = {};
 
-      // Aggregate API key data across all days
+      // Aggregate Virtual Key data across all days
       dailyActivity.results.forEach((day) => {
         const modelData = day.breakdown[key]?.[model];
         if (modelData && "api_key_breakdown" in modelData) {

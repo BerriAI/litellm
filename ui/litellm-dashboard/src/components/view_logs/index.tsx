@@ -18,6 +18,7 @@ import KeyInfoView from "../templates/key_info_view";
 import { SessionView } from "./SessionView";
 import { VectorStoreViewer } from "./VectorStoreViewer";
 import GuardrailViewer from "@/components/view_logs/GuardrailViewer/GuardrailViewer";
+import { CostBreakdownViewer } from "./CostBreakdownViewer";
 import FilterComponent from "../molecules/filter";
 import { FilterOption } from "../molecules/filter";
 import { useLogFilterLogic } from "./log_filter_logic";
@@ -26,6 +27,7 @@ import { Tab, TabGroup, TabList, TabPanels, TabPanel, Switch } from "@tremor/rea
 import AuditLogs from "./audit_logs";
 import { getTimeRangeDisplay } from "./logs_utils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { truncateString } from "@/utils/textUtils";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -365,6 +367,24 @@ export default function SpendLogsTable({
     setExpandedRequestId(requestId);
   };
 
+  // Function to extract unique error codes from logs
+  const extractErrorCodes = (logs: LogEntry[], searchText: string = "") => {
+    const errorCodes = new Set<string>();
+    logs.forEach((log) => {
+      const metadata = log.metadata || {};
+      if (metadata.status === "failure" && metadata.error_information) {
+        const errorCode = metadata.error_information.error_code;
+        if (errorCode && (!searchText || errorCode.toLowerCase().includes(searchText.toLowerCase()))) {
+          errorCodes.add(errorCode);
+        }
+      }
+    });
+    return Array.from(errorCodes).map((code) => ({
+      label: code,
+      value: code,
+    }));
+  };
+
   const logFilterOptions: FilterOption[] = [
     {
       name: "Team ID",
@@ -423,6 +443,14 @@ export default function SpendLogsTable({
         const users = data?.map((u: any) => u.user_id) || [];
         const filtered = users.filter((u: string) => u.toLowerCase().includes(searchText.toLowerCase()));
         return filtered.map((u: string) => ({ label: u, value: u }));
+      },
+    },
+    {
+      name: "Error Code",
+      label: "Error Code",
+      isSearchable: true,
+      searchFn: async (searchText: string) => {
+        return extractErrorCodes(logsData.data, searchText);
       },
     },
     {
@@ -498,12 +526,8 @@ export default function SpendLogsTable({
               <KeyInfoView
                 keyId={selectedKeyIdInfoView}
                 keyData={selectedKeyInfo}
-                accessToken={accessToken}
-                userID={userID}
-                userRole={userRole}
                 teams={allTeams}
                 onClose={() => setSelectedKeyIdInfoView(null)}
-                premiumUser={premiumUser}
                 backButtonText="Back to Logs"
               />
             ) : selectedSessionId ? (
@@ -791,11 +815,7 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
 
   // Extract guardrail information from metadata if available
   const guardrailInfo = row.original.metadata?.guardrail_information;
-  const guardrailEntries = Array.isArray(guardrailInfo)
-    ? guardrailInfo
-    : guardrailInfo
-    ? [guardrailInfo]
-    : [];
+  const guardrailEntries = Array.isArray(guardrailInfo) ? guardrailInfo : guardrailInfo ? [guardrailInfo] : [];
   const hasGuardrailData = guardrailEntries.length > 0;
 
   // Calculate total masked entities if guardrail data exists
@@ -806,18 +826,18 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
     }
     return (
       sum +
-      Object.values(maskedCounts).reduce<number>(
-        (acc, count) => (typeof count === "number" ? acc + count : acc),
-        0,
-      )
+      Object.values(maskedCounts).reduce<number>((acc, count) => (typeof count === "number" ? acc + count : acc), 0)
     );
   }, 0);
 
-  const primaryGuardrailLabel = guardrailEntries.length === 1
-    ? guardrailEntries[0]?.guardrail_name ?? "-"
-    : guardrailEntries.length > 1
-    ? `${guardrailEntries.length} guardrails`
-    : "-";
+  const primaryGuardrailLabel =
+    guardrailEntries.length === 1
+      ? guardrailEntries[0]?.guardrail_name ?? "-"
+      : guardrailEntries.length > 1
+        ? `${guardrailEntries.length} guardrails`
+        : "-";
+
+  const truncatedRequestId = truncateString(row.original.request_id, 64);
 
   return (
     <div className="p-6 bg-gray-50 space-y-6 w-full max-w-full overflow-hidden box-border">
@@ -830,7 +850,13 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
           <div className="space-y-2">
             <div className="flex">
               <span className="font-medium w-1/3">Request ID:</span>
-              <span className="font-mono text-sm">{row.original.request_id}</span>
+              {row.original.request_id.length > 64 ? (
+                <Tooltip title={row.original.request_id}>
+                  <span className="font-mono text-sm">{truncatedRequestId}</span>
+                </Tooltip>
+              ) : (
+                <span className="font-mono text-sm">{row.original.request_id}</span>
+              )}
             </div>
             <div className="flex">
               <span className="font-medium w-1/3">Model:</span>
@@ -927,9 +953,18 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
               <span className="font-medium w-1/3">Duration:</span>
               <span>{row.original.duration} s.</span>
             </div>
+            {row.original.metadata?.litellm_overhead_time_ms !== undefined && (
+              <div className="flex">
+                <span className="font-medium w-1/3">LiteLLM Overhead:</span>
+                <span>{row.original.metadata.litellm_overhead_time_ms} ms</span>
+              </div>
+            )}
           </div>
         </div>
       </div>
+
+      {/* Cost Breakdown - Show if cost breakdown data is available */}
+      <CostBreakdownViewer costBreakdown={row.original.metadata?.cost_breakdown} totalSpend={row.original.spend || 0} />
 
       {/* Configuration Info Message - Show when data is missing */}
       <ConfigInfoMessage show={missingData} />

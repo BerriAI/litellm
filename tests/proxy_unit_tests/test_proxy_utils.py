@@ -238,7 +238,7 @@ def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
 
     proxy_config = ProxyConfig()
     user_api_key_dict = UserAPIKeyAuth(
-        token="6f8688eaff1d37555bb9e9a6390b6d7032b3ab2526ba0152da87128eab956432",
+        token="sk-test-mock-token-789",
         key_name="sk-...63Fg",
         key_alias=None,
         spend=0.000111,
@@ -287,7 +287,7 @@ def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
         end_user_rpm_limit=None,
         end_user_max_budget=None,
         last_refreshed_at=1726101560.967527,
-        api_key="7c305cc48fe72272700dc0d67dc691c2d1f2807490ef5eb2ee1d3a3ca86e12b1",
+        api_key="sk-test-mock-api-key-202",
         user_role=LitellmUserRoles.INTERNAL_USER,
         allowed_model_region=None,
         parent_otel_span=None,
@@ -320,7 +320,7 @@ def test_dynamic_turn_off_message_logging(callback_vars):
 
     proxy_config = ProxyConfig()
     user_api_key_dict = UserAPIKeyAuth(
-        token="6f8688eaff1d37555bb9e9a6390b6d7032b3ab2526ba0152da87128eab956432",
+        token="sk-test-mock-token-789",
         key_name="sk-...63Fg",
         key_alias=None,
         spend=0.000111,
@@ -368,7 +368,7 @@ def test_dynamic_turn_off_message_logging(callback_vars):
         end_user_rpm_limit=None,
         end_user_max_budget=None,
         last_refreshed_at=1726101560.967527,
-        api_key="7c305cc48fe72272700dc0d67dc691c2d1f2807490ef5eb2ee1d3a3ca86e12b1",
+        api_key="sk-test-mock-api-key-202",
         user_role=LitellmUserRoles.INTERNAL_USER,
         allowed_model_region=None,
         parent_otel_span=None,
@@ -677,6 +677,11 @@ async def test_prepare_key_update_data():
     data = UpdateKeyRequest(key="test_key", metadata=None)
     updated_data = await prepare_key_update_data(data, existing_key_row)
     assert updated_data["metadata"] is None
+
+    # Test duration "-1" sets expires to None (never expires)
+    data = UpdateKeyRequest(key="test_key", duration="-1")
+    updated_data = await prepare_key_update_data(data, existing_key_row)
+    assert updated_data["expires"] is None
 
 
 @pytest.mark.parametrize(
@@ -1267,7 +1272,7 @@ def test_litellm_verification_token_view_response_with_budget_table(
     from litellm.proxy._types import LiteLLM_VerificationTokenView
 
     args: Dict[str, Any] = {
-        "token": "78b627d4d14bc3acf5571ae9cb6834e661bc8794d1209318677387add7621ce1",
+        "token": "sk-test-mock-token-303",
         "key_name": "sk-...if_g",
         "key_alias": None,
         "soft_budget_cooldown": False,
@@ -1629,12 +1634,15 @@ async def test_end_user_transactions_reset():
 @pytest.mark.asyncio
 async def test_spend_logs_cleanup_after_error():
     # Setup test data
+    import asyncio
     mock_client = MagicMock()
     mock_client.spend_log_transactions = [
         {"id": 1, "amount": 10.0},
         {"id": 2, "amount": 20.0},
         {"id": 3, "amount": 30.0},
     ]
+    # Add lock for spend_log_transactions (matches real PrismaClient)
+    mock_client._spend_log_transactions_lock = asyncio.Lock()
     # Make the DB operation fail
     mock_client.db.litellm_spendlogs.create_many = AsyncMock(
         side_effect=Exception("DB Error")

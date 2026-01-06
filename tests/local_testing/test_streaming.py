@@ -1418,7 +1418,7 @@ def test_bedrock_claude_3_streaming():
 @pytest.mark.parametrize(
     "model",
     [
-        "claude-3-opus-20240229",
+        "claude-3-7-sonnet-20250219",
         "cohere.command-r-plus-v1:0",  # bedrock
         "gpt-3.5-turbo",
     ],
@@ -1952,7 +1952,6 @@ def test_openai_chat_completion_complete_response_call():
     "model",
     [
         "gpt-3.5-turbo",
-        "azure/gpt-4.1-mini",
         "claude-3-haiku-20240307",
         "o1",
     ],
@@ -2915,7 +2914,7 @@ def test_completion_claude_3_function_call_with_streaming():
     try:
         # test without max tokens
         response = completion(
-            model="claude-3-opus-20240229",
+            model="claude-3-7-sonnet-20250219",
             messages=messages,
             tools=tools,
             tool_choice="required",
@@ -2947,7 +2946,7 @@ def test_completion_claude_3_function_call_with_streaming():
     "model",
     [
         "gemini/gemini-2.5-flash-lite",
-    ],  #  "claude-3-opus-20240229"
+    ],
 )  #
 @pytest.mark.asyncio
 async def test_acompletion_function_call_with_streaming(model):

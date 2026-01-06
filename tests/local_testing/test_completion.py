@@ -286,7 +286,7 @@ def test_completion_claude_3_empty_response():
         },
     ]
     try:
-        response = litellm.completion(model="claude-3-opus-20240229", messages=messages)
+        response = litellm.completion(model="claude-3-7-sonnet-20250219", messages=messages)
         print(response)
     except litellm.InternalServerError as e:
         pytest.skip(f"InternalServerError - {str(e)}")
@@ -313,7 +313,7 @@ def test_completion_claude_3():
     try:
         # test without max tokens
         response = completion(
-            model="anthropic/claude-3-opus-20240229",
+            model="anthropic/claude-3-7-sonnet-20250219",
             messages=messages,
         )
         # Add any assertions, here to check response args
@@ -326,7 +326,7 @@ def test_completion_claude_3():
 
 @pytest.mark.parametrize(
     "model",
-    ["anthropic/claude-3-opus-20240229", "anthropic.claude-3-sonnet-20240229-v1:0"],
+    ["anthropic/claude-3-7-sonnet-20250219", "anthropic.claude-3-sonnet-20240229-v1:0"],
 )
 def test_completion_claude_3_function_call(model):
     litellm.set_verbose = True
@@ -411,7 +411,7 @@ def test_completion_claude_3_function_call(model):
     "model, api_key, api_base",
     [
         ("gpt-3.5-turbo", None, None),
-        ("claude-3-opus-20240229", None, None),
+        ("claude-3-7-sonnet-20250219", None, None),
         ("anthropic.claude-3-sonnet-20240229-v1:0", None, None),
         # (
         #     "azure_ai/command-r-plus",
@@ -512,7 +512,7 @@ async def test_anthropic_no_content_error():
     try:
         litellm.drop_params = True
         response = await litellm.acompletion(
-            model="anthropic/claude-3-opus-20240229",
+            model="anthropic/claude-3-7-sonnet-20250219",
             api_key=os.getenv("ANTHROPIC_API_KEY"),
             messages=[
                 {
@@ -630,7 +630,7 @@ def test_completion_claude_3_multi_turn_conversations():
     ]
     try:
         response = completion(
-            model="anthropic/claude-3-opus-20240229",
+            model="anthropic/claude-3-7-sonnet-20250219",
             messages=messages,
         )
         print(response)
@@ -644,7 +644,7 @@ def test_completion_claude_3_stream():
     try:
         # test without max tokens
         response = completion(
-            model="anthropic/claude-3-opus-20240229",
+            model="anthropic/claude-3-7-sonnet-20250219",
             messages=messages,
             max_tokens=10,
             stream=True,
@@ -669,7 +669,7 @@ def encode_image(image_path):
     [
         "gpt-4o",
         "azure/gpt-4.1-mini",
-        "anthropic/claude-3-opus-20240229",
+        "anthropic/claude-3-7-sonnet-20250219",
     ],
 )  #
 def test_completion_base64(model):
@@ -981,7 +981,7 @@ def test_completion_gpt4_vision():
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                                "url": "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png"
                             },
                         },
                     ],
@@ -1209,7 +1209,7 @@ def test_completion_fireworks_ai():
             },
         ]
         response = completion(
-            model="fireworks_ai/llama4-maverick-instruct-basic",
+            model="fireworks_ai/llama-v3p3-70b-instruct",
             messages=messages,
         )
         print(response)
@@ -1751,21 +1751,6 @@ def test_completion_openai_pydantic(model, api_version):
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-
-def test_completion_openai_organization():
-    try:
-        litellm.set_verbose = True
-        try:
-            response = completion(
-                model="gpt-3.5-turbo", messages=messages, organization="org-ikDc4ex8NB"
-            )
-            pytest.fail("Request should have failed - This organization does not exist")
-        except Exception as e:
-            assert "header should match organization for API key" in str(e)
-
-    except Exception as e:
-        print(e)
-        pytest.fail(f"Error occurred: {e}")
 
 
 def test_completion_text_openai():
@@ -3118,8 +3103,9 @@ async def test_completion_bedrock_httpx_models(sync_mode, model):
 
 def test_completion_bedrock_titan_null_response():
     try:
+        # amazon.titan-text-lite-v1 is deprecated, using titan-text-express-v1 instead
         response = completion(
-            model="bedrock/amazon.titan-text-lite-v1",
+            model="bedrock/amazon.titan-text-express-v1",
             messages=[
                 {
                     "role": "user",

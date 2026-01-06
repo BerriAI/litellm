@@ -130,3 +130,111 @@ async def test_update_budget_db_not_connected(client_and_mocks, monkeypatch):
     assert resp.status_code == 500
     detail = resp.json()["detail"]
     assert detail["error"] == CommonProxyErrors.db_not_connected_error.value
+
+
+@pytest.mark.asyncio
+async def test_update_budget_allows_null_max_budget(client_and_mocks):
+    """
+    Test that /budget/update allows setting max_budget to null.
+    
+    Previously, using exclude_none=True would drop null values,
+    making it impossible to remove a budget limit. With exclude_unset=True,
+    explicitly setting max_budget to null should include it in the update.
+    """
+    client, _, mock_table = client_and_mocks
+
+    captured_data = {}
+    
+    async def capture_update(*, where, data):
+        captured_data.update(data)
+        return {**where, **data}
+    
+    mock_table.update = AsyncMock(side_effect=capture_update)
+
+    payload = {
+        "budget_id": "budget_789",
+        "max_budget": None,  # Explicitly setting to null to remove budget limit
+    }
+    resp = client.post("/budget/update", json=payload)
+    assert resp.status_code == 200, resp.text
+
+    # Verify that max_budget=None was included in the update data
+    assert "max_budget" in captured_data, "max_budget should be included when explicitly set to null"
+    assert captured_data["max_budget"] is None, "max_budget should be None"
+    
+    mock_table.update.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_new_budget_negative_max_budget(client_and_mocks):
+    """
+    Test that /budget/new rejects negative max_budget values.
+    
+    This prevents the issue where negative budgets would always trigger
+    budget exceeded errors.
+    """
+    client, _, _ = client_and_mocks
+
+    payload = {
+        "budget_id": "budget_negative",
+        "max_budget": -7.0,
+    }
+    resp = client.post("/budget/new", json=payload)
+    assert resp.status_code == 400, resp.text
+    
+    detail = resp.json()["detail"]
+    assert "max_budget cannot be negative" in str(detail)
+
+
+@pytest.mark.asyncio
+async def test_new_budget_negative_soft_budget(client_and_mocks):
+    """
+    Test that /budget/new rejects negative soft_budget values.
+    """
+    client, _, _ = client_and_mocks
+
+    payload = {
+        "budget_id": "budget_negative_soft",
+        "soft_budget": -10.0,
+    }
+    resp = client.post("/budget/new", json=payload)
+    assert resp.status_code == 400, resp.text
+    
+    detail = resp.json()["detail"]
+    assert "soft_budget cannot be negative" in str(detail)
+
+
+@pytest.mark.asyncio
+async def test_update_budget_negative_max_budget(client_and_mocks):
+    """
+    Test that /budget/update rejects negative max_budget values.
+    """
+    client, _, _ = client_and_mocks
+
+    payload = {
+        "budget_id": "budget_update_negative",
+        "max_budget": -5.0,
+    }
+    resp = client.post("/budget/update", json=payload)
+    assert resp.status_code == 400, resp.text
+    
+    detail = resp.json()["detail"]
+    assert "max_budget cannot be negative" in str(detail)
+
+
+@pytest.mark.asyncio
+async def test_update_budget_negative_soft_budget(client_and_mocks):
+    """
+    Test that /budget/update rejects negative soft_budget values.
+    """
+    client, _, _ = client_and_mocks
+
+    payload = {
+        "budget_id": "budget_update_negative_soft",
+        "soft_budget": -15.0,
+    }
+    resp = client.post("/budget/update", json=payload)
+    assert resp.status_code == 400, resp.text
+    
+    detail = resp.json()["detail"]
+    assert "soft_budget cannot be negative" in str(detail)

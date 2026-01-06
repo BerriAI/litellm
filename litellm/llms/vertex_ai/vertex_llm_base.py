@@ -90,9 +90,15 @@ class VertexBase:
                     else ""
                 )
                 if isinstance(environment_id, str) and "aws" in environment_id:
-                    creds = self._credentials_from_identity_pool_with_aws(json_obj)
+                    creds = self._credentials_from_identity_pool_with_aws(
+                        json_obj,
+                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                    )
                 else:
-                    creds = self._credentials_from_identity_pool(json_obj)
+                    creds = self._credentials_from_identity_pool(
+                        json_obj,
+                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                    )
             # Check if the JSON object contains Authorized User configuration (via gcloud auth application-default login)
             elif "type" in json_obj and json_obj["type"] == "authorized_user":
                 creds = self._credentials_from_authorized_user(
@@ -131,15 +137,21 @@ class VertexBase:
         return creds, project_id
 
     # Google Auth Helpers -- extracted for mocking purposes in tests
-    def _credentials_from_identity_pool(self, json_obj):
+    def _credentials_from_identity_pool(self, json_obj, scopes):
         from google.auth import identity_pool
 
-        return identity_pool.Credentials.from_info(json_obj)
+        creds = identity_pool.Credentials.from_info(json_obj)
+        if scopes and hasattr(creds, "requires_scopes") and creds.requires_scopes:
+            creds = creds.with_scopes(scopes)
+        return creds
 
-    def _credentials_from_identity_pool_with_aws(self, json_obj):
+    def _credentials_from_identity_pool_with_aws(self, json_obj, scopes):
         from google.auth import aws
 
-        return aws.Credentials.from_info(json_obj)
+        creds = aws.Credentials.from_info(json_obj)
+        if scopes and hasattr(creds, "requires_scopes") and creds.requires_scopes:
+            creds = creds.with_scopes(scopes)
+        return creds
 
     def _credentials_from_authorized_user(self, json_obj, scopes):
         import google.oauth2.credentials
@@ -295,6 +307,7 @@ class VertexBase:
         vertex_project: Optional[str] = None,
         vertex_location: Optional[str] = None,
         vertex_api_version: Optional[Literal["v1", "v1beta1"]] = None,
+        use_psc_endpoint_format: bool = False,
     ) -> Tuple[Optional[str], str]:
         """
         for cloudflare ai gateway - https://github.com/BerriAI/litellm/issues/4317
@@ -304,6 +317,11 @@ class VertexBase:
         2. Vertex AI with standard proxies - constructs {api_base}:{endpoint}
         3. Vertex AI with PSC endpoints - constructs full path structure
            {api_base}/v1/projects/{project}/locations/{location}/endpoints/{model}:{endpoint}
+           (only when use_psc_endpoint_format=True)
+
+        Args:
+            use_psc_endpoint_format: If True, constructs PSC endpoint URL format.
+                                     If False (default), uses api_base as-is and appends :{endpoint}
 
         ## Returns
         - (auth_header, url) - Tuple[Optional[str], str]
@@ -324,34 +342,25 @@ class VertexBase:
                     auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
             else:
                 # For Vertex AI
-                # Check if this is a PSC endpoint or custom deployment
-                # PSC/custom endpoints need the full path structure
-                if vertex_project and vertex_location and model:
+                if use_psc_endpoint_format:
+                    # User explicitly specified PSC endpoint format
+                    # Construct full PSC/custom endpoint URL
+                    if not (vertex_project and vertex_location and model):
+                        raise ValueError(
+                            "vertex_project, vertex_location, and model are required when use_psc_endpoint_format=True"
+                        )
                     # Strip routing prefixes (bge/, gemma/, etc.) for endpoint URL construction
                     model_for_url = get_vertex_base_model_name(model=model)
-
-                    # Check if model is numeric (endpoint ID) or if api_base doesn't contain googleapis.com
-                    # These are indicators of PSC/custom endpoints
-                    is_psc_or_custom = (
-                        "googleapis.com" not in api_base.lower()
-                        or model_for_url.isdigit()
+                    # Format: {api_base}/v1/projects/{project}/locations/{location}/endpoints/{model}:{endpoint}
+                    version = vertex_api_version or "v1"
+                    url = "{}/{}/projects/{}/locations/{}/endpoints/{}:{}".format(
+                        api_base.rstrip("/"),
+                        version,
+                        vertex_project,
+                        vertex_location,
+                        model_for_url,
+                        endpoint,
                     )
-
-                    if is_psc_or_custom:
-                        # Construct full PSC/custom endpoint URL
-                        # Format: {api_base}/v1/projects/{project}/locations/{location}/endpoints/{model}:{endpoint}
-                        version = vertex_api_version or "v1"
-                        url = "{}/{}/projects/{}/locations/{}/endpoints/{}:{}".format(
-                            api_base.rstrip("/"),
-                            version,
-                            vertex_project,
-                            vertex_location,
-                            model_for_url,
-                            endpoint,
-                        )
-                    else:
-                        # Standard proxy - just append endpoint
-                        url = "{}:{}".format(api_base, endpoint)
                 else:
                     # Fallback to simple format if we don't have all parameters
                     url = "{}:{}".format(api_base, endpoint)
@@ -372,6 +381,7 @@ class VertexBase:
         api_base: Optional[str],
         should_use_v1beta1_features: Optional[bool] = False,
         mode: all_gemini_url_modes = "chat",
+        use_psc_endpoint_format: bool = False,
     ) -> Tuple[Optional[str], str]:
         """
         Internal function. Returns the token and url for the call.
@@ -419,6 +429,7 @@ class VertexBase:
             vertex_project=vertex_project,
             vertex_location=vertex_location,
             vertex_api_version=version,
+            use_psc_endpoint_format=use_psc_endpoint_format,
         )
 
     def _handle_reauthentication(

@@ -1,7 +1,10 @@
 import os
+import sys
 from typing import List, Literal
 
-DEFAULT_HEALTH_CHECK_PROMPT = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"))
+DEFAULT_HEALTH_CHECK_PROMPT = str(
+    os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm")
+)
 AZURE_DEFAULT_RESPONSES_API_VERSION = str(
     os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview")
 )
@@ -18,7 +21,9 @@ DEFAULT_SQS_FLUSH_INTERVAL_SECONDS = int(
 DEFAULT_NUM_WORKERS_LITELLM_PROXY = int(
     os.getenv("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1)
 )
-DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE = int(os.getenv("DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE", 1))
+DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE = int(
+    os.getenv("DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE", 1)
+)
 DEFAULT_SQS_BATCH_SIZE = int(os.getenv("DEFAULT_SQS_BATCH_SIZE", 512))
 SQS_SEND_MESSAGE_ACTION = "SendMessage"
 SQS_API_VERSION = "2012-11-05"
@@ -49,6 +54,9 @@ MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = int(
 SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD = int(
     os.getenv("SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD", 1000)
 )  # Minimum number of requests to consider "reasonable traffic". Used for single-deployment cooldown logic.
+DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS = int(
+    os.getenv("DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS", 5)
+)  # Minimum number of requests before applying error rate cooldown. Prevents cooldown from triggering on first failure.
 
 DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET", 0)
@@ -85,16 +93,28 @@ MAX_TOKEN_TRIMMING_ATTEMPTS = int(
     os.getenv("MAX_TOKEN_TRIMMING_ATTEMPTS", 10)
 )  # Maximum number of attempts to trim the message
 
-RUNWAYML_DEFAULT_API_VERSION = str(os.getenv("RUNWAYML_DEFAULT_API_VERSION", "2024-11-06"))
-RUNWAYML_POLLING_TIMEOUT = int(os.getenv("RUNWAYML_POLLING_TIMEOUT", 600))  # 10 minutes default for image generation
+RUNWAYML_DEFAULT_API_VERSION = str(
+    os.getenv("RUNWAYML_DEFAULT_API_VERSION", "2024-11-06")
+)
+RUNWAYML_POLLING_TIMEOUT = int(
+    os.getenv("RUNWAYML_POLLING_TIMEOUT", 600)
+)  # 10 minutes default for image generation
 
 ########## Networking constants ##############################################################
 _DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client for 1 hour
 
-# Aiohttp connection pooling constants
-AIOHTTP_CONNECTOR_LIMIT = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 0))
+# Aiohttp connection pooling - prevents memory leaks from unbounded connection growth
+# Set to 0 for unlimited (not recommended for production)
+AIOHTTP_CONNECTOR_LIMIT = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 300))
+AIOHTTP_CONNECTOR_LIMIT_PER_HOST = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT_PER_HOST", 50))
 AIOHTTP_KEEPALIVE_TIMEOUT = int(os.getenv("AIOHTTP_KEEPALIVE_TIMEOUT", 120))
 AIOHTTP_TTL_DNS_CACHE = int(os.getenv("AIOHTTP_TTL_DNS_CACHE", 300))
+# enable_cleanup_closed is only needed for Python versions with the SSL leak bug
+# Fixed in Python 3.12.7+ and 3.13.1+ (see https://github.com/python/cpython/pull/118960)
+# Reference: https://github.com/aio-libs/aiohttp/blob/master/aiohttp/connector.py#L74-L78
+AIOHTTP_NEEDS_CLEANUP_CLOSED = (
+    (3, 13, 0) <= sys.version_info < (3, 13, 1) or sys.version_info < (3, 12, 7)
+)
 
 # WebSocket constants
 # Default to None (unlimited) to match OpenAI's official agents SDK behavior
@@ -110,31 +130,33 @@ REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES = (
 DEFAULT_SSL_CIPHERS = os.getenv(
     "LITELLM_SSL_CIPHERS",
     # Priority 1: TLS 1.3 ciphers (fastest, ~50ms handshake)
-    "TLS_AES_256_GCM_SHA384:"           # Fastest observed in testing
-    "TLS_AES_128_GCM_SHA256:"           # Slightly faster than 256-bit
-    "TLS_CHACHA20_POLY1305_SHA256:"     # Fast on ARM/mobile
+    "TLS_AES_256_GCM_SHA384:"  # Fastest observed in testing
+    "TLS_AES_128_GCM_SHA256:"  # Slightly faster than 256-bit
+    "TLS_CHACHA20_POLY1305_SHA256:"  # Fast on ARM/mobile
     # Priority 2: TLS 1.2 ECDHE+GCM (fast, ~100ms handshake, widely supported)
     "ECDHE-RSA-AES256-GCM-SHA384:"
     "ECDHE-RSA-AES128-GCM-SHA256:"
     "ECDHE-ECDSA-AES256-GCM-SHA384:"
     "ECDHE-ECDSA-AES128-GCM-SHA256:"
     # Priority 3: Additional modern ciphers (good balance)
-    "ECDHE-RSA-CHACHA20-POLY1305:"
-    "ECDHE-ECDSA-CHACHA20-POLY1305:"
+    "ECDHE-RSA-CHACHA20-POLY1305:" "ECDHE-ECDSA-CHACHA20-POLY1305:"
     # Priority 4: Widely compatible fallbacks (slower but universally supported)
-    "ECDHE-RSA-AES256-SHA384:"          # Common fallback
-    "ECDHE-RSA-AES128-SHA256:"          # Very widely supported
-    "AES256-GCM-SHA384:"                # Non-PFS fallback (compatibility)
-    "AES128-GCM-SHA256",                # Last resort (maximum compatibility)
+    "ECDHE-RSA-AES256-SHA384:"  # Common fallback
+    "ECDHE-RSA-AES128-SHA256:"  # Very widely supported
+    "AES256-GCM-SHA384:"  # Non-PFS fallback (compatibility)
+    "AES128-GCM-SHA256",  # Last resort (maximum compatibility)
 )
 
 ########### v2 Architecture constants for managing writing updates to the database ###########
 REDIS_UPDATE_BUFFER_KEY = "litellm_spend_update_buffer"
 REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_spend_update_buffer"
 REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_team_spend_update_buffer"
+REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_org_spend_update_buffer"
+REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_end_user_spend_update_buffer"
+REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_agent_spend_update_buffer"
 REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_tag_spend_update_buffer"
 MAX_REDIS_BUFFER_DEQUEUE_COUNT = int(os.getenv("MAX_REDIS_BUFFER_DEQUEUE_COUNT", 100))
-MAX_SIZE_IN_MEMORY_QUEUE = int(os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", 10000))
+MAX_SIZE_IN_MEMORY_QUEUE = int(os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", 2000))
 MAX_IN_MEMORY_QUEUE_FLUSH_COUNT = int(
     os.getenv("MAX_IN_MEMORY_QUEUE_FLUSH_COUNT", 1000)
 )
@@ -199,6 +221,7 @@ REPEATED_STREAMING_CHUNK_LIMIT = int(
     os.getenv("REPEATED_STREAMING_CHUNK_LIMIT", 100)
 )  # catch if model starts looping the same chunk while streaming. Uses high default to prevent false positives.
 DEFAULT_MAX_LRU_CACHE_SIZE = int(os.getenv("DEFAULT_MAX_LRU_CACHE_SIZE", 16))
+_REALTIME_BODY_CACHE_SIZE = 1000  # Keep realtime helper caches bounded; workloads rarely exceed 1k models/intents
 INITIAL_RETRY_DELAY = float(os.getenv("INITIAL_RETRY_DELAY", 0.5))
 MAX_RETRY_DELAY = float(os.getenv("MAX_RETRY_DELAY", 8.0))
 JITTER = float(os.getenv("JITTER", 0.75))
@@ -246,6 +269,9 @@ TOGETHER_AI_EMBEDDING_350_M = int(os.getenv("TOGETHER_AI_EMBEDDING_350_M", 350))
 QDRANT_SCALAR_QUANTILE = float(os.getenv("QDRANT_SCALAR_QUANTILE", 0.99))
 QDRANT_VECTOR_SIZE = int(os.getenv("QDRANT_VECTOR_SIZE", 1536))
 CACHED_STREAMING_CHUNK_DELAY = float(os.getenv("CACHED_STREAMING_CHUNK_DELAY", 0.02))
+AUDIO_SPEECH_CHUNK_SIZE = int(
+    os.getenv("AUDIO_SPEECH_CHUNK_SIZE", 8192)
+)  # chunk_size for audio speech streaming. Balance between latency and memory usage
 MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = int(
     os.getenv("MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB", 512)
 )
@@ -268,12 +294,30 @@ REDACTED_BY_LITELM_STRING = "REDACTED_BY_LITELM"
 MAX_LANGFUSE_INITIALIZED_CLIENTS = int(
     os.getenv("MAX_LANGFUSE_INITIALIZED_CLIENTS", 50)
 )
+LOGGING_WORKER_CONCURRENCY = int(
+    os.getenv("LOGGING_WORKER_CONCURRENCY", 100)
+)  # Must be above 0
+LOGGING_WORKER_MAX_QUEUE_SIZE = int(os.getenv("LOGGING_WORKER_MAX_QUEUE_SIZE", 50_000))
+LOGGING_WORKER_MAX_TIME_PER_COROUTINE = float(
+    os.getenv("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0)
+)
+LOGGING_WORKER_CLEAR_PERCENTAGE = int(
+    os.getenv("LOGGING_WORKER_CLEAR_PERCENTAGE", 50)
+)  # Percentage of queue to clear (default: 50%)
+MAX_ITERATIONS_TO_CLEAR_QUEUE = int(os.getenv("MAX_ITERATIONS_TO_CLEAR_QUEUE", 200))
+MAX_TIME_TO_CLEAR_QUEUE = float(os.getenv("MAX_TIME_TO_CLEAR_QUEUE", 5.0))
+LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS = float(
+    os.getenv("LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS", 0.5)
+)  # Cooldown time in seconds before allowing another aggressive clear (default: 0.5s)
 DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE = os.getenv(
     "DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE", "streaming.chunk.yield"
 )
 
+EMAIL_BUDGET_ALERT_TTL = int(os.getenv("EMAIL_BUDGET_ALERT_TTL", 24 * 60 * 60))  # 24 hours in seconds
+EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE = float(os.getenv("EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE", 0.8))  # 80% of max budget
 ############### LLM Provider Constants ###############
 ### ANTHROPIC CONSTANTS ###
+ANTHROPIC_SKILLS_API_BETA_VERSION = "skills-2025-10-02"
 ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES = {
     "low": 1,
     "medium": 5,
@@ -282,7 +326,9 @@ ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES = {
 DEFAULT_IMAGE_ENDPOINT_MODEL = "dall-e-2"
 DEFAULT_VIDEO_ENDPOINT_MODEL = "sora-2"
 
-DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS = int(os.getenv("DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS", 8))
+DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS = int(
+    os.getenv("DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS", 8)
+)
 
 ### DATAFORSEO CONSTANTS ###
 DEFAULT_DATAFORSEO_LOCATION_CODE = int(
@@ -305,6 +351,7 @@ LITELLM_CHAT_PROVIDERS = [
     "huggingface",
     "together_ai",
     "datarobot",
+    "helicone",
     "openrouter",
     "cometapi",
     "vertex_ai",
@@ -328,6 +375,7 @@ LITELLM_CHAT_PROVIDERS = [
     "perplexity",
     "mistral",
     "groq",
+    "gigachat",
     "nvidia_nim",
     "cerebras",
     "baseten",
@@ -363,6 +411,7 @@ LITELLM_CHAT_PROVIDERS = [
     "nebius",
     "dashscope",
     "moonshot",
+    "publicai",
     "v0",
     "heroku",
     "oci",
@@ -371,7 +420,9 @@ LITELLM_CHAT_PROVIDERS = [
     "vercel_ai_gateway",
     "wandb",
     "ovhcloud",
-    "lemonade"
+    "lemonade",
+    "docker_model_runner",
+    "amazon_nova",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -475,6 +526,7 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "additional_drop_params": None,
     "messages": None,
     "reasoning_effort": None,
+    "verbosity": None,
     "thinking": None,
     "web_search_options": None,
     "service_tier": None,
@@ -496,6 +548,7 @@ openai_compatible_endpoints: List = [
     "https://api.friendli.ai/serverless/v1",
     "api.sambanova.ai/v1",
     "api.x.ai/v1",
+    "ollama.com",
     "api.galadriel.ai/v1",
     "api.llama.com/compat/v1/",
     "api.featherless.ai/v1",
@@ -503,10 +556,17 @@ openai_compatible_endpoints: List = [
     "api.studio.nebius.ai/v1",
     "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "https://api.moonshot.ai/v1",
+    "https://api.publicai.co/v1",
+    "https://api.synthetic.new/openai/v1",
+    "https://api.stima.tech/v1",
+    "https://nano-gpt.com/api/v1",
+    "https://api.poe.com/v1",
+    "https://llm.chutes.ai/v1/",
     "https://api.v0.dev/v1",
     "https://api.morphllm.com/v1",
     "https://api.lambda.ai/v1",
     "https://api.hyperbolic.xyz/v1",
+    "https://ai-gateway.helicone.ai/",
     "https://ai-gateway.vercel.sh/v1",
     "https://api.inference.wandb.ai/v1",
     "https://api.clarifai.com/v2/ext/openai/v1",
@@ -529,6 +589,7 @@ openai_compatible_providers: List = [
     "perplexity",
     "xinference",
     "xai",
+    "zai",
     "together_ai",
     "fireworks_ai",
     "empower",
@@ -543,12 +604,19 @@ openai_compatible_providers: List = [
     "github_copilot",  # GitHub Copilot Chat API
     "novita",
     "meta_llama",
+    "publicai",  # PublicAI - JSON-configured provider
+    "synthetic",  # Synthetic - JSON-configured provider
+    "apertis",  # Apertis - JSON-configured provider
+    "nano-gpt",  # Nano-GPT - JSON-configured provider
+    "poe",  # Poe - JSON-configured provider
+    "chutes",  # Chutes - JSON-configured provider
     "featherless_ai",
     "nscale",
     "nebius",
     "dashscope",
     "moonshot",
     "v0",
+    "helicone",
     "morph",
     "lambda_ai",
     "hyperbolic",
@@ -557,6 +625,8 @@ openai_compatible_providers: List = [
     "wandb",
     "cometapi",
     "clarifai",
+    "docker_model_runner",
+    "ragflow",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -569,6 +639,12 @@ openai_text_completion_compatible_providers: List = (
         "nebius",
         "dashscope",
         "moonshot",
+        "publicai",
+        "synthetic",
+        "apertis",
+        "nano-gpt",
+        "poe",
+        "chutes",
         "v0",
         "lambda_ai",
         "hyperbolic",
@@ -630,7 +706,7 @@ clarifai_models: set = set(
         "clarifai/qwen.qwenLM.Qwen3-14B",
         "clarifai/qwen.qwenLM.QwQ-32B-AWQ",
         "clarifai/anthropic.completion.claude-3_5-haiku",
-        "clarifai/anthropic.completion.claude-3_7-sonnet",    
+        "clarifai/anthropic.completion.claude-3_7-sonnet",
     ]
 )
 
@@ -796,28 +872,22 @@ WANDB_MODELS: set = set(
         # openai models
         "openai/gpt-oss-120b",
         "openai/gpt-oss-20b",
-
         # zai-org models
         "zai-org/GLM-4.5",
-
         # Qwen models
         "Qwen/Qwen3-235B-A22B-Instruct-2507",
         "Qwen/Qwen3-Coder-480B-A35B-Instruct",
         "Qwen/Qwen3-235B-A22B-Thinking-2507",
-
         # moonshotai
         "moonshotai/Kimi-K2-Instruct",
-
         # meta models
         "meta-llama/Llama-3.1-8B-Instruct",
         "meta-llama/Llama-3.3-70B-Instruct",
         "meta-llama/Llama-4-Scout-17B-16E-Instruct",
-
         # deepseek-ai
         "deepseek-ai/DeepSeek-V3.1",
         "deepseek-ai/DeepSeek-R1-0528",
         "deepseek-ai/DeepSeek-V3-0324",
-
         # microsoft
         "microsoft/Phi-4-mini-instruct",
     ]
@@ -834,12 +904,17 @@ BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "nova",
     "deepseek_r1",
     "qwen3",
+    "qwen2",
+    "twelvelabs",
+    "openai",
+    "stability",
 ]
 
 BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[
     "cohere",
     "amazon",
     "twelvelabs",
+    "nova",
 ]
 
 BEDROCK_CONVERSE_MODELS = [
@@ -882,6 +957,11 @@ BEDROCK_CONVERSE_MODELS = [
     "meta.llama3-2-3b-instruct-v1:0",
     "meta.llama3-2-11b-instruct-v1:0",
     "meta.llama3-2-90b-instruct-v1:0",
+    "amazon.nova-lite-v1:0",
+    "amazon.nova-2-lite-v1:0",
+    "amazon.nova-pro-v1:0",
+    "writer.palmyra-x4-v1:0",
+    "writer.palmyra-x5-v1:0",
 ]
 
 
@@ -900,6 +980,7 @@ cohere_embedding_models: set = set(
 bedrock_embedding_models: set = set(
     [
         "amazon.titan-embed-text-v1",
+        "amazon.nova-2-multimodal-embeddings-v1:0",
         "cohere.embed-english-v3",
         "cohere.embed-multilingual-v3",
         "cohere.embed-v4:0",
@@ -1031,13 +1112,17 @@ LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME = "litellm_internal_jobs"
 
 # Key Rotation Constants
 LITELLM_KEY_ROTATION_ENABLED = os.getenv("LITELLM_KEY_ROTATION_ENABLED", "false")
-LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS = int(os.getenv("LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS", 86400))  # 24 hours default
+LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS = int(
+    os.getenv("LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS", 86400)
+)  # 24 hours default
 UI_SESSION_TOKEN_TEAM_ID = "litellm-dashboard"
 LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 
 ########################### CLI SSO AUTHENTICATION CONSTANTS ###########################
 LITELLM_CLI_SOURCE_IDENTIFIER = "litellm-cli"
 LITELLM_CLI_SESSION_TOKEN_PREFIX = "litellm-session-token"
+CLI_SSO_SESSION_CACHE_KEY_PREFIX = "cli_sso_session"
+CLI_JWT_TOKEN_NAME = "cli-jwt-token"
 
 ########################### DB CRON JOB NAMES ###########################
 DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"
@@ -1049,6 +1134,8 @@ CLOUDZERO_MAX_FETCHED_DATA_RECORDS = int(
 SPEND_LOG_CLEANUP_JOB_NAME = "spend_log_cleanup"
 SPEND_LOG_RUN_LOOPS = int(os.getenv("SPEND_LOG_RUN_LOOPS", 500))
 SPEND_LOG_CLEANUP_BATCH_SIZE = int(os.getenv("SPEND_LOG_CLEANUP_BATCH_SIZE", 1000))
+SPEND_LOG_QUEUE_SIZE_THRESHOLD = int(os.getenv("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100))
+SPEND_LOG_QUEUE_POLL_INTERVAL = float(os.getenv("SPEND_LOG_QUEUE_POLL_INTERVAL", 2.0))
 DEFAULT_CRON_JOB_LOCK_TTL_SECONDS = int(
     os.getenv("DEFAULT_CRON_JOB_LOCK_TTL_SECONDS", 60)
 )  # 1 minute
@@ -1059,14 +1146,28 @@ PROXY_BATCH_POLLING_INTERVAL = int(os.getenv("PROXY_BATCH_POLLING_INTERVAL", 360
 PROXY_BUDGET_RESCHEDULER_MAX_TIME = int(
     os.getenv("PROXY_BUDGET_RESCHEDULER_MAX_TIME", 605)
 )
-PROXY_BATCH_WRITE_AT = int(os.getenv("PROXY_BATCH_WRITE_AT", 10))  # in seconds, increased from 10
+PROXY_BATCH_WRITE_AT = int(
+    os.getenv("PROXY_BATCH_WRITE_AT", 10)
+)  # in seconds, increased from 10
 
 # APScheduler Configuration - MEMORY LEAK FIX
 # These settings prevent memory leaks in APScheduler's normalize() and _apply_jitter() functions
-APSCHEDULER_COALESCE = os.getenv("APSCHEDULER_COALESCE", "True").lower() in ["true", "1"]  # collapse many missed runs into one
-APSCHEDULER_MISFIRE_GRACE_TIME = int(os.getenv("APSCHEDULER_MISFIRE_GRACE_TIME", 3600))  # ignore runs older than 1 hour (was 120)
-APSCHEDULER_MAX_INSTANCES = int(os.getenv("APSCHEDULER_MAX_INSTANCES", 1))  # prevent concurrent job instances
-APSCHEDULER_REPLACE_EXISTING = os.getenv("APSCHEDULER_REPLACE_EXISTING", "True").lower() in ["true", "1"]  # always replace existing jobs
+APSCHEDULER_COALESCE = os.getenv("APSCHEDULER_COALESCE", "True").lower() in [
+    "true",
+    "1",
+]  # collapse many missed runs into one
+APSCHEDULER_MISFIRE_GRACE_TIME = int(
+    os.getenv("APSCHEDULER_MISFIRE_GRACE_TIME", 3600)
+)  # ignore runs older than 1 hour (was 120)
+APSCHEDULER_MAX_INSTANCES = int(
+    os.getenv("APSCHEDULER_MAX_INSTANCES", 1)
+)  # prevent concurrent job instances
+APSCHEDULER_REPLACE_EXISTING = os.getenv(
+    "APSCHEDULER_REPLACE_EXISTING", "True"
+).lower() in [
+    "true",
+    "1",
+]  # always replace existing jobs
 
 DEFAULT_HEALTH_CHECK_INTERVAL = int(
     os.getenv("DEFAULT_HEALTH_CHECK_INTERVAL", 300)
@@ -1096,8 +1197,12 @@ SECRET_MANAGER_REFRESH_INTERVAL = int(
 )
 LITELLM_SETTINGS_SAFE_DB_OVERRIDES = [
     "default_internal_user_params",
+    "public_mcp_servers",
+    "public_agent_groups",
     "public_model_groups",
     "public_model_groups_links",
+    "cost_discount_config",
+    "cost_margin_config",
 ]
 SPECIAL_LITELLM_AUTH_TOKEN = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(
@@ -1174,3 +1279,7 @@ SENTRY_PII_DENYLIST = [
 COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY = int(
     os.getenv("COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY", 1000)
 )
+
+########################### RAG Text Splitter Constants ###########################
+DEFAULT_CHUNK_SIZE = int(os.getenv("DEFAULT_CHUNK_SIZE", 1000))
+DEFAULT_CHUNK_OVERLAP = int(os.getenv("DEFAULT_CHUNK_OVERLAP", 200))

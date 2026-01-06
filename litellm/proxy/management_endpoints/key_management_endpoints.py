@@ -507,7 +507,11 @@ async def _common_key_generation_helper(  # noqa: PLR0915
                         upperbound_duration = duration_in_seconds(
                             duration=upperbound_value
                         )
-                        user_duration = duration_in_seconds(duration=value)
+                        # Handle special case where duration is "-1" (never expires)
+                        if value == "-1":
+                            user_duration = float('inf')  # Infinite duration
+                        else:
+                            user_duration = duration_in_seconds(duration=value)
                         if user_duration > upperbound_duration:
                             raise HTTPException(
                                 status_code=400,
@@ -647,9 +651,9 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         request_type="key", **data_json, table_name="key"
     )
 
-    response[
-        "soft_budget"
-    ] = data.soft_budget  # include the user-input soft budget in the response
+    response["soft_budget"] = (
+        data.soft_budget
+    )  # include the user-input soft budget in the response
 
     response = GenerateKeyResponse(**response)
 
@@ -1005,6 +1009,7 @@ async def generate_key_fn(
     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
     - guardrails: Optional[List[str]] - List of active guardrails for the key
+    - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
@@ -1022,7 +1027,7 @@ async def generate_key_fn(
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
     - allowed_passthrough_routes: Optional[list] - List of allowed pass through endpoints for the key. Store the actual endpoint or store a wildcard pattern for a set of endpoints. Example - ["/my-custom-endpoint"]. Use this instead of allowed_routes, if you just want to specify which pass through endpoints the key can access, without specifying the routes. If allowed_routes is specified, allowed_pass_through_endpoints is ignored.
-    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "mcp_tool_permissions": {"server_id_1": ["tool1", "tool2"]}}. IF null or {} then no object permission.
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - key_type: Optional[str] - Type of key that determines default allowed routes. Options: "llm_api" (can call LLM API routes), "management" (can call management routes), "read_only" (can only call info/read routes), "default" (uses default allowed routes). Defaults to "default".
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated (regenerated)
@@ -1063,6 +1068,18 @@ async def generate_key_fn(
             )
 
         verbose_proxy_logger.debug("entered /key/generate")
+
+        # Validate budget values are not negative
+        if data.max_budget is not None and data.max_budget < 0:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"max_budget cannot be negative. Received: {data.max_budget}"}
+            )
+        if data.soft_budget is not None and data.soft_budget < 0:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"soft_budget cannot be negative. Received: {data.soft_budget}"}
+            )
 
         if user_custom_key_generate is not None:
             if asyncio.iscoroutinefunction(user_custom_key_generate):
@@ -1174,7 +1191,7 @@ async def generate_service_account_key_fn(
     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
-    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "mcp_tool_permissions": {"server_id_1": ["tool1", "tool2"]}}. IF null or {} then no object permission.
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     Examples:
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
 
@@ -1338,7 +1355,10 @@ async def prepare_key_update_data(
 
     if "duration" in non_default_values:
         duration = non_default_values.pop("duration")
-        if duration and (isinstance(duration, str)) and len(duration) > 0:
+        if duration == "-1":
+            # Set expires to None to indicate the key never expires
+            non_default_values["expires"] = None
+        elif duration and (isinstance(duration, str)) and len(duration) > 0:
             duration_s = duration_in_seconds(duration=duration)
             expires = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
             non_default_values["expires"] = expires
@@ -1451,10 +1471,11 @@ async def update_key_fn(
     - tpm_limit_type: Optional[str] - TPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
     - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
     - allowed_cache_controls: Optional[list] - List of allowed cache control values
-    - duration: Optional[str] - Key validity duration ("30d", "1h", etc.)
+    - duration: Optional[str] - Key validity duration ("30d", "1h", etc.) or "-1" to never expire
     - permissions: Optional[dict] - Key-specific permissions
     - send_invite_email: Optional[bool] - Send invite email to user_id
     - guardrails: Optional[List[str]] - List of active guardrails for the key
+    - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
     - blocked: Optional[bool] - Whether the key is blocked
     - aliases: Optional[dict] - Model aliases for the key - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)
@@ -1464,7 +1485,7 @@ async def update_key_fn(
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
     - allowed_passthrough_routes: Optional[list] - List of allowed pass through routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/my-custom-endpoint"]. Use this instead of allowed_routes, if you just want to specify which pass through routes the key can access, without specifying the routes. If allowed_routes is specified, allowed_passthrough_routes is ignored.
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
-    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "mcp_tool_permissions": {"server_id_1": ["tool1", "tool2"]}}. IF null or {} then no object permission.
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated
     - rotation_interval: Optional[str] - How often to rotate this key (e.g., '30d', '90d'). Required if auto_rotate=True
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
@@ -1493,6 +1514,13 @@ async def update_key_fn(
     )
 
     try:
+        # Validate budget values are not negative
+        if data.max_budget is not None and data.max_budget < 0:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"max_budget cannot be negative. Received: {data.max_budget}"}
+            )
+
         data_json: dict = data.model_dump(exclude_unset=True, exclude_none=True)
         key = data_json.pop("key")
 
@@ -1908,14 +1936,14 @@ async def info_key_fn(
 
     Example Curl:
     ```
-    curl -X GET "http://0.0.0.0:4000/key/info?key=sk-02Wr4IAlN3NvPXvL5JVvDA" \
+    curl -X GET "http://0.0.0.0:4000/key/info?key=sk-test-example-key-123" \
 -H "Authorization: Bearer sk-1234"
     ```
 
     Example Curl - if no key is passed, it will use the Key Passed in Authorization Header
     ```
     curl -X GET "http://0.0.0.0:4000/key/info" \
--H "Authorization: Bearer sk-02Wr4IAlN3NvPXvL5JVvDA"
+-H "Authorization: Bearer sk-test-example-key-123"
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
@@ -2069,7 +2097,9 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     if duration is None:  # allow tokens that never expire
         expires = None
     else:
-        expires = get_budget_reset_time(budget_duration=duration)
+        # Add duration to current time for exact expiration (not standardized reset time)
+        duration_seconds = duration_in_seconds(duration)
+        expires = datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)
 
     if key_budget_duration is None:  # one-time budget
         key_reset_at = None
@@ -2308,31 +2338,70 @@ async def _team_key_deletion_check(
     return False
 
 
-async def can_delete_verification_token(
+async def can_modify_verification_token(
     key_info: LiteLLM_VerificationToken,
     user_api_key_cache: DualCache,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
 ) -> bool:
     """
-    - check if user is proxy admin
-    - check if user is team admin and key is a team key
-    - check if key is personal key
+    Check if user has permission to modify (delete/regenerate) a verification token.
+    
+    Rules:
+    - Proxy admin can modify any key
+    - For team keys: only team admin or key owner can modify
+    - For personal keys: only key owner can modify
+    
+    Args:
+        key_info: The verification token to check
+        user_api_key_cache: Cache for user API keys
+        user_api_key_dict: The user making the request
+        prisma_client: Prisma client for database access
+        
+    Returns:
+        True if user can modify the key, False otherwise
     """
     is_team_key = _is_team_key(data=key_info)
+    
+    # 1. Proxy admin can modify any key
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return True
-    elif is_team_key and key_info.team_id is not None:
-        return await _team_key_deletion_check(
-            user_api_key_dict=user_api_key_dict,
-            key_info=key_info,
+    
+    # 2. For team keys: only team admin or key owner can modify
+    if is_team_key and key_info.team_id is not None:
+        # Get team object to check if user is team admin
+        team_table = await get_team_object(
+            team_id=key_info.team_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
+            check_db_only=True,
         )
-    elif key_info.user_id is not None and key_info.user_id == user_api_key_dict.user_id:
-        return True
-    else:
+        
+        if team_table is None:
+            return False
+        
+        # Check if user is team admin
+        if _is_user_team_admin(
+            user_api_key_dict=user_api_key_dict,
+            team_obj=team_table,
+        ):
+            return True
+        
+        # Check if the key belongs to the user (they own it)
+        if key_info.user_id is not None and key_info.user_id == user_api_key_dict.user_id:
+            return True
+        
+        # Not team admin and doesn't own the key
         return False
+    
+    # 3. For personal keys: only key owner can modify
+    if key_info.user_id is not None and key_info.user_id == user_api_key_dict.user_id:
+        return True
+    
+    # Default: deny
+    return False
+
+
 
 
 async def delete_verification_tokens(
@@ -2363,10 +2432,10 @@ async def delete_verification_tokens(
     try:
         if prisma_client:
             tokens = [_hash_token_if_needed(token=key) for key in tokens]
-            _keys_being_deleted: List[
-                LiteLLM_VerificationToken
-            ] = await prisma_client.db.litellm_verificationtoken.find_many(
-                where={"token": {"in": tokens}}
+            _keys_being_deleted: List[LiteLLM_VerificationToken] = (
+                await prisma_client.db.litellm_verificationtoken.find_many(
+                    where={"token": {"in": tokens}}
+                )
             )
 
             if len(_keys_being_deleted) == 0:
@@ -2386,7 +2455,7 @@ async def delete_verification_tokens(
                 for key in _keys_being_deleted:
 
                     async def _delete_key(key: LiteLLM_VerificationToken):
-                        if await can_delete_verification_token(
+                        if await can_modify_verification_token(
                             key_info=key,
                             user_api_key_cache=user_api_key_cache,
                             user_api_key_dict=user_api_key_dict,
@@ -2474,9 +2543,9 @@ async def _rotate_master_key(
     from litellm.proxy.proxy_server import proxy_config
 
     try:
-        models: Optional[
-            List
-        ] = await prisma_client.db.litellm_proxymodeltable.find_many()
+        models: Optional[List] = (
+            await prisma_client.db.litellm_proxymodeltable.find_many()
+        )
     except Exception:
         models = None
     # 2. process model table
@@ -2536,6 +2605,40 @@ async def _rotate_master_key(
         touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
         new_master_key=new_master_key,
     )
+
+    # 5. process credentials table
+    try:
+        credentials = await prisma_client.db.litellm_credentialstable.find_many()
+    except Exception:
+        credentials = None
+    if credentials:
+        from litellm.proxy.credential_endpoints.endpoints import update_db_credential
+
+        for cred in credentials:
+            try:
+                decrypted_cred = proxy_config.decrypt_credentials(cred)
+                encrypted_cred = update_db_credential(
+                    db_credential=cred,
+                    updated_patch=decrypted_cred,
+                    new_encryption_key=new_master_key,
+                )
+                credential_object_jsonified = jsonify_object(encrypted_cred.model_dump())
+                await prisma_client.db.litellm_credentialstable.update(
+                    where={"credential_name": cred.credential_name},
+                    data={
+                        **credential_object_jsonified,
+                        "updated_by": user_api_key_dict.user_id,
+                    },
+                )
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    f"Failed to re-encrypt credential {cred.credential_name}: {str(e)}"
+                )
+                # Continue with next credential instead of failing entire rotation
+                continue
+        verbose_proxy_logger.debug(
+            f"Successfully re-encrypted {len(credentials)} credentials with new master key"
+        )
 
 
 def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
@@ -2703,6 +2806,18 @@ async def regenerate_key_fn(
             user_api_key_cache=user_api_key_cache,
         )
 
+        # check if user has ownership permission to regenerate key
+        if not await can_modify_verification_token(
+            key_info=_key_in_db,
+            user_api_key_cache=user_api_key_cache,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "You are not authorized to regenerate this key"},
+            )
+
         verbose_proxy_logger.debug("key_in_db: %s", _key_in_db)
 
         new_token = get_new_token(data=data)
@@ -2741,14 +2856,8 @@ async def regenerate_key_fn(
 
         ### 3. remove existing key entry from cache
         ######################################################################
-        if key:
-            await _delete_cache_key_object(
-                hashed_token=hash_token(key),
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-            )
 
-        if hashed_api_key:
+        if hashed_api_key or key:
             await _delete_cache_key_object(
                 hashed_token=hash_token(key),
                 user_api_key_cache=user_api_key_cache,
@@ -2794,11 +2903,11 @@ async def validate_key_list_check(
             param="user_id",
             code=status.HTTP_403_FORBIDDEN,
         )
-    complete_user_info_db_obj: Optional[
-        BaseModel
-    ] = await prisma_client.db.litellm_usertable.find_unique(
-        where={"user_id": user_api_key_dict.user_id},
-        include={"organization_memberships": True},
+    complete_user_info_db_obj: Optional[BaseModel] = (
+        await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": user_api_key_dict.user_id},
+            include={"organization_memberships": True},
+        )
     )
 
     if complete_user_info_db_obj is None:
@@ -2884,10 +2993,10 @@ async def get_admin_team_ids(
     if complete_user_info is None:
         return []
     # Get all teams that user is an admin of
-    teams: Optional[
-        List[BaseModel]
-    ] = await prisma_client.db.litellm_teamtable.find_many(
-        where={"team_id": {"in": complete_user_info.teams}}
+    teams: Optional[List[BaseModel]] = (
+        await prisma_client.db.litellm_teamtable.find_many(
+            where={"team_id": {"in": complete_user_info.teams}}
+        )
     )
     if teams is None:
         return []
@@ -2932,9 +3041,13 @@ async def list_keys(
         description="Column to sort by (e.g. 'user_id', 'created_at', 'spend')",
     ),
     sort_order: str = Query(default="desc", description="Sort order ('asc' or 'desc')"),
+    expand: Optional[List[str]] = Query(None, description="Expand related objects (e.g. 'user')"),
 ) -> KeyListResponseObject:
     """
     List all keys for a given user / team / organization.
+
+    Parameters:
+        expand: Optional[List[str]] - Expand related objects (e.g. 'user' to include user information)
 
     Returns:
         {
@@ -2943,6 +3056,9 @@ async def list_keys(
             "current_page": int,
             "total_pages": int,
         }
+
+    When expand includes "user", each key object will include a "user" field with the associated user object.
+    Note: When expand=user is specified, full key objects are returned regardless of the return_full_object parameter.
     """
     try:
         from litellm.proxy.proxy_server import prisma_client
@@ -2992,6 +3108,7 @@ async def list_keys(
             include_created_by_keys=include_created_by_keys,
             sort_by=sort_by,
             sort_order=sort_order,
+            expand=expand,
         )
 
         verbose_proxy_logger.debug("Successfully prepared response")
@@ -3127,45 +3244,17 @@ def _validate_sort_params(
     return order_by
 
 
-async def _list_key_helper(
-    prisma_client: PrismaClient,
-    page: int,
-    size: int,
+def _build_key_filter_conditions(
     user_id: Optional[str],
     team_id: Optional[str],
     organization_id: Optional[str],
     key_alias: Optional[str],
     key_hash: Optional[str],
-    exclude_team_id: Optional[str] = None,
-    return_full_object: bool = False,
-    admin_team_ids: Optional[
-        List[str]
-    ] = None,  # New parameter for teams where user is admin
-    include_created_by_keys: bool = False,
-    sort_by: Optional[str] = None,
-    sort_order: str = "desc",
-) -> KeyListResponseObject:
-    """
-    Helper function to list keys
-    Args:
-        page: int
-        size: int
-        user_id: Optional[str]
-        team_id: Optional[str]
-        key_alias: Optional[str]
-        exclude_team_id: Optional[str] # exclude a specific team_id
-        return_full_object: bool # when true, will return UserAPIKeyAuth objects instead of just the token
-        admin_team_ids: Optional[List[str]] # list of team IDs where the user is an admin
-
-    Returns:
-        KeyListResponseObject
-        {
-            "keys": List[str] or List[UserAPIKeyAuth],  # Updated to reflect possible return types
-            "total_count": int,
-            "current_page": int,
-            "total_pages": int,
-        }
-    """
+    exclude_team_id: Optional[str],
+    admin_team_ids: Optional[List[str]],
+    include_created_by_keys: bool,
+) -> Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]]:
+    """Build filter conditions for key listing."""
     # Prepare filter conditions
     where: Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]] = {}
     where.update(_get_condition_to_filter_out_ui_session_tokens())
@@ -3206,6 +3295,59 @@ async def _list_key_helper(
         where.update(or_conditions[0])
 
     verbose_proxy_logger.debug(f"Filter conditions: {where}")
+    return where
+
+
+async def _list_key_helper(
+    prisma_client: PrismaClient,
+    page: int,
+    size: int,
+    user_id: Optional[str],
+    team_id: Optional[str],
+    organization_id: Optional[str],
+    key_alias: Optional[str],
+    key_hash: Optional[str],
+    exclude_team_id: Optional[str] = None,
+    return_full_object: bool = False,
+    admin_team_ids: Optional[
+        List[str]
+    ] = None,  # New parameter for teams where user is admin
+    include_created_by_keys: bool = False,
+    sort_by: Optional[str] = None,
+    sort_order: str = "desc",
+    expand: Optional[List[str]] = None,
+) -> KeyListResponseObject:
+    """
+    Helper function to list keys
+    Args:
+        page: int
+        size: int
+        user_id: Optional[str]
+        team_id: Optional[str]
+        key_alias: Optional[str]
+        exclude_team_id: Optional[str] # exclude a specific team_id
+        return_full_object: bool # when true, will return UserAPIKeyAuth objects instead of just the token
+        admin_team_ids: Optional[List[str]] # list of team IDs where the user is an admin
+
+    Returns:
+        KeyListResponseObject
+        {
+            "keys": List[str] or List[UserAPIKeyAuth],  # Updated to reflect possible return types
+            "total_count": int,
+            "current_page": int,
+            "total_pages": int,
+        }
+    """
+    where = _build_key_filter_conditions(
+        user_id=user_id,
+        team_id=team_id,
+        organization_id=organization_id,
+        key_alias=key_alias,
+        key_hash=key_hash,
+        exclude_team_id=exclude_team_id,
+        admin_team_ids=admin_team_ids,
+        include_created_by_keys=include_created_by_keys,
+    )
 
     # Calculate skip for pagination
     skip = (page - 1) * size
@@ -3246,13 +3388,28 @@ async def _list_key_helper(
     # Calculate total pages
     total_pages = -(-total_count // size)  # Ceiling division
 
+    # Fetch user information if expand includes "user"
+    user_map = {}
+    if expand and "user" in expand:
+        user_ids = [key.user_id for key in keys if key.user_id]
+        if user_ids:
+            users = await prisma_client.db.litellm_usertable.find_many(
+                where={"user_id": {"in": list(set(user_ids))}}  # Remove duplicates
+            )
+            user_map = {user.user_id: user for user in users}
+
     # Prepare response
     key_list: List[Union[str, UserAPIKeyAuth]] = []
     for key in keys:
         key_dict = key.dict()
         # Attach object_permission if object_permission_id is set
         key_dict = await attach_object_permission_to_dict(key_dict, prisma_client)
-        if return_full_object is True:
+
+        # Include user information if expand includes "user"
+        if expand and "user" in expand and key.user_id and key.user_id in user_map:
+            key_dict["user"] = user_map[key.user_id].dict()
+
+        if return_full_object is True or (expand and "user" in expand):
             key_list.append(UserAPIKeyAuth(**key_dict))  # Return full key object
         else:
             _token = key_dict.get("token")

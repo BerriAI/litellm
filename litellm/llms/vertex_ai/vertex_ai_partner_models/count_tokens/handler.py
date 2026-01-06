@@ -8,6 +8,7 @@ their respective publisher-specific count-tokens endpoints.
 from typing import Any, Dict, Optional
 
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
 
@@ -66,7 +67,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         if api_base:
             base_url = api_base
         else:
-            base_url = f"https://{vertex_location}-aiplatform.googleapis.com"
+            base_url = get_vertex_base_url(vertex_location)
 
         # Construct the count-tokens endpoint
         # Format: /v1/projects/{project}/locations/{location}/publishers/{publisher}/models/count-tokens:rawPredict

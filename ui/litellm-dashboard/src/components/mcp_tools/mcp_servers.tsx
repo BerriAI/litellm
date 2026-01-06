@@ -1,54 +1,48 @@
-import React, { useState, useEffect } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Modal, Select, Tooltip } from "antd";
-import { TabPanel, TabPanels, TabGroup, TabList, Tab, Button } from "@tremor/react";
-import { Grid, Col, Title, Text } from "@tremor/react";
-import { DataTable } from "../view_logs/table";
-import { mcpServerColumns } from "./mcp_server_columns";
-import { deleteMCPServer, fetchMCPServers } from "../networking";
-import { MCPServer, MCPServerProps, Team } from "./types";
 import { isAdminRole } from "@/utils/roles";
-import { MCPServerView } from "./mcp_server_view";
+import { QuestionCircleOutlined } from "@ant-design/icons";
+import { Button, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
+import { Descriptions, Modal, Select, Tooltip, Typography } from "antd";
+import React, { useEffect, useState, useMemo } from "react";
+import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
+import { useMCPServerHealth } from "../../app/(dashboard)/hooks/mcpServers/useMCPServerHealth";
+import NotificationsManager from "../molecules/notifications_manager";
+import { deleteMCPServer } from "../networking";
+import { DataTable } from "../view_logs/table";
 import CreateMCPServer from "./create_mcp_server";
 import MCPConnect from "./mcp_connect";
-import { QuestionCircleOutlined } from "@ant-design/icons";
-import NotificationsManager from "../molecules/notifications_manager";
+import { mcpServerColumns } from "./mcp_server_columns";
+import { MCPServerView } from "./mcp_server_view";
+import { MCPServer, MCPServerProps, Team } from "./types";
+
+const { Text: AntdText, Title: AntdTitle } = Typography;
+const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
 
 const { Option } = Select;
 
-const DeleteModal: React.FC<{
-  isModalOpen: boolean;
-  title: string;
-  confirmDelete: () => void;
-  cancelDelete: () => void;
-}> = ({ isModalOpen, title, confirmDelete, cancelDelete }) => {
-  if (!isModalOpen) return null;
-  return (
-    <Modal open={isModalOpen} onOk={confirmDelete} okType="danger" onCancel={cancelDelete}>
-      <Grid numItems={1} className="gap-2 w-full">
-        <Title>{title}</Title>
-        <Col numColSpan={1}>
-          <p>Are you sure you want to delete this MCP Server?</p>
-        </Col>
-      </Grid>
-    </Modal>
-  );
-};
-
 const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID }) => {
-  const {
-    data: mcpServers,
-    isLoading: isLoadingServers,
-    refetch,
-    dataUpdatedAt,
-  } = useQuery({
-    queryKey: ["mcpServers"],
-    queryFn: () => {
-      if (!accessToken) throw new Error("Access Token required");
-      return fetchMCPServers(accessToken);
-    },
-    enabled: !!accessToken,
-  }) as { data: MCPServer[]; isLoading: boolean; refetch: () => void; dataUpdatedAt: number };
+  const { data: mcpServers, isLoading: isLoadingServers, refetch } = useMCPServers();
+
+  // Fetch health status for all servers
+  const serverIds = useMemo(() => mcpServers?.map((server) => server.server_id), [mcpServers]);
+  const { data: healthStatuses, isLoading: isLoadingHealth } = useMCPServerHealth(serverIds);
+
+  // Merge health status data into servers
+  const serversWithHealth = useMemo(() => {
+    if (!mcpServers) return [];
+    if (!healthStatuses) return mcpServers;
+
+    const healthMap = new Map(healthStatuses.map((h) => [h.server_id, h.status]));
+
+    return mcpServers.map((server) => {
+      const healthStatus = healthMap.get(server.server_id);
+      return {
+        ...server,
+        status: healthStatus
+          ? (healthStatus as "healthy" | "unhealthy" | "unknown")
+          : server.status,
+      };
+    });
+  }, [mcpServers, healthStatuses]);
 
   // Log allowed_tools from fetched servers
   React.useEffect(() => {
@@ -70,15 +64,34 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [selectedMcpAccessGroup, setSelectedMcpAccessGroup] = useState<string>("all");
   const [filteredServers, setFilteredServers] = useState<MCPServer[]>([]);
   const [isModalVisible, setModalVisible] = useState(false);
-
+  const [isDeletingServer, setIsDeletingServer] = useState(false);
   const isInternalUser = userRole === "Internal User";
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    try {
+      const stored = window.sessionStorage.getItem(EDIT_OAUTH_UI_STATE_KEY);
+      if (!stored) {
+        return;
+      }
+      const parsed = JSON.parse(stored);
+      if (parsed?.serverId) {
+        setSelectedServerId(parsed.serverId);
+        setEditServer(true);
+      }
+    } catch (err) {
+      console.error("Failed to restore MCP edit view state", err);
+    }
+  }, []);
 
   // Get unique teams from all servers
   const uniqueTeams = React.useMemo(() => {
-    if (!mcpServers) return [];
+    if (!serversWithHealth) return [];
     const teamsSet = new Set<string>();
     const uniqueTeamsArray: Team[] = [];
-    mcpServers.forEach((server: MCPServer) => {
+    serversWithHealth.forEach((server: MCPServer) => {
       if (server.teams) {
         server.teams.forEach((team: Team) => {
           const teamKey = team.team_id;
@@ -90,17 +103,17 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       }
     });
     return uniqueTeamsArray;
-  }, [mcpServers]);
+  }, [serversWithHealth]);
 
   // Get unique MCP access groups from all servers
   const uniqueMcpAccessGroups = React.useMemo(() => {
-    if (!mcpServers) return [];
+    if (!serversWithHealth) return [];
     return Array.from(
       new Set(
-        mcpServers.flatMap((server) => server.mcp_access_groups).filter((group): group is string => group != null),
+        serversWithHealth.flatMap((server) => server.mcp_access_groups).filter((group): group is string => group != null),
       ),
     );
-  }, [mcpServers]);
+  }, [serversWithHealth]);
 
   // Handle team filter change
   const handleTeamChange = (teamId: string) => {
@@ -116,8 +129,8 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
 
   // Filtering logic for both team and access group
   const filterServers = (teamId: string, group: string) => {
-    if (!mcpServers) return setFilteredServers([]);
-    let filtered = mcpServers;
+    if (!serversWithHealth) return setFilteredServers([]);
+    let filtered = serversWithHealth;
     if (teamId === "personal") {
       setFilteredServers([]);
       return;
@@ -133,10 +146,10 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     setFilteredServers(filtered);
   };
 
-  // Initial and effect-based filtering (trigger on query data updates)
+  // Initial and effect-based filtering (trigger on query data updates and health data updates)
   useEffect(() => {
     filterServers(selectedTeam, selectedMcpAccessGroup);
-  }, [dataUpdatedAt]);
+  }, [serversWithHealth, selectedTeam, selectedMcpAccessGroup]);
 
   const columns = React.useMemo(
     () =>
@@ -151,8 +164,9 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           setEditServer(true);
         },
         handleDelete,
+        isLoadingHealth,
       ),
-    [userRole],
+    [userRole, isLoadingHealth],
   );
 
   function handleDelete(server_id: string) {
@@ -165,20 +179,28 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       return;
     }
     try {
+      setIsDeletingServer(true);
       await deleteMCPServer(accessToken, serverIdToDelete);
       NotificationsManager.success("Deleted MCP Server successfully");
       refetch();
     } catch (error) {
       console.error("Error deleting the mcp server:", error);
+    } finally {
+      setIsDeletingServer(false);
+      setIsDeleteModalOpen(false);
+      setServerToDelete(null);
     }
-    setIsDeleteModalOpen(false);
-    setServerToDelete(null);
   };
 
   const cancelDelete = () => {
     setIsDeleteModalOpen(false);
     setServerToDelete(null);
   };
+
+  // Find the server to delete from the servers list
+  const serverToDelete = serverIdToDelete
+    ? (mcpServers || []).find((server) => server.server_id === serverIdToDelete)
+    : null;
 
   const handleCreateSuccess = (newMcpServer: MCPServer) => {
     setFilteredServers((prev) => [...prev, newMcpServer]);
@@ -282,6 +304,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             getRowCanExpand={() => false}
             isLoading={isLoadingServers}
             noDataMessage="No MCP servers configured"
+            loadingMessage="🚅 Loading MCP servers..."
           />
         </div>
       </div>
@@ -289,12 +312,51 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
 
   return (
     <div className="w-full h-full p-6">
-      <DeleteModal
-        isModalOpen={isDeleteModalOpen}
-        title="Delete MCP Server"
-        confirmDelete={confirmDelete}
-        cancelDelete={cancelDelete}
-      />
+      <Modal
+        open={isDeleteModalOpen}
+        title="Delete MCP Server?"
+        onOk={confirmDelete}
+        okText={isDeletingServer ? "Deleting..." : "Delete"}
+        onCancel={cancelDelete}
+        cancelText="Cancel"
+        cancelButtonProps={{ disabled: isDeletingServer }}
+        okButtonProps={{ danger: true }}
+        confirmLoading={isDeletingServer}
+      >
+        <div className="space-y-4">
+          <AntdText>Are you sure you want to delete this MCP Server? This action cannot be undone.</AntdText>
+
+          {serverToDelete && (
+            <div className="mt-4 p-4 bg-red-50 rounded-lg border border-red-200">
+              <AntdTitle level={5} className="mb-3 text-gray-900">
+                Server Information
+              </AntdTitle>
+              <Descriptions column={1} size="small">
+                {serverToDelete.server_name && (
+                  <Descriptions.Item label={<span className="font-semibold text-gray-700">Server Name</span>}>
+                    <AntdText className="text-sm">{serverToDelete.server_name}</AntdText>
+                  </Descriptions.Item>
+                )}
+                {serverToDelete.alias && (
+                  <Descriptions.Item label={<span className="font-semibold text-gray-700">Alias</span>}>
+                    <AntdText className="text-sm">{serverToDelete.alias}</AntdText>
+                  </Descriptions.Item>
+                )}
+                <Descriptions.Item label={<span className="font-semibold text-gray-700">Server ID</span>}>
+                  <AntdText code className="text-sm">
+                    {serverToDelete.server_id}
+                  </AntdText>
+                </Descriptions.Item>
+                <Descriptions.Item label={<span className="font-semibold text-gray-700">URL</span>}>
+                  <AntdText code className="text-sm">
+                    {serverToDelete.url}
+                  </AntdText>
+                </Descriptions.Item>
+              </Descriptions>
+            </div>
+          )}
+        </div>
+      </Modal>
       <CreateMCPServer
         userRole={userRole}
         accessToken={accessToken}
