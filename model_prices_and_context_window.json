@@ -25383,7 +25383,7 @@
     },
     "stability/inpaint": {
         "litellm_provider": "stability",
-        "mode": "image_edit",
+        "mode": "image_edits",
         "output_cost_per_image": 0.005,
         "supported_endpoints": [
             "/v1/images/edits"
@@ -25391,7 +25391,7 @@
     },
     "stability/outpaint": {
         "litellm_provider": "stability",
-        "mode": "image_edit",
+        "mode": "image_edits",
         "output_cost_per_image": 0.004,
         "supported_endpoints": [
             "/v1/images/edits"
@@ -25399,7 +25399,7 @@
     },
     "stability/erase": {
         "litellm_provider": "stability",
-        "mode": "image_edit",
+        "mode": "image_edits",
         "output_cost_per_image": 0.005,
         "supported_endpoints": [
             "/v1/images/edits"
@@ -25407,7 +25407,7 @@
     },
     "stability/search-and-replace": {
         "litellm_provider": "stability",
-        "mode": "image_edit",
+        "mode": "image_edits",
         "output_cost_per_image": 0.005,
         "supported_endpoints": [
             "/v1/images/edits"
@@ -25415,7 +25415,7 @@
     },
     "stability/search-and-recolor": {
         "litellm_provider": "stability",
-        "mode": "image_edit",
+        "mode": "image_edits",
         "output_cost_per_image": 0.005,
         "supported_endpoints": [
             "/v1/images/edits"
@@ -25423,7 +25423,7 @@
     },
     "stability/remove-background": {
         "litellm_provider": "stability",
-        "mode": "image_edit",
+        "mode": "image_edits",
         "output_cost_per_image": 0.005,
         "supported_endpoints": [
             "/v1/images/edits"
@@ -25431,7 +25431,7 @@
     },
     "stability/replace-background-and-relight": {
         "litellm_provider": "stability",
-        "mode": "image_edit",
+        "mode": "image_edits",
         "output_cost_per_image": 0.008,
         "supported_endpoints": [
             "/v1/images/edits"
@@ -25439,7 +25439,7 @@
     },
     "stability/sketch": {
         "litellm_provider": "stability",
-        "mode": "image_edit",
+        "mode": "image_edits",
         "output_cost_per_image": 0.005,
         "supported_endpoints": [
             "/v1/images/edits"
@@ -25447,7 +25447,7 @@
     },
     "stability/structure": {
         "litellm_provider": "stability",
-        "mode": "image_edit",
+        "mode": "image_edits",
         "output_cost_per_image": 0.005,
         "supported_endpoints": [
             "/v1/images/edits"
@@ -25455,7 +25455,7 @@
     },
     "stability/style": {
         "litellm_provider": "stability",
-        "mode": "image_edit",
+        "mode": "image_edits",
         "output_cost_per_image": 0.005,
         "supported_endpoints": [
             "/v1/images/edits"
@@ -25463,7 +25463,7 @@
     },
     "stability/style-transfer": {
         "litellm_provider": "stability",
-        "mode": "image_edit",
+        "mode": "image_edits",
         "output_cost_per_image": 0.008,
         "supported_endpoints": [
             "/v1/images/edits"
@@ -25471,7 +25471,7 @@
     },
     "stability/fast": {
         "litellm_provider": "stability",
-        "mode": "image_edit",
+        "mode": "image_edits",
         "output_cost_per_image": 0.002,
         "supported_endpoints": [
             "/v1/images/edits"
@@ -25479,7 +25479,7 @@
     },
     "stability/conservative": {
         "litellm_provider": "stability",
-        "mode": "image_edit",
+        "mode": "image_edits",
         "output_cost_per_image": 0.04,
         "supported_endpoints": [
             "/v1/images/edits"
@@ -25487,7 +25487,7 @@
     },
     "stability/creative": {
         "litellm_provider": "stability",
-        "mode": "image_edit",
+        "mode": "image_edits",
         "output_cost_per_image": 0.06,
         "supported_endpoints": [
             "/v1/images/edits"
@@ -25525,79 +25525,79 @@
     "stability.stable-conservative-upscale-v1:0": {
         "litellm_provider": "bedrock",
         "max_input_tokens": 77,
-        "mode": "image_edit",
-        "output_cost_per_image": 0.4
+        "mode": "image_edits",
+        "output_cost_per_image": 0.40
     },
     "stability.stable-creative-upscale-v1:0": {
         "litellm_provider": "bedrock",
         "max_input_tokens": 77,
-        "mode": "image_edit",
-        "output_cost_per_image": 0.6
+        "mode": "image_edits",
+        "output_cost_per_image": 0.60
     },
     "stability.stable-fast-upscale-v1:0": {
         "litellm_provider": "bedrock",
         "max_input_tokens": 77,
-        "mode": "image_edit",
+        "mode": "image_edits",
         "output_cost_per_image": 0.03
     },
     "stability.stable-outpaint-v1:0": {
         "litellm_provider": "bedrock",
         "max_input_tokens": 77,
-        "mode": "image_edit",
+        "mode": "image_edits",
         "output_cost_per_image": 0.06
     },
     "stability.stable-image-control-sketch-v1:0": {
         "litellm_provider": "bedrock",
         "max_input_tokens": 77,
-        "mode": "image_edit",
+        "mode": "image_edits",
         "output_cost_per_image": 0.07
     },
     "stability.stable-image-control-structure-v1:0": {
         "litellm_provider": "bedrock",
         "max_input_tokens": 77,
-        "mode": "image_edit",
+        "mode": "image_edits",
         "output_cost_per_image": 0.07
     },
     "stability.stable-image-erase-object-v1:0": {
         "litellm_provider": "bedrock",
         "max_input_tokens": 77,
-        "mode": "image_edit",
+        "mode": "image_edits",
         "output_cost_per_image": 0.07
     },
     "stability.stable-image-inpaint-v1:0": {
         "litellm_provider": "bedrock",
         "max_input_tokens": 77,
-        "mode": "image_edit",
+        "mode": "image_edits",
         "output_cost_per_image": 0.07
     },
     "stability.stable-image-remove-background-v1:0": {
         "litellm_provider": "bedrock",
         "max_input_tokens": 77,
-        "mode": "image_edit",
+        "mode": "image_edits",
         "output_cost_per_image": 0.07
     },
     "stability.stable-image-search-recolor-v1:0": {
         "litellm_provider": "bedrock",
         "max_input_tokens": 77,
-        "mode": "image_edit",
+        "mode": "image_edits",
         "output_cost_per_image": 0.07
     },
     "stability.stable-image-search-replace-v1:0": {
         "litellm_provider": "bedrock",
         "max_input_tokens": 77,
-        "mode": "image_edit",
+        "mode": "image_edits",
         "output_cost_per_image": 0.07
     },
     "stability.stable-image-style-guide-v1:0": {
         "litellm_provider": "bedrock",
         "max_input_tokens": 77,
-        "mode": "image_edit",
+        "mode": "image_edits",
         "output_cost_per_image": 0.07
     },
     "stability.stable-style-transfer-v1:0": {
         "litellm_provider": "bedrock",
         "max_input_tokens": 77,
-        "mode": "image_edit",
+        "mode": "image_edits",
         "output_cost_per_image": 0.08
     },
     "stability.stable-image-core-v1:1": {
