@@ -863,6 +863,7 @@ class KeyRequestBase(GenerateRequestBase):
     tpm_limit_type: Optional[
         Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"]
     ] = None  # raise an error if 'guaranteed_throughput' is set and we're overallocating tpm
+    router_settings: Optional[dict] = None
 
 
 class LiteLLMKeyType(str, enum.Enum):
@@ -918,6 +919,7 @@ class GenerateKeyResponse(KeyRequestBase):
             "config",
             "permissions",
             "model_max_budget",
+            "router_settings",
         ]
         for field in dict_fields:
             value = values.get(field)
@@ -1460,6 +1462,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
 
     models: list = []
     blocked: bool = False
+    router_settings: Optional[dict] = None
 
 
 class NewTeamRequest(TeamBase):
@@ -1541,6 +1544,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     model_rpm_limit: Optional[Dict[str, int]] = None
     model_tpm_limit: Optional[Dict[str, int]] = None
     allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
+    router_settings: Optional[dict] = None
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
@@ -1683,6 +1687,7 @@ class LiteLLM_TeamTable(TeamBase):
             "permissions",
             "model_max_budget",
             "model_aliases",
+            "router_settings",
         ]
 
         if isinstance(values, BaseModel):

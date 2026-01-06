@@ -1388,6 +1388,10 @@ async def prepare_key_update_data(
     if "model_max_budget" in non_default_values:
         validate_model_max_budget(non_default_values["model_max_budget"])
 
+    # Serialize router_settings to JSON if present
+    if "router_settings" in non_default_values and non_default_values["router_settings"] is not None:
+        non_default_values["router_settings"] = json.dumps(non_default_values["router_settings"])
+
     non_default_values = prepare_metadata_fields(
         data=data, non_default_values=non_default_values, existing_metadata=_metadata
     )
@@ -2080,6 +2084,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None,
     auto_rotate: Optional[bool] = None,
     rotation_interval: Optional[str] = None,
+    router_settings: Optional[dict] = None,
 ):
     from litellm.proxy.proxy_server import premium_user, prisma_client
 
@@ -2112,6 +2117,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     aliases_json = json.dumps(aliases)
     config_json = json.dumps(config)
     permissions_json = json.dumps(permissions)
+    router_settings_json = json.dumps(router_settings) if router_settings is not None else json.dumps({})
 
     # Add model_rpm_limit and model_tpm_limit to metadata
     if model_rpm_limit is not None:
@@ -2187,6 +2193,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "updated_by": updated_by,
             "allowed_routes": allowed_routes or [],
             "object_permission_id": object_permission_id,
+            "router_settings": router_settings_json,
         }
 
         # Add rotation fields if auto_rotate is enabled
@@ -2223,6 +2230,8 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             saved_token["model_max_budget"] = json.loads(
                 saved_token["model_max_budget"]
             )
+        if isinstance(saved_token.get("router_settings"), str):
+            saved_token["router_settings"] = json.loads(saved_token["router_settings"])
 
         if saved_token.get("expires", None) is not None and isinstance(
             saved_token["expires"], datetime
@@ -2267,6 +2276,15 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             )
             key_data["created_at"] = getattr(create_key_response, "created_at", None)
             key_data["updated_at"] = getattr(create_key_response, "updated_at", None)
+            
+            # Deserialize router_settings from JSON string to dict for response
+            router_settings_value = key_data.get("router_settings")
+            if router_settings_value is not None and isinstance(router_settings_value, str):
+                try:
+                    key_data["router_settings"] = json.loads(router_settings_value)
+                except json.JSONDecodeError:
+                    # If it's not valid JSON, keep as is or set to empty dict
+                    key_data["router_settings"] = {}
     except Exception as e:
         verbose_proxy_logger.error(
             "litellm.proxy.proxy_server.generate_key_helper_fn(): Exception occured - {}".format(
