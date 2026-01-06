@@ -112,7 +112,7 @@ extra_proxy = [
     "google-cloud-iam",
     "resend",
     "redisvl",
-    "qualifire",
+    "qualifire"
 ]
 
 utils = [
