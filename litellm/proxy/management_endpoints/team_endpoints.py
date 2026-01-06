@@ -916,8 +916,6 @@ async def new_team(  # noqa: PLR0915
             include={"litellm_model_table": True},  # type: ignore
         )
 
-        print(f"team_row: {team_row}")
-
         ## ADD TEAM ID TO USER TABLE ##
         team_member_add_request = TeamMemberAddRequest(
             team_id=data.team_id,
@@ -955,7 +953,6 @@ async def new_team(  # noqa: PLR0915
                 )
             )
 
-        print(f"team_row.model_dump(): {team_row.model_dump()}")
         try:
             return team_row.model_dump()
         except Exception:
