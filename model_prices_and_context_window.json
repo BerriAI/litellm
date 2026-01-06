@@ -15831,6 +15831,68 @@
         "max_tokens": 8191,
         "mode": "embedding"
     },
+    "gigachat/GigaChat-2-Lite": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "gigachat",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "supports_function_calling": true,
+        "supports_system_messages": true
+    },
+    "gigachat/GigaChat-2-Max": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "gigachat",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "gigachat/GigaChat-2-Pro": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "gigachat",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "gigachat/Embeddings": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "gigachat",
+        "max_input_tokens": 512,
+        "max_tokens": 512,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "output_vector_size": 1024
+    },
+    "gigachat/Embeddings-2": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "gigachat",
+        "max_input_tokens": 512,
+        "max_tokens": 512,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "output_vector_size": 1024
+    },
+    "gigachat/EmbeddingsGigaR": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "gigachat",
+        "max_input_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "output_vector_size": 2560
+    },
     "google.gemma-3-12b-it": {
         "input_cost_per_token": 9e-08,
         "litellm_provider": "bedrock_converse",
