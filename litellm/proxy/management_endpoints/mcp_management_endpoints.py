@@ -76,6 +76,7 @@ if MCP_AVAILABLE:
         SpecialMCPServerName,
         UpdateMCPServerRequest,
         UserAPIKeyAuth,
+        UserMCPManagementMode,
     )
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
@@ -302,6 +303,19 @@ if MCP_AVAILABLE:
         return {"access_groups": access_groups_list}
 
     ## FastAPI Routes
+    def _get_user_mcp_management_mode() -> UserMCPManagementMode:
+        try:
+            from litellm.proxy.proxy_server import (
+                general_settings as proxy_general_settings,
+            )
+        except Exception:
+            proxy_general_settings = None
+
+        mode = (proxy_general_settings or {}).get("user_mcp_management_mode")
+        if mode == "view_all":
+            return "view_all"
+        return "restricted"
+
     @router.get(
         "/server",
         description="Returns the mcp server list with associated teams",
@@ -319,18 +333,26 @@ if MCP_AVAILABLE:
         ```
         """
 
-        auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
+        user_mcp_management_mode = _get_user_mcp_management_mode()
 
-        aggregated_servers: Dict[str, LiteLLM_MCPServerTable] = {}
-        for auth_context in auth_contexts:
-            servers = await global_mcp_server_manager.get_all_allowed_mcp_servers(
-                user_api_key_auth=auth_context
+        if user_mcp_management_mode == "view_all":
+            servers = await global_mcp_server_manager.get_all_mcp_servers_unfiltered()
+            redacted_mcp_servers = _redact_mcp_credentials_list(servers)
+        else:
+            auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
+
+            aggregated_servers: Dict[str, LiteLLM_MCPServerTable] = {}
+            for auth_context in auth_contexts:
+                servers = await global_mcp_server_manager.get_all_allowed_mcp_servers(
+                    user_api_key_auth=auth_context
+                )
+                for server in servers:
+                    if server.server_id not in aggregated_servers:
+                        aggregated_servers[server.server_id] = server
+
+            redacted_mcp_servers = _redact_mcp_credentials_list(
+                aggregated_servers.values()
             )
-            for server in servers:
-                if server.server_id not in aggregated_servers:
-                    aggregated_servers[server.server_id] = server
-
-        redacted_mcp_servers = _redact_mcp_credentials_list(aggregated_servers.values())
 
         # augment the mcp servers with public status
         if litellm.public_mcp_servers is not None:
@@ -372,6 +394,17 @@ if MCP_AVAILABLE:
         --header 'Authorization: Bearer your_api_key_here'
         ```
         """
+        user_mcp_management_mode = _get_user_mcp_management_mode()
+
+        if user_mcp_management_mode == "view_all":
+            servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_unfiltered(
+                server_ids=server_ids
+            )
+            return [
+                {"server_id": server.server_id, "status": server.status}
+                for server in servers
+            ]
+
         auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
 
         server_status_map: Dict[
