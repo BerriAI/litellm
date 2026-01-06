@@ -288,7 +288,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
               </p>
             </div>
             <a
-              href="https://github.com/BerriAI/litellm/issues/18686"
+              href="https://models.litellm.ai/?request=true"
               target="_blank"
               rel="noopener noreferrer"
               className="flex-shrink-0 inline-flex items-center gap-2 px-4 py-2 bg-[#6366f1] hover:bg-[#5558e3] text-white text-sm font-medium rounded-lg transition-colors"
