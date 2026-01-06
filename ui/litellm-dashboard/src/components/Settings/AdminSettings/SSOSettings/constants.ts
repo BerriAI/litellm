@@ -13,3 +13,10 @@ export const ssoProviderDisplayNames: Record<string, string> = {
   okta: "Okta / Auth0 SSO",
   generic: "Generic SSO",
 };
+
+export const defaultRoleDisplayNames: Record<string, string> = {
+  internal_user_viewer: "Internal Viewer",
+  internal_user: "Internal User",
+  proxy_admin_viewer: "Proxy Admin Viewer",
+  proxy_admin: "Proxy Admin",
+};
