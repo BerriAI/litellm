@@ -1938,7 +1938,7 @@ async def view_spend_logs(  # noqa: PLR0915
 
     Example Request for specific api_key
     ```
-    curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=sk-Fn8Ej39NkBQmUagFEoUWPQ" \
+    curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=sk-example-1234567890abcdef" \
 -H "Authorization: Bearer sk-1234"
     ```
 

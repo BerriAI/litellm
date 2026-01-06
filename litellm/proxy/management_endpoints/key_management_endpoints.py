@@ -1917,7 +1917,7 @@ async def info_key_fn(
     Example Curl - if no key is passed, it will use the Key Passed in Authorization Header
     ```
     curl -X GET "http://0.0.0.0:4000/key/info" \
--H "Authorization: Bearer sk-02Wr4IAlN3NvPXvL5JVvDA"
+-H "Authorization: Bearer sk-example-1234567890abcdef"
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
