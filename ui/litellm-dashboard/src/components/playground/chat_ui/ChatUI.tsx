@@ -365,7 +365,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
     const loadAgents = async () => {
       try {
-        const agents = await fetchAvailableAgents(userApiKey);
+        const agents = await fetchAvailableAgents(userApiKey, customProxyBaseUrl || undefined);
         setAgentInfo(agents);
         // Clear selection if current agent not in list
         if (selectedAgent && !agents.some((a) => a.agent_name === selectedAgent)) {
@@ -377,7 +377,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     };
 
     loadAgents();
-  }, [accessToken, apiKeySource, apiKey, endpointType]);
+  }, [accessToken, apiKeySource, apiKey, endpointType, customProxyBaseUrl, selectedAgent]);
 
   useEffect(() => {
     // Scroll to the bottom of the chat whenever chatHistory updates
@@ -862,6 +862,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             useAdvancedParams ? temperature : undefined,
             useAdvancedParams ? maxTokens : undefined,
             updateTotalLatency,
+            customProxyBaseUrl || undefined,
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -872,6 +873,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             effectiveApiKey,
             selectedTags,
             signal,
+            customProxyBaseUrl || undefined,
           );
         } else if (endpointType === EndpointType.SPEECH) {
           // For audio speech
@@ -883,6 +885,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
             effectiveApiKey,
             selectedTags,
             signal,
+            undefined, // responseFormat
+            undefined, // speed
+            customProxyBaseUrl || undefined,
           );
         } else if (endpointType === EndpointType.IMAGE_EDITS) {
           // For image edits
@@ -895,6 +900,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
               effectiveApiKey,
               selectedTags,
               signal,
+              customProxyBaseUrl || undefined,
             );
           }
         } else if (endpointType === EndpointType.RESPONSES) {
@@ -933,6 +939,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             handleMCPEvent, // Pass MCP event handler
             codeInterpreter.enabled, // Enable Code Interpreter tool
             codeInterpreter.setResult, // Handle code interpreter output
+            customProxyBaseUrl || undefined,
           );
         } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
           const apiChatHistory = [
@@ -956,6 +963,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
             selectedMCPTools, // Pass the selected tools array
+            customProxyBaseUrl || undefined,
           );
         } else if (endpointType === EndpointType.EMBEDDINGS) {
           await makeOpenAIEmbeddingsRequest(
@@ -964,6 +972,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             selectedModel,
             effectiveApiKey,
             selectedTags,
+            customProxyBaseUrl || undefined,
           );
         } else if (endpointType === EndpointType.TRANSCRIPTION) {
           // For audio transcriptions
@@ -975,6 +984,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
               effectiveApiKey,
               selectedTags,
               signal,
+              undefined, // language
+              undefined, // prompt
+              undefined, // responseFormat
+              undefined, // temperature
+              customProxyBaseUrl || undefined,
             );
           }
         }
@@ -991,6 +1005,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
           updateTimingData,
           updateTotalLatency,
           updateA2AMetadata,
+          customProxyBaseUrl || undefined,
         );
       }
     } catch (error) {
@@ -1116,9 +1131,25 @@ const ChatUI: React.FC<ChatUIProps> = ({
               </div>
 
               <div>
-                <Text className="font-medium block mb-2 text-gray-700 flex items-center">
-                  <SettingOutlined className="mr-2" /> Custom Proxy Base URL
-                </Text>
+                <div className="flex items-center justify-between mb-2">
+                  <Text className="font-medium text-gray-700 flex items-center">
+                    <SettingOutlined className="mr-2" /> Custom Proxy Base URL
+                  </Text>
+                  {customProxyBaseUrl && (
+                    <Button
+                      type="link"
+                      size="small"
+                      icon={<ClearOutlined />}
+                      onClick={() => {
+                        setCustomProxyBaseUrl("");
+                        sessionStorage.removeItem("customProxyBaseUrl");
+                      }}
+                      className="text-gray-500 hover:text-gray-700"
+                    >
+                      Clear
+                    </Button>
+                  )}
+                </div>
                 <TextInput
                   placeholder="Optional: Enter custom proxy URL (e.g., http://localhost:5000)"
                   onValueChange={(value) => {
