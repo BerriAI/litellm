@@ -32,8 +32,8 @@ from fastapi import (
 from fastapi.responses import JSONResponse
 
 import litellm
-from litellm._uuid import uuid
 from litellm._logging import verbose_logger, verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._experimental.mcp_server.utils import (
     validate_and_normalize_mcp_server_payload,
@@ -67,7 +67,6 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.ui_session_utils import (
         build_effective_auth_contexts,
     )
-    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
     from litellm.proxy._types import (
         LiteLLM_MCPServerTable,
         LitellmUserRoles,
@@ -79,6 +78,7 @@ if MCP_AVAILABLE:
         UserMCPManagementMode,
     )
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
     from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
     from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
     from litellm.types.mcp import MCPCredentials
@@ -312,7 +312,7 @@ if MCP_AVAILABLE:
         except Exception:
             pass
 
-        mode = (proxy_general_settings or {}).get("user_mcp_management_mode")
+        mode = proxy_general_settings.get("user_mcp_management_mode")
         if mode == "view_all":
             return "view_all"
         return "restricted"
