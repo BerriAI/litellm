@@ -61,13 +61,19 @@ async def test_bedrock_apply_guardrail_blocked():
         guardrailVersion="DRAFT",
     )
 
-    # Mock the make_bedrock_api_request method
+    # Mock the make_bedrock_api_request method to raise an exception for blocked content
     with patch.object(
-        guardrail, "make_bedrock_api_request", new_callable=AsyncMock
+            guardrail, "make_bedrock_api_request", new_callable=AsyncMock
     ) as mock_api_request:
-        # Mock a blocked response from Bedrock
-        mock_response = {"action": "BLOCKED", "reason": "Content violates policy"}
-        mock_api_request.return_value = mock_response
+        # Mock the method to raise an HTTPException as it would for blocked content
+        from fastapi import HTTPException
+        mock_api_request.side_effect = HTTPException(
+            status_code=400,
+            detail={
+                "error": "Violated guardrail policy",
+                "bedrock_guardrail_response": "",
+            },
+        )
 
         # Test the apply_guardrail method should raise an exception
         with pytest.raises(Exception) as exc_info:
@@ -77,8 +83,9 @@ async def test_bedrock_apply_guardrail_blocked():
                 input_type="request",
             )
 
-        assert "Content blocked by Bedrock guardrail" in str(exc_info.value)
-        assert "Content violates policy" in str(exc_info.value)
+        # The apply_guardrail method wraps the original exception in a generic Exception
+        assert "Bedrock guardrail failed:" in str(exc_info.value)
+        assert "Violated guardrail policy" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
@@ -253,7 +260,15 @@ async def test_bedrock_apply_guardrail_filters_request_messages_when_flag_enable
     with patch.object(
         guardrail, "make_bedrock_api_request", new_callable=AsyncMock
     ) as mock_api:
-        mock_api.return_value = {"action": "BLOCKED", "reason": "policy"}
+        # Mock the method to raise an HTTPException as it would for blocked content
+        from fastapi import HTTPException
+        mock_api.side_effect = HTTPException(
+            status_code=400,
+            detail={
+                "error": "Violated guardrail policy",
+                "bedrock_guardrail_response": "policy",
+            },
+        )
 
         with pytest.raises(Exception, match="policy") as exc_info:
             await guardrail.apply_guardrail(
@@ -265,7 +280,8 @@ async def test_bedrock_apply_guardrail_filters_request_messages_when_flag_enable
         assert mock_api.called
         _, kwargs = mock_api.call_args
         assert kwargs["messages"] == [request_messages[-1]]
-        assert "Content blocked by Bedrock guardrail" in str(exc_info.value)
+        # The apply_guardrail method wraps the original exception in a generic Exception
+        assert "Bedrock guardrail failed:" in str(exc_info.value)
 
 
 def test_bedrock_guardrail_filters_latest_user_message_when_enabled():
