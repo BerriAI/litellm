@@ -4705,7 +4705,7 @@ class Router:
                 except Exception as e:
                     ## LOGGING
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
-                    remaining_retries = num_retries - current_attempt
+                    remaining_retries = num_retries - current_attempt - 1
                     _model: Optional[str] = kwargs.get("model")  # type: ignore
                     if _model is not None:
                         (
@@ -4728,7 +4728,15 @@ class Router:
 
             if type(original_exception) in litellm.LITELLM_EXCEPTION_TYPES:
                 setattr(original_exception, "max_retries", num_retries)
-                setattr(original_exception, "num_retries", current_attempt)
+                # current_attempt is 0-indexed (0 to num_retries-1), so after loop completion
+                # it represents the last attempt index. The actual number of retries attempted
+                # is current_attempt + 1, which equals num_retries when all retries are exhausted.
+                # We've already verified num_retries > 0 before entering the loop, so current_attempt
+                # will always be set (never None) when we reach this point.
+                actual_retries_attempted = (
+                    current_attempt + 1 if current_attempt is not None else num_retries
+                )
+                setattr(original_exception, "num_retries", actual_retries_attempted)
 
             raise original_exception
 
