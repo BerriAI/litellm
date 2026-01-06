@@ -2,6 +2,7 @@
 Unit tests for Qualifire guardrail integration.
 """
 
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -139,76 +140,98 @@ class TestQualifireGuardrailEvaluateKwargs:
     @pytest.mark.asyncio
     async def test_evaluate_called_with_prompt_injections(self):
         """Test that evaluate is called with prompt_injections enabled."""
-        from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import (
-            QualifireGuardrail,
-        )
+        # Mock the qualifire module and its types
+        mock_qualifire_types = MagicMock()
+        mock_llm_message = MagicMock()
+        mock_llm_tool_call = MagicMock()
+        mock_message_instance = MagicMock()
+        mock_llm_message.return_value = mock_message_instance
+        
+        mock_qualifire_types.LLMMessage = mock_llm_message
+        mock_qualifire_types.LLMToolCall = mock_llm_tool_call
+        
+        with patch.dict('sys.modules', {'qualifire': MagicMock(), 'qualifire.types': mock_qualifire_types}):
+            from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import (
+                QualifireGuardrail,
+            )
 
-        guardrail = QualifireGuardrail(
-            api_key="test_key",
-            prompt_injections=True,
-            guardrail_name="test_guardrail",
-        )
+            guardrail = QualifireGuardrail(
+                api_key="test_key",
+                prompt_injections=True,
+                guardrail_name="test_guardrail",
+            )
 
-        # Mock the client
-        mock_client = MagicMock()
-        mock_result = MagicMock()
-        mock_result.score = 100
-        mock_result.status = "completed"
-        mock_result.evaluationResults = []
-        mock_client.evaluate.return_value = mock_result
-        guardrail._client = mock_client
+            # Mock the client
+            mock_client = MagicMock()
+            mock_result = MagicMock()
+            mock_result.score = 100
+            mock_result.status = "completed"
+            mock_result.evaluationResults = []
+            mock_client.evaluate.return_value = mock_result
+            guardrail._client = mock_client
 
-        messages = [{"role": "user", "content": "Hello, world!"}]
+            messages = [{"role": "user", "content": "Hello, world!"}]
 
-        await guardrail._run_qualifire_check(
-            messages=messages, output=None, dynamic_params={}
-        )
+            await guardrail._run_qualifire_check(
+                messages=messages, output=None, dynamic_params={}
+            )
 
-        # Verify evaluate was called with correct kwargs
-        mock_client.evaluate.assert_called_once()
-        call_kwargs = mock_client.evaluate.call_args[1]
-        assert call_kwargs["prompt_injections"] is True
-        assert "messages" in call_kwargs
+            # Verify evaluate was called with correct kwargs
+            mock_client.evaluate.assert_called_once()
+            call_kwargs = mock_client.evaluate.call_args[1]
+            assert call_kwargs["prompt_injections"] is True
+            assert "messages" in call_kwargs
 
     @pytest.mark.asyncio
     async def test_evaluate_called_with_multiple_checks(self):
         """Test that evaluate is called with multiple checks enabled."""
-        from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import (
-            QualifireGuardrail,
-        )
+        # Mock the qualifire module and its types
+        mock_qualifire_types = MagicMock()
+        mock_llm_message = MagicMock()
+        mock_llm_tool_call = MagicMock()
+        mock_message_instance = MagicMock()
+        mock_llm_message.return_value = mock_message_instance
+        
+        mock_qualifire_types.LLMMessage = mock_llm_message
+        mock_qualifire_types.LLMToolCall = mock_llm_tool_call
+        
+        with patch.dict('sys.modules', {'qualifire': MagicMock(), 'qualifire.types': mock_qualifire_types}):
+            from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import (
+                QualifireGuardrail,
+            )
 
-        guardrail = QualifireGuardrail(
-            api_key="test_key",
-            prompt_injections=True,
-            pii_check=True,
-            hallucinations_check=True,
-            assertions=["Output must be valid JSON"],
-            guardrail_name="test_guardrail",
-        )
+            guardrail = QualifireGuardrail(
+                api_key="test_key",
+                prompt_injections=True,
+                pii_check=True,
+                hallucinations_check=True,
+                assertions=["Output must be valid JSON"],
+                guardrail_name="test_guardrail",
+            )
 
-        # Mock the client
-        mock_client = MagicMock()
-        mock_result = MagicMock()
-        mock_result.score = 100
-        mock_result.status = "completed"
-        mock_result.evaluationResults = []
-        mock_client.evaluate.return_value = mock_result
-        guardrail._client = mock_client
+            # Mock the client
+            mock_client = MagicMock()
+            mock_result = MagicMock()
+            mock_result.score = 100
+            mock_result.status = "completed"
+            mock_result.evaluationResults = []
+            mock_client.evaluate.return_value = mock_result
+            guardrail._client = mock_client
 
-        messages = [{"role": "user", "content": "Hello, world!"}]
+            messages = [{"role": "user", "content": "Hello, world!"}]
 
-        await guardrail._run_qualifire_check(
-            messages=messages, output="Test output", dynamic_params={}
-        )
+            await guardrail._run_qualifire_check(
+                messages=messages, output="Test output", dynamic_params={}
+            )
 
-        # Verify evaluate was called with correct kwargs
-        mock_client.evaluate.assert_called_once()
-        call_kwargs = mock_client.evaluate.call_args[1]
-        assert call_kwargs["prompt_injections"] is True
-        assert call_kwargs["pii_check"] is True
-        assert call_kwargs["hallucinations_check"] is True
-        assert call_kwargs["assertions"] == ["Output must be valid JSON"]
-        assert call_kwargs["output"] == "Test output"
+            # Verify evaluate was called with correct kwargs
+            mock_client.evaluate.assert_called_once()
+            call_kwargs = mock_client.evaluate.call_args[1]
+            assert call_kwargs["prompt_injections"] is True
+            assert call_kwargs["pii_check"] is True
+            assert call_kwargs["hallucinations_check"] is True
+            assert call_kwargs["assertions"] == ["Output must be valid JSON"]
+            assert call_kwargs["output"] == "Test output"
 
 
 class TestQualifireGuardrailCheckIfFlagged:
