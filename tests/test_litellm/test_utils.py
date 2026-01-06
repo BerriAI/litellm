@@ -507,9 +507,6 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         "additionalProperties": {
             "type": "object",
             "properties": {
-                "display_name": {"type": "string"},
-                "model_vendor": {"type": "string"},
-                "model_version": {"type": "string"},
                 "supports_computer_use": {"type": "boolean"},
                 "cache_creation_input_audio_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost": {"type": "number"},
