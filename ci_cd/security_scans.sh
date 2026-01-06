@@ -207,6 +207,10 @@ main() {
     echo "Installing security scanning tools..."
     install_trivy
     install_grype
+    install_ggshield
+    
+    echo "Running secret detection scans..."
+    run_secret_detection
     
     echo "Running filesystem vulnerability scans..."
     run_trivy_scans
