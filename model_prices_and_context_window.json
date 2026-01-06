@@ -17392,7 +17392,7 @@
         "max_tokens": 16000,
         "mode": "chat",
         "supported_endpoints": [
-            "/chat/completions"
+            "/v1/chat/completions"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -17407,7 +17407,7 @@
         "max_tokens": 16000,
         "mode": "chat",
         "supported_endpoints": [
-            "/chat/completions"
+            "/v1/chat/completions"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -17422,7 +17422,7 @@
         "max_tokens": 16000,
         "mode": "chat",
         "supported_endpoints": [
-            "/chat/completions"
+            "/v1/chat/completions"
         ],
         "supports_vision": true
     },
@@ -17435,7 +17435,7 @@
         "max_tokens": 16000,
         "mode": "chat",
         "supported_endpoints": [
-            "/chat/completions"
+            "/v1/chat/completions"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -17450,7 +17450,7 @@
         "max_tokens": 16000,
         "mode": "chat",
         "supported_endpoints": [
-            "/chat/completions"
+            "/v1/chat/completions"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -17641,8 +17641,8 @@
         "max_tokens": 128000,
         "mode": "chat",
         "supported_endpoints": [
-            "/chat/completions",
-            "/responses"
+            "/v1/chat/completions",
+            "/v1/responses"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -17671,8 +17671,8 @@
         "max_tokens": 64000,
         "mode": "chat",
         "supported_endpoints": [
-            "/chat/completions",
-            "/responses"
+            "/v1/chat/completions",
+            "/v1/responses"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -17688,7 +17688,7 @@
         "max_tokens": 128000,
         "mode": "responses",
         "supported_endpoints": [
-            "/responses"
+            "/v1/responses"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -17704,8 +17704,8 @@
         "max_tokens": 64000,
         "mode": "chat",
         "supported_endpoints": [
-            "/chat/completions",
-            "/responses"
+            "/v1/chat/completions",
+            "/v1/responses"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -17737,6 +17737,8 @@
         "mode": "embedding"
     },
     "gigachat/GigaChat-2-Lite": {
+        "display_name": "GigaChat 2 Lite",
+        "model_vendor": "sberbank",
         "input_cost_per_token": 0.0,
         "litellm_provider": "gigachat",
         "max_input_tokens": 128000,
@@ -17748,6 +17750,8 @@
         "supports_system_messages": true
     },
     "gigachat/GigaChat-2-Max": {
+        "display_name": "GigaChat 2 Max",
+        "model_vendor": "sberbank",
         "input_cost_per_token": 0.0,
         "litellm_provider": "gigachat",
         "max_input_tokens": 128000,
@@ -17760,6 +17764,8 @@
         "supports_vision": true
     },
     "gigachat/GigaChat-2-Pro": {
+        "display_name": "GigaChat 2 Pro",
+        "model_vendor": "sberbank",
         "input_cost_per_token": 0.0,
         "litellm_provider": "gigachat",
         "max_input_tokens": 128000,
@@ -17772,6 +17778,8 @@
         "supports_vision": true
     },
     "gigachat/Embeddings": {
+        "display_name": "GigaChat Embeddings",
+        "model_vendor": "sberbank",
         "input_cost_per_token": 0.0,
         "litellm_provider": "gigachat",
         "max_input_tokens": 512,
@@ -17781,6 +17789,8 @@
         "output_vector_size": 1024
     },
     "gigachat/Embeddings-2": {
+        "display_name": "GigaChat Embeddings 2",
+        "model_vendor": "sberbank",
         "input_cost_per_token": 0.0,
         "litellm_provider": "gigachat",
         "max_input_tokens": 512,
@@ -17790,6 +17800,8 @@
         "output_vector_size": 1024
     },
     "gigachat/EmbeddingsGigaR": {
+        "display_name": "GigaChat Embeddings GigaR",
+        "model_vendor": "sberbank",
         "input_cost_per_token": 0.0,
         "litellm_provider": "gigachat",
         "max_input_tokens": 4096,
