@@ -97,9 +97,6 @@ secret:
     - name: Generic test API key pattern
       match: test-api-key
 
-    - name: Short fake sk keys
-      match: \bsk-\d{1,9}\b
-    
     # Common test fixtures
     - name: Test API key fixture 88dc28d0f03
       match: 88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b
@@ -111,11 +108,5 @@ secret:
       match: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
     
     - name: Test JWT token pattern
-      match: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.
-    
-    - name: Mock data in code comments
-      match: \/\*.*api_key.*\*\/
-    
-    - name: Commented Langfuse credentials
-      match: #\s+langfuse_(public_key|secret):
+      match: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9
 
