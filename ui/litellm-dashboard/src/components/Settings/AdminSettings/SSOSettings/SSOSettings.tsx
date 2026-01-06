@@ -1,7 +1,6 @@
 "use client";
 
 import { useSSOSettings, type SSOSettingsValues } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
-import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { Button, Card, Descriptions, Space, Typography } from "antd";
 import { Edit, Shield, Trash2 } from "lucide-react";
 import { useState } from "react";
@@ -13,12 +12,12 @@ import RedactableField from "./RedactableField";
 import RoleMappings from "./RoleMappings";
 import SSOSettingsEmptyPlaceholder from "./SSOSettingsEmptyPlaceholder";
 import SSOSettingsLoadingSkeleton from "./SSOSettingsLoadingSkeleton";
+import { detectSSOProvider } from "./utils";
 
 const { Title, Text } = Typography;
 
 export default function SSOSettings() {
   const { data: ssoSettings, refetch, isLoading } = useSSOSettings();
-  const { accessToken } = useAuthorized();
   const [isDeleteModalVisible, setIsDeleteModalVisible] = useState(false);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
@@ -26,23 +25,6 @@ export default function SSOSettings() {
     Boolean(ssoSettings?.values.google_client_id) ||
     Boolean(ssoSettings?.values.microsoft_client_id) ||
     Boolean(ssoSettings?.values.generic_client_id);
-
-  // Determine the SSO provider based on the configuration
-  const detectSSOProvider = (values: SSOSettingsValues): string | null => {
-    if (values.google_client_id) return "google";
-    if (values.microsoft_client_id) return "microsoft";
-    if (values.generic_client_id) {
-      // Check if it looks like Okta/Auth0 based on endpoints
-      if (
-        values.generic_authorization_endpoint?.includes("okta") ||
-        values.generic_authorization_endpoint?.includes("auth0")
-      ) {
-        return "okta";
-      }
-      return "generic";
-    }
-    return null;
-  };
 
   const selectedProvider = ssoSettings?.values ? detectSSOProvider(ssoSettings.values) : null;
   const isRoleMappingsEnabled = Boolean(ssoSettings?.values.role_mappings);
@@ -233,7 +215,6 @@ export default function SSOSettings() {
         isVisible={isDeleteModalVisible}
         onCancel={() => setIsDeleteModalVisible(false)}
         onSuccess={() => refetch()}
-        accessToken={accessToken}
       />
 
       <AddSSOSettingsModal
