@@ -150,6 +150,8 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
         headers: dict,
     ) -> Tuple[Dict[str, Any], Optional[RequestFiles]]:
         # Prepare reference images in the correct Imagen format
+        if image is None:
+            raise ValueError("Vertex AI Imagen image edit requires at least one reference image.")
         reference_images = self._prepare_reference_images(image, image_edit_optional_request_params)
         if not reference_images:
             raise ValueError("Vertex AI Imagen image edit requires at least one reference image.")
