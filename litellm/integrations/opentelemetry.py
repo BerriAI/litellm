@@ -196,50 +196,88 @@ class OpenTelemetry(CustomLogger):
             litellm.service_callback.append(self)
         setattr(proxy_server, "open_telemetry_logger", self)
 
+    def _get_or_create_provider(
+        self,
+        provider,
+        provider_name: str,
+        get_existing_provider_fn,
+        sdk_provider_class,
+        create_new_provider_fn,
+        set_provider_fn,
+    ):
+        """
+        Generic helper to get or create an OpenTelemetry provider (Tracer, Meter, or Logger).
+
+        Args:
+            provider: The provider instance passed to the init function (can be None)
+            provider_name: Name for logging (e.g., "TracerProvider")
+            get_existing_provider_fn: Function to get the existing global provider
+            sdk_provider_class: The SDK provider class to check for (e.g., TracerProvider from SDK)
+            create_new_provider_fn: Function to create a new provider instance
+            set_provider_fn: Function to set the provider globally
+
+        Returns:
+            The provider to use (either existing, new, or explicitly provided)
+        """
+        if provider is not None:
+            # Provider explicitly provided (e.g., for testing)
+            # Do NOT call set_provider_fn - the caller is responsible for managing global state
+            # If they want it to be global, they've already set it before passing it to us
+            verbose_logger.debug(
+                "OpenTelemetry: Using provided TracerProvider: %s",
+                type(provider).__name__,
+            )
+            return provider
+
+        # Check if a provider is already set globally
+        try:
+            existing_provider = get_existing_provider_fn()
+
+            # If a real SDK provider exists (set by another SDK like Langfuse), use it
+            # This uses a positive check for SDK providers instead of a negative check for proxy providers
+            if isinstance(existing_provider, sdk_provider_class):
+                verbose_logger.debug(
+                    "OpenTelemetry: Using existing %s: %s",
+                    provider_name,
+                    type(existing_provider).__name__,
+                )
+                provider = existing_provider
+                # Don't call set_provider to preserve existing context
+            else:
+                # Default proxy provider or unknown type, create our own
+                verbose_logger.debug("OpenTelemetry: Creating new %s", provider_name)
+                provider = create_new_provider_fn()
+                set_provider_fn(provider)
+        except Exception as e:
+            # Fallback: create a new provider if something goes wrong
+            verbose_logger.debug(
+                "OpenTelemetry: Exception checking existing %s, creating new one: %s",
+                provider_name,
+                str(e),
+            )
+            provider = create_new_provider_fn()
+            set_provider_fn(provider)
+
+        return provider
+
     def _init_tracing(self, tracer_provider):
         from opentelemetry import trace
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.trace import SpanKind
 
-        # use provided tracer or create a new one
-        if tracer_provider is None:
-            # Check if a TracerProvider is already set globally (e.g., by Langfuse SDK)
-            try:
-                from opentelemetry.trace import ProxyTracerProvider
+        def create_tracer_provider():
+            provider = TracerProvider(resource=_get_litellm_resource())
+            provider.add_span_processor(self._get_span_processor())
+            return provider
 
-                existing_provider = trace.get_tracer_provider()
-
-                # If an actual provider exists (not the default proxy), use it
-                if not isinstance(existing_provider, ProxyTracerProvider):
-                    verbose_logger.debug(
-                        "OpenTelemetry: Using existing TracerProvider: %s",
-                        type(existing_provider).__name__,
-                    )
-                    tracer_provider = existing_provider
-                    # Don't call set_tracer_provider to preserve existing context
-                else:
-                    # No real provider exists yet, create our own
-                    verbose_logger.debug("OpenTelemetry: Creating new TracerProvider")
-                    tracer_provider = TracerProvider(resource=_get_litellm_resource())
-                    tracer_provider.add_span_processor(self._get_span_processor())
-                    trace.set_tracer_provider(tracer_provider)
-            except Exception as e:
-                # Fallback: create a new provider if something goes wrong
-                verbose_logger.debug(
-                    "OpenTelemetry: Exception checking existing provider, creating new one: %s",
-                    str(e),
-                )
-                tracer_provider = TracerProvider(resource=_get_litellm_resource())
-                tracer_provider.add_span_processor(self._get_span_processor())
-                trace.set_tracer_provider(tracer_provider)
-        else:
-            # Tracer provider explicitly provided (e.g., for testing)
-            # Do NOT call set_tracer_provider - the caller is responsible for managing global state
-            # If they want it to be global, they've already set it before passing it to us
-            verbose_logger.debug(
-                "OpenTelemetry: Using provided TracerProvider: %s",
-                type(tracer_provider).__name__,
-            )
+        tracer_provider = self._get_or_create_provider(
+            provider=tracer_provider,
+            provider_name="TracerProvider",
+            get_existing_provider_fn=trace.get_tracer_provider,
+            sdk_provider_class=TracerProvider,
+            create_new_provider_fn=create_tracer_provider,
+            set_provider_fn=trace.set_tracer_provider,
+        )
 
         # Grab our tracer from the TracerProvider (not from global context)
         # This ensures we use the provided TracerProvider (e.g., for testing)
@@ -257,39 +295,24 @@ class OpenTelemetry(CustomLogger):
             return
 
         from opentelemetry import metrics
-        from opentelemetry.sdk.metrics import Histogram, MeterProvider
+        from opentelemetry.sdk.metrics import MeterProvider
 
-        # Only create OTLP infrastructure if no custom meter provider is provided
-        if meter_provider is None:
-            from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
-                OTLPMetricExporter,
-            )
-            from opentelemetry.sdk.metrics.export import (
-                AggregationTemporality,
-                PeriodicExportingMetricReader,
+        def create_meter_provider():
+            metric_reader = self._get_metric_reader()
+            return MeterProvider(
+                metric_readers=[metric_reader], resource=_get_litellm_resource()
             )
 
-            normalized_endpoint = self._normalize_otel_endpoint(
-                self.config.endpoint, "metrics"
-            )
-            _metric_exporter = OTLPMetricExporter(
-                endpoint=normalized_endpoint,
-                headers=OpenTelemetry._get_headers_dictionary(self.config.headers),
-                preferred_temporality={Histogram: AggregationTemporality.DELTA},
-            )
-            _metric_reader = PeriodicExportingMetricReader(
-                _metric_exporter, export_interval_millis=10000
-            )
+        meter_provider = self._get_or_create_provider(
+            provider=meter_provider,
+            provider_name="MeterProvider",
+            get_existing_provider_fn=metrics.get_meter_provider,
+            sdk_provider_class=MeterProvider,
+            create_new_provider_fn=create_meter_provider,
+            set_provider_fn=metrics.set_meter_provider,
+        )
 
-            meter_provider = MeterProvider(
-                metric_readers=[_metric_reader], resource=_get_litellm_resource()
-            )
-            meter = meter_provider.get_meter(__name__)
-        else:
-            # Use the provided meter provider as-is, without creating additional OTLP infrastructure
-            meter = meter_provider.get_meter(__name__)
-
-        metrics.set_meter_provider(meter_provider)
+        meter = meter_provider.get_meter(__name__)
 
         self._operation_duration_histogram = meter.create_histogram(
             name="gen_ai.client.operation.duration",  # Replace with semconv constant in otel 1.38
@@ -327,22 +350,26 @@ class OpenTelemetry(CustomLogger):
         if not self.config.enable_events:
             return
 
-        from opentelemetry._logs import set_logger_provider
+        from opentelemetry._logs import get_logger_provider, set_logger_provider
         from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
         from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 
-        # set up log pipeline
-        if logger_provider is None:
-            litellm_resource = _get_litellm_resource()
-            logger_provider = OTLoggerProvider(resource=litellm_resource)
-            # Only add OTLP exporter if we created the logger provider ourselves
+        def create_logger_provider():
+            provider = OTLoggerProvider(resource=_get_litellm_resource())
             log_exporter = self._get_log_exporter()
-            if log_exporter:
-                logger_provider.add_log_record_processor(
-                    BatchLogRecordProcessor(log_exporter)  # type: ignore[arg-type]
-                )
+            provider.add_log_record_processor(
+                BatchLogRecordProcessor(log_exporter)  # type: ignore[arg-type]
+            )
+            return provider
 
-        set_logger_provider(logger_provider)
+        self._get_or_create_provider(
+            provider=logger_provider,
+            provider_name="LoggerProvider",
+            get_existing_provider_fn=get_logger_provider,
+            sdk_provider_class=OTLoggerProvider,
+            create_new_provider_fn=create_logger_provider,
+            set_provider_fn=set_logger_provider,
+        )
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         self._handle_success(kwargs, response_obj, start_time, end_time)
@@ -943,6 +970,15 @@ class OpenTelemetry(CustomLogger):
     def _emit_semantic_logs(self, kwargs, response_obj, span: Span):
         if not self.config.enable_events:
             return
+
+        # NOTE: Semantic logs (gen_ai.content.prompt/completion events) have compatibility issues
+        # with OTEL SDK >= 1.39.0 due to breaking changes in PR #4676:
+        # - LogRecord moved from opentelemetry.sdk._logs to opentelemetry.sdk._logs._internal
+        # - LogRecord constructor no longer accepts 'resource' parameter (now inherited from LoggerProvider)
+        # - LogData class was removed entirely
+        # These logs work correctly in OTEL SDK < 1.39.0 but may fail in >= 1.39.0.
+        # See: https://github.com/open-telemetry/opentelemetry-python/pull/4676
+        # TODO: Refactor to use the proper OTEL Logs API instead of directly creating SDK LogRecords
 
         from opentelemetry._logs import SeverityNumber, get_logger, get_logger_provider
         from opentelemetry.sdk._logs import LogRecord as SdkLogRecord
@@ -1807,7 +1843,8 @@ class OpenTelemetry(CustomLogger):
             )
             return self.OTEL_EXPORTER
 
-        if self.OTEL_EXPORTER == "console":
+        otel_logs_exporter = os.getenv("OTEL_LOGS_EXPORTER")
+        if self.OTEL_EXPORTER == "console" or otel_logs_exporter == "console":
             from opentelemetry.sdk._logs.export import ConsoleLogExporter
 
             verbose_logger.debug(
@@ -1853,6 +1890,67 @@ class OpenTelemetry(CustomLogger):
             from opentelemetry.sdk._logs.export import ConsoleLogExporter
 
             return ConsoleLogExporter()
+
+    def _get_metric_reader(self):
+        """
+        Get the appropriate metric reader based on the configuration.
+        """
+        from opentelemetry.sdk.metrics import Histogram
+        from opentelemetry.sdk.metrics.export import (
+            AggregationTemporality,
+            ConsoleMetricExporter,
+            PeriodicExportingMetricReader,
+        )
+
+        verbose_logger.debug(
+            "OpenTelemetry Logger, initializing metric reader\nself.OTEL_EXPORTER: %s\nself.OTEL_ENDPOINT: %s\nself.OTEL_HEADERS: %s",
+            self.OTEL_EXPORTER,
+            self.OTEL_ENDPOINT,
+            self.OTEL_HEADERS,
+        )
+
+        _split_otel_headers = OpenTelemetry._get_headers_dictionary(self.OTEL_HEADERS)
+        normalized_endpoint = self._normalize_otel_endpoint(self.OTEL_ENDPOINT, "metrics")
+
+        if self.OTEL_EXPORTER == "console":
+            exporter = ConsoleMetricExporter()
+            return PeriodicExportingMetricReader(exporter, export_interval_millis=5000)
+
+        elif (
+            self.OTEL_EXPORTER == "otlp_http"
+            or self.OTEL_EXPORTER == "http/protobuf"
+            or self.OTEL_EXPORTER == "http/json"
+        ):
+            from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
+                OTLPMetricExporter,
+            )
+
+            exporter = OTLPMetricExporter(
+                endpoint=normalized_endpoint,
+                headers=_split_otel_headers,
+                preferred_temporality={Histogram: AggregationTemporality.DELTA},
+            )
+            return PeriodicExportingMetricReader(exporter, export_interval_millis=5000)
+
+        elif self.OTEL_EXPORTER == "otlp_grpc" or self.OTEL_EXPORTER == "grpc":
+            from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
+                OTLPMetricExporter,
+            )
+
+            exporter = OTLPMetricExporter(
+                endpoint=normalized_endpoint,
+                headers=_split_otel_headers,
+                preferred_temporality={Histogram: AggregationTemporality.DELTA},
+            )
+            return PeriodicExportingMetricReader(exporter, export_interval_millis=5000)
+
+        else:
+            verbose_logger.warning(
+                "OpenTelemetry: Unknown metric exporter '%s', defaulting to console. Supported: console, otlp_http, otlp_grpc",
+                self.OTEL_EXPORTER,
+            )
+            exporter = ConsoleMetricExporter()
+            return PeriodicExportingMetricReader(exporter, export_interval_millis=5000)
 
     def _normalize_otel_endpoint(
         self, endpoint: Optional[str], signal_type: str
