@@ -24,7 +24,7 @@ for (const { role, storage } of roles) {
     test.use({ storageState: storage });
 
     test("can see and navigate all sidebar buttons", async ({ page }) => {
-      await page.goto("http://localhost:4000/ui");
+      await page.goto("/ui");
       for (const button of sidebarButtons[role as keyof typeof sidebarButtons]) {
         const tab = page.getByRole("menuitem", { name: button });
         await expect(tab).toBeVisible();

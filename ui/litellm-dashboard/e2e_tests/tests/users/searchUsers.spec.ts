@@ -1,9 +1,10 @@
 import { test, expect, Page } from "@playwright/test";
+import { ADMIN_STORAGE_PATH } from "../../constants";
 test.describe("Internal Users Search", () => {
-  test.use({ storageState: "admin.storageState.json" });
+  test.use({ storageState: ADMIN_STORAGE_PATH });
 
   async function goToInternalUsers(page: Page) {
-    await page.goto("http://localhost:4000/ui");
+    await page.goto("/ui");
 
     const tab = page.getByRole("menuitem", { name: "Internal User" });
     await expect(tab).toBeVisible();
