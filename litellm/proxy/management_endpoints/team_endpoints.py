@@ -901,6 +901,12 @@ async def new_team(  # noqa: PLR0915
             complete_team_data.members_with_roles = []
 
         complete_team_data_dict = complete_team_data.model_dump(exclude_none=True)
+        
+        # Serialize router_settings to JSON (matching key creation pattern)
+        router_settings_value = getattr(data, "router_settings", None)
+        router_settings_json = json.dumps(router_settings_value) if router_settings_value is not None else json.dumps({})
+        complete_team_data_dict["router_settings"] = router_settings_json
+        
         complete_team_data_dict = prisma_client.jsonify_team_object(
             db_data=complete_team_data_dict
         )
@@ -909,6 +915,8 @@ async def new_team(  # noqa: PLR0915
             data=complete_team_data_dict,
             include={"litellm_model_table": True},  # type: ignore
         )
+
+        print(f"team_row: {team_row}")
 
         ## ADD TEAM ID TO USER TABLE ##
         team_member_add_request = TeamMemberAddRequest(
@@ -947,6 +955,7 @@ async def new_team(  # noqa: PLR0915
                 )
             )
 
+        print(f"team_row.model_dump(): {team_row.model_dump()}")
         try:
             return team_row.model_dump()
         except Exception:
@@ -1382,6 +1391,10 @@ async def update_team(   # noqa: PLR0915
             )
             if _model_id is not None:
                 updated_kv["model_id"] = _model_id
+
+        # Serialize router_settings to JSON if present (matching key update pattern)
+        if "router_settings" in updated_kv and updated_kv["router_settings"] is not None:
+            updated_kv["router_settings"] = json.dumps(updated_kv["router_settings"])
 
         updated_kv = prisma_client.jsonify_team_object(db_data=updated_kv)
         team_row: Optional[LiteLLM_TeamTable] = (
