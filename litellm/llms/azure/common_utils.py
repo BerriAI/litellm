@@ -3,7 +3,7 @@ import os
 from typing import Any, Callable, Dict, Literal, Optional, Union, cast
 
 import httpx
-from openai import AsyncAzureOpenAI, AzureOpenAI
+from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 
 import litellm
 from litellm._logging import verbose_logger
@@ -439,12 +439,12 @@ class BaseAzureLLM(BaseOpenAILLM):
         api_key: Optional[str],
         api_base: Optional[str],
         api_version: Optional[str] = None,
-        client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None,
+        client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]] = None,
         litellm_params: Optional[dict] = None,
         _is_async: bool = False,
         model: Optional[str] = None,
-    ) -> Optional[Union[AzureOpenAI, AsyncAzureOpenAI]]:
-        openai_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None
+    ) -> Optional[Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]]:
+        openai_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]] = None
         client_initialization_params: dict = locals()
         client_initialization_params["is_async"] = _is_async
         if client is None:
@@ -466,10 +466,30 @@ class BaseAzureLLM(BaseOpenAILLM):
                 api_version=api_version,
                 is_async=_is_async,
             )
-            if _is_async is True:
-                openai_client = AsyncAzureOpenAI(**azure_client_params)
+            # For Azure v1 API, use OpenAI client instead of AzureOpenAI
+            # as per Microsoft docs: https://learn.microsoft.com/en-us/azure/ai-foundry/openai/api-version-lifecycle
+            if self._is_azure_v1_api_version(azure_client_params.get("api_version")):
+                # Remove Azure-specific params that OpenAI client doesn't accept
+                v1_params = {
+                    "api_key": azure_client_params.get("api_key"),
+                    "base_url": azure_client_params.get("base_url"),
+                }
+                # Add optional params if present
+                if "timeout" in azure_client_params:
+                    v1_params["timeout"] = azure_client_params["timeout"]
+                if "max_retries" in azure_client_params:
+                    v1_params["max_retries"] = azure_client_params["max_retries"]
+
+                if _is_async is True:
+                    openai_client = AsyncOpenAI(**v1_params)  # type: ignore
+                else:
+                    openai_client = OpenAI(**v1_params)  # type: ignore
             else:
-                openai_client = AzureOpenAI(**azure_client_params)  # type: ignore
+                # Traditional Azure API uses AzureOpenAI client
+                if _is_async is True:
+                    openai_client = AsyncAzureOpenAI(**azure_client_params)
+                else:
+                    openai_client = AzureOpenAI(**azure_client_params)  # type: ignore
         else:
             openai_client = client
             if api_version is not None and isinstance(
@@ -599,9 +619,26 @@ class BaseAzureLLM(BaseOpenAILLM):
         # this decides if we should set azure_endpoint or base_url on Azure OpenAI Client
         # required to support GPT-4 vision enhancements, since base_url needs to be set on Azure OpenAI Client
 
-        azure_client_params = select_azure_base_url_or_endpoint(
-            azure_client_params=azure_client_params
-        )
+        # Handle Azure v1 API (OpenAI-compatible format)
+        # v1 API uses /openai/v1/ endpoint without deployments in the path
+        # See: https://learn.microsoft.com/en-us/azure/ai-foundry/openai/api-version-lifecycle
+        if self._is_azure_v1_api_version(api_version):
+            # v1 API format: https://{endpoint}/openai/v1/chat/completions
+            # Does NOT use /deployments/ in the URL
+            # For v1 API, we use the standard OpenAI client (not AzureOpenAI)
+            # so we need base_url and should remove Azure-specific parameters
+            azure_client_params["base_url"] = f"{api_base}/openai/{api_version}"
+            azure_client_params.pop("azure_endpoint", None)
+            # Note: We keep api_version in the dict for now, but OpenAI client will ignore it
+            # The client creation code will filter out Azure-specific params
+            verbose_logger.debug(
+                f"Using Azure v1 API format with base_url: {azure_client_params['base_url']}"
+            )
+        else:
+            # Traditional Azure format: https://{endpoint}/openai/deployments/{model}/chat/completions?api-version=...
+            azure_client_params = select_azure_base_url_or_endpoint(
+                azure_client_params=azure_client_params
+            )
 
         return azure_client_params
 
