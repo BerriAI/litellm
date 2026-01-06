@@ -109,20 +109,4 @@ secret:
     
     - name: Test JWT token pattern
       match: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9
-    
-    # Mock data in cache_dashboard.tsx comments
-    - name: Mock API key in cache_dashboard comments 147dba2181f
-      match: 8c892b51c97ff98b14f17864b89a13c0f4e7ea0c8de739b6acfa1cf9cab4e01d
-    
-    - name: Mock API key in cache_dashboard comments 8c23f021d05
-      match: 05681b08b5b2a6d5b3efdcfd8243b92e69715a267f24d105e946656de829de23
-    
-    - name: Mock API key in cache_dashboard comments 0ad4b3c03dc
-      match: 42386bbdf8a420ebc43057dcf62c3ab6a78ea9e7a816d465a44d582ad9c245c4
-    
-    - name: Mock API key in cache_dashboard comments 034224b36e9
-      match: d700e35089af83d66a6d8a31b09d68e67c883d87b49d2186a9fcbac492ccd8fe
-    
-    - name: Mock API key in cache_dashboard comments 4f9c71cce0a
-      match: 119117ac366f569fe34c94ad805b88a5bf02b0d45ef0f2142518fcc7e75364e8
 
