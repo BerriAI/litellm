@@ -32,8 +32,8 @@ from fastapi import (
 from fastapi.responses import JSONResponse
 
 import litellm
-from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._experimental.mcp_server.utils import (
     validate_and_normalize_mcp_server_payload,
@@ -67,6 +67,7 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.ui_session_utils import (
         build_effective_auth_contexts,
     )
+    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
     from litellm.proxy._types import (
         LiteLLM_MCPServerTable,
         LitellmUserRoles,
@@ -75,10 +76,8 @@ if MCP_AVAILABLE:
         SpecialMCPServerName,
         UpdateMCPServerRequest,
         UserAPIKeyAuth,
-        UserMCPManagementMode,
     )
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
     from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
     from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
     from litellm.types.mcp import MCPCredentials
@@ -303,20 +302,6 @@ if MCP_AVAILABLE:
         return {"access_groups": access_groups_list}
 
     ## FastAPI Routes
-    def _get_user_mcp_management_mode() -> UserMCPManagementMode:
-        proxy_general_settings: dict = {}
-        try:
-            from litellm.proxy.proxy_server import (
-                general_settings as proxy_general_settings,
-            )
-        except Exception:
-            pass
-
-        mode = proxy_general_settings.get("user_mcp_management_mode")
-        if mode == "view_all":
-            return "view_all"
-        return "restricted"
-
     @router.get(
         "/server",
         description="Returns the mcp server list with associated teams",
@@ -334,26 +319,18 @@ if MCP_AVAILABLE:
         ```
         """
 
-        user_mcp_management_mode = _get_user_mcp_management_mode()
+        auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
 
-        if user_mcp_management_mode == "view_all":
-            servers = await global_mcp_server_manager.get_all_mcp_servers_unfiltered()
-            redacted_mcp_servers = _redact_mcp_credentials_list(servers)
-        else:
-            auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
-
-            aggregated_servers: Dict[str, LiteLLM_MCPServerTable] = {}
-            for auth_context in auth_contexts:
-                servers = await global_mcp_server_manager.get_all_allowed_mcp_servers(
-                    user_api_key_auth=auth_context
-                )
-                for server in servers:
-                    if server.server_id not in aggregated_servers:
-                        aggregated_servers[server.server_id] = server
-
-            redacted_mcp_servers = _redact_mcp_credentials_list(
-                aggregated_servers.values()
+        aggregated_servers: Dict[str, LiteLLM_MCPServerTable] = {}
+        for auth_context in auth_contexts:
+            servers = await global_mcp_server_manager.get_all_allowed_mcp_servers(
+                user_api_key_auth=auth_context
             )
+            for server in servers:
+                if server.server_id not in aggregated_servers:
+                    aggregated_servers[server.server_id] = server
+
+        redacted_mcp_servers = _redact_mcp_credentials_list(aggregated_servers.values())
 
         # augment the mcp servers with public status
         if litellm.public_mcp_servers is not None:
@@ -395,17 +372,6 @@ if MCP_AVAILABLE:
         --header 'Authorization: Bearer your_api_key_here'
         ```
         """
-        user_mcp_management_mode = _get_user_mcp_management_mode()
-
-        if user_mcp_management_mode == "view_all":
-            servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_unfiltered(
-                server_ids=server_ids
-            )
-            return [
-                {"server_id": server.server_id, "status": server.status}
-                for server in servers
-            ]
-
         auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
 
         server_status_map: Dict[

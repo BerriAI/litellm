@@ -108,7 +108,7 @@ Some MCP servers are meant to be shared broadly—think internal knowledge bases
 3. Toggle **Allow All LiteLLM Keys** on.
 
 <Image 
-  img={require('../img/mcp_allow_all_ui.png')}
+  img={require('../img/mcp_ui.png')}
   style={{width: '80%', display: 'block', margin: '1rem auto'}}
   alt="MCP server configuration in Admin UI"
 /> 
@@ -634,18 +634,3 @@ Control which tools different teams can access from the same MCP server. For exa
 This video shows how to set allowed tools for a Key, Team, or Organization.
 
 <iframe width="840" height="500" src="https://www.loom.com/embed/7464d444c3324078892367272fe50745" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
-
-
-## Dashboard View Modes
-
-Proxy admins can also control what non-admins see inside the MCP dashboard via `general_settings.user_mcp_management_mode`:
-
-- `restricted` *(default)* – users only see servers that their team explicitly has access to.
-- `view_all` – every dashboard user can see the full MCP server list. 
-
-```yaml title="Config example"
-general_settings:
-  user_mcp_management_mode: view_all
-```
-
-This is useful when you want discoverability for MCP offerings without granting additional execution privileges.

@@ -375,7 +375,6 @@ LITELLM_CHAT_PROVIDERS = [
     "perplexity",
     "mistral",
     "groq",
-    "gigachat",
     "nvidia_nim",
     "cerebras",
     "baseten",
