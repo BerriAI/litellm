@@ -1645,9 +1645,12 @@ def convert_to_anthropic_tool_result(
                 )
             elif content["type"] == "image_url":
                 format = content["image_url"].get("format") if isinstance(content["image_url"], dict) else None
-                anthropic_content_list.append(
-                    create_anthropic_image_param(content["image_url"], format=format)
+                _anthropic_image_param = create_anthropic_image_param(content["image_url"], format=format)
+                _anthropic_image_param = add_cache_control_to_content(
+                    anthropic_content_element=_anthropic_image_param,
+                    original_content_element=content,
                 )
+                anthropic_content_list.append(_anthropic_image_param)
 
         anthropic_content = anthropic_content_list
     anthropic_tool_result: Optional[AnthropicMessagesToolResultParam] = None
