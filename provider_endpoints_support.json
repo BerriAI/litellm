@@ -28,7 +28,8 @@
         "list_container_files": "Supports GET /containers/{id}/files endpoint",
         "retrieve_container_file": "Supports GET /containers/{id}/files/{file_id} endpoint",
         "retrieve_container_file_content": "Supports GET /containers/{id}/files/{file_id}/content endpoint",
-        "delete_container_file": "Supports DELETE /containers/{id}/files/{file_id} endpoint"
+        "delete_container_file": "Supports DELETE /containers/{id}/files/{file_id} endpoint",
+        "compact": "Supports /responses/compact endpoint"
       }
     }
   },
@@ -1519,6 +1520,7 @@
         "retrieve_container_file": true,
         "retrieve_container_file_content": true,
         "delete_container_file": true,
+        "compact": true,
         "a2a": true,
         "interactions": true
       }

@@ -829,6 +829,9 @@ class Router:
         self.acancel_responses = self.factory_function(
             litellm.acancel_responses, call_type="acancel_responses"
         )
+        self.acompact_responses = self.factory_function(
+            litellm.acompact_responses, call_type="acompact_responses"
+        )
         self.adelete_responses = self.factory_function(
             litellm.adelete_responses, call_type="adelete_responses"
         )
@@ -3941,6 +3944,7 @@ class Router:
             "anthropic_messages",
             "aresponses",
             "acancel_responses",
+            "acompact_responses",
             "responses",
             "aget_responses",
             "adelete_responses",
@@ -4169,6 +4173,7 @@ class Router:
             elif call_type in (
                 "aget_responses",
                 "acancel_responses",
+                "acompact_responses",
                 "adelete_responses",
                 "alist_input_items",
             ):
