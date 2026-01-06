@@ -1908,9 +1908,6 @@ class UserHeaderMapping(LiteLLMPydanticObjectBase):
     }
 
 
-UserMCPManagementMode = Literal["restricted", "view_all"]
-
-
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
@@ -2027,10 +2024,6 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     supported_db_objects: Optional[List[SupportedDBObjectType]] = Field(
         None,
         description="Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map'. If not set, all objects are loaded (default behavior).",
-    )
-    user_mcp_management_mode: Optional[UserMCPManagementMode] = Field(
-        None,
-        description="Controls how non-admin users interact with MCP servers in the dashboard. 'restricted' shows only accessible servers, 'view_all' lists every server in read-only mode.",
     )
 
 

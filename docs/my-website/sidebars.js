@@ -541,14 +541,7 @@ const sidebars = {
         },
         "realtime",
         "rerank",
-        {
-          type: "category",
-          label: "/responses",
-          items: [
-            "response_api",
-            "response_api_compact",
-          ]
-        },
+        "response_api",
         {
           type: "category",
           label: "/search",

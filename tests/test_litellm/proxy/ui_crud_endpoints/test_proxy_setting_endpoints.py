@@ -742,16 +742,18 @@ class TestProxySettingEndpoints:
     ):
         """Test updating UI settings with an allowlisted field"""
         from unittest.mock import AsyncMock, MagicMock
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-        from litellm.proxy._types import UserAPIKeyAuth
 
-        # Override the FastAPI dependency with a proper mock
-        mock_user_auth = UserAPIKeyAuth(
-            user_id="test-user-123",
-            user_role=LitellmUserRoles.PROXY_ADMIN,
+        class MockUser:
+            def __init__(self, user_role):
+                self.user_role = user_role
+
+        async def mock_admin_auth():
+            return MockUser(LitellmUserRoles.PROXY_ADMIN)
+
+        monkeypatch.setattr(
+            "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.user_api_key_auth",
+            mock_admin_auth,
         )
-        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
-
         monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
@@ -759,11 +761,7 @@ class TestProxySettingEndpoints:
 
         payload = {"disable_model_add_for_internal_users": True}
 
-        try:
-            response = client.patch("/update/ui_settings", json=payload)
-        finally:
-            # Clean up the dependency override
-            app.dependency_overrides.clear()
+        response = client.patch("/update/ui_settings", json=payload)
 
         assert response.status_code == 200
         data = response.json()
@@ -782,16 +780,18 @@ class TestProxySettingEndpoints:
     ):
         """Test non-allowlisted UI settings are ignored on update"""
         from unittest.mock import AsyncMock, MagicMock
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-        from litellm.proxy._types import UserAPIKeyAuth
 
-        # Override the FastAPI dependency with a proper mock
-        mock_user_auth = UserAPIKeyAuth(
-            user_id="test-user-123",
-            user_role=LitellmUserRoles.PROXY_ADMIN,
+        class MockUser:
+            def __init__(self, user_role):
+                self.user_role = user_role
+
+        async def mock_admin_auth():
+            return MockUser(LitellmUserRoles.PROXY_ADMIN)
+
+        monkeypatch.setattr(
+            "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.user_api_key_auth",
+            mock_admin_auth,
         )
-        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
-
         monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
@@ -802,11 +802,7 @@ class TestProxySettingEndpoints:
             "unsupported_flag": True,
         }
 
-        try:
-            response = client.patch("/update/ui_settings", json=payload)
-        finally:
-            # Clean up the dependency override
-            app.dependency_overrides.clear()
+        response = client.patch("/update/ui_settings", json=payload)
 
         assert response.status_code == 200
         data = response.json()
