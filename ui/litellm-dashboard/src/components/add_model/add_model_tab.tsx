@@ -71,7 +71,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
           </p>
         </div>
         <a
-          href="https://glitter-book-e86.notion.site/2e043b8acdab80f6ab39cf4fd790aa72?pvs=105"
+          href="https://github.com/BerriAI/litellm/issues/18686"
           target="_blank"
           rel="noopener noreferrer"
           className="flex-shrink-0 inline-flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-colors shadow-sm"
