@@ -219,36 +219,7 @@ class OpenTelemetry(CustomLogger):
         Returns:
             The provider to use (either existing, new, or explicitly provided)
         """
-        if provider is None:
-            # Check if a provider is already set globally
-            try:
-                existing_provider = get_existing_provider_fn()
-
-                # If a real SDK provider exists (set by another SDK like Langfuse), use it
-                # This uses a positive check for SDK providers instead of a negative check for proxy providers
-                if isinstance(existing_provider, sdk_provider_class):
-                    verbose_logger.debug(
-                        "OpenTelemetry: Using existing %s: %s",
-                        provider_name,
-                        type(existing_provider).__name__,
-                    )
-                    provider = existing_provider
-                    # Don't call set_provider to preserve existing context
-                else:
-                    # Default proxy provider or unknown type, create our own
-                    verbose_logger.debug("OpenTelemetry: Creating new %s", provider_name)
-                    provider = create_new_provider_fn()
-                    set_provider_fn(provider)
-            except Exception as e:
-                # Fallback: create a new provider if something goes wrong
-                verbose_logger.debug(
-                    "OpenTelemetry: Exception checking existing %s, creating new one: %s",
-                    provider_name,
-                    str(e),
-                )
-                provider = create_new_provider_fn()
-                set_provider_fn(provider)
-        else:
+        if provider is not None:
             # Provider explicitly provided (e.g., for testing)
             # Do NOT call set_provider_fn - the caller is responsible for managing global state
             # If they want it to be global, they've already set it before passing it to us
@@ -256,6 +227,36 @@ class OpenTelemetry(CustomLogger):
                 "OpenTelemetry: Using provided TracerProvider: %s",
                 type(provider).__name__,
             )
+            return provider
+
+        # Check if a provider is already set globally
+        try:
+            existing_provider = get_existing_provider_fn()
+
+            # If a real SDK provider exists (set by another SDK like Langfuse), use it
+            # This uses a positive check for SDK providers instead of a negative check for proxy providers
+            if isinstance(existing_provider, sdk_provider_class):
+                verbose_logger.debug(
+                    "OpenTelemetry: Using existing %s: %s",
+                    provider_name,
+                    type(existing_provider).__name__,
+                )
+                provider = existing_provider
+                # Don't call set_provider to preserve existing context
+            else:
+                # Default proxy provider or unknown type, create our own
+                verbose_logger.debug("OpenTelemetry: Creating new %s", provider_name)
+                provider = create_new_provider_fn()
+                set_provider_fn(provider)
+        except Exception as e:
+            # Fallback: create a new provider if something goes wrong
+            verbose_logger.debug(
+                "OpenTelemetry: Exception checking existing %s, creating new one: %s",
+                provider_name,
+                str(e),
+            )
+            provider = create_new_provider_fn()
+            set_provider_fn(provider)
 
         return provider
 
@@ -298,14 +299,9 @@ class OpenTelemetry(CustomLogger):
 
         def create_meter_provider():
             metric_reader = self._get_metric_reader()
-            if metric_reader:
-                return MeterProvider(
-                    metric_readers=[metric_reader], resource=_get_litellm_resource()
-                )
-            verbose_logger.warning(
-                "OpenTelemetry: No metric reader created. Metrics will not be exported."
+            return MeterProvider(
+                metric_readers=[metric_reader], resource=_get_litellm_resource()
             )
-            return MeterProvider(resource=_get_litellm_resource())
 
         meter_provider = self._get_or_create_provider(
             provider=meter_provider,
@@ -359,14 +355,11 @@ class OpenTelemetry(CustomLogger):
         from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 
         def create_logger_provider():
-            litellm_resource = _get_litellm_resource()
-            provider = OTLoggerProvider(resource=litellm_resource)
-            # Only add OTLP exporter if we created the logger provider ourselves
+            provider = OTLoggerProvider(resource=_get_litellm_resource())
             log_exporter = self._get_log_exporter()
-            if log_exporter:
-                provider.add_log_record_processor(
-                    BatchLogRecordProcessor(log_exporter)  # type: ignore[arg-type]
-                )
+            provider.add_log_record_processor(
+                BatchLogRecordProcessor(log_exporter)  # type: ignore[arg-type]
+            )
             return provider
 
         self._get_or_create_provider(
