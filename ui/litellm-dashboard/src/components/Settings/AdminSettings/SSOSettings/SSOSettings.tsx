@@ -5,13 +5,14 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { Button, Card, Descriptions, Space, Typography } from "antd";
 import { Edit, Shield, Trash2 } from "lucide-react";
 import { useState } from "react";
+import { ssoProviderDisplayNames, ssoProviderLogoMap } from "./constants";
 import AddSSOSettingsModal from "./Modals/AddSSOSettingsModal";
 import DeleteSSOSettingsModal from "./Modals/DeleteSSOSettingsModal";
 import EditSSOSettingsModal from "./Modals/EditSSOSettingsModal";
 import RedactableField from "./RedactableField";
+import RoleMappings from "./RoleMappings";
 import SSOSettingsEmptyPlaceholder from "./SSOSettingsEmptyPlaceholder";
 import SSOSettingsLoadingSkeleton from "./SSOSettingsLoadingSkeleton";
-import { ssoProviderDisplayNames, ssoProviderLogoMap } from "./constants";
 
 const { Title, Text } = Typography;
 
@@ -44,6 +45,7 @@ export default function SSOSettings() {
   };
 
   const selectedProvider = ssoSettings?.values ? detectSSOProvider(ssoSettings.values) : null;
+  const isRoleMappingsEnabled = Boolean(ssoSettings?.values.role_mappings);
 
   const renderEndpointValue = (value?: string | null) => (
     <Text className="font-mono text-gray-600 text-sm" copyable={!!value}>
@@ -185,39 +187,46 @@ export default function SSOSettings() {
       {isLoading ? (
         <SSOSettingsLoadingSkeleton />
       ) : (
-        <Card>
-          <Space direction="vertical" size="large" className="w-full">
-            {/* Header Section */}
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <Shield className="w-6 h-6 text-gray-400" />
-                <div>
-                  <Title level={3}>SSO Configuration</Title>
-                  <Text type="secondary">Manage Single Sign-On authentication settings</Text>
+        <Space direction="vertical" size="large" className="w-full">
+          <Card>
+            <Space direction="vertical" size="large" className="w-full">
+              {/* Header Section */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Shield className="w-6 h-6 text-gray-400" />
+                  <div>
+                    <Title level={3}>SSO Configuration</Title>
+                    <Text type="secondary">Manage Single Sign-On authentication settings</Text>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  {isSSOConfigured && (
+                    <>
+                      <Button icon={<Edit className="w-4 h-4" />} onClick={() => setIsEditModalVisible(true)}>
+                        Edit SSO Settings
+                      </Button>
+                      <Button
+                        danger
+                        icon={<Trash2 className="w-4 h-4" />}
+                        onClick={() => setIsDeleteModalVisible(true)}
+                      >
+                        Delete SSO Settings
+                      </Button>
+                    </>
+                  )}
                 </div>
               </div>
 
-              <div className="flex items-center gap-3">
-                {isSSOConfigured && (
-                  <>
-                    <Button icon={<Edit className="w-4 h-4" />} onClick={() => setIsEditModalVisible(true)}>
-                      Edit SSO Settings
-                    </Button>
-                    <Button danger icon={<Trash2 className="w-4 h-4" />} onClick={() => setIsDeleteModalVisible(true)}>
-                      Delete SSO Settings
-                    </Button>
-                  </>
-                )}
-              </div>
-            </div>
-
-            {isSSOConfigured ? (
-              renderSSOSettings()
-            ) : (
-              <SSOSettingsEmptyPlaceholder onAdd={() => setIsAddModalVisible(true)} />
-            )}
-          </Space>
-        </Card>
+              {isSSOConfigured ? (
+                renderSSOSettings()
+              ) : (
+                <SSOSettingsEmptyPlaceholder onAdd={() => setIsAddModalVisible(true)} />
+              )}
+            </Space>
+          </Card>
+          {isRoleMappingsEnabled && <RoleMappings roleMappings={ssoSettings?.values.role_mappings} />}
+        </Space>
       )}
 
       <DeleteSSOSettingsModal
