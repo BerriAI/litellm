@@ -3,7 +3,6 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 """
 
 import json
-import os
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -23,7 +22,6 @@ from typing import (
 from openai.types.responses.tool_param import FunctionToolParam
 from pydantic import BaseModel
 
-import litellm
 from litellm import ModelResponse
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
@@ -693,26 +691,19 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         if isinstance(reasoning_effort, dict):
             return Reasoning(**reasoning_effort)  # type: ignore[typeddict-item]
 
-        # Check if auto-summary is enabled via flag or environment variable
-        # Priority: litellm.reasoning_auto_summary flag > LITELLM_REASONING_AUTO_SUMMARY env var
-        auto_summary_enabled = (
-            litellm.reasoning_auto_summary
-            or os.getenv("LITELLM_REASONING_AUTO_SUMMARY", "false").lower() == "true"
-        )
-
-        # If string is passed, map with optional summary based on flag/env var
+        # If string is passed, map with summary="detailed"
         if reasoning_effort == "none":
-            return Reasoning(effort="none", summary="detailed") if auto_summary_enabled else Reasoning(effort="none")  # type: ignore
+            return Reasoning(effort="none", summary="detailed")  # type: ignore
         elif reasoning_effort == "high":
-            return Reasoning(effort="high", summary="detailed") if auto_summary_enabled else Reasoning(effort="high")
+            return Reasoning(effort="high", summary="detailed")
         elif reasoning_effort == "xhigh":
-            return Reasoning(effort="xhigh", summary="detailed") if auto_summary_enabled else Reasoning(effort="xhigh")  # type: ignore[typeddict-item]
+            return Reasoning(effort="xhigh", summary="detailed")  # type: ignore[typeddict-item]
         elif reasoning_effort == "medium":
-            return Reasoning(effort="medium", summary="detailed") if auto_summary_enabled else Reasoning(effort="medium")
+            return Reasoning(effort="medium", summary="detailed")
         elif reasoning_effort == "low":
-            return Reasoning(effort="low", summary="detailed") if auto_summary_enabled else Reasoning(effort="low")
+            return Reasoning(effort="low", summary="detailed")
         elif reasoning_effort == "minimal":
-            return Reasoning(effort="minimal", summary="detailed") if auto_summary_enabled else Reasoning(effort="minimal")
+            return Reasoning(effort="minimal", summary="detailed")
         return None
 
     def _transform_response_format_to_text_format(

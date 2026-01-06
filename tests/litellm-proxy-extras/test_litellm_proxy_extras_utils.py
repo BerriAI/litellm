@@ -1,14 +1,11 @@
 import os
 import sys
-import time
-from unittest.mock import Mock, patch
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
-from litellm_proxy_extras.utils import ProxyExtrasDBManager, MigrationLockManager
-
+from litellm_proxy_extras.utils import ProxyExtrasDBManager
 
 
 def test_custom_prisma_dir(monkeypatch):
@@ -30,279 +27,101 @@ def test_custom_prisma_dir(monkeypatch):
     assert os.path.exists(migrations_dir)
 
 
-class TestMigrationLockManager:
-    """Test cases for MigrationLockManager"""
+class TestPermissionErrorDetection:
+    """Test cases for permission error detection in Prisma migrations"""
 
-    def test_acquire_lock_without_redis(self):
-        """Test lock acquisition when Redis is not available"""
-        lock_manager = MigrationLockManager()
-        result = lock_manager.acquire_lock()
-        assert result is True  # Should return True when Redis is not available
-        assert lock_manager.lock_acquired is True  # Redis 없을 때도 lock_acquired는 True
+    def test_is_permission_error_postgres_42501(self):
+        """Test detection of PostgreSQL 42501 error code (insufficient privilege)"""
+        error_message = "Database error code: 42501 - permission denied for table users"
+        assert ProxyExtrasDBManager._is_permission_error(error_message) is True
 
-    def test_acquire_lock_with_redis_success(self):
-        """Test successful lock acquisition with Redis"""
-        mock_redis = Mock()
-        mock_redis.set_cache.return_value = True
-        lock_manager = MigrationLockManager(mock_redis)
+    def test_is_permission_error_must_be_owner(self):
+        """Test detection of 'must be owner of table' error"""
+        error_message = "ERROR: must be owner of table my_table"
+        assert ProxyExtrasDBManager._is_permission_error(error_message) is True
 
-        result = lock_manager.acquire_lock()
+    def test_is_permission_error_permission_denied_schema(self):
+        """Test detection of 'permission denied for schema' error"""
+        error_message = "permission denied for schema public"
+        assert ProxyExtrasDBManager._is_permission_error(error_message) is True
 
-        assert result is True
-        assert lock_manager.lock_acquired is True
-        mock_redis.set_cache.assert_called_once()
+    def test_is_permission_error_permission_denied_table(self):
+        """Test detection of 'permission denied for table' error"""
+        error_message = "permission denied for table my_table"
+        assert ProxyExtrasDBManager._is_permission_error(error_message) is True
 
-    def test_acquire_lock_with_redis_failure(self):
-        """Test failed lock acquisition with Redis"""
-        mock_redis = Mock()
-        mock_redis.set_cache.return_value = False
-        lock_manager = MigrationLockManager(mock_redis)
+    def test_is_permission_error_must_be_owner_schema(self):
+        """Test detection of 'must be owner of schema' error"""
+        error_message = "must be owner of schema public"
+        assert ProxyExtrasDBManager._is_permission_error(error_message) is True
 
-        result = lock_manager.acquire_lock()
+    def test_is_permission_error_case_insensitive(self):
+        """Test that permission error detection is case insensitive"""
+        error_message = "PERMISSION DENIED FOR TABLE my_table"
+        assert ProxyExtrasDBManager._is_permission_error(error_message) is True
 
-        assert result is False
-        assert lock_manager.lock_acquired is False
-        mock_redis.set_cache.assert_called_once()
-
-    def test_acquire_lock_with_redis_exception(self):
-        """Test lock acquisition with Redis exception"""
-        mock_redis = Mock()
-        mock_redis.set_cache.side_effect = Exception("Redis error")
-        lock_manager = MigrationLockManager(mock_redis)
-
-        result = lock_manager.acquire_lock()
-
-        assert result is False
-        assert lock_manager.lock_acquired is False
-
-    def test_wait_for_lock_release_success(self):
-        """Test successful waiting for lock release"""
-        mock_redis = Mock()
-        # First call returns False (lock held), second call returns True (lock acquired)
-        mock_redis.set_cache.side_effect = [False, True]
-        lock_manager = MigrationLockManager(mock_redis)
-
-        result = lock_manager.wait_for_lock_release(check_interval=0.1, max_wait=1)
-
-        assert result is True
-        assert lock_manager.lock_acquired is True
-        assert mock_redis.set_cache.call_count == 2
-
-    def test_wait_for_lock_release_timeout(self):
-        """Test timeout while waiting for lock release"""
-        mock_redis = Mock()
-        mock_redis.set_cache.return_value = False  # Lock always held
-        lock_manager = MigrationLockManager(mock_redis)
-
-        result = lock_manager.wait_for_lock_release(check_interval=0.1, max_wait=0.2)
-
-        assert result is False
-        assert lock_manager.lock_acquired is False
-
-    def test_release_lock_not_acquired(self):
-        """Test releasing lock when not acquired"""
-        mock_redis = Mock()
-        lock_manager = MigrationLockManager(mock_redis)
-
-        lock_manager.release_lock()
-
-        mock_redis.get_cache.assert_not_called()
-        mock_redis.delete_cache.assert_not_called()
-
-    def test_release_lock_success(self):
-        """Test successful lock release"""
-        mock_redis = Mock()
-        mock_redis.get_cache.return_value = "pod_123_456"
-        lock_manager = MigrationLockManager(mock_redis)
-        lock_manager.pod_id = "pod_123_456"
-        lock_manager.lock_acquired = True
-
-        lock_manager.release_lock()
-
-        mock_redis.get_cache.assert_called_once()
-        mock_redis.delete_cache.assert_called_once()
-        assert lock_manager.lock_acquired is False
-
-    def test_release_lock_wrong_owner(self):
-        """Test releasing lock when not the owner"""
-        mock_redis = Mock()
-        mock_redis.get_cache.return_value = "pod_999_999"  # Different pod
-        lock_manager = MigrationLockManager(mock_redis)
-        lock_manager.pod_id = "pod_123_456"
-        lock_manager.lock_acquired = True
-
-        lock_manager.release_lock()
-
-        mock_redis.get_cache.assert_called_once()
-        mock_redis.delete_cache.assert_not_called()
-        assert lock_manager.lock_acquired is False
-
-    def test_context_manager(self):
-        """Test MigrationLockManager as context manager"""
-        mock_redis = Mock()
-        mock_redis.set_cache.return_value = True
-        # Mock get_cache to return the same pod_id for successful release
-        mock_redis.get_cache.return_value = "pod_123_456"
-
-        lock_manager = MigrationLockManager(mock_redis)
-        lock_manager.pod_id = "pod_123_456"  # Set consistent pod_id
-
-        with lock_manager:
-            assert lock_manager.lock_acquired is True
-
-        # Should call release_lock when exiting context
-        mock_redis.get_cache.assert_called_once()
-        mock_redis.delete_cache.assert_called_once()
+    def test_is_permission_error_negative(self):
+        """Test that non-permission errors are not detected as permission errors"""
+        error_message = "column 'id' already exists"
+        assert ProxyExtrasDBManager._is_permission_error(error_message) is False
 
 
-class TestProxyExtrasDBManagerMigrationLock:
-    """Test cases for ProxyExtrasDBManager with migration locking"""
+class TestIdempotentErrorDetection:
+    """Test cases for idempotent error detection in Prisma migrations"""
 
-    @patch("litellm_proxy_extras.utils.ProxyExtrasDBManager._resolve_all_migrations")
-    @patch("litellm_proxy_extras.utils.subprocess.run")
-    @patch("litellm_proxy_extras.utils.ProxyExtrasDBManager._get_prisma_dir")
-    @patch("os.chdir")
-    def test_setup_database_with_redis_lock_success(
-        self, mock_chdir, mock_get_prisma_dir, mock_subprocess, mock_resolve_migrations
-    ):
-        """Test successful database setup with Redis lock"""
-        # Setup mocks
-        mock_get_prisma_dir.return_value = "/test/prisma"
-        mock_subprocess.return_value = Mock(stdout="Migration completed", stderr="")
-        mock_resolve_migrations.return_value = None
+    def test_is_idempotent_error_already_exists(self):
+        """Test detection of generic 'already exists' error"""
+        error_message = "object already exists"
+        assert ProxyExtrasDBManager._is_idempotent_error(error_message) is True
 
-        # Mock Redis cache
-        mock_redis = Mock()
-        mock_redis.set_cache.return_value = True  # Lock acquired successfully
-        mock_redis.get_cache.return_value = "pod_123_456"
+    def test_is_idempotent_error_column_already_exists(self):
+        """Test detection of 'column already exists' error"""
+        error_message = "column 'email' already exists"
+        assert ProxyExtrasDBManager._is_idempotent_error(error_message) is True
 
-        # Set DATABASE_URL
-        with patch.dict(
-            os.environ, {"DATABASE_URL": "postgresql://test:test@localhost/test"}
-        ):
-            result = ProxyExtrasDBManager.setup_database(
-                use_migrate=True, redis_cache=mock_redis
-            )
+    def test_is_idempotent_error_duplicate_key(self):
+        """Test detection of duplicate key violation error"""
+        error_message = "duplicate key value violates unique constraint"
+        assert ProxyExtrasDBManager._is_idempotent_error(error_message) is True
 
-        assert result is True
-        # set_cache is called once in acquire_lock (__enter__ calls acquire_lock)
-        assert mock_redis.set_cache.call_count == 1
-        mock_subprocess.assert_called_once()
+    def test_is_idempotent_error_relation_already_exists(self):
+        """Test detection of 'relation already exists' error"""
+        error_message = "relation 'users_pkey' already exists"
+        assert ProxyExtrasDBManager._is_idempotent_error(error_message) is True
 
-    @patch("litellm_proxy_extras.utils.ProxyExtrasDBManager._resolve_all_migrations")
-    @patch("litellm_proxy_extras.utils.subprocess.run")
-    @patch("litellm_proxy_extras.utils.ProxyExtrasDBManager._get_prisma_dir")
-    @patch("os.chdir")
-    def test_setup_database_with_redis_lock_wait_and_skip(
-        self, mock_chdir, mock_get_prisma_dir, mock_subprocess, mock_resolve_migrations
-    ):
-        """Test database setup when lock is held by another pod, then acquired after waiting"""
-        # Setup mocks
-        mock_get_prisma_dir.return_value = "/test/prisma"
-        mock_resolve_migrations.return_value = None
+    def test_is_idempotent_error_constraint_already_exists(self):
+        """Test detection of 'constraint already exists' error"""
+        error_message = "constraint 'fk_user_id' already exists"
+        assert ProxyExtrasDBManager._is_idempotent_error(error_message) is True
 
-        # Mock Redis cache - first call fails, second call succeeds
-        mock_redis = Mock()
-        mock_redis.set_cache.side_effect = [False, True]  # First fails, then succeeds
-        mock_redis.get_cache.return_value = "pod_123_456"
+    def test_is_idempotent_error_case_insensitive(self):
+        """Test that idempotent error detection is case insensitive"""
+        error_message = "COLUMN 'ID' ALREADY EXISTS"
+        assert ProxyExtrasDBManager._is_idempotent_error(error_message) is True
 
-        # Set DATABASE_URL
-        with patch.dict(
-            os.environ, {"DATABASE_URL": "postgresql://test:test@localhost/test"}
-        ):
-            result = ProxyExtrasDBManager.setup_database(
-                use_migrate=True, redis_cache=mock_redis
-            )
+    def test_is_idempotent_error_negative(self):
+        """Test that non-idempotent errors are not detected as idempotent errors"""
+        error_message = "Database error code: 42501 - permission denied"
+        assert ProxyExtrasDBManager._is_idempotent_error(error_message) is False
 
-        assert result is True  # Should return True after waiting and acquiring lock
-        # set_cache is called 2 times: once in __enter__, once in wait_for_lock_release
-        assert mock_redis.set_cache.call_count == 2
-        # Proceed for case handling in case of migration failure
-        mock_subprocess.assert_called_once()
 
-    @patch("litellm_proxy_extras.utils.ProxyExtrasDBManager._resolve_all_migrations")
-    @patch("litellm_proxy_extras.utils.subprocess.run")
-    @patch("litellm_proxy_extras.utils.ProxyExtrasDBManager._get_prisma_dir")
-    @patch("os.chdir")
-    def test_setup_database_without_redis(
-        self, mock_chdir, mock_get_prisma_dir, mock_subprocess, mock_resolve_migrations
-    ):
-        """Test database setup without Redis cache"""
-        # Setup mocks
-        mock_get_prisma_dir.return_value = "/test/prisma"
-        mock_subprocess.return_value = Mock(stdout="Migration completed", stderr="")
-        mock_resolve_migrations.return_value = None
+class TestErrorClassificationPriority:
+    """Test cases to ensure errors are correctly classified"""
 
-        # Set DATABASE_URL
-        with patch.dict(
-            os.environ, {"DATABASE_URL": "postgresql://test:test@localhost/test"}
-        ):
-            result = ProxyExtrasDBManager.setup_database(
-                use_migrate=True, redis_cache=None
-            )
+    def test_permission_error_not_classified_as_idempotent(self):
+        """Ensure permission errors are not mistakenly classified as idempotent"""
+        error_message = "Database error code: 42501 - must be owner of table users"
+        assert ProxyExtrasDBManager._is_permission_error(error_message) is True
+        assert ProxyExtrasDBManager._is_idempotent_error(error_message) is False
 
-        assert result is True
-        # Redis가 없을 때는 락 보호 없이 마이그레이션을 실행해야 함
-        mock_subprocess.assert_called_once()
+    def test_idempotent_error_not_classified_as_permission(self):
+        """Ensure idempotent errors are not mistakenly classified as permission errors"""
+        error_message = "column 'created_at' already exists"
+        assert ProxyExtrasDBManager._is_idempotent_error(error_message) is True
+        assert ProxyExtrasDBManager._is_permission_error(error_message) is False
 
-    def test_setup_database_no_database_url(self):
-        """Test database setup without DATABASE_URL"""
-        with patch.dict(os.environ, {}, clear=True):
-            result = ProxyExtrasDBManager.setup_database(
-                use_migrate=True, redis_cache=None
-            )
-
-        assert result is False
-
-    @patch("litellm_proxy_extras.utils.subprocess.run")
-    @patch("litellm_proxy_extras.utils.ProxyExtrasDBManager._get_prisma_dir")
-    @patch("os.chdir")
-    @patch.object(
-        MigrationLockManager, "LOCK_TTL_SECONDS", 1
-    )  # Set short TTL for testing
-    def test_setup_database_lock_timeout(
-        self, mock_chdir, mock_get_prisma_dir, mock_subprocess
-    ):
-        """Test database setup when lock acquisition times out"""
-        # Setup mocks
-        mock_get_prisma_dir.return_value = "/test/prisma"
-
-        # Mock Redis cache - always fails to acquire lock
-        mock_redis = Mock()
-        mock_redis.set_cache.return_value = False  # Always fails
-
-        # Set DATABASE_URL
-        with patch.dict(
-            os.environ, {"DATABASE_URL": "postgresql://test:test@localhost/test"}
-        ):
-            # Patch the wait_for_lock_release method to use shorter timeout
-            with patch.object(
-                MigrationLockManager, "wait_for_lock_release"
-            ) as mock_wait:
-                mock_wait.return_value = False  # Simulate timeout
-
-                result = ProxyExtrasDBManager.setup_database(
-                    use_migrate=True, redis_cache=mock_redis
-                )
-
-        assert result is False  # Should return False after timeout
-        mock_subprocess.assert_not_called()  # Should not run migration
-        # Verify that wait_for_lock_release was called with default parameters
-        mock_wait.assert_called_once_with()
-
-    def test_wait_for_lock_release_actual_timeout(self):
-        """Test actual timeout behavior of wait_for_lock_release with real timing"""
-        mock_redis = Mock()
-        mock_redis.set_cache.return_value = False  # Always fails to acquire lock
-        lock_manager = MigrationLockManager(mock_redis)
-
-        # Test with very short timeout to verify actual timeout behavior
-        start_time = time.time()
-        result = lock_manager.wait_for_lock_release(check_interval=0.1, max_wait=0.5)
-        end_time = time.time()
-
-        assert result is False  # Should timeout
-        assert end_time - start_time >= 0.5  # Should wait at least the max_wait time
-        assert end_time - start_time < 1.0  # But not too much longer
-        # Should have called set_cache multiple times during the wait
-        assert mock_redis.set_cache.call_count > 1
+    def test_unknown_error_classified_as_neither(self):
+        """Ensure unknown errors are classified as neither permission nor idempotent"""
+        error_message = "connection timeout"
+        assert ProxyExtrasDBManager._is_permission_error(error_message) is False
+        assert ProxyExtrasDBManager._is_idempotent_error(error_message) is False

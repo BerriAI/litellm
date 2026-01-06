@@ -6,7 +6,7 @@ Handles Authentication and generating request urls for Vertex AI and Google AI S
 
 import json
 import os
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 
 import litellm
 from litellm._logging import verbose_logger
@@ -168,6 +168,7 @@ class VertexBase:
         )
 
     def _credentials_from_default_auth(self, scopes):
+
         import google.auth as google_auth
 
         return google_auth.default(scopes=scopes)
@@ -391,7 +392,7 @@ class VertexBase:
         Returns
             token, url
         """
-        version: Optional[Literal["v1", "v1beta1"]] = None
+        version: Optional[Literal["v1beta1", "v1"]] = None
         if custom_llm_provider == "gemini":
             url, endpoint = _get_gemini_url(
                 mode=mode,
@@ -414,7 +415,7 @@ class VertexBase:
                 stream=stream,
                 vertex_project=vertex_project,
                 vertex_location=vertex_location,
-                vertex_api_version=cast(Literal["v1", "v1beta1"], version),
+                vertex_api_version=version,
             )
 
         return self._check_custom_proxy(

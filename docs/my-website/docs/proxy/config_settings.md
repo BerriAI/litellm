@@ -111,7 +111,6 @@ general_settings:
   master_key: string
   maximum_spend_logs_retention_period: 30d # The maximum time to retain spend logs before deletion.
   maximum_spend_logs_retention_interval: 1d # interval in which the spend log cleanup task should run in.
-  user_mcp_management_mode: restricted  # or "view_all"
 
   # Database Settings
   database_url: string
@@ -231,7 +230,6 @@ router_settings:
 | image_generation_model | str | The default model to use for image generation - ignores model set in request |
 | store_model_in_db | boolean | If true, enables storing model + credential information in the DB. |
 | supported_db_objects | List[str] | Fine-grained control over which object types to load from the database when `store_model_in_db` is True. Available types: `"models"`, `"mcp"`, `"guardrails"`, `"vector_stores"`, `"pass_through_endpoints"`, `"prompts"`, `"model_cost_map"`. If not set, all object types are loaded (default behavior). Example: `supported_db_objects: ["mcp"]` to only load MCP servers from DB. |
-| user_mcp_management_mode | string | Controls what non-admins can see on the MCP dashboard. `restricted` (default) only lists MCP servers that the user’s teams are explicitly allowed to access. `view_all` lets every user see the full MCP server list. Tool list/call always respects per-key permissions, so users still cannot run MCP calls without access. |
 | store_prompts_in_spend_logs | boolean | If true, allows prompts and responses to be stored in the spend logs table. |
 | max_request_size_mb | int | The maximum size for requests in MB. Requests above this size will be rejected. |
 | max_response_size_mb | int | The maximum size for responses in MB. LLM Responses above this size will not be sent. |
@@ -671,7 +669,6 @@ router_settings:
 | LANGSMITH_DEFAULT_RUN_NAME | Default name for Langsmith run
 | LANGSMITH_PROJECT | Project name for Langsmith integration
 | LANGSMITH_SAMPLING_RATE | Sampling rate for Langsmith logging
-| LANGSMITH_TENANT_ID | Tenant ID for Langsmith multi-tenant deployments
 | LANGTRACE_API_KEY | API key for Langtrace service
 | LASSO_API_BASE | Base URL for Lasso API
 | LASSO_API_KEY | API key for Lasso service
@@ -710,7 +707,6 @@ router_settings:
 | LITELLM_MODE | Operating mode for LiteLLM (e.g., production, development)
 | LITELLM_NON_ROOT | Flag to run LiteLLM in non-root mode for enhanced security in Docker containers
 | LITELLM_RATE_LIMIT_WINDOW_SIZE | Rate limit window size for LiteLLM. Default is 60
-| LITELLM_REASONING_AUTO_SUMMARY | If set to "true", automatically enables detailed reasoning summaries for reasoning models (e.g., o1, o3-mini, deepseek-reasoner). When enabled, adds `summary: "detailed"` to reasoning effort configurations. Default is "false"
 | LITELLM_SALT_KEY | Salt key for encryption in LiteLLM
 | LITELLM_SSL_CIPHERS | SSL/TLS cipher configuration for faster handshakes. Controls cipher suite preferences for OpenSSL connections.
 | LITELLM_SECRET_AWS_KMS_LITELLM_LICENSE | AWS KMS encrypted license for LiteLLM
@@ -778,7 +774,6 @@ router_settings:
 | OTEL_EXPORTER_OTLP_HEADERS | Headers for OpenTelemetry requests
 | OTEL_SERVICE_NAME | Service name identifier for OpenTelemetry
 | OTEL_TRACER_NAME | Tracer name for OpenTelemetry tracing
-| OTEL_LOGS_EXPORTER | Exporter type for OpenTelemetry logs (e.g., console)
 | PAGERDUTY_API_KEY | API key for PagerDuty Alerting
 | PANW_PRISMA_AIRS_API_KEY | API key for PANW Prisma AIRS service
 | PANW_PRISMA_AIRS_API_BASE | Base URL for PANW Prisma AIRS service

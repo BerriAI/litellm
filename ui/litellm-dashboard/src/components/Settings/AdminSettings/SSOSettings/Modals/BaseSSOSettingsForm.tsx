@@ -189,16 +189,11 @@ const BaseSSOSettingsForm: React.FC<BaseSSOSettingsFormProps> = ({ form, onFormS
 
         <Form.Item
           noStyle
-          shouldUpdate={(prevValues, currentValues) =>
-            prevValues.use_role_mappings !== currentValues.use_role_mappings ||
-            prevValues.sso_provider !== currentValues.sso_provider
-          }
+          shouldUpdate={(prevValues, currentValues) => prevValues.use_role_mappings !== currentValues.use_role_mappings}
         >
           {({ getFieldValue }) => {
             const useRoleMappings = getFieldValue("use_role_mappings");
-            const provider = getFieldValue("sso_provider");
-            const supportsRoleMappings = provider === "okta" || provider === "generic";
-            return useRoleMappings && supportsRoleMappings ? (
+            return useRoleMappings ? (
               <Form.Item
                 label="Group Claim"
                 name="group_claim"
@@ -212,16 +207,11 @@ const BaseSSOSettingsForm: React.FC<BaseSSOSettingsFormProps> = ({ form, onFormS
 
         <Form.Item
           noStyle
-          shouldUpdate={(prevValues, currentValues) =>
-            prevValues.use_role_mappings !== currentValues.use_role_mappings ||
-            prevValues.sso_provider !== currentValues.sso_provider
-          }
+          shouldUpdate={(prevValues, currentValues) => prevValues.use_role_mappings !== currentValues.use_role_mappings}
         >
           {({ getFieldValue }) => {
             const useRoleMappings = getFieldValue("use_role_mappings");
-            const provider = getFieldValue("sso_provider");
-            const supportsRoleMappings = provider === "okta" || provider === "generic";
-            return useRoleMappings && supportsRoleMappings ? (
+            return useRoleMappings ? (
               <>
                 <Form.Item label="Default Role" name="default_role" initialValue="Internal User">
                   <Select>
