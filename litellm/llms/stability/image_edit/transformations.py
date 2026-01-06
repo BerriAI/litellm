@@ -170,8 +170,8 @@ class StabilityImageEditConfig(BaseImageEditConfig):
     def transform_image_edit_request(
         self,
         model: str,
-        prompt: str,
-        image: FileTypes,
+        prompt: Optional[str],
+        image: Optional[FileTypes],
         image_edit_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
@@ -186,12 +186,18 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         # Populate multipart form-data as separate text fields (data) and files.
         # Stability expects prompt/output_format/etc. as normal form fields, not file parts.
         data: Dict[str, Any] = {
-            "prompt": prompt,
             "output_format": "png",  # Default to PNG
         }
+        
+        # Add prompt only if provided
+        if prompt is not None and prompt != "":
+            data["prompt"] = prompt
+            
         # Handle image parameter - could be a single file or list
-        image_file = image[0] if isinstance(image, list) else image  # type: ignore
-        files: Dict[str, Any] = {"image": image_file}
+        files: Dict[str, Any] = {}
+        if image is not None:
+            image_file = image[0] if isinstance(image, list) else image  # type: ignore
+            files["image"] = image_file
 
         # Add optional params (already mapped in map_openai_params)
         for key, value in image_edit_optional_request_params.items():  # type: ignore

@@ -143,8 +143,8 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
     def transform_image_edit_request(  # type: ignore[override]
         self,
         model: str,
-        prompt: str,
-        image: FileTypes,
+        prompt: Optional[str],
+        image: Optional[FileTypes],
         image_edit_optional_request_params: Dict[str, Any],
         litellm_params: GenericLiteLLMParams,
         headers: dict,
