@@ -7718,6 +7718,11 @@ class ProviderConfigManager:
             return litellm.CometAPIEmbeddingConfig()
         elif litellm.LlmProviders.GITHUB_COPILOT == provider:
             return litellm.GithubCopilotEmbeddingConfig()
+        elif litellm.LlmProviders.OPENROUTER == provider:
+            from litellm.llms.openrouter.embedding.transformation import (
+                OpenrouterEmbeddingConfig,
+            )
+            return OpenrouterEmbeddingConfig()
         elif litellm.LlmProviders.GIGACHAT == provider:
             return litellm.GigaChatEmbeddingConfig()
         elif litellm.LlmProviders.SAGEMAKER == provider:
