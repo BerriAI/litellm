@@ -62,7 +62,7 @@ def test_get_api_key_with_custom_litellm_key_header(
 def test_team_metadata_with_tags_flows_through_jwt_auth():
     """
     Test that team_metadata (specifically tags) flows through JWT authentication.
-    
+
     This is a regression test for the issue where JWT auth was not populating
     team_metadata, causing team-level tags to be missing in litellm_pre_call_utils.py
     """
@@ -77,7 +77,7 @@ def test_team_metadata_with_tags_flows_through_jwt_auth():
         rpm_limit=100,
         models=["gpt-4", "gpt-3.5-turbo"],
     )
-    
+
     # Simulate constructing UserAPIKeyAuth like we do in JWT auth
     # This is the pattern from user_api_key_auth.py lines 552-587
     user_api_key_auth = UserAPIKeyAuth(
@@ -90,14 +90,14 @@ def test_team_metadata_with_tags_flows_through_jwt_auth():
         user_role="internal_user",
         user_id="test-user",
     )
-    
+
     # Verify team_metadata is set
     assert user_api_key_auth.team_metadata is not None, "team_metadata should be populated"
     assert user_api_key_auth.team_metadata == team_object.metadata, (
         f"team_metadata not correctly mapped. "
         f"Expected: {team_object.metadata}, Got: {user_api_key_auth.team_metadata}"
     )
-    
+
     # Specifically verify tags are present
     assert "tags" in user_api_key_auth.team_metadata, "tags should be in team_metadata"
     assert user_api_key_auth.team_metadata["tags"] == ["production", "high-priority"], (
@@ -108,7 +108,7 @@ def test_team_metadata_with_tags_flows_through_jwt_auth():
 
 def test_route_checks_is_llm_api_route():
     """Test RouteChecks.is_llm_api_route() correctly identifies LLM API routes including passthrough endpoints"""
-    
+
     # Test OpenAI routes
     openai_routes = [
         "/v1/chat/completions",
@@ -132,7 +132,7 @@ def test_route_checks_is_llm_api_route():
         "/v1/realtime",
         "/realtime",
     ]
-    
+
     for route in openai_routes:
         assert RouteChecks.is_llm_api_route(route=route), f"Route {route} should be identified as LLM API route"
 
@@ -141,7 +141,7 @@ def test_route_checks_is_llm_api_route():
         "/v1/messages",
         "/v1/messages/count_tokens",
     ]
-    
+
     for route in anthropic_routes:
         assert RouteChecks.is_llm_api_route(route=route), f"Route {route} should be identified as LLM API route"
 
@@ -161,7 +161,7 @@ def test_route_checks_is_llm_api_route():
         "/vllm/v1/chat/completions",
         "/mistral/v1/chat/completions",
     ]
-    
+
     for route in passthrough_routes:
         assert RouteChecks.is_llm_api_route(route=route), f"Route {route} should be identified as LLM API route"
 
@@ -171,7 +171,7 @@ def test_route_checks_is_llm_api_route():
         "/mcp/",
         "/mcp/test",
     ]
-    
+
     for route in mcp_routes:
         assert RouteChecks.is_llm_api_route(route=route), f"Route {route} should be identified as LLM API route"
 
@@ -186,7 +186,7 @@ def test_route_checks_is_llm_api_route():
         "/v1/batches/batch_123",
         "/batches/batch_123",
     ]
-    
+
     for route in placeholder_routes:
         assert RouteChecks.is_llm_api_route(route=route), f"Route {route} should be identified as LLM API route"
 
@@ -197,7 +197,7 @@ def test_route_checks_is_llm_api_route():
         "/engines/gpt-4/chat/completions",
         "/engines/gpt-3.5-turbo/completions",
     ]
-    
+
     for route in azure_routes:
         assert RouteChecks.is_llm_api_route(route=route), f"Route {route} should be identified as LLM API route"
 
@@ -216,7 +216,7 @@ def test_route_checks_is_llm_api_route():
         "/debug",
         "/test",
     ]
-    
+
     for route in non_llm_routes:
         assert not RouteChecks.is_llm_api_route(route=route), f"Route {route} should NOT be identified as LLM API route"
 
@@ -228,7 +228,7 @@ def test_route_checks_is_llm_api_route():
         {},
         "",
     ]
-    
+
     for invalid_input in invalid_inputs:
         assert not RouteChecks.is_llm_api_route(route=invalid_input), f"Invalid input {invalid_input} should return False"
 
@@ -239,14 +239,14 @@ async def test_proxy_admin_expired_key_from_cache():
     Test that PROXY_ADMIN keys retrieved from cache are checked for expiration
     before being returned. This prevents expired keys from bypassing expiration checks
     when retrieved from cache (which normally happens at lines 1014-1036).
-    
+
     Regression test for issue where PROXY_ADMIN keys from cache skipped expiration check.
     """
     from datetime import datetime, timedelta, timezone
-    
+
     from fastapi import Request
     from starlette.datastructures import URL
-    
+
     from litellm.proxy._types import (
         LitellmUserRoles,
         ProxyErrorTypes,
@@ -255,24 +255,24 @@ async def test_proxy_admin_expired_key_from_cache():
     )
     from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
     from litellm.proxy.proxy_server import hash_token
-    
+
     # Create an expired PROXY_ADMIN key
     api_key = "sk-test-proxy-admin-key"
     hashed_key = hash_token(api_key)
     expired_time = datetime.now(timezone.utc) - timedelta(hours=1)  # Expired 1 hour ago
-    
+
     expired_token = UserAPIKeyAuth(
         api_key=api_key,
         user_role=LitellmUserRoles.PROXY_ADMIN,
         expires=expired_time,
         token=hashed_key,
     )
-    
+
     # Mock cache to return the expired token
     mock_cache = AsyncMock()
     mock_cache.async_get_cache = AsyncMock(return_value=expired_token)
     mock_cache.delete_cache = MagicMock()
-    
+
     # Mock proxy_logging_obj
     mock_proxy_logging_obj = MagicMock()
     mock_proxy_logging_obj.internal_usage_cache = MagicMock()
@@ -280,22 +280,22 @@ async def test_proxy_admin_expired_key_from_cache():
     mock_proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
     # Mock post_call_failure_hook as async function returning None (no transformation)
     mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
-    
+
     # Mock prisma_client
     mock_prisma_client = MagicMock()
-    
+
     # Mock get_key_object to return expired token from cache
     with patch(
         "litellm.proxy.auth.user_api_key_auth.get_key_object",
         new_callable=AsyncMock,
     ) as mock_get_key_object, \
          patch("litellm.proxy.auth.user_api_key_auth._delete_cache_key_object", new_callable=AsyncMock) as mock_delete_cache:
-        
+
         mock_get_key_object.return_value = expired_token
-        
+
         # Set attributes on proxy_server module (these are imported inside _user_api_key_auth_builder)
         import litellm.proxy.proxy_server
-        
+
         setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma_client)
         setattr(litellm.proxy.proxy_server, "user_api_key_cache", mock_cache)
         setattr(litellm.proxy.proxy_server, "proxy_logging_obj", mock_proxy_logging_obj)
@@ -308,14 +308,14 @@ async def test_proxy_admin_expired_key_from_cache():
         setattr(litellm.proxy.proxy_server, "user_custom_auth", None)
         setattr(litellm.proxy.proxy_server, "jwt_handler", None)
         setattr(litellm.proxy.proxy_server, "litellm_proxy_admin_name", "admin")
-        
+
         try:
-            
+
             # Create a mock request
             request = Request(scope={"type": "http"})
             request._url = URL(url="/chat/completions")
             request_data = {}
-            
+
             # Call the auth builder - should raise ProxyException for expired key
             # Note: api_key needs "Bearer " prefix for get_api_key() to process it correctly
             with pytest.raises(ProxyException) as exc_info:
@@ -328,7 +328,7 @@ async def test_proxy_admin_expired_key_from_cache():
                     azure_apim_header=None,
                     request_data=request_data,
                 )
-            
+
             # Verify that ProxyException was raised with expired_key type
             assert hasattr(exc_info.value, "type"), "Exception should have 'type' attribute"
             assert exc_info.value.type == ProxyErrorTypes.expired_key, (
@@ -337,7 +337,7 @@ async def test_proxy_admin_expired_key_from_cache():
             assert "Expired Key" in str(exc_info.value.message), (
                 f"Exception message should mention 'Expired Key', got: {exc_info.value.message}"
             )
-            
+
             # Verify that cache deletion was called
             mock_delete_cache.assert_called_once()
             call_args = mock_delete_cache.call_args
@@ -347,3 +347,60 @@ async def test_proxy_admin_expired_key_from_cache():
         finally:
             # Clean up - restore original values if needed
             pass
+
+
+class TestAuthenticationMode:
+    """Tests for the authentication_mode setting."""
+
+    def test_get_effective_authentication_mode_explicit_off(self):
+        """When authentication_mode is explicitly 'off', should return OFF regardless of master_key."""
+        from litellm.proxy._types import AuthenticationMode
+        from litellm.proxy.auth.user_api_key_auth import get_effective_authentication_mode
+
+        # Explicit off, no master key
+        result = get_effective_authentication_mode({"authentication_mode": "off"}, None)
+        assert result == AuthenticationMode.OFF
+
+        # Explicit off, with master key (explicit setting takes precedence)
+        result = get_effective_authentication_mode(
+            {"authentication_mode": "off"}, "sk-master-key"
+        )
+        assert result == AuthenticationMode.OFF
+
+        # Explicit off as enum
+        result = get_effective_authentication_mode(
+            {"authentication_mode": AuthenticationMode.OFF}, None
+        )
+        assert result == AuthenticationMode.OFF
+
+    def test_get_effective_authentication_mode_explicit_secure(self):
+        """When authentication_mode is explicitly 'secure', should return SECURE."""
+        from litellm.proxy._types import AuthenticationMode
+        from litellm.proxy.auth.user_api_key_auth import get_effective_authentication_mode
+
+        result = get_effective_authentication_mode(
+            {"authentication_mode": "secure"}, "sk-master-key"
+        )
+        assert result == AuthenticationMode.SECURE
+
+        # Explicit secure as enum
+        result = get_effective_authentication_mode(
+            {"authentication_mode": AuthenticationMode.SECURE}, "sk-master-key"
+        )
+        assert result == AuthenticationMode.SECURE
+
+    def test_get_effective_authentication_mode_default_with_master_key(self):
+        """When no explicit mode but master_key is set, should default to SECURE."""
+        from litellm.proxy._types import AuthenticationMode
+        from litellm.proxy.auth.user_api_key_auth import get_effective_authentication_mode
+
+        result = get_effective_authentication_mode({}, "sk-master-key")
+        assert result == AuthenticationMode.SECURE
+
+    def test_get_effective_authentication_mode_default_without_master_key(self):
+        """When no explicit mode and no master_key, should default to OFF."""
+        from litellm.proxy._types import AuthenticationMode
+        from litellm.proxy.auth.user_api_key_auth import get_effective_authentication_mode
+
+        result = get_effective_authentication_mode({}, None)
+        assert result == AuthenticationMode.OFF
