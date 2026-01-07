@@ -324,6 +324,8 @@ class CallTypes(str, Enum):
     adelete_container = "adelete_container"
     list_container_files = "list_container_files"
     alist_container_files = "alist_container_files"
+    upload_container_file = "upload_container_file"
+    aupload_container_file = "aupload_container_file"
 
     acancel_fine_tuning_job = "acancel_fine_tuning_job"
     cancel_fine_tuning_job = "cancel_fine_tuning_job"

@@ -1515,7 +1515,7 @@
         "list_containers": true,
         "retrieve_container": true,
         "delete_container": true,
-        "create_container_file": false,
+        "create_container_file": true,
         "list_container_files": true,
         "retrieve_container_file": true,
         "retrieve_container_file_content": true,
