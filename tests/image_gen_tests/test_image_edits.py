@@ -143,6 +143,23 @@ class TestOpenAIImageEditDallE2(BaseLLMImageEditTest):
         }
 
 
+class TestAzureAIFlux2ImageEdit(BaseLLMImageEditTest):
+    """
+    Concrete implementation of BaseLLMImageEditTest for Azure AI FLUX 2 image edits.
+    FLUX 2 uses JSON with base64 image instead of multipart/form-data.
+    """
+
+    def get_base_image_edit_call_args(self) -> dict:
+        """Return base call args for Azure AI FLUX 2 image edit"""
+        return {
+            "model": "azure_ai/flux.2-pro",
+            "image": SINGLE_TEST_IMAGE,
+            "api_base": os.getenv("AZURE_AI_API_BASE", "https://litellm-ci-cd-prod.services.ai.azure.com"),
+            "api_key": os.getenv("AZURE_AI_API_KEY"),
+            "api_version": "preview",
+        }
+
+
 @pytest.mark.flaky(retries=3, delay=2)
 @pytest.mark.asyncio
 async def test_openai_image_edit_litellm_router():
