@@ -17,7 +17,7 @@ from typing import (
 import httpx
 import orjson
 from fastapi import HTTPException, Request, status
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -96,16 +96,55 @@ async def _parse_event_data_for_error(event_line: Union[str, bytes]) -> Optional
     return None
 
 
-async def create_streaming_response(
+def _extract_error_from_sse_chunk(event_line: Union[str, bytes]) -> dict:
+    """
+    Extract error dictionary from SSE format chunk.
+
+    Args:
+        event_line: SSE format event line, e.g. "data: {"error": {...}}\n\n"
+
+    Returns:
+        Error dictionary in OpenAI API format
+    """
+    event_line = (
+        event_line.decode("utf-8") if isinstance(event_line, bytes) else event_line
+    )
+
+    # Default error format
+    default_error = {
+        "message": "Unknown error",
+        "type": "internal_server_error",
+        "param": None,
+        "code": "500",
+    }
+
+    if event_line.startswith("data: "):
+        json_str = event_line[len("data: ") :].strip()
+        if not json_str or json_str == "[DONE]":
+            return default_error
+
+        try:
+            data = orjson.loads(json_str)
+            if isinstance(data, dict) and "error" in data:
+                error_obj = data["error"]
+                if isinstance(error_obj, dict):
+                    return error_obj
+        except (orjson.JSONDecodeError, json.JSONDecodeError):
+            pass
+
+    return default_error
+
+
+async def create_response(
     generator: AsyncGenerator[str, None],
     media_type: str,
     headers: dict,
     default_status_code: int = status.HTTP_200_OK,
-) -> StreamingResponse:
+) -> Union[StreamingResponse, JSONResponse]:
     """
-    Creates a StreamingResponse by inspecting the first chunk for an error code.
-    The entire original generator content is streamed, but the HTTP status code
-    of the response is set based on the first chunk if it's a recognized error.
+    Create streaming response, checking if the first chunk is an error.
+    If the first chunk is an error, return a standard JSON error response.
+    Otherwise, return StreamingResponse and stream all content.
     """
     first_chunk_value: Optional[str] = None
     final_status_code = default_status_code
@@ -124,9 +163,27 @@ async def create_streaming_response(
                     first_chunk_value
                 )
                 if error_code_from_chunk is not None:
+                    # First chunk is an error, stream hasn't really started yet
+                    # Should return standard JSON error response instead of SSE format
                     final_status_code = error_code_from_chunk
                     verbose_proxy_logger.debug(
-                        f"Error detected in first stream chunk. Status code set to: {final_status_code}"
+                        f"Error detected in first stream chunk. Returning JSON error response with status code: {final_status_code}"
+                    )
+
+                    # Parse error content
+                    error_dict = _extract_error_from_sse_chunk(first_chunk_value)
+
+                    # Consume and close generator (avoid resource leak)
+                    try:
+                        await generator.aclose()
+                    except Exception:
+                        pass
+
+                    # Return JSON format error response
+                    return JSONResponse(
+                        status_code=final_status_code,
+                        content={"error": error_dict},
+                        headers=headers,
                     )
             except Exception as e:
                 verbose_proxy_logger.debug(f"Error parsing first chunk value: {e}")
@@ -647,7 +704,7 @@ class ProxyBaseLLMRequestProcessing:
                         proxy_logging_obj=proxy_logging_obj,
                     )
                 )
-                return await create_streaming_response(
+                return await create_response(
                     generator=selected_data_generator,
                     media_type="text/event-stream",
                     headers=custom_headers,
@@ -658,7 +715,7 @@ class ProxyBaseLLMRequestProcessing:
                     user_api_key_dict=user_api_key_dict,
                     request_data=self.data,
                 )
-                return await create_streaming_response(
+                return await create_response(
                     generator=selected_data_generator,
                     media_type="text/event-stream",
                     headers=custom_headers,
