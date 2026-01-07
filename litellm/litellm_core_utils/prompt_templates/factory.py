@@ -2137,6 +2137,14 @@ def anthropic_messages_pt(  # noqa: PLR0915
                         assistant_content.append(
                             cast(AnthropicMessagesTextParam, _cached_message)
                         )
+                    # handle server_tool_use blocks (tool search, web search, etc.)
+                    # Pass through as-is since these are Anthropic-native content types
+                    elif m.get("type", "") == "server_tool_use":
+                        assistant_content.append(m)  # type: ignore
+                    # handle tool_search_tool_result blocks
+                    # Pass through as-is since these are Anthropic-native content types
+                    elif m.get("type", "") == "tool_search_tool_result":
+                        assistant_content.append(m)  # type: ignore
             elif (
                 "content" in assistant_content_block
                 and isinstance(assistant_content_block["content"], str)
