@@ -427,6 +427,8 @@ def test_set_latency_metrics(prometheus_logger):
         team_alias="test_team_alias",
         requested_model="openai-gpt",
         model="gpt-3.5-turbo",
+        api_provider="openai",
+        api_base="https://api.openai.com",
     )
     prometheus_logger.litellm_llm_api_latency_metric.labels().observe.assert_called_once_with(
         1.5
