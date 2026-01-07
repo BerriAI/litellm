@@ -2234,7 +2234,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             saved_token["model_max_budget"] = json.loads(
                 saved_token["model_max_budget"]
             )
-        router_settings = saved_token.get("router_settings")
+        router_settings = cast(Optional[dict], saved_token.get("router_settings"))
         if router_settings is not None and isinstance(router_settings, str):
             try:
                 saved_token["router_settings"] = yaml.safe_load(router_settings)
