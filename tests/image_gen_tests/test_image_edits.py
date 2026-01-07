@@ -322,14 +322,23 @@ async def test_openai_image_edit_cost_tracking():
     litellm.logging_callback_manager._reset_all_callbacks()
     litellm.callbacks = [test_custom_logger]
     
-    # Mock response for Azure image edit
+    # Mock response for Azure image edit with usage data for cost tracking
     mock_response = {
         "created": 1589478378,
         "data": [
             {
                 "b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
             }
-        ]
+        ],
+        "usage": {
+            "total_tokens": 1100,
+            "input_tokens": 100,
+            "input_tokens_details": {
+                "image_tokens": 50,
+                "text_tokens": 50
+            },
+            "output_tokens": 1000
+        }
     }
 
     class MockResponse:
