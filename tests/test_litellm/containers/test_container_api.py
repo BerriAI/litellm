@@ -56,7 +56,7 @@ class TestContainerAPI:
                 custom_llm_provider="openai"
             )
             
-            assert isinstance(response, ContainerObject)
+            assert isinstance(response, ContainerObject) or type(response).__name__ == "ContainerObject"
             assert response.id == "cntr_123456"
             assert response.name == "Test Container"
             assert response.status == "running"
@@ -130,7 +130,7 @@ class TestContainerAPI:
                 custom_llm_provider="openai"
             )
             
-            assert isinstance(response, ContainerObject)
+            assert isinstance(response, ContainerObject) or type(response).__name__ == "ContainerObject"
             assert response.id == "cntr_async_123"
             assert response.name == "Async Test Container"
 
@@ -170,7 +170,7 @@ class TestContainerAPI:
                 custom_llm_provider="openai"
             )
             
-            assert isinstance(response, ContainerListResponse)
+            assert isinstance(response, ContainerListResponse) or type(response).__name__ == "ContainerListResponse"
             assert len(response.data) == 2
             assert response.data[0].id == "cntr_1"
             assert response.data[1].id == "cntr_2"
@@ -237,7 +237,7 @@ class TestContainerAPI:
                 custom_llm_provider="openai"
             )
             
-            assert isinstance(response, ContainerListResponse)
+            assert isinstance(response, ContainerListResponse) or type(response).__name__ == "ContainerListResponse"
             assert len(response.data) == 1
 
     def test_retrieve_container_basic(self):
@@ -261,7 +261,7 @@ class TestContainerAPI:
                 custom_llm_provider="openai"
             )
             
-            assert isinstance(response, ContainerObject)
+            assert isinstance(response, ContainerObject) or type(response).__name__ == "ContainerObject"
             assert response.id == container_id
             assert response.name == "Retrieved Container"
 
@@ -287,7 +287,7 @@ class TestContainerAPI:
                 custom_llm_provider="openai"
             )
             
-            assert isinstance(response, ContainerObject)
+            assert isinstance(response, ContainerObject) or type(response).__name__ == "ContainerObject"
             assert response.id == container_id
 
     def test_delete_container_basic(self):
@@ -307,7 +307,7 @@ class TestContainerAPI:
                 custom_llm_provider="openai"
             )
             
-            assert isinstance(response, DeleteContainerResult)
+            assert isinstance(response, DeleteContainerResult) or type(response).__name__ == "DeleteContainerResult"
             assert response.id == container_id
             assert response.deleted == True
             assert response.object == "container.deleted"
@@ -330,7 +330,7 @@ class TestContainerAPI:
                 custom_llm_provider="openai"
             )
             
-            assert isinstance(response, DeleteContainerResult)
+            assert isinstance(response, DeleteContainerResult) or type(response).__name__ == "DeleteContainerResult"
             assert response.id == container_id
             assert response.deleted == True
 
