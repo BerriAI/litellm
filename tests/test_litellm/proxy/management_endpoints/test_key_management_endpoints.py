@@ -3,6 +3,7 @@ import os
 import sys
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 sys.path.insert(
@@ -3688,10 +3689,12 @@ async def test_generate_key_with_router_settings(monkeypatch):
     )
 
     # Test router_settings with sample data
+    # Using valid UpdateRouterConfig fields (retry_policy is not a valid field,
+    # but model_group_retry_policy is, which also tests nested dict serialization)
     router_settings_data = {
         "routing_strategy": "usage-based",
         "num_retries": 3,
-        "retry_policy": {"max_retries": 5},
+        "model_group_retry_policy": {"max_retries": 5},
     }
 
     request_data = GenerateKeyRequest(
@@ -3722,17 +3725,17 @@ async def test_generate_key_with_router_settings(monkeypatch):
     assert "router_settings" in key_data
     
     # router_settings should be present in the data passed to insert_data
-    # Note: insert_data may call jsonify_object which serializes dicts to JSON strings
-    # So router_settings could be either a dict (before jsonify_object) or a JSON string (after)
+    # The code uses safe_dumps to serialize router_settings, so it will be a JSON string
     router_settings_value = key_data["router_settings"]
     
     # Get the actual settings value for comparison
+    # The code uses safe_dumps to serialize and yaml.safe_load to deserialize
     if isinstance(router_settings_value, str):
-        # If it's a JSON string, deserialize it
+        # If it's a JSON string (from safe_dumps), deserialize it using json.loads
+        # (safe_dumps produces JSON, and json.loads is the correct way to deserialize it)
         actual_settings = json.loads(router_settings_value)
     elif isinstance(router_settings_value, dict):
         # If it's still a dict, use it directly
-        # (jsonify_object inside insert_data will serialize it before saving to DB)
         actual_settings = router_settings_value
     else:
         raise AssertionError(
