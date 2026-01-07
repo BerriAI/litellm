@@ -1,5 +1,5 @@
 import { render, waitFor } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import ModelInfoView from "./model_info_view";
 
 vi.mock("../../utils/dataUtils", () => ({

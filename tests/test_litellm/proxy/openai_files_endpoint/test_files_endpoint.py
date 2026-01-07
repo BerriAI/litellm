@@ -100,6 +100,7 @@ def test_invalid_purpose(mocker: MockerFixture, monkeypatch, llm_router: Router)
     assert "Invalid purpose: my-bad-purpose" in response.json()["error"]["message"]
 
 
+@pytest.mark.skip(reason="CARTO fork: requires LITELLM_LICENSE for Enterprise features - fix in separate PR")
 def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: Router):
     """
     Asserts 'create_file' is called with the correct arguments
