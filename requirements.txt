@@ -65,7 +65,7 @@ jsonschema>=4.23.0,<5.0.0 # validating json schema - aligned with openapi-core +
 websockets==13.1.0 # for realtime API
 soundfile==0.12.1 # for audio file processing
 openapi-core==0.21.0 # for OpenAPI compliance tests
-a2a-sdk[http-server]>=0.3.0 # for A2A server
+
 ########################
 # LITELLM ENTERPRISE DEPENDENCIES
 ########################
