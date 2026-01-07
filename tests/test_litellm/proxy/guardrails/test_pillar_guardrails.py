@@ -53,7 +53,12 @@ def setup_and_teardown():
     import asyncio
 
     # Reload litellm to ensure clean state
-    importlib.reload(litellm)
+    # Ensure litellm is in sys.modules before reloading (fixes xdist parallel execution)
+    if 'litellm' in sys.modules:
+        importlib.reload(litellm)
+    else:
+        import litellm as _litellm
+        globals()['litellm'] = _litellm
 
     # Set up async loop
     loop = asyncio.get_event_loop_policy().new_event_loop()
