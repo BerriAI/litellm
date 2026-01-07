@@ -43,6 +43,7 @@ test.describe("Internal Users Page", () => {
       await expect(prevButton).toBeDisabled();
     }
 
+    await page.waitForTimeout(1000);
     // Check if there are more pages
     const hasMorePages = infoText.includes("of") && !infoText.endsWith("25 of 25");
     if (hasMorePages) {
