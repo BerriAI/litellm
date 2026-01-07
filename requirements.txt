@@ -57,7 +57,7 @@ tokenizers==0.20.2 # for calculating usage
 click==8.1.7 # for proxy cli
 rich==13.7.1 # for litellm proxy cli
 jinja2==3.1.6 # for prompt templates
-aiohttp==3.12.14 # for network calls
+aiohttp==3.13.3 # for network calls
 aioboto3==13.4.0 # for async sagemaker calls
 tenacity==8.5.0  # for retrying requests, when litellm.num_retries set
 pydantic>=2.11,<3 # proxy + openai req. + mcp
