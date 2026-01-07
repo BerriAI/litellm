@@ -8,7 +8,7 @@ import TabItem from '@theme/TabItem';
 | Logging | ✅ | Works across all integrations |
 | Streaming | ✅ | |
 | Loadbalancing | ✅ | Between supported models |
-| Supported LLM providers | **All LiteLLM supported providers** | `openai`, `anthropic`, `bedrock`, `vertex_ai`, `gemini`, `azure`, `azure_ai` etc. |
+| Supported LLM providers | **All LiteLLM supported CHAT COMPLETION providers** | `openai`, `anthropic`, `bedrock`, `vertex_ai`, `gemini`, `azure`, `azure_ai` etc. |
 
 ## **LiteLLM Python SDK Usage**
 
