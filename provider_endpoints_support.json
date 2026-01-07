@@ -284,6 +284,7 @@
         "responses": true,
         "embeddings": true,
         "image_generations": true,
+        "image_edits": true,
         "audio_transcriptions": true,
         "audio_speech": true,
         "moderations": true,
