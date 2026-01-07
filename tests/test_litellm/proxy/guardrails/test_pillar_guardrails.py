@@ -55,11 +55,21 @@ def setup_and_teardown():
     # Reload litellm to ensure clean state
     # Handle race conditions in xdist parallel execution
     try:
-        importlib.reload(litellm)
-    except (ImportError, KeyError):
-        # Module not in sys.modules (can happen in parallel execution)
-        import litellm as _litellm
-        globals()['litellm'] = _litellm
+        # Check if litellm is in sys.modules before attempting reload
+        if 'litellm' in sys.modules:
+            importlib.reload(litellm)
+        else:
+            # Module not loaded yet, import it fresh
+            import litellm as _litellm
+            globals()['litellm'] = _litellm
+    except (ImportError, KeyError) as e:
+        # If reload fails, try fresh import
+        try:
+            import litellm as _litellm
+            globals()['litellm'] = _litellm
+        except ImportError:
+            # Fallback: litellm already imported at module level
+            pass
 
     # Set up async loop
     loop = asyncio.get_event_loop_policy().new_event_loop()
