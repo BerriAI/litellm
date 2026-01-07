@@ -60,6 +60,7 @@ def _get_litellm_resource():
     while maintaining backward compatibility with LiteLLM-specific environment variables.
     """
     from opentelemetry.sdk.resources import OTELResourceDetector, Resource
+    from opentelemetry.semconv.schemas import Schemas
 
     # Create base resource attributes with LiteLLM-specific defaults
     # These will be overridden by OTEL_RESOURCE_ATTRIBUTES if present
@@ -73,7 +74,7 @@ def _get_litellm_resource():
     }
 
     # Create base resource with LiteLLM-specific defaults
-    base_resource = Resource.create(base_attributes)  # type: ignore
+    base_resource = Resource.create(base_attributes, Schemas.V1_25_0.value)  # type: ignore
 
     # Create resource from OTEL_RESOURCE_ATTRIBUTES using the detector
     otel_resource_detector = OTELResourceDetector()
@@ -1500,7 +1501,7 @@ class OpenTelemetry(CustomLogger):
                     value=usage.get("prompt_tokens"),
                 )
 
-                ########################################################################
+            ########################################################################
             ########## LLM Request Medssages / tools / content Attributes ###########
             #########################################################################
 
