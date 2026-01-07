@@ -594,7 +594,26 @@ class TestMCPServerManager:
         assert (
             server.registration_url == "https://discovered.example.com/register"
         )
+    @pytest.mark.asyncio
+    async def test_config_oauth_initialize_tool_name_to_mcp_server_name_mapping(self):
+        manager = MCPServerManager()
 
+        config = {
+            "example": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+                "auth_type": MCPAuth.oauth2,
+                "scopes": ["config"],
+                "authorization_url": "https://config.example.com/auth",
+            }
+        }
+
+        await manager.load_servers_from_config(config)
+
+        # Initialize the tool mapping
+        await manager._initialize_tool_name_to_mcp_server_name_mapping()
+        assert manager.tool_name_to_mcp_server_name_mapping == {}
+        
     @pytest.mark.asyncio
     async def test_list_tools_handles_missing_server_alias(self):
         """Test that list_tools handles servers without alias gracefully"""

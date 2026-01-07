@@ -522,6 +522,7 @@ class LiteLLMRoutes(enum.Enum):
         "/spend/tags",
         "/spend/calculate",
         "/spend/logs",
+        "/cost/estimate",
     ]
 
     global_spend_tracking_routes = [
@@ -1531,6 +1532,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     guardrails: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
     team_member_budget: Optional[float] = None
+    team_member_budget_duration: Optional[str] = None
     team_member_rpm_limit: Optional[int] = None
     team_member_tpm_limit: Optional[int] = None
     team_member_key_duration: Optional[str] = None
@@ -1907,6 +1909,9 @@ class UserHeaderMapping(LiteLLMPydanticObjectBase):
     }
 
 
+UserMCPManagementMode = Literal["restricted", "view_all"]
+
+
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
@@ -2023,6 +2028,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     supported_db_objects: Optional[List[SupportedDBObjectType]] = Field(
         None,
         description="Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map'. If not set, all objects are loaded (default behavior).",
+    )
+    user_mcp_management_mode: Optional[UserMCPManagementMode] = Field(
+        None,
+        description="Controls how non-admin users interact with MCP servers in the dashboard. 'restricted' shows only accessible servers, 'view_all' lists every server in read-only mode.",
     )
 
 
@@ -3825,3 +3834,46 @@ class LiteLLM_ManagedVectorStoresTable(LiteLLMPydanticObjectBase):
 
 class ResponseLiteLLM_ManagedVectorStore(TypedDict, total=False):
     vector_store: LiteLLM_ManagedVectorStoresTable
+
+
+class CostEstimateRequest(LiteLLMPydanticObjectBase):
+    """Request body for /cost/estimate endpoint."""
+
+    model: str = Field(description="Model name (from /model_group/info)")
+    input_tokens: int = Field(description="Expected input tokens per request", ge=0)
+    output_tokens: int = Field(description="Expected output tokens per request", ge=0)
+    num_requests_per_day: Optional[int] = Field(
+        default=None, description="Number of requests per day", ge=0
+    )
+    num_requests_per_month: Optional[int] = Field(
+        default=None, description="Number of requests per month", ge=0
+    )
+
+
+class CostEstimateResponse(LiteLLMPydanticObjectBase):
+    """Response body for /cost/estimate endpoint."""
+
+    model: str
+    input_tokens: int
+    output_tokens: int
+    num_requests_per_day: Optional[int] = None
+    num_requests_per_month: Optional[int] = None
+    # Per-request costs
+    cost_per_request: float = Field(description="Total cost per request (includes margin)")
+    input_cost_per_request: float = Field(description="Input token cost per request (before margin)")
+    output_cost_per_request: float = Field(description="Output token cost per request (before margin)")
+    margin_cost_per_request: float = Field(default=0.0, description="Margin/fee added per request")
+    # Daily costs (if num_requests_per_day provided)
+    daily_cost: Optional[float] = Field(default=None, description="Total daily cost (includes margin)")
+    daily_input_cost: Optional[float] = Field(default=None, description="Daily input token cost")
+    daily_output_cost: Optional[float] = Field(default=None, description="Daily output token cost")
+    daily_margin_cost: Optional[float] = Field(default=None, description="Daily margin/fee")
+    # Monthly costs (if num_requests_per_month provided)
+    monthly_cost: Optional[float] = Field(default=None, description="Total monthly cost (includes margin)")
+    monthly_input_cost: Optional[float] = Field(default=None, description="Monthly input token cost")
+    monthly_output_cost: Optional[float] = Field(default=None, description="Monthly output token cost")
+    monthly_margin_cost: Optional[float] = Field(default=None, description="Monthly margin/fee")
+    # Pricing info
+    input_cost_per_token: Optional[float] = None
+    output_cost_per_token: Optional[float] = None
+    provider: Optional[str] = None

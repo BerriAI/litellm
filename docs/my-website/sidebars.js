@@ -390,6 +390,7 @@ const sidebars = {
           items: [
             "proxy/cost_tracking",
             "proxy/custom_pricing",
+            "proxy/pricing_calculator",
             "proxy/provider_margins",
             "proxy/provider_discounts",
             "proxy/sync_models_github",
@@ -540,7 +541,14 @@ const sidebars = {
         },
         "realtime",
         "rerank",
-        "response_api",
+        {
+          type: "category",
+          label: "/responses",
+          items: [
+            "response_api",
+            "response_api_compact",
+          ]
+        },
         {
           type: "category",
           label: "/search",
@@ -729,6 +737,7 @@ const sidebars = {
         "providers/langgraph",
         "providers/lemonade",
         "providers/llamafile",
+        "providers/llamagate",
         "providers/lm_studio",
         "providers/meta_llama",
         "providers/milvus_vector_stores",

@@ -110,7 +110,6 @@ from litellm.types.utils import (
     RawRequestTypedDict,
     StreamingChoices,
 )
-
 from litellm.utils import (
     Choices,
     CustomStreamWrapper,
@@ -2142,6 +2141,49 @@ def completion(  # type: ignore # noqa: PLR0915
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
                 client=client,
             )
+        elif custom_llm_provider == "gigachat":
+            # GigaChat - Sber AI's LLM (Russia)
+            api_key = (
+                api_key
+                or litellm.api_key
+                or litellm.gigachat_key
+                or get_secret("GIGACHAT_API_KEY")
+                or get_secret("GIGACHAT_CREDENTIALS")
+            )
+
+            headers = headers or litellm.headers or {}
+
+            ## COMPLETION CALL
+            try:
+                response = base_llm_http_handler.completion(
+                    model=model,
+                    messages=messages,
+                    headers=headers,
+                    model_response=model_response,
+                    api_key=api_key,
+                    api_base=api_base,
+                    acompletion=acompletion,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    shared_session=shared_session,
+                    timeout=timeout,
+                    client=client,
+                    custom_llm_provider=custom_llm_provider,
+                    encoding=_get_encoding(),
+                    stream=stream,
+                    provider_config=provider_config,
+                )
+            except Exception as e:
+                ## LOGGING - log the original exception returned
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=str(e),
+                    additional_args={"headers": headers},
+                )
+                raise e
+
         elif custom_llm_provider == "sap":
             headers = headers or litellm.headers
             ## LOAD CONFIG - if set
@@ -5225,6 +5267,28 @@ def embedding(  # noqa: PLR0915
                 aembedding=aembedding,
                 litellm_params={},
             )
+        elif custom_llm_provider == "gigachat":
+            api_key = (
+                api_key
+                or litellm.api_key
+                or litellm.gigachat_key
+                or get_secret_str("GIGACHAT_CREDENTIALS")
+                or get_secret_str("GIGACHAT_API_KEY")
+            )
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params={"ssl_verify": kwargs.get("ssl_verify", None)},
+            )
         else:
             raise LiteLLMUnknownProvider(
                 model=model, custom_llm_provider=custom_llm_provider
@@ -6656,7 +6720,16 @@ async def ahealth_check(
         if model in litellm.model_cost and mode is None:
             mode = litellm.model_cost[model].get("mode")
 
-        model, custom_llm_provider, _, _ = get_llm_provider(model=model)
+        custom_llm_provider_from_params = model_params.get("custom_llm_provider", None)
+        api_base_from_params = model_params.get("api_base", None)
+        api_key_from_params = model_params.get("api_key", None)
+        
+        model, custom_llm_provider, _, _ = get_llm_provider(
+            model=model,
+            custom_llm_provider=custom_llm_provider_from_params,
+            api_base=api_base_from_params,
+            api_key=api_key_from_params,
+        )
         if model in litellm.model_cost and mode is None:
             mode = litellm.model_cost[model].get("mode")
 

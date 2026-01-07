@@ -26,7 +26,6 @@ from typing import (
     overload,
     Type,
 )
-from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
 from litellm.types.integrations.datadog import DatadogInitParams
 from litellm._logging import (
     set_verbose,
@@ -198,6 +197,7 @@ retry = True
 api_key: Optional[str] = None
 openai_key: Optional[str] = None
 groq_key: Optional[str] = None
+gigachat_key: Optional[str] = None
 databricks_key: Optional[str] = None
 openai_like_key: Optional[str] = None
 azure_key: Optional[str] = None
@@ -276,6 +276,7 @@ banned_keywords_list: Optional[Union[str, List]] = None
 llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
 guardrail_name_config_map: Dict[str, GuardrailItem] = {}
 include_cost_in_streaming_usage: bool = False
+reasoning_auto_summary: bool = False
 ### PROMPTS ####
 from litellm.types.prompts.init_prompts import PromptSpec
 
@@ -1441,6 +1442,8 @@ if TYPE_CHECKING:
     from .llms.github_copilot.chat.transformation import GithubCopilotConfig as GithubCopilotConfig
     from .llms.github_copilot.responses.transformation import GithubCopilotResponsesAPIConfig as GithubCopilotResponsesAPIConfig
     from .llms.github_copilot.embedding.transformation import GithubCopilotEmbeddingConfig as GithubCopilotEmbeddingConfig
+    from .llms.gigachat.chat.transformation import GigaChatConfig as GigaChatConfig
+    from .llms.gigachat.embedding.transformation import GigaChatEmbeddingConfig as GigaChatEmbeddingConfig
     from .llms.nebius.chat.transformation import NebiusConfig as NebiusConfig
     from .llms.wandb.chat.transformation import WandbConfig as WandbConfig
     from .llms.dashscope.chat.transformation import DashScopeChatConfig as DashScopeChatConfig
@@ -1533,6 +1536,9 @@ if TYPE_CHECKING:
     # Custom logger class (lazy-loaded)
     from litellm.integrations.custom_logger import CustomLogger
     
+    # Datadog LLM observability params (lazy-loaded)
+    from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
+    
     # Logging callback manager class and instance (lazy-loaded)
     from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
     logging_callback_manager: LoggingCallbackManager
@@ -1546,6 +1552,16 @@ if TYPE_CHECKING:
 
 # Track if async client cleanup has been registered (for lazy loading)
 _async_client_cleanup_registered = False
+
+# Eager loading for backwards compatibility with VCR and other HTTP recording tools
+# When LITELLM_DISABLE_LAZY_LOADING is set, lazy-loaded attributes are loaded at import time
+# For now, this only affects encoding (tiktoken) as it was the only reported issue
+# See: https://github.com/BerriAI/litellm/issues/18659
+# This ensures encoding is initialized before VCR starts recording HTTP requests
+if os.getenv("LITELLM_DISABLE_LAZY_LOADING", "").lower() in ("1", "true", "yes", "on"):
+    # Load encoding at import time (pre-#18070 behavior)
+    # This ensures encoding is initialized before VCR starts recording
+    from .main import encoding
 
 
 def __getattr__(name: str) -> Any:
