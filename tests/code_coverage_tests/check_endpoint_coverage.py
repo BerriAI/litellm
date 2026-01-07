@@ -169,6 +169,13 @@ def check_unused_endpoints(data: Dict) -> List[Tuple[str, str]]:
 
     Returns a list of tuples (endpoint_key, provider_json_field) for unused endpoints.
     """
+    # Special endpoints that don't need to be used by specific providers
+    # These are utility/framework endpoints available across the platform
+    SPECIAL_ENDPOINTS = {
+        "apply_guardrail",  # Guardrail application - works across providers
+        "mcp",  # Model Context Protocol - works across providers
+    }
+
     # Get all endpoint definitions
     defined_endpoints = data.get("endpoints", {})
     providers = data.get("providers", {})
@@ -181,9 +188,13 @@ def check_unused_endpoints(data: Dict) -> List[Tuple[str, str]]:
         ):
             used_keys.update(provider_data["endpoints"].keys())
 
-    # Find unused endpoints
+    # Find unused endpoints (excluding special ones)
     unused = []
     for endpoint_key, endpoint_data in defined_endpoints.items():
+        # Skip special endpoints
+        if endpoint_key in SPECIAL_ENDPOINTS:
+            continue
+
         if isinstance(endpoint_data, dict) and "provider_json_field" in endpoint_data:
             provider_json_field = endpoint_data["provider_json_field"]
             # Check if this provider_json_field is used by any provider
