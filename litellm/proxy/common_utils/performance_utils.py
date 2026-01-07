@@ -160,7 +160,9 @@ def wrap_function_with_line_profiler(module: Any, function_name: str) -> bool:
     Returns:
         True if wrapping was successful, False otherwise
     """
-    if not enable_line_profiler():
+    try:
+        enable_line_profiler()  # May raise ImportError if not available
+    except ImportError:
         return False
     
     if _line_profiler is None:
