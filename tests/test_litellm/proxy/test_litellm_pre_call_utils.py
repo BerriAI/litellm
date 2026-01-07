@@ -161,6 +161,44 @@ async def test_add_litellm_data_to_request_parses_string_metadata():
 
 
 @pytest.mark.asyncio
+async def test_add_litellm_data_to_request_user_spend_and_budget():
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hello"}]}
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={},
+        team_metadata={},
+        user_spend=150.0,
+        user_max_budget=500.0,
+    )
+
+    updated_data = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    metadata = updated_data.get("metadata", {})
+    assert metadata["user_api_key_user_spend"] == 150.0
+    assert metadata["user_api_key_user_max_budget"] == 500.0
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_audio_transcription_multipart():
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
