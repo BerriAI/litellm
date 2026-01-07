@@ -863,7 +863,7 @@ class KeyRequestBase(GenerateRequestBase):
     tpm_limit_type: Optional[
         Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"]
     ] = None  # raise an error if 'guaranteed_throughput' is set and we're overallocating tpm
-    router_settings: Optional[dict] = None
+    router_settings: Optional[UpdateRouterConfig] = None
 
 
 class LiteLLMKeyType(str, enum.Enum):
