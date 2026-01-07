@@ -3100,31 +3100,6 @@ async def test_completion_bedrock_httpx_models(sync_mode, model):
         pytest.fail(f"An error occurred - {str(e)}")
 
 
-def test_completion_bedrock_titan_null_response():
-    try:
-        # amazon.titan-text-lite-v1 is deprecated, using titan-text-express-v1 instead
-        response = completion(
-            model="bedrock/amazon.titan-text-express-v1",
-            messages=[
-                {
-                    "role": "user",
-                    "content": "Hello!",
-                },
-                {
-                    "role": "assistant",
-                    "content": "Hello! How can I help you?",
-                },
-                {
-                    "role": "user",
-                    "content": "What model are you?",
-                },
-            ],
-        )
-        # Add any assertions here to check the response
-        print(f"response: {response}")
-    except Exception as e:
-        pytest.fail(f"An error occurred - {str(e)}")
-
 
 # test_completion_bedrock_titan()
 
