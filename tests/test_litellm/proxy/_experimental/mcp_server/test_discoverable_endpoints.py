@@ -354,7 +354,7 @@ async def test_register_client_remote_registration_success():
 
     request_payload = {
         "client_name": "Litellm Proxy",
-        "grant_types": ["authorization_code"],
+        "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
         "token_endpoint_auth_method": "client_secret_post",
     }
@@ -556,9 +556,33 @@ async def test_oauth_protected_resource_respects_x_forwarded_proto():
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             oauth_protected_resource_mcp,
         )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+        from litellm.proxy._types import MCPTransport
         from fastapi import Request
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
+    # Clear registry
+    global_mcp_server_manager.registry.clear()
+
+    # Create mock OAuth2 server
+    oauth2_server = MCPServer(
+        server_id="test_oauth_server",
+        name="test_oauth",
+        server_name="test_oauth",
+        alias="test_oauth",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="test_client_id",
+        client_secret="test_client_secret",
+        authorization_url="https://provider.com/oauth/authorize",
+        token_url="https://provider.com/oauth/token",
+        scopes=["read", "write"],
+    )
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
 
     # Mock request with http base_url but X-Forwarded-Proto: https
     mock_request = MagicMock(spec=Request)
@@ -568,13 +592,14 @@ async def test_oauth_protected_resource_respects_x_forwarded_proto():
     # Call the endpoint
     response = await oauth_protected_resource_mcp(
         request=mock_request,
-        mcp_server_name="test_server",
+        mcp_server_name="test_oauth",
     )
 
     # Verify response uses HTTPS URLs
     assert response["authorization_servers"][0].startswith(
         "https://litellm.example.com/"
     )
+    assert response["scopes_supported"] == oauth2_server.scopes
 
 
 @pytest.mark.asyncio
@@ -584,9 +609,33 @@ async def test_oauth_authorization_server_respects_x_forwarded_proto():
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             oauth_authorization_server_mcp,
         )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+        from litellm.proxy._types import MCPTransport
         from fastapi import Request
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
+    # Clear registry
+    global_mcp_server_manager.registry.clear()
+
+    # Create mock OAuth2 server
+    oauth2_server = MCPServer(
+        server_id="test_oauth_server",
+        name="test_oauth",
+        server_name="test_oauth",
+        alias="test_oauth",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="test_client_id",
+        client_secret="test_client_secret",
+        authorization_url="https://provider.com/oauth/authorize",
+        token_url="https://provider.com/oauth/token",
+        scopes=["read", "write"],
+    )
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
 
     # Mock request with http base_url but X-Forwarded-Proto: https
     mock_request = MagicMock(spec=Request)
@@ -596,13 +645,15 @@ async def test_oauth_authorization_server_respects_x_forwarded_proto():
     # Call the endpoint
     response = await oauth_authorization_server_mcp(
         request=mock_request,
-        mcp_server_name="test_server",
+        mcp_server_name="test_oauth",
     )
 
     # Verify response uses HTTPS URLs
     assert response["authorization_endpoint"].startswith("https://litellm.example.com/")
     assert response["token_endpoint"].startswith("https://litellm.example.com/")
     assert response["registration_endpoint"].startswith("https://litellm.example.com/")
+    assert response["grant_types_supported"] == ["authorization_code", "refresh_token"]
+    assert response["scopes_supported"] == oauth2_server.scopes
 
 
 @pytest.mark.asyncio
