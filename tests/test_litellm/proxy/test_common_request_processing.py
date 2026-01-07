@@ -13,7 +13,7 @@ from litellm.proxy.common_request_processing import (
     ProxyConfig,
     _get_cost_breakdown_from_logging_obj,
     _parse_event_data_for_error,
-    create_streaming_response,
+    create_response,
 )
 from litellm.proxy.utils import ProxyLogging
 
@@ -607,7 +607,7 @@ class TestCommonRequestProcessingHelpers:
             yield 'data: {"content": "more data"}\n\n'
             yield "data: [DONE]\n\n"
 
-        response = await create_streaming_response(
+        response = await create_response(
             mock_generator(), "text/event-stream", {}
         )
         assert response.status_code == status.HTTP_403_FORBIDDEN
@@ -624,7 +624,7 @@ class TestCommonRequestProcessingHelpers:
             yield 'data: {"content": "second part"}\n\n'
             yield "data: [DONE]\n\n"
 
-        response = await create_streaming_response(
+        response = await create_response(
             mock_generator(), "text/event-stream", {}
         )
         assert response.status_code == status.HTTP_200_OK
@@ -641,7 +641,7 @@ class TestCommonRequestProcessingHelpers:
                 yield
             # Implicitly raises StopAsyncIteration
 
-        response = await create_streaming_response(
+        response = await create_response(
             mock_generator(), "text/event-stream", {}
         )
         assert response.status_code == status.HTTP_200_OK
@@ -654,7 +654,7 @@ class TestCommonRequestProcessingHelpers:
         mock_gen = AsyncMock()
         mock_gen.__anext__.side_effect = StopAsyncIteration
 
-        response = await create_streaming_response(mock_gen, "text/event-stream", {})
+        response = await create_response(mock_gen, "text/event-stream", {})
         assert response.status_code == status.HTTP_200_OK
         content = await self.consume_stream(response)
         assert content == []
@@ -665,7 +665,7 @@ class TestCommonRequestProcessingHelpers:
         mock_gen = AsyncMock()
         mock_gen.__anext__.side_effect = ValueError("Test error from generator")
 
-        response = await create_streaming_response(mock_gen, "text/event-stream", {})
+        response = await create_response(mock_gen, "text/event-stream", {})
         assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
         content = await self.consume_stream(response)
         expected_error_data = {
@@ -686,7 +686,7 @@ class TestCommonRequestProcessingHelpers:
             yield 'data: {"error": {"code": "429", "message": "too many requests"}}\n\n'
             yield "data: [DONE]\n\n"
 
-        response = await create_streaming_response(
+        response = await create_response(
             mock_generator(), "text/event-stream", {}
         )
         assert response.status_code == status.HTTP_429_TOO_MANY_REQUESTS
@@ -702,7 +702,7 @@ class TestCommonRequestProcessingHelpers:
             yield "data: [DONE]\n\n"
 
         custom_headers = {"X-Custom-Header": "TestValue"}
-        response = await create_streaming_response(
+        response = await create_response(
             mock_generator(), "text/event-stream", custom_headers
         )
         assert response.headers["x-custom-header"] == "TestValue"
@@ -712,7 +712,7 @@ class TestCommonRequestProcessingHelpers:
             yield 'data: {"content": "data"}\n\n'
             yield "data: [DONE]\n\n"
 
-        response = await create_streaming_response(
+        response = await create_response(
             mock_generator(),
             "text/event-stream",
             {},
@@ -729,7 +729,7 @@ class TestCommonRequestProcessingHelpers:
         async def mock_generator():
             yield "data: [DONE]\n\n"
 
-        response = await create_streaming_response(
+        response = await create_response(
             mock_generator(), "text/event-stream", {}
         )
         assert response.status_code == status.HTTP_200_OK  # Default status
@@ -742,7 +742,7 @@ class TestCommonRequestProcessingHelpers:
             yield 'data: {"content": "actual data"}\n\n'
             yield "data: [DONE]\n\n"
 
-        response = await create_streaming_response(
+        response = await create_response(
             mock_generator(), "text/event-stream", {}
         )
         assert response.status_code == status.HTTP_200_OK  # Default status
@@ -773,7 +773,7 @@ class TestCommonRequestProcessingHelpers:
 
         # Patch the tracer in the common_request_processing module
         with patch("litellm.proxy.common_request_processing.tracer", mock_tracer):
-            response = await create_streaming_response(
+            response = await create_response(
                 mock_generator(), "text/event-stream", {}
             )
 
@@ -827,7 +827,7 @@ class TestCommonRequestProcessingHelpers:
 
         # Patch the tracer in the common_request_processing module
         with patch("litellm.proxy.common_request_processing.tracer", mock_tracer):
-            response = await create_streaming_response(
+            response = await create_response(
                 mock_generator(), "text/event-stream", {}
             )
 
