@@ -218,7 +218,8 @@ class ResponsesIDSecurity(CustomLogger):
             )
 
             encoded_user_id_and_response_id = encrypt_value_helper(
-                value=encrypted_response_id
+                value=encrypted_response_id,
+                new_encryption_key=signing_key
             )
             setattr(
                 response, "id", f"resp_{encoded_user_id_and_response_id}"
@@ -231,7 +232,8 @@ class ResponsesIDSecurity(CustomLogger):
                 user_api_key_dict.team_id or "",
             )
             encoded_user_id_and_response_id = encrypt_value_helper(
-                value=encrypted_response_id
+                value=encrypted_response_id,
+                new_encryption_key=signing_key
             )
             setattr(
                 response_obj, "id", f"resp_{encoded_user_id_and_response_id}"
