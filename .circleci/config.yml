@@ -1960,6 +1960,7 @@ jobs:
       - run: ruff check ./litellm
       # - run: python ./tests/documentation_tests/test_general_setting_keys.py
       - run: python ./tests/code_coverage_tests/check_licenses.py
+      - run: python ./tests/code_coverage_tests/check_provider_folders_documented.py
       - run: python ./tests/code_coverage_tests/router_code_coverage.py
       - run: python ./tests/code_coverage_tests/test_chat_completion_imports.py
       - run: python ./tests/code_coverage_tests/info_log_check.py
