@@ -73,7 +73,7 @@ def test_routing_strategy_init(model_list):
     from litellm.types.router import RoutingStrategy
 
     router = Router(model_list=model_list)
-    for strategy in RoutingStrategy._member_names_:
+    for strategy in RoutingStrategy:
         router.routing_strategy_init(
             routing_strategy=strategy, routing_strategy_args={}
         )
