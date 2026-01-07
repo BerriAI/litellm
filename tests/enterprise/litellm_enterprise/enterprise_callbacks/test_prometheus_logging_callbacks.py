@@ -366,6 +366,39 @@ async def test_increment_remaining_budget_metrics(prometheus_logger):
         assert 11.9 <= remaining_hours_call <= 12.0
 
 
+@pytest.mark.asyncio
+async def test_increment_remaining_budget_metrics_with_none_litellm_params(
+    prometheus_logger,
+):
+    """
+    Test that _increment_remaining_budget_metrics handles None litellm_params gracefully
+    
+    This test ensures that when litellm_params is None (which can happen for keys without metadata),
+    the method doesn't crash with AttributeError.
+    """
+    # Mock all budget-related metrics
+    prometheus_logger.litellm_remaining_team_budget_metric = MagicMock()
+    prometheus_logger.litellm_remaining_api_key_budget_metric = MagicMock()
+    prometheus_logger.litellm_team_max_budget_metric = MagicMock()
+    prometheus_logger.litellm_api_key_max_budget_metric = MagicMock()
+    prometheus_logger.litellm_team_budget_remaining_hours_metric = MagicMock()
+    prometheus_logger.litellm_api_key_budget_remaining_hours_metric = MagicMock()
+
+    # Test with None litellm_params - should not raise AttributeError
+    await prometheus_logger._increment_remaining_budget_metrics(
+        user_api_team="team1",
+        user_api_team_alias="team_alias1",
+        user_api_key="key1",
+        user_api_key_alias="alias1",
+        litellm_params=None,  # This is the key test case
+        response_cost=10,
+    )
+
+    # When litellm_params is None, no metrics should be set since there's no budget data
+    # Just verify the method completed without error
+    assert True
+
+
 def test_set_latency_metrics(prometheus_logger):
     """
     Test the set_latency_metrics method

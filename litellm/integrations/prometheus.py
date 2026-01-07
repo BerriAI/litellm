@@ -1023,6 +1023,10 @@ class PrometheusLogger(CustomLogger):
         litellm_params: dict,
         response_cost: float,
     ):
+        # Handle case where litellm_params could be None
+        if litellm_params is None:
+            litellm_params = {}
+        
         _team_spend = litellm_params.get("metadata", {}).get(
             "user_api_key_team_spend", None
         )
