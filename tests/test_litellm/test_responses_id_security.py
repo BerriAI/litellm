@@ -111,21 +111,22 @@ class TestEncryptResponseId:
             id="resp_123", created_at=1234567890, output=[], status="completed"
         )
 
-        with patch(
-            "litellm.proxy.hooks.responses_id_security.encrypt_value_helper"
-        ) as mock_encrypt:
-            mock_encrypt.return_value = "encrypted_base64_value"
-            
-            with patch.object(
-                responses_id_security, "_get_signing_key", return_value="test-key"
-            ):
-                result = responses_id_security._encrypt_response_id(
-                    mock_response, mock_user_api_key_dict
-                )
+        with patch("litellm.proxy.proxy_server.general_settings", {}):
+            with patch(
+                "litellm.proxy.hooks.responses_id_security.encrypt_value_helper"
+            ) as mock_encrypt:
+                mock_encrypt.return_value = "encrypted_base64_value"
+                
+                with patch.object(
+                    responses_id_security, "_get_signing_key", return_value="test-key"
+                ):
+                    result = responses_id_security._encrypt_response_id(
+                        mock_response, mock_user_api_key_dict
+                    )
 
-                assert result.id == "resp_encrypted_base64_value"
-                assert result.id.startswith("resp_")
-                mock_encrypt.assert_called_once()
+                    assert result.id == "resp_encrypted_base64_value"
+                    assert result.id.startswith("resp_")
+                    mock_encrypt.assert_called_once()
 
     def test_encrypt_response_id_maintains_prefix(
         self, responses_id_security, mock_user_api_key_dict

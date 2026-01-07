@@ -163,18 +163,19 @@ class TestContainerAPI:
             has_more=False
         )
         
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
-            mock_handler.container_list_handler.return_value = mock_response
-            
-            response = list_containers(
-                custom_llm_provider="openai"
-            )
-            
-            assert isinstance(response, ContainerListResponse) or type(response).__name__ == "ContainerListResponse"
-            assert len(response.data) == 2
-            assert response.data[0].id == "cntr_1"
-            assert response.data[1].id == "cntr_2"
-            assert response.has_more == False
+        with patch('litellm.containers.main.ProviderConfigManager'):
+            with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
+                mock_handler.container_list_handler.return_value = mock_response
+                
+                response = list_containers(
+                    custom_llm_provider="openai"
+                )
+                
+                assert isinstance(response, ContainerListResponse) or type(response).__name__ == "ContainerListResponse"
+                assert len(response.data) == 2
+                assert response.data[0].id == "cntr_1"
+                assert response.data[1].id == "cntr_2"
+                assert response.has_more == False
 
     def test_list_containers_with_params(self):
         """Test container listing with parameters."""
@@ -196,18 +197,19 @@ class TestContainerAPI:
             has_more=True
         )
         
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
-            mock_handler.container_list_handler.return_value = mock_response
-            
-            response = list_containers(
-                limit=1,
-                order="desc",
-                after="cntr_prev",
-                custom_llm_provider="openai"
-            )
-            
-            assert len(response.data) == 1
-            assert response.has_more == True
+        with patch('litellm.containers.main.ProviderConfigManager'):
+            with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
+                mock_handler.container_list_handler.return_value = mock_response
+                
+                response = list_containers(
+                    limit=1,
+                    order="desc",
+                    after="cntr_prev",
+                    custom_llm_provider="openai"
+                )
+                
+                assert len(response.data) == 1
+                assert response.has_more == True
 
     @pytest.mark.asyncio
     async def test_alist_containers_basic(self):

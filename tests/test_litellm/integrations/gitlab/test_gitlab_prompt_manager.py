@@ -818,27 +818,29 @@ def test_cache_get_by_file_returns_exact_entry(mock_pm_cls, fake_managers):
     assert beta and beta["id"] == "nested/beta"
 
 
-@patch("litellm.integrations.gitlab.gitlab_client.GitLabClient")
-@patch("litellm.integrations.gitlab.gitlab_prompt_manager.GitLabPromptManager")
-def test_encode_decode_helpers_roundtrip_in_cache_context(mock_pm_cls, mock_client_cls, fake_managers):
+def test_encode_decode_helpers_roundtrip_in_cache_context(fake_managers):
+    """Test encode/decode roundtrip in cache context."""
     tm, wrapper = fake_managers
     tm._discoverable_ids = ["dir1/dir2/item"]
-    mock_pm_cls.return_value = wrapper
     
     # Mock the GitLabClient to avoid real HTTP requests
     mock_client = MagicMock()
-    mock_client_cls.return_value = mock_client
+    
+    with patch("litellm.integrations.gitlab.gitlab_prompt_manager.GitLabPromptManager") as mock_pm_cls:
+        with patch("litellm.integrations.gitlab.gitlab_client.GitLabClient") as mock_client_cls:
+            mock_pm_cls.return_value = wrapper
+            mock_client_cls.return_value = mock_client
 
-    cache = GitLabPromptCache({"project": "g/s/r", "access_token": "tkn"})
-    cache.load_all()
+            cache = GitLabPromptCache({"project": "g/s/r", "access_token": "tkn"})
+            cache.load_all()
 
-    encoded = encode_prompt_id("dir1/dir2/item")
-    assert encoded in cache.list_ids()
+            encoded = encode_prompt_id("dir1/dir2/item")
+            assert encoded in cache.list_ids()
 
-    # decode → encode → lookup should still work
-    decoded = decode_prompt_id(encoded)
-    assert decoded == "dir1/dir2/item"
+            # decode → encode → lookup should still work
+            decoded = decode_prompt_id(encoded)
+            assert decoded == "dir1/dir2/item"
 
-    got = cache.get_by_id(decoded)
-    assert got is not None
-    assert got["id"] == "dir1/dir2/item"
+            got = cache.get_by_id(decoded)
+            assert got is not None
+            assert got["id"] == "dir1/dir2/item"

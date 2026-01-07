@@ -25,17 +25,11 @@ class TestS3V2UnitTests:
             "json.dumps(" not in source_code
         ), "S3 v2 should not use json.dumps directly"
 
-    @patch('asyncio.create_task')
-    @patch('litellm.integrations.s3_v2.CustomBatchLogger.periodic_flush')
-    def test_s3_v2_endpoint_url(self, mock_periodic_flush, mock_create_task):
+    def test_s3_v2_endpoint_url(self):
         """testing s3 endpoint url"""
         from unittest.mock import AsyncMock, MagicMock
 
         from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
-
-        # Mock periodic_flush and create_task to prevent async task creation during init
-        mock_periodic_flush.return_value = None
-        mock_create_task.return_value = None
 
         # Mock response for all tests
         mock_response = MagicMock()
@@ -512,35 +506,37 @@ def test_s3_object_key_prefix_combinations(
     """
     Validate correct S3 prefix composition for team alias + key alias combinations.
     """
-    with patch("litellm.integrations.s3_v2.get_s3_object_key") as mock_get_key:
-        mock_get_key.return_value = "mocked/s3/object/key.json"
+    with patch("asyncio.create_task"):
+        with patch("litellm.integrations.s3_v2.CustomBatchLogger.periodic_flush"):
+            with patch("litellm.integrations.s3_v2.get_s3_object_key") as mock_get_key:
+                mock_get_key.return_value = "mocked/s3/object/key.json"
 
-        logger = S3Logger(
-            s3_bucket_name="test-bucket",
-            s3_region_name="us-east-1",
-            s3_use_team_prefix=use_team_prefix,
-            s3_use_key_prefix=use_key_prefix,
-        )
+                logger = S3Logger(
+                    s3_bucket_name="test-bucket",
+                    s3_region_name="us-east-1",
+                    s3_use_team_prefix=use_team_prefix,
+                    s3_use_key_prefix=use_key_prefix,
+                )
 
-        payload = StandardLoggingPayload(
-            id="abc123",
-            metadata={
-                "user_api_key_team_alias": team_alias,
-                "user_api_key_alias": key_alias,
-            },
-            messages=[{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
-        )
+                payload = StandardLoggingPayload(
+                    id="abc123",
+                    metadata={
+                        "user_api_key_team_alias": team_alias,
+                        "user_api_key_alias": key_alias,
+                    },
+                    messages=[{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+                )
 
-        result = logger.create_s3_batch_logging_element(datetime.utcnow(), payload)
-        assert result is not None
-        mock_get_key.assert_called_once()
+                result = logger.create_s3_batch_logging_element(datetime.utcnow(), payload)
+                assert result is not None
+                mock_get_key.assert_called_once()
 
-        prefix_arg = mock_get_key.call_args.kwargs.get("prefix")
-        assert prefix_arg == expected_prefix, (
-            f"Expected prefix '{expected_prefix}', got '{prefix_arg}' "
-            f"for team={team_alias}, key={key_alias}, "
-            f"use_team_prefix={use_team_prefix}, use_key_prefix={use_key_prefix}"
-        )
+                prefix_arg = mock_get_key.call_args.kwargs.get("prefix")
+                assert prefix_arg == expected_prefix, (
+                    f"Expected prefix '{expected_prefix}', got '{prefix_arg}' "
+                    f"for team={team_alias}, key={key_alias}, "
+                    f"use_team_prefix={use_team_prefix}, use_key_prefix={use_key_prefix}"
+                )
 
 
 # --------------------------------------------------------------
