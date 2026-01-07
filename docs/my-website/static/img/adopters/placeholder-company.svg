@@ -1,0 +1,8 @@
+<svg width="240" height="160" viewBox="0 0 240 160" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="240" height="160" rx="8" fill="#f8fafc"/>
+  <rect x="1" y="1" width="238" height="158" rx="7" stroke="#e2e8f0" stroke-width="2" stroke-dasharray="8 4"/>
+  <circle cx="120" cy="60" r="24" fill="#e2e8f0"/>
+  <path d="M120 48v24M108 60h24" stroke="#94a3b8" stroke-width="3" stroke-linecap="round"/>
+  <text x="120" y="110" text-anchor="middle" fill="#64748b" font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="500">Add Your Logo</text>
+  <text x="120" y="130" text-anchor="middle" fill="#94a3b8" font-family="system-ui, -apple-system, sans-serif" font-size="11">Click to contribute</text>
+</svg>

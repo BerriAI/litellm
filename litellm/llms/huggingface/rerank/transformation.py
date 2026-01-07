@@ -1,10 +1,11 @@
 import os
-import uuid
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, TypedDict, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx
+from typing_extensions import TypedDict
 
 import litellm
+from litellm._uuid import uuid
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.secret_managers.main import get_secret_str
@@ -59,7 +60,12 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         else:
             return "https://api-inference.huggingface.co"
 
-    def get_complete_url(self, api_base: Optional[str], model: str) -> str:
+    def get_complete_url(
+        self, 
+        api_base: Optional[str], 
+        model: str,
+        optional_params: Optional[dict] = None,
+    ) -> str:
         """
         Get the complete URL for the API call, including the /rerank suffix if necessary.
         """
@@ -94,7 +100,7 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         return_documents: Optional[bool] = True,
         max_chunks_per_doc: Optional[int] = None,
         max_tokens_per_doc: Optional[int] = None,
-    ) -> OptionalRerankParams:
+    ) -> Dict:
         optional_rerank_params = {}
         if non_default_params is not None:
             for k, v in non_default_params.items():
@@ -116,6 +122,7 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        optional_params: Optional[dict] = None,
         api_base: Optional[str] = None,
     ) -> dict:
         # Get API credentials

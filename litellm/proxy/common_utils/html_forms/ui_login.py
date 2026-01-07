@@ -1,11 +1,29 @@
 import os
 
+from litellm.proxy.utils import get_custom_url
+
 url_to_redirect_to = os.getenv("PROXY_BASE_URL", "")
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
 if server_root_path != "":
     url_to_redirect_to += server_root_path
 url_to_redirect_to += "/login"
-html_form = f"""
+new_ui_login_url = get_custom_url("", "ui/login")
+
+
+def build_ui_login_form(show_deprecation_banner: bool = False) -> str:
+    banner_html = (
+        f"""
+        <div class="deprecation-banner">
+            <strong>Deprecated:</strong> Logging in with username and password on this page is deprecated.
+            Please use the <a href="{new_ui_login_url}">new login page</a> instead.
+            This page will be dedicated to signing in via SSO in the future.
+        </div>
+        """
+        if show_deprecation_banner
+        else ""
+    )
+
+    return f"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -185,10 +203,28 @@ html_form = f"""
             margin-top: -12px;
             margin-bottom: 20px;
         }}
+
+        .deprecation-banner {{
+            background-color: #fee2e2;
+            border: 1px solid #ef4444;
+            color: #991b1b;
+            padding: 14px 16px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            line-height: 1.5;
+        }}
+
+        .deprecation-banner a {{
+            color: #991b1b;
+            font-weight: 600;
+            text-decoration: underline;
+        }}
     </style>
 </head>
 <body>
     <form action="{url_to_redirect_to}" method="post">
+        {banner_html}
         <div class="logo-container">
             <div class="logo">
                 🚅 LiteLLM
@@ -228,3 +264,6 @@ html_form = f"""
 </body>
 </html>
 """
+
+
+html_form = build_ui_login_form(show_deprecation_banner=True)

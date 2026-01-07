@@ -5,7 +5,7 @@ RBAC tests
 import os
 import sys
 import traceback
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime
 
 from dotenv import load_dotenv

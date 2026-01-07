@@ -2,10 +2,11 @@ import asyncio
 import json
 import time
 from datetime import datetime
-from typing import Literal, Optional, TypedDict
+from typing import Literal, Optional
 from urllib.parse import urlparse
 
 import httpx
+from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger

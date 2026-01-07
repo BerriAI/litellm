@@ -17,7 +17,6 @@ from litellm.types.llms.openai import (
     ResponseAPIUsage,
     ResponseCompletedEvent,
     ResponsesAPIResponse,
-    ResponseTextConfig,
 )
 from litellm.types.utils import StandardLoggingPayload
 
@@ -79,6 +78,7 @@ async def test_async_responses_api_routing_with_previous_response_id():
             self._json_data = json_data
             self.status_code = status_code
             self.text = json.dumps(json_data)
+            self.headers = {}
 
         def json(self):
             return self._json_data
@@ -199,6 +199,7 @@ async def test_async_routing_without_previous_response_id():
             self._json_data = json_data
             self.status_code = status_code
             self.text = json.dumps(json_data)
+            self.headers = {}
 
         def json(self):
             return self._json_data
@@ -327,6 +328,7 @@ async def test_async_previous_response_id_not_in_cache():
             self._json_data = json_data
             self.status_code = status_code
             self.text = json.dumps(json_data)
+            self.headers = {}
 
         def json(self):
             return self._json_data
@@ -480,6 +482,7 @@ async def test_async_multiple_response_ids_routing():
             self._json_data = json_data
             self.status_code = status_code
             self.text = json.dumps(json_data)
+            self.headers = {}
 
         def json(self):
             return self._json_data

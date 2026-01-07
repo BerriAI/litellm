@@ -135,6 +135,7 @@ class SpendUpdateQueue(BaseUpdateQueue):
             team_list_transactions={},
             team_member_list_transactions={},
             org_list_transactions={},
+            tag_list_transactions={},
         )
 
         # Map entity types to their corresponding transaction dictionary keys
@@ -145,6 +146,7 @@ class SpendUpdateQueue(BaseUpdateQueue):
             Litellm_EntityType.TEAM: "team_list_transactions",
             Litellm_EntityType.TEAM_MEMBER: "team_member_list_transactions",
             Litellm_EntityType.ORGANIZATION: "org_list_transactions",
+            Litellm_EntityType.TAG: "tag_list_transactions",
         }
 
         for update in updates:
@@ -191,6 +193,10 @@ class SpendUpdateQueue(BaseUpdateQueue):
             elif dict_key == "org_list_transactions":
                 transactions_dict = db_spend_update_transactions[
                     "org_list_transactions"
+                ]
+            elif dict_key == "tag_list_transactions":
+                transactions_dict = db_spend_update_transactions[
+                    "tag_list_transactions"
                 ]
             else:
                 continue

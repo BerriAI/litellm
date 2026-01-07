@@ -1,5 +1,6 @@
 # What is this?
 ## API Handler for calling Vertex AI Partner Models
+from enum import Enum
 from typing import Callable, Optional, Union
 
 import httpx  # type: ignore
@@ -28,6 +29,19 @@ class VertexAIError(Exception):
         )  # Call the base class constructor with the parameters it needs
 
 
+class PartnerModelPrefixes(str, Enum):
+    META_PREFIX = "meta/"
+    DEEPSEEK_PREFIX = "deepseek-ai"
+    MISTRAL_PREFIX = "mistral"
+    CODERESTAL_PREFIX = "codestral"
+    JAMBA_PREFIX = "jamba"
+    CLAUDE_PREFIX = "claude"
+    QWEN_PREFIX = "qwen"
+    GPT_OSS_PREFIX = "openai/gpt-oss-"
+    MINIMAX_PREFIX = "minimaxai/"
+    MOONSHOT_PREFIX = "moonshotai/"
+
+
 class VertexAIPartnerModels(VertexBase):
     def __init__(self) -> None:
         pass
@@ -42,13 +56,31 @@ class VertexAIPartnerModels(VertexBase):
             bool: True if the model string is a Vertex AI Partner Model, False otherwise
         """
         if (
-            model.startswith("meta/")
-            or model.startswith("deepseek-ai")
-            or model.startswith("mistral")
-            or model.startswith("codestral")
-            or model.startswith("jamba")
-            or model.startswith("claude")
+            model.startswith(PartnerModelPrefixes.META_PREFIX)
+            or model.startswith(PartnerModelPrefixes.DEEPSEEK_PREFIX)
+            or model.startswith(PartnerModelPrefixes.MISTRAL_PREFIX)
+            or model.startswith(PartnerModelPrefixes.CODERESTAL_PREFIX)
+            or model.startswith(PartnerModelPrefixes.JAMBA_PREFIX)
+            or model.startswith(PartnerModelPrefixes.CLAUDE_PREFIX)
+            or model.startswith(PartnerModelPrefixes.QWEN_PREFIX)
+            or model.startswith(PartnerModelPrefixes.GPT_OSS_PREFIX)
+            or model.startswith(PartnerModelPrefixes.MINIMAX_PREFIX)
+            or model.startswith(PartnerModelPrefixes.MOONSHOT_PREFIX)
         ):
+            return True
+        return False
+
+    @staticmethod
+    def should_use_openai_handler(model: str):
+        OPENAI_LIKE_VERTEX_PROVIDERS = [
+            "llama",
+            PartnerModelPrefixes.DEEPSEEK_PREFIX,
+            PartnerModelPrefixes.QWEN_PREFIX,
+            PartnerModelPrefixes.GPT_OSS_PREFIX,
+            PartnerModelPrefixes.MINIMAX_PREFIX,
+            PartnerModelPrefixes.MOONSHOT_PREFIX,
+        ]
+        if any(provider in model for provider in OPENAI_LIKE_VERTEX_PROVIDERS):
             return True
         return False
 
@@ -115,7 +147,7 @@ class VertexAIPartnerModels(VertexBase):
 
             optional_params["stream"] = stream
 
-            if "llama" in model or "deepseek-ai" in model:
+            if self.should_use_openai_handler(model):
                 partner = VertexPartnerProvider.llama
             elif "mistral" in model or "codestral" in model:
                 partner = VertexPartnerProvider.mistralai
@@ -191,7 +223,7 @@ class VertexAIPartnerModels(VertexBase):
                     client=client,
                     custom_llm_provider=LlmProviders.VERTEX_AI.value,
                 )
-            elif "llama" in model:
+            elif self.should_use_openai_handler(model):
                 return base_llm_http_handler.completion(
                     model=model,
                     stream=stream,
@@ -228,6 +260,80 @@ class VertexAIPartnerModels(VertexBase):
                 custom_llm_provider="vertex_ai",
                 custom_endpoint=True,
             )
+
+        except Exception as e:
+            if hasattr(e, "status_code"):
+                raise e
+            raise VertexAIError(status_code=500, message=str(e))
+
+    async def count_tokens(
+        self,
+        model: str,
+        messages: list,
+        litellm_params: dict,
+        vertex_project=None,
+        vertex_location=None,
+        vertex_credentials=None,
+    ):
+        """
+        Count tokens for Vertex AI partner models (Anthropic Claude, Mistral, etc.)
+
+        Args:
+            model: The model name (e.g., "claude-3-5-sonnet-20241022")
+            messages: List of messages in Anthropic Messages API format
+            litellm_params: LiteLLM parameters dict
+            vertex_project: Optional Google Cloud project ID
+            vertex_location: Optional Vertex AI location
+            vertex_credentials: Optional Vertex AI credentials
+
+        Returns:
+            Dict containing token count information
+        """
+        try:
+            import vertexai
+        except Exception as e:
+            raise VertexAIError(
+                status_code=400,
+                message=f"""vertexai import failed please run `pip install -U "google-cloud-aiplatform>=1.38"`. Got error: {e}""",
+            )
+
+        if not (
+            hasattr(vertexai, "preview") or hasattr(vertexai.preview, "language_models")
+        ):
+            raise VertexAIError(
+                status_code=400,
+                message="""Upgrade vertex ai. Run `pip install "google-cloud-aiplatform>=1.38"`""",
+            )
+
+        try:
+            from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import (
+                VertexAIPartnerModelsTokenCounter,
+            )
+
+            # Prepare request data in Anthropic Messages API format
+            request_data = {
+                "model": model,
+                "messages": messages,
+            }
+
+            # Prepare litellm_params with credentials
+            _litellm_params = litellm_params.copy()
+            if vertex_project:
+                _litellm_params["vertex_project"] = vertex_project
+            if vertex_location:
+                _litellm_params["vertex_location"] = vertex_location
+            if vertex_credentials:
+                _litellm_params["vertex_credentials"] = vertex_credentials
+
+            # Call the token counter
+            token_counter = VertexAIPartnerModelsTokenCounter()
+            result = await token_counter.handle_count_tokens_request(
+                model=model,
+                request_data=request_data,
+                litellm_params=_litellm_params,
+            )
+
+            return result
 
         except Exception as e:
             if hasattr(e, "status_code"):

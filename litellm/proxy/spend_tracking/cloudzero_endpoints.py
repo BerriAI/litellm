@@ -69,7 +69,7 @@ async def _get_cloudzero_settings():
     Retrieve CloudZero settings from the database with decrypted API key.
 
     Returns:
-        dict: CloudZero settings with decrypted API key
+        dict: CloudZero settings with decrypted API key, or empty dict if not configured
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -82,16 +82,16 @@ async def _get_cloudzero_settings():
     cloudzero_config = await prisma_client.db.litellm_config.find_first(
         where={"param_name": "cloudzero_settings"}
     )
+    if cloudzero_config is None or cloudzero_config.param_value is None:
+        return {}
 
-    if not cloudzero_config or not cloudzero_config.param_value:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "CloudZero settings not configured. Please run /cloudzero/init first."
-            },
-        )
-
-    settings = dict(cloudzero_config.param_value)
+    # Handle both dict and JSON string cases
+    if isinstance(cloudzero_config.param_value, dict):
+        settings = cloudzero_config.param_value
+    elif isinstance(cloudzero_config.param_value, str):
+        settings = json.loads(cloudzero_config.param_value)
+    else:
+        settings = dict(cloudzero_config.param_value)
 
     # Decrypt the API key
     encrypted_api_key = settings.get("api_key")
@@ -125,6 +125,7 @@ async def get_cloudzero_settings(
 
     Returns the current CloudZero configuration with the API key masked for security.
     Only the first 4 and last 4 characters of the API key are shown.
+    Returns null/empty values when settings are not configured (consistent with other settings endpoints).
 
     Only admin users can view CloudZero settings.
     """
@@ -139,22 +140,27 @@ async def get_cloudzero_settings(
         # Get CloudZero settings using the accessor method
         settings = await _get_cloudzero_settings()
 
+        # If settings are empty, return null/empty values (consistent with other endpoints)
+        if not settings:
+            return CloudZeroSettingsView(
+                api_key_masked=None,
+                connection_id=None,
+                timezone=None,
+                status=None,
+            )
+
         # Use SensitiveDataMasker to mask the API key
         masked_settings = _sensitive_masker.mask_dict(settings)
 
         return CloudZeroSettingsView(
-            api_key_masked=masked_settings["api_key"],
-            connection_id=settings["connection_id"],
-            timezone=settings["timezone"],
+            api_key_masked=masked_settings.get("api_key"),
+            connection_id=settings.get("connection_id"),
+            timezone=settings.get("timezone"),
             status="configured",
         )
 
     except HTTPException as e:
-        if e.status_code == 400:
-            # Settings not configured
-            raise HTTPException(
-                status_code=404, detail={"error": "CloudZero settings not configured"}
-            )
+        # Re-raise HTTPExceptions as-is
         raise e
     except Exception as e:
         verbose_proxy_logger.error(f"Error retrieving CloudZero settings: {str(e)}")
@@ -257,62 +263,6 @@ async def update_cloudzero_settings(
 _cloudzero_background_job_initialized = False
 
 
-async def init_cloudzero_background_job():
-    """
-    Initialize CloudZero background job if not already initialized.
-    This should be called from the proxy server startup.
-    """
-    global _cloudzero_background_job_initialized
-
-    if _cloudzero_background_job_initialized:
-        verbose_proxy_logger.debug(
-            "CloudZero background job already initialized, skipping"
-        )
-        return
-
-    try:
-        from litellm.proxy.proxy_server import prisma_client
-
-        if prisma_client is None:
-            verbose_proxy_logger.warning(
-                "Prisma client not available, skipping CloudZero background job initialization"
-            )
-            return
-
-        # Get CloudZero settings from database
-        cloudzero_config = await prisma_client.db.litellm_config.find_first(
-            where={"param_name": "cloudzero_settings"}
-        )
-
-        if not cloudzero_config or not cloudzero_config.param_value:
-            verbose_proxy_logger.debug(
-                "CloudZero settings not configured, skipping background job initialization"
-            )
-            return
-
-        settings = dict(cloudzero_config.param_value)
-
-        # Initialize CloudZero logger with credentials
-        from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
-
-        logger = CloudZeroLogger(
-            api_key=settings["api_key"],
-            connection_id=settings["connection_id"],
-            timezone=settings["timezone"],
-        )
-
-        # Initialize the background job
-        await logger.init_background_job()
-
-        _cloudzero_background_job_initialized = True
-        verbose_proxy_logger.info("CloudZero background job initialized successfully")
-
-    except Exception as e:
-        verbose_proxy_logger.error(
-            f"Error initializing CloudZero background job: {str(e)}"
-        )
-
-
 async def is_cloudzero_setup_in_db() -> bool:
     """
     Check if CloudZero is setup in the database.
@@ -340,6 +290,47 @@ async def is_cloudzero_setup_in_db() -> bool:
 
     except Exception as e:
         verbose_proxy_logger.error(f"Error checking CloudZero status: {str(e)}")
+        return False
+
+
+def is_cloudzero_setup_in_config() -> bool:
+    """
+    Check if CloudZero is setup in config.yaml or environment variables.
+
+    CloudZero is considered setup in config if:
+    - "cloudzero" is in the callbacks list in config.yaml, OR
+    Returns:
+        bool: True if CloudZero is configured, False otherwise
+    """
+    import litellm
+    return "cloudzero" in litellm.callbacks
+
+
+async def is_cloudzero_setup() -> bool:
+    """
+    Check if CloudZero is setup in either config.yaml/env vars OR database.
+
+    CloudZero is considered setup if:
+    - CloudZero is configured in config.yaml callbacks, OR
+    - CloudZero environment variables are set, OR  
+    - CloudZero settings exist in the database
+
+    Returns:
+        bool: True if CloudZero is configured anywhere, False otherwise
+    """
+    try:
+        # Check config.yaml/environment variables first
+        if is_cloudzero_setup_in_config():
+            return True
+            
+        # Check database as fallback
+        if await is_cloudzero_setup_in_db():
+            return True
+            
+        return False
+
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error checking CloudZero setup: {str(e)}")
         return False
 
 
@@ -383,9 +374,6 @@ async def init_cloudzero_settings(
 
         verbose_proxy_logger.info("CloudZero settings initialized successfully")
 
-        # Initialize background job after settings are saved
-        await init_cloudzero_background_job()
-
         return CloudZeroInitResponse(
             message="CloudZero settings initialized successfully", status="success"
         )
@@ -412,15 +400,18 @@ async def cloudzero_dry_run_export(
     Perform a dry run export using the CloudZero logger.
 
     This endpoint uses the CloudZero logger to perform a dry run export,
-    which displays the data that would be exported without actually sending it to CloudZero.
+    which returns the data that would be exported without actually sending it to CloudZero.
 
     Parameters:
     - limit: Optional limit on number of records to process (default: 10000)
 
+    Returns:
+    - usage_data: Sample of the raw usage data (first 50 records)
+    - cbf_data: CloudZero CBF formatted data ready for export
+    - summary: Statistics including total cost, tokens, and record counts
+
     Only admin users can perform CloudZero exports.
     """
-    from datetime import datetime
-
     # Validation
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
@@ -434,15 +425,17 @@ async def cloudzero_dry_run_export(
 
         # Initialize logger with credentials directly
         logger = CloudZeroLogger()
-        await logger.dry_run_export_usage_data(
-            target_hour=datetime.utcnow(), limit=request.limit
+        dry_run_result = await logger.dry_run_export_usage_data(
+            limit=request.limit
         )
 
         verbose_proxy_logger.info("CloudZero dry run export completed successfully")
 
         return CloudZeroExportResponse(
-            message="CloudZero dry run export completed successfully. Check logs for output.",
+            message="CloudZero dry run export completed successfully.",
             status="success",
+            dry_run_data=dry_run_result,
+            summary=dry_run_result.get("summary") if dry_run_result else None,
         )
 
     except Exception as e:
@@ -477,7 +470,6 @@ async def cloudzero_export(
     Only admin users can perform CloudZero exports.
     """
 
-    from datetime import datetime
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
@@ -494,20 +486,24 @@ async def cloudzero_export(
 
         # Initialize logger with credentials directly
         logger = CloudZeroLogger(
-            api_key=settings["api_key"],
-            connection_id=settings["connection_id"],
-            timezone=settings["timezone"],
+            api_key=settings.get("api_key"),
+            connection_id=settings.get("connection_id"),
+            timezone=settings.get("timezone"),
         )
         await logger.export_usage_data(
-            target_hour=datetime.utcnow(),
             limit=request.limit,
             operation=request.operation,
+            start_time_utc=request.start_time_utc,
+            end_time_utc=request.end_time_utc,
         )
 
         verbose_proxy_logger.info("CloudZero export completed successfully")
 
         return CloudZeroExportResponse(
-            message="CloudZero export completed successfully", status="success"
+            message="CloudZero export completed successfully", 
+            status="success",
+            dry_run_data=None,
+            summary=None
         )
 
     except Exception as e:
@@ -515,4 +511,71 @@ async def cloudzero_export(
         raise HTTPException(
             status_code=500,
             detail={"error": f"Failed to perform CloudZero export: {str(e)}"},
+        )
+
+
+@router.delete(
+    "/cloudzero/delete",
+    tags=["CloudZero"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=CloudZeroInitResponse,
+)
+async def delete_cloudzero_settings(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Delete CloudZero settings from the database.
+
+    This endpoint removes the CloudZero configuration (API key, connection ID, timezone)
+    from the proxy database. Only the CloudZero settings entry will be deleted;
+    other configuration values in the database will remain unchanged.
+
+    Only admin users can delete CloudZero settings.
+    """
+    # Validation
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": CommonProxyErrors.not_allowed_access.value},
+        )
+
+    try:
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+
+        # Check if CloudZero settings exist
+        cloudzero_config = await prisma_client.db.litellm_config.find_first(
+            where={"param_name": "cloudzero_settings"}
+        )
+
+        if cloudzero_config is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "CloudZero settings not found"},
+            )
+
+        # Delete only the CloudZero settings entry
+        # This uses a specific where clause to target only the cloudzero_settings row
+        await prisma_client.db.litellm_config.delete(
+            where={"param_name": "cloudzero_settings"}
+        )
+
+        verbose_proxy_logger.info("CloudZero settings deleted successfully")
+
+        return CloudZeroInitResponse(
+            message="CloudZero settings deleted successfully", status="success"
+        )
+
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error deleting CloudZero settings: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": f"Failed to delete CloudZero settings: {str(e)}"},
         )

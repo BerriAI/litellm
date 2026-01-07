@@ -12,14 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# CHANGELOG: 2025-07-23 - Added support for using LiteLLM_SpendLogs table for CBF mapping (ishaan-jaff)
 # CHANGELOG: 2025-01-19 - Refactored to use daily spend tables for proper CBF mapping (erik.peterson)
 # CHANGELOG: 2025-01-19 - Migrated from pandas to polars for database operations (erik.peterson)
 # CHANGELOG: 2025-01-19 - Initial database module for LiteLLM data extraction (erik.peterson)
 
 """Database connection and data extraction for LiteLLM."""
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 import polars as pl
@@ -27,6 +26,7 @@ import polars as pl
 
 class LiteLLMDatabase:
     """Handle LiteLLM PostgreSQL database connections and queries."""
+
     def _ensure_prisma_client(self):
         from litellm.proxy.proxy_server import prisma_client
 
@@ -37,61 +37,90 @@ class LiteLLMDatabase:
             )
         return prisma_client
 
-    async def get_usage_data_for_hour(self, target_hour: datetime, limit: Optional[int] = 1000) -> pl.DataFrame:
-        """Retrieve spend logs for a specific hour from LiteLLM_SpendLogs table with batching."""
+    async def get_usage_data(
+        self,
+        limit: Optional[int] = None,
+        start_time_utc: Optional[datetime] = None,
+        end_time_utc: Optional[datetime] = None,
+    ) -> pl.DataFrame:
+        """Retrieve usage data from LiteLLM daily user spend table."""
         client = self._ensure_prisma_client()
-        
-        # Calculate hour range
-        hour_start = target_hour.replace(minute=0, second=0, microsecond=0)
-        hour_end = hour_start + timedelta(hours=1)
-        
-        # Convert datetime objects to ISO format strings for PostgreSQL compatibility
-        hour_start_str = hour_start.isoformat()
-        hour_end_str = hour_end.isoformat()
-        
-        # Query to get spend logs for the specific hour
-        query = """
-        SELECT *
-        FROM "LiteLLM_SpendLogs"
-        WHERE "startTime" >= $1::timestamp 
-          AND "startTime" < $2::timestamp
-        ORDER BY "startTime" ASC
+
+        # Build WHERE clause for time filtering
+        where_conditions = []
+        if start_time_utc:
+            where_conditions.append(f"dus.updated_at >= '{start_time_utc.isoformat()}'")
+        if end_time_utc:
+            where_conditions.append(f"dus.updated_at <= '{end_time_utc.isoformat()}'")
+
+        where_clause = ""
+        if where_conditions:
+            where_clause = "WHERE " + " AND ".join(where_conditions)
+
+        # Query to get user spend data with team information
+        query = f"""
+        SELECT
+            dus.id,
+            dus.date,
+            dus.user_id,
+            dus.api_key,
+            dus.model,
+            dus.model_group,
+            dus.custom_llm_provider,
+            dus.prompt_tokens,
+            dus.completion_tokens,
+            dus.spend,
+            dus.api_requests,
+            dus.successful_requests,
+            dus.failed_requests,
+            dus.cache_creation_input_tokens,
+            dus.cache_read_input_tokens,
+            dus.created_at,
+            dus.updated_at,
+            vt.team_id,
+            vt.key_alias as api_key_alias,
+            tt.team_alias,
+            ut.user_email as user_email
+        FROM "LiteLLM_DailyUserSpend" dus
+        LEFT JOIN "LiteLLM_VerificationToken" vt ON dus.api_key = vt.token
+        LEFT JOIN "LiteLLM_TeamTable" tt ON vt.team_id = tt.team_id
+        LEFT JOIN "LiteLLM_UserTable" ut ON dus.user_id = ut.user_id
+        {where_clause}
+        ORDER BY dus.date DESC, dus.created_at DESC
         """
 
         if limit:
             query += f" LIMIT {limit}"
 
         try:
-            db_response = await client.db.query_raw(query, hour_start_str, hour_end_str)
-            # Convert the response to polars DataFrame
-            return pl.DataFrame(db_response) if db_response else pl.DataFrame()
+            db_response = await client.db.query_raw(query)
+            # Convert the response to polars DataFrame with full schema inference
+            # This prevents schema mismatch errors when data types vary across rows
+            return pl.DataFrame(db_response, infer_schema_length=None)
         except Exception as e:
-            raise Exception(f"Error retrieving spend logs for hour {target_hour}: {str(e)}")
-
+            raise Exception(f"Error retrieving usage data: {str(e)}")
 
     async def get_table_info(self) -> Dict[str, Any]:
-        """Get information about the LiteLLM_SpendLogs table."""
+        """Get information about the daily user spend table."""
         client = self._ensure_prisma_client()
-        
-        try:
-            # Get row count from SpendLogs table
-            spend_logs_count = await self._get_table_row_count('LiteLLM_SpendLogs')
 
-            # Get column structure from spend logs table
+        try:
+            # Get row count from user spend table
+            user_count = await self._get_table_row_count("LiteLLM_DailyUserSpend")
+
+            # Get column structure from user spend table
             query = """
             SELECT column_name, data_type, is_nullable
             FROM information_schema.columns
-            WHERE table_name = 'LiteLLM_SpendLogs'
+            WHERE table_name = 'LiteLLM_DailyUserSpend'
             ORDER BY ordinal_position;
             """
             columns_response = await client.db.query_raw(query)
 
             return {
-                'columns': columns_response,
-                'row_count': spend_logs_count,
-                'table_breakdown': {
-                    'spend_logs': spend_logs_count
-                }
+                "columns": columns_response,
+                "row_count": user_count,
+                "table_name": "LiteLLM_DailyUserSpend",
             }
         except Exception as e:
             raise Exception(f"Error getting table info: {str(e)}")
@@ -99,13 +128,13 @@ class LiteLLMDatabase:
     async def _get_table_row_count(self, table_name: str) -> int:
         """Get row count from specified table."""
         client = self._ensure_prisma_client()
-        
+
         try:
             query = f'SELECT COUNT(*) as count FROM "{table_name}"'
             response = await client.db.query_raw(query)
-            
+
             if response and len(response) > 0:
-                return response[0].get('count', 0)
+                return response[0].get("count", 0)
             return 0
         except Exception:
             return 0
@@ -113,7 +142,7 @@ class LiteLLMDatabase:
     async def discover_all_tables(self) -> Dict[str, Any]:
         """Discover all tables in the LiteLLM database and their schemas."""
         client = self._ensure_prisma_client()
-        
+
         try:
             # Get all LiteLLM tables
             litellm_tables_query = """
@@ -124,7 +153,7 @@ class LiteLLMDatabase:
             ORDER BY table_name;
             """
             tables_response = await client.db.query_raw(litellm_tables_query)
-            table_names = [row['table_name'] for row in tables_response]
+            table_names = [row["table_name"] for row in tables_response]
 
             # Get detailed schema for each table
             tables_info = {}
@@ -155,7 +184,9 @@ class LiteLLMDatabase:
                 WHERE i.indrelid = $1::regclass AND i.indisprimary;
                 """
                 pk_response = await client.db.query_raw(pk_query, f'"{table_name}"')
-                primary_keys = [row['attname'] for row in pk_response] if pk_response else []
+                primary_keys = (
+                    [row["attname"] for row in pk_response] if pk_response else []
+                )
 
                 # Get foreign key information
                 fk_query = """
@@ -200,18 +231,17 @@ class LiteLLMDatabase:
                     row_count = 0
 
                 tables_info[table_name] = {
-                    'columns': columns_response,
-                    'primary_keys': primary_keys,
-                    'foreign_keys': foreign_keys,
-                    'indexes': indexes,
-                    'row_count': row_count
+                    "columns": columns_response,
+                    "primary_keys": primary_keys,
+                    "foreign_keys": foreign_keys,
+                    "indexes": indexes,
+                    "row_count": row_count,
                 }
 
             return {
-                'tables': tables_info,
-                'table_count': len(table_names),
-                'table_names': table_names
+                "tables": tables_info,
+                "table_count": len(table_names),
+                "table_names": table_names,
             }
         except Exception as e:
             raise Exception(f"Error discovering tables: {str(e)}")
-

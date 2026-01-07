@@ -677,3 +677,569 @@ def test_vertex_filter_format_uri():
     )
 
     assert "uri" not in json.dumps(new_parameters)
+
+def test_convert_schema_types_type_array_conversion():
+    """
+    Test _convert_schema_types function handles type arrays and case conversion.
+    
+    This test verifies the fix for the issue where type arrays like ["string", "number"] 
+    would raise an exception in Vertex AI schema validation.
+
+    Relevant issue: https://github.com/BerriAI/litellm/issues/14091
+    """
+    from litellm.llms.vertex_ai.common_utils import _convert_schema_types
+
+    # Input: OpenAI-style schema with type array (the problematic case)
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "studio": {
+                "type": ["string", "number"],
+                "description": "The studio ID or name"
+            }
+        },
+        "required": ["studio"],
+        "additionalProperties": False,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+
+    # Expected output: Vertex AI compatible schema with anyOf and uppercase types
+    expected_output = {
+        "type": "object",
+        "properties": {
+            "studio": {
+                "anyOf": [
+                    {"type": "string"}, 
+                    {"type": "number"}
+                ],
+                "description": "The studio ID or name"
+            }
+        },
+        "required": ["studio"],
+        "additionalProperties": False,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+
+    # Apply the transformation
+    _convert_schema_types(input_schema)
+
+    # Verify the transformation
+    assert input_schema == expected_output
+
+    # Verify specific transformations:
+    # 1. Root level type converted to uppercase
+    assert input_schema["type"] == "object"
+
+    # 2. Type array converted to anyOf format
+    assert "anyOf" in input_schema["properties"]["studio"]
+    assert "type" not in input_schema["properties"]["studio"]
+
+    # 3. Individual types in anyOf are uppercase
+    anyof_types = input_schema["properties"]["studio"]["anyOf"]
+    assert anyof_types[0]["type"] == "string"
+    assert anyof_types[1]["type"] == "number"
+
+    # 4. Other properties preserved
+    assert input_schema["properties"]["studio"]["description"] == "The studio ID or name"
+    assert input_schema["required"] == ["studio"]
+
+
+def test_fix_enum_empty_strings():
+    """
+    Test _fix_enum_empty_strings function replaces empty strings with None in enum arrays.
+    
+    This test verifies the fix for the issue where Gemini rejects tool definitions 
+    with empty strings in enum values, causing API failures.
+
+    Relevant issue: Gemini does not accept empty strings in enum values
+    """
+    from litellm.llms.vertex_ai.common_utils import _fix_enum_empty_strings
+
+    # Input: Schema with empty string in enum (the problematic case)
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "user_agent_type": {
+                "enum": ["", "desktop", "mobile", "tablet"],
+                "type": "string",
+                "description": "Device type for user agent"
+            }
+        },
+        "required": ["user_agent_type"]
+    }
+
+    # Expected output: Empty strings replaced with None
+    expected_output = {
+        "type": "object", 
+        "properties": {
+            "user_agent_type": {
+                "enum": [None, "desktop", "mobile", "tablet"],
+                "type": "string",
+                "description": "Device type for user agent"
+            }
+        },
+        "required": ["user_agent_type"]
+    }
+
+    # Apply the transformation
+    _fix_enum_empty_strings(input_schema)
+
+    # Verify the transformation
+    assert input_schema == expected_output
+
+    # Verify specific transformations:
+    # 1. Empty string replaced with None
+    enum_values = input_schema["properties"]["user_agent_type"]["enum"]
+    assert "" not in enum_values
+    assert None in enum_values
+
+    # 2. Other enum values preserved
+    assert "desktop" in enum_values
+    assert "mobile" in enum_values
+    assert "tablet" in enum_values
+
+    # 3. Other properties preserved
+    assert input_schema["properties"]["user_agent_type"]["type"] == "string"
+    assert input_schema["properties"]["user_agent_type"]["description"] == "Device type for user agent"
+
+
+def test_fix_enum_types():
+    """
+    Test _fix_enum_types function removes enum fields when type is not string.
+    
+    This test verifies the fix for the issue where Gemini rejects cached content
+    with function parameter enums on non-string types, causing API failures.
+
+    Relevant issue: Gemini only allows enums for string-typed fields
+    """
+    from litellm.llms.vertex_ai.common_utils import _fix_enum_types
+
+    # Input: Schema with enum on non-string type (the problematic case)
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "truncateMode": {
+                "enum": ["auto", "none", "start", "end"],
+                "type": "string",  # This should keep the enum
+                "description": "How to truncate content"
+            },
+            "maxLength": {
+                "enum": [100, 200, 500],  # This should be removed
+                "type": "integer",
+                "description": "Maximum length"
+            },
+            "enabled": {
+                "enum": [True, False],  # This should be removed
+                "type": "boolean",
+                "description": "Whether feature is enabled"
+            },
+            "nested": {
+                "type": "object",
+                "properties": {
+                    "innerEnum": {
+                        "enum": ["a", "b", "c"],  # This should be kept
+                        "type": "string"
+                    },
+                    "innerNonStringEnum": {
+                        "enum": [1, 2, 3],  # This should be removed
+                        "type": "integer"
+                    }
+                }
+            },
+            "anyOfField": {
+                "anyOf": [
+                    {"type": "string", "enum": ["option1", "option2"]},  # This should be kept
+                    {"type": "integer", "enum": [1, 2, 3]}  # This should be removed
+                ]
+            }
+        }
+    }
+
+    # Expected output: Non-string enums removed, string enums kept
+    expected_output = {
+        "type": "object",
+        "properties": {
+            "truncateMode": {
+                "enum": ["auto", "none", "start", "end"],  # Kept - string type
+                "type": "string",
+                "description": "How to truncate content"
+            },
+            "maxLength": {  # enum removed
+                "type": "integer",
+                "description": "Maximum length"
+            },
+            "enabled": {  # enum removed
+                "type": "boolean",
+                "description": "Whether feature is enabled"
+            },
+            "nested": {
+                "type": "object",
+                "properties": {
+                    "innerEnum": {
+                        "enum": ["a", "b", "c"],  # Kept - string type
+                        "type": "string"
+                    },
+                    "innerNonStringEnum": {  # enum removed
+                        "type": "integer"
+                    }
+                }
+            },
+            "anyOfField": {
+                "anyOf": [
+                    {"type": "string", "enum": ["option1", "option2"]},  # Kept - has string type
+                    {"type": "integer"}  # enum removed
+                ]
+            }
+        }
+    }
+
+    # Apply the transformation
+    _fix_enum_types(input_schema)
+
+    # Verify the transformation
+    assert input_schema == expected_output
+
+    # Verify specific transformations:
+    # 1. String enums are preserved
+    assert "enum" in input_schema["properties"]["truncateMode"]
+    assert input_schema["properties"]["truncateMode"]["enum"] == ["auto", "none", "start", "end"]
+    
+    assert "enum" in input_schema["properties"]["nested"]["properties"]["innerEnum"]
+    assert input_schema["properties"]["nested"]["properties"]["innerEnum"]["enum"] == ["a", "b", "c"]
+
+    # 2. Non-string enums are removed
+    assert "enum" not in input_schema["properties"]["maxLength"]
+    assert "enum" not in input_schema["properties"]["enabled"]
+    assert "enum" not in input_schema["properties"]["nested"]["properties"]["innerNonStringEnum"]
+
+    # 3. anyOf with string type keeps enum, non-string removes it
+    assert "enum" in input_schema["properties"]["anyOfField"]["anyOf"][0]
+    assert "enum" not in input_schema["properties"]["anyOfField"]["anyOf"][1]
+
+    # 4. Other properties preserved
+    assert input_schema["properties"]["maxLength"]["type"] == "integer"
+    assert input_schema["properties"]["enabled"]["type"] == "boolean"
+
+
+def test_get_token_url():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexLLM,
+    )
+
+    vertex_llm = VertexLLM()
+    vertex_ai_project = "pathrise-convert-1606954137718"
+    vertex_ai_location = "us-central1"
+    vertex_credentials = ""
+
+    should_use_v1beta1_features = vertex_llm.is_using_v1beta1_features(
+        optional_params={"cached_content": "hi"}
+    )
+
+    _, url = vertex_llm._get_token_and_url(
+        auth_header=None,
+        vertex_project=vertex_ai_project,
+        vertex_location=vertex_ai_location,
+        vertex_credentials=vertex_credentials,
+        gemini_api_key="",
+        custom_llm_provider="vertex_ai_beta",
+        should_use_v1beta1_features=should_use_v1beta1_features,
+        api_base=None,
+        model="",
+        stream=False,
+    )
+
+    print("url=", url)
+
+
+
+    should_use_v1beta1_features = vertex_llm.is_using_v1beta1_features(
+        optional_params={"temperature": 0.1}
+    )
+
+    _, url = vertex_llm._get_token_and_url(
+        auth_header=None,
+        vertex_project=vertex_ai_project,
+        vertex_location=vertex_ai_location,
+        vertex_credentials=vertex_credentials,
+        gemini_api_key="",
+        custom_llm_provider="vertex_ai_beta",
+        should_use_v1beta1_features=should_use_v1beta1_features,
+        api_base=None,
+        model="",
+        stream=False,
+    )
+
+    print("url for normal request", url)
+
+    assert "v1beta1" not in url
+    assert "/v1/" in url
+
+    pass
+
+
+@pytest.mark.asyncio
+async def test_vertex_ai_token_counter_routes_partner_models():
+    """
+    Test that VertexAITokenCounter correctly routes partner models (Claude, Mistral, etc.)
+    to the partner models token counter instead of the Gemini token counter.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+    from litellm.types.utils import TokenCountResponse
+
+    token_counter = VertexAITokenCounter()
+
+    # Mock the partner models handler
+    with patch(
+        "litellm.llms.vertex_ai.vertex_ai_partner_models.main.VertexAIPartnerModels.count_tokens"
+    ) as mock_partner_count_tokens:
+        mock_partner_count_tokens.return_value = {
+            "input_tokens": 42,
+            "tokenizer_used": "vertex_ai_partner_models",
+        }
+
+        # Test with a Claude model (partner model)
+        result = await token_counter.count_tokens(
+            model_to_use="claude-3-5-sonnet-20241022",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-east5",
+                }
+            },
+            request_model="vertex_ai/claude-3-5-sonnet-20241022",
+        )
+
+        # Verify partner models handler was called
+        assert mock_partner_count_tokens.called
+        assert result is not None
+        assert isinstance(result, TokenCountResponse)
+        assert result.total_tokens == 42
+        assert result.tokenizer_type == "vertex_ai_partner_models"
+
+
+@pytest.mark.asyncio
+async def test_vertex_ai_token_counter_uses_count_tokens_location():
+    """
+    Test that VertexAITokenCounter uses vertex_count_tokens_location to override
+    vertex_location when counting tokens for partner models.
+
+    Count tokens API is not available on global location for partner models:
+    https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/count-tokens
+    """
+    from unittest.mock import patch
+
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+    from litellm.types.utils import TokenCountResponse
+
+    token_counter = VertexAITokenCounter()
+
+    # Mock the partner models handler
+    with patch(
+        "litellm.llms.vertex_ai.vertex_ai_partner_models.main.VertexAIPartnerModels.count_tokens"
+    ) as mock_partner_count_tokens:
+        mock_partner_count_tokens.return_value = {
+            "input_tokens": 42,
+            "tokenizer_used": "vertex_ai_partner_models",
+        }
+
+        # Test with vertex_count_tokens_location overriding vertex_location
+        await token_counter.count_tokens(
+            model_to_use="claude-3-5-sonnet-20241022",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "vertex_project": "test-project",
+                    "vertex_location": "global",  # Original location (not supported for count_tokens)
+                    "vertex_count_tokens_location": "us-east5",  # Override for count_tokens
+                }
+            },
+            request_model="vertex_ai/claude-3-5-sonnet-20241022",
+        )
+
+        # Verify the partner models handler was called with the overridden location
+        assert mock_partner_count_tokens.called
+        call_kwargs = mock_partner_count_tokens.call_args.kwargs
+        assert call_kwargs["vertex_location"] == "us-east5"
+        assert call_kwargs["vertex_project"] == "test-project"
+
+
+@pytest.mark.asyncio
+async def test_vertex_ai_token_counter_routes_gemini_models():
+    """
+    Test that VertexAITokenCounter correctly routes Gemini models
+    to the Gemini token counter (not partner models).
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+    from litellm.types.utils import TokenCountResponse
+
+    token_counter = VertexAITokenCounter()
+
+    # Mock the Gemini handler (different import path)
+    with patch(
+        "litellm.llms.vertex_ai.count_tokens.handler.VertexAITokenCounter.acount_tokens"
+    ) as mock_gemini_count_tokens:
+        mock_gemini_count_tokens.return_value = {
+            "totalTokens": 50,
+            "tokenizer_used": "gemini",
+        }
+
+        # Test with a Gemini model (not a partner model)
+        result = await token_counter.count_tokens(
+            model_to_use="gemini-1.5-pro",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-central1",
+                }
+            },
+            request_model="vertex_ai/gemini-1.5-pro",
+        )
+
+        # Verify Gemini handler was called
+        assert mock_gemini_count_tokens.called
+        assert result is not None
+        assert isinstance(result, TokenCountResponse)
+        assert result.total_tokens == 50
+
+
+@pytest.mark.asyncio
+async def test_vertex_ai_partner_model_detection():
+    """
+    Test that VertexAIPartnerModels.is_vertex_partner_model correctly identifies
+    partner models (Claude, Mistral, Llama, etc.).
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+        VertexAIPartnerModels,
+    )
+
+    # Test Claude models (should be detected as partner model)
+    assert VertexAIPartnerModels.is_vertex_partner_model("claude-3-5-sonnet-20241022")
+    assert VertexAIPartnerModels.is_vertex_partner_model("claude-3-opus-20240229")
+    assert VertexAIPartnerModels.is_vertex_partner_model("claude-3-haiku-20240307")
+
+    # Test Mistral models
+    assert VertexAIPartnerModels.is_vertex_partner_model("mistral-large-2407")
+    assert VertexAIPartnerModels.is_vertex_partner_model("mistral-7b-instruct-v0.3")
+
+    # Test Meta/Llama models
+    assert VertexAIPartnerModels.is_vertex_partner_model("meta/llama-3.1-405b")
+    # Test Minimax models
+    assert VertexAIPartnerModels.is_vertex_partner_model("minimaxai/minimax-m2-maas")
+    # Test Moonshot models
+    assert VertexAIPartnerModels.is_vertex_partner_model(
+        "moonshotai/kimi-k2-thinking-maas"
+    )
+
+    # Test Gemini models (should NOT be detected as partner model)
+    assert not VertexAIPartnerModels.is_vertex_partner_model("gemini-1.5-pro")
+    assert not VertexAIPartnerModels.is_vertex_partner_model("gemini-1.0-pro")
+    assert not VertexAIPartnerModels.is_vertex_partner_model("gemini-pro-vision")
+
+    # Test other non-partner models
+    assert not VertexAIPartnerModels.is_vertex_partner_model("text-bison-001")
+    assert not VertexAIPartnerModels.is_vertex_partner_model("chat-bison-001")
+
+
+def test_vertex_ai_minimax_uses_openai_handler():
+    """
+    Ensure Minimax partner models re-use the OpenAI-format handler.
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+        VertexAIPartnerModels,
+    )
+
+    assert VertexAIPartnerModels.should_use_openai_handler(
+        "minimaxai/minimax-m2-maas"
+    )
+
+
+def test_vertex_ai_moonshot_uses_openai_handler():
+    """
+    Ensure Moonshot partner models re-use the OpenAI-format handler.
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+        VertexAIPartnerModels,
+    )
+
+    assert VertexAIPartnerModels.should_use_openai_handler(
+        "moonshotai/kimi-k2-thinking-maas"
+    )
+
+
+def test_build_vertex_schema_empty_properties():
+    """
+    Test _build_vertex_schema handles empty properties objects correctly.
+    
+    This test verifies the fix for the issue where Gemini rejects schemas 
+    with empty properties objects like {"properties": {}, "type": "object"}.
+    
+    Error from Gemini: "GenerateContentRequest.generation_config.response_schema
+    .properties[\"action\"].items.any_of[0].properties[\"go_back\"].properties: 
+    should be non-empty for OBJECT type"
+    
+    The fix removes empty properties objects and their associated type/required fields.
+    """
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    # Input: Schema with empty properties (the problematic case from real request)
+    input_schema = {
+        "properties": {
+            "action": {
+                "description": "List of actions to execute",
+                "items": {
+                    "anyOf": [
+                        {
+                            "properties": {
+                                "go_back": {
+                                    "properties": {},
+                                    "type": "object",
+                                    "additionalProperties": False,
+                                    "description": "Go back",
+                                    "required": []
+                                }
+                            },
+                            "required": ["go_back"],
+                            "type": "object",
+                            "additionalProperties": False
+                        }
+                    ]
+                },
+                "type": "array"
+            }
+        },
+        "type": "object",
+        "additionalProperties": False
+    }
+
+    # Apply the transformation
+    result = _build_vertex_schema(input_schema)
+
+    # Verify the transformation removed empty properties
+    # Navigate to the go_back schema
+    go_back_schema = result["properties"]["action"]["items"]["anyOf"][0]["properties"]["go_back"]
+    
+    # Verify empty properties was removed
+    assert "properties" not in go_back_schema, "Empty properties should be removed"
+    
+    # Verify type was also removed (since object without properties is invalid in Gemini)
+    assert "type" not in go_back_schema, "Type should be removed when properties is empty"
+    
+    # Verify required was also removed
+    assert "required" not in go_back_schema, "Required should be removed when properties is empty"
+    
+    # Verify description is preserved
+    assert go_back_schema.get("description") == "Go back", "Description should be preserved"
+    
+    # Verify parent schema still has proper structure
+    parent_schema = result["properties"]["action"]["items"]["anyOf"][0]
+    assert parent_schema["type"] == "object", "Parent schema should still have object type"
+    assert "go_back" in parent_schema["properties"], "go_back should still be in parent properties"

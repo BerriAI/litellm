@@ -610,7 +610,7 @@ class Cache:
             verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
 
     async def async_add_cache(
-        self, result, dynamic_cache_object: Optional[BaseCache], **kwargs
+        self, result, dynamic_cache_object: Optional[BaseCache] = None, **kwargs
     ):
         """
         Async implementation of add_cache
@@ -691,7 +691,7 @@ class Cache:
         return cache_key, cached_data, kwargs
 
     async def async_add_cache_pipeline(
-        self, result, dynamic_cache_object: Optional[BaseCache], **kwargs
+        self, result, dynamic_cache_object: Optional[BaseCache] = None, **kwargs
     ):
         """
         Async implementation of add_cache for Embedding calls
@@ -774,11 +774,9 @@ class Cache:
         """
         Internal method to check if the cache type supports async get/set operations
 
-        Only S3 Cache Does NOT support async operations
+        All cache types now support async operations
 
         """
-        if self.type and self.type == LiteLLMCacheType.S3:
-            return False
         return True
 
 

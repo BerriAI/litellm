@@ -8,6 +8,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
+from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.types.fine_tuning import OpenAIFineTuningHyperparameters
 from litellm.types.llms.openai import FineTuningJobCreate
@@ -64,9 +65,9 @@ class VertexFineTuningAPI(VertexLLM):
         )
 
         if create_fine_tuning_job_data.validation_file:
-            supervised_tuning_spec[
-                "validation_dataset"
-            ] = create_fine_tuning_job_data.validation_file
+            supervised_tuning_spec["validation_dataset"] = (
+                create_fine_tuning_job_data.validation_file
+            )
 
         _vertex_hyperparameters = (
             self._transform_openai_hyperparameters_to_vertex_hyperparameters(
@@ -140,7 +141,9 @@ class VertexFineTuningAPI(VertexLLM):
             fine_tuned_model=response.get("tunedModelDisplayName", ""),
             finished_at=None,
             hyperparameters=self._translate_vertex_response_hyperparameters(
-                vertex_hyper_parameters=_supervisedTuningSpec.get("hyperParameters", {})
+                vertex_hyper_parameters=_supervisedTuningSpec.get(
+                    "hyperParameters", FineTuneHyperparameters()
+                )
                 or {}
             ),
             model=response.get("baseModel", "") or "",
@@ -259,7 +262,8 @@ class VertexFineTuningAPI(VertexLLM):
             original_hyperparameters=original_hyperparameters or {},
         )
 
-        fine_tuning_url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/tuningJobs"
+        base_url = get_vertex_base_url(vertex_location)
+        fine_tuning_url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/tuningJobs"
         if _is_async is True:
             return self.acreate_fine_tuning_job(  # type: ignore
                 fine_tuning_url=fine_tuning_url,
@@ -327,27 +331,29 @@ class VertexFineTuningAPI(VertexLLM):
             "Content-Type": "application/json",
         }
 
+        base_url = get_vertex_base_url(vertex_location)
+        
         url = None
         if request_route == "/tuningJobs":
-            url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/tuningJobs"
+            url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/tuningJobs"
         elif "/tuningJobs/" in request_route and "cancel" in request_route:
-            url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/tuningJobs{request_route}"
+            url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/tuningJobs{request_route}"
         elif "generateContent" in request_route:
-            url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}{request_route}"
+            url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}{request_route}"
         elif "predict" in request_route:
-            url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}{request_route}"
+            url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}{request_route}"
         elif "/batchPredictionJobs" in request_route:
-            url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}{request_route}"
+            url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}{request_route}"
         elif "countTokens" in request_route:
-            url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}{request_route}"
+            url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}{request_route}"
         elif "cachedContents" in request_route:
             _model = request_data.get("model")
             if _model is not None and "/publishers/google/models/" not in _model:
-                request_data[
-                    "model"
-                ] = f"projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{_model}"
+                request_data["model"] = (
+                    f"projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{_model}"
+                )
 
-            url = f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}{request_route}"
+            url = f"{base_url}/v1beta1/projects/{vertex_project}/locations/{vertex_location}{request_route}"
         else:
             raise ValueError(f"Unsupported Vertex AI request route: {request_route}")
         if self.async_handler is None:

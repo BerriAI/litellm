@@ -6,6 +6,9 @@ metadata:
   name: {{ include "litellm.fullname" . }}
   labels:
     {{- include "litellm.labels" . | nindent 4 }}
+    {{- if .Values.deploymentLabels }}
+    {{- toYaml .Values.deploymentLabels | nindent 4 }}
+    {{- end }}
 spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
@@ -16,7 +19,9 @@ spec:
   template:
     metadata:
       annotations:
+        {{- if .Values.proxyConfigMap.create }}
         checksum/config: {{ include (print $.Template.BasePath "/configmap-litellm.yaml") . | sha256sum }}
+        {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -71,7 +76,14 @@ spec:
                   name: {{ .Values.db.secret.name }}
                   key: {{ .Values.db.secret.passwordKey }}
             - name: DATABASE_HOST
+              {{- if .Values.db.secret.endpointKey }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.db.secret.name }}
+                  key: {{ .Values.db.secret.endpointKey }}
+              {{- else }}
               value: {{ .Values.db.endpoint }}
+              {{- end }}
             - name: DATABASE_NAME
               value: {{ .Values.db.database }}
             - name: DATABASE_URL
@@ -117,9 +129,20 @@ spec:
             - configMapRef:
                 name: {{ . }}
           {{- end }}
+          {{- if .Values.command }}
+          command: {{ toYaml .Values.command | nindent 12 }}
+          {{- end }}
+          {{- if .Values.args }}
+          args: {{ toYaml .Values.args | nindent 12 }}
+          {{- else }}
           args:
             - --config
             - /etc/litellm/config.yaml
+            {{ if .Values.numWorkers }}
+            - --num_workers
+            - {{ .Values.numWorkers | quote }}
+            {{- end }}
+          {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
@@ -159,6 +182,10 @@ spec:
           {{- with .Values.volumeMounts }}
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- with .Values.lifecycle }}
+          lifecycle:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
       {{- with .Values.extraContainers }}
         {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -176,9 +203,13 @@ spec:
         {{- end }}
         - name: litellm-config
           configMap:
+            {{- if .Values.proxyConfigMap.create }}
             name: {{ include "litellm.fullname" . }}-config
+            {{- else }}
+            name: {{ .Values.proxyConfigMap.name }}
+            {{- end }}
             items:
-              - key: "config.yaml"
+              - key: {{ .Values.proxyConfigMap.key | default "config.yaml" }}
                 path: "config.yaml"
       {{- with .Values.volumes }}
         {{- toYaml . | nindent 8 }}
@@ -194,4 +225,9 @@ spec:
       {{- with .Values.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds | default 90 }}
+      {{- if .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml .Values.topologySpreadConstraints | nindent 8 }}
       {{- end }}

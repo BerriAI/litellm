@@ -23,6 +23,7 @@ from litellm.utils import (
     get_optional_params,
     get_optional_params_embeddings,
     get_optional_params_image_gen,
+    get_requester_metadata,
 )
 
 ## get_optional_params_embeddings
@@ -65,6 +66,41 @@ def test_anthropic_optional_params(stop_sequence, expected_count):
         model="claude-3", custom_llm_provider="anthropic", stop=stop_sequence
     )
     assert len(optional_params) == expected_count
+
+
+def test_get_requester_metadata_returns_none_for_empty():
+    metadata = {"requester_metadata": {}}
+    assert get_requester_metadata(metadata) is None
+
+
+@patch("litellm.main.openai_chat_completions.completion")
+def test_requester_metadata_forwarded_to_openai(mock_completion):
+    mock_completion.return_value = MagicMock()
+    metadata = {
+        "requester_metadata": {
+            "custom_meta_key": "value",
+            "hidden_params": "secret",
+            "int_value": 123,
+        }
+    }
+
+    original_api_key = litellm.api_key
+    litellm.api_key = "sk-test"
+    original_preview_flag = litellm.enable_preview_features
+    litellm.enable_preview_features = True
+
+    try:
+        litellm.completion(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata=metadata,
+        )
+    finally:
+        litellm.api_key = original_api_key
+        litellm.enable_preview_features = original_preview_flag
+
+    sent_metadata = mock_completion.call_args.kwargs["optional_params"]["metadata"]
+    assert sent_metadata == {"custom_meta_key": "value"}
 
 
 def test_get_optional_params_with_allowed_openai_params():
@@ -1557,8 +1593,37 @@ def test_azure_ai_cohere_embed_input_type_param():
 
 def test_optional_params_image_gen_with_aspect_ratio():
     optional_params = get_optional_params_image_gen(
-        model="imagen-4.0-ultra-generate-preview-06-06",
+        model="imagen-4.0-ultra-generate-001",
         custom_llm_provider="vertex_ai",
         aspect_ratio="16:9",
     )
     assert optional_params["aspect_ratio"] == "16:9"
+
+
+def test_optional_params_responses_api_allowed_openai_params():
+    from litellm import responses
+    from unittest.mock import patch, MagicMock
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            response = litellm.responses(
+                model="openai/o1-pro",
+                input="Tell me a three sentence bedtime story about a unicorn.",
+                max_output_tokens=100,
+                top_logprobs=10,
+                allowed_openai_params=["top_logprobs"],
+                client=client,
+            )
+        except Exception as e:
+            import traceback
+
+            traceback.print_exc()
+            print("error: ", e)
+
+        mock_post.assert_called_once()
+        request_body = mock_post.call_args.kwargs
+        print("request_body: ", request_body)
+        assert "top_logprobs" in request_body["json"]

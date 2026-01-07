@@ -4,9 +4,16 @@
 
 liteLLM provides `input_callbacks`, `success_callbacks` and `failure_callbacks`, making it easy for you to send data to a particular provider depending on the status of your responses.
 
-liteLLM supports:
+:::tip
+**New to LiteLLM Callbacks?**
 
-- [Custom Callback Functions](https://docs.litellm.ai/docs/observability/custom_callback)
+- For proxy/server logging and observability, see the [Proxy Logging Guide](https://docs.litellm.ai/docs/proxy/logging).
+- To write your own callback logic, see the [Custom Callbacks Guide](https://docs.litellm.ai/docs/observability/custom_callback).
+:::
+
+
+### Supported Callback Integrations
+
 - [Lunary](https://lunary.ai/docs)
 - [Langfuse](https://langfuse.com/docs)
 - [LangSmith](https://www.langchain.com/langsmith)
@@ -16,8 +23,19 @@ liteLLM supports:
 - [Sentry](https://docs.sentry.io/platforms/python/)
 - [PostHog](https://posthog.com/docs/libraries/python)
 - [Slack](https://slack.dev/bolt-python/concepts)
+- [Arize](https://docs.arize.com/)
+- [PromptLayer](https://docs.promptlayer.com/)
 
 This is **not** an extensive list. Please check the dropdown for all logging integrations.
+
+### Related Cookbooks
+Try out our cookbooks for code snippets and interactive demos:
+
+- [Langfuse Callback Example (Colab)](https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/logging_observability/LiteLLM_Langfuse.ipynb)
+- [Lunary Callback Example (Colab)](https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/logging_observability/LiteLLM_Lunary.ipynb)
+- [Arize Callback Example (Colab)](https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/logging_observability/LiteLLM_Arize.ipynb)
+- [Proxy + Langfuse Callback Example (Colab)](https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/logging_observability/LiteLLM_Proxy_Langfuse.ipynb)
+- [PromptLayer Callback Example (Colab)](https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/LiteLLM_PromptLayer.ipynb)
 
 ### Quick Start
 

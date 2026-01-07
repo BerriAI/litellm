@@ -88,6 +88,12 @@ class TestStandardizedResetTime(unittest.TestCase):
         )
         self.assertEqual(london_result, london_expected)
 
+        # Test Bangkok timezone (UTC+7): 5:30 AM next day, so next reset is midnight the day after
+        bangkok = ZoneInfo("Asia/Bangkok")
+        bangkok_expected = datetime(2023, 5, 17, 0, 0, 0, tzinfo=bangkok)
+        bangkok_result = get_next_standardized_reset_time("1d", base_time, "Asia/Bangkok")
+        self.assertEqual(bangkok_result, bangkok_expected)
+
     def test_edge_cases(self):
         """Test edge cases and boundary conditions"""
         # Exactly on hour boundary

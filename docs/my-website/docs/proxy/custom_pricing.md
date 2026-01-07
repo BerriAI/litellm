@@ -2,23 +2,28 @@ import Image from '@theme/IdealImage';
 
 # Custom LLM Pricing
 
-Use this to register custom pricing for models. 
+## Overview
 
-There's 2 ways to track cost: 
-- cost per token
-- cost per second
+LiteLLM provides flexible cost tracking and pricing customization for all LLM providers:
+
+- **Custom Pricing** - Override default model costs or set pricing for custom models
+- **Cost Per Token** - Track costs based on input/output tokens (most common)
+- **Cost Per Second** - Track costs based on runtime (e.g., Sagemaker)
+- **[Provider Discounts](./provider_discounts.md)** - Apply percentage-based discounts to specific providers
+- **[Provider Margins](./provider_margins.md)** - Add fees/margins to LLM costs for internal billing
+- **Base Model Mapping** - Ensure accurate cost tracking for Azure deployments
 
 By default, the response cost is accessible in the logging object via `kwargs["response_cost"]` on success (sync + async). [**Learn More**](../observability/custom_callback.md)
 
 :::info
 
-LiteLLM already has pricing for any model in our [model cost map](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json). 
+LiteLLM already has pricing for 100+ models in our [model cost map](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json). 
 
 :::
 
 ## Cost Per Second (e.g. Sagemaker)
 
-### Usage with LiteLLM Proxy Server
+#### Usage with LiteLLM Proxy Server
 
 **Step 1: Add pricing to config.yaml**
 ```yaml
@@ -47,7 +52,7 @@ litellm /path/to/config.yaml
 
 ## Cost Per Token (e.g. Azure)
 
-### Usage with LiteLLM Proxy Server
+#### Usage with LiteLLM Proxy Server
 
 ```yaml
 model_list:
@@ -82,6 +87,24 @@ model_list:
       cache_creation_input_token_cost: 0.0000075
       cache_read_input_token_cost: 0.0000006
 ```
+
+### Additional Cost Keys
+
+There are other keys you can use to specify costs for different scenarios and modalities:
+
+- `input_cost_per_token_above_200k_tokens` - Cost for input tokens when context exceeds 200k tokens
+- `output_cost_per_token_above_200k_tokens` - Cost for output tokens when context exceeds 200k tokens  
+- `cache_creation_input_token_cost_above_200k_tokens` - Cache creation cost for large contexts
+- `cache_read_input_token_cost_above_200k_token` - Cache read cost for large contexts
+- `input_cost_per_image` - Cost per image in multimodal requests
+- `output_cost_per_reasoning_token` - Cost for reasoning tokens (e.g., OpenAI o1 models)
+- `input_cost_per_audio_token` - Cost for audio input tokens
+- `output_cost_per_audio_token` - Cost for audio output tokens
+- `input_cost_per_video_per_second` - Cost per second of video input
+- `input_cost_per_video_per_second_above_128k_tokens` - Video cost for large contexts
+- `input_cost_per_character` - Character-based pricing for some providers
+
+These keys evolve based on how new models handle multimodality. The latest version can be found at [https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json).
 
 ## Set 'base_model' for Cost Tracking (e.g. Azure deployments)
 

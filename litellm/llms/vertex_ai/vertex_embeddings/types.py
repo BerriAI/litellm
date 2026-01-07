@@ -3,7 +3,9 @@ Types for Vertex Embeddings Requests
 """
 
 from enum import Enum
-from typing import List, Optional, TypedDict, Union
+from typing import List, Optional, Union
+
+from typing_extensions import TypedDict
 
 
 class TaskType(str, Enum):
@@ -19,6 +21,12 @@ class TaskType(str, Enum):
 
 class TextEmbeddingInput(TypedDict, total=False):
     content: str
+    task_type: Optional[TaskType]
+    title: Optional[str]
+
+
+class TextEmbeddingBGEInput(TypedDict, total=False):
+    prompt: str
     task_type: Optional[TaskType]
     title: Optional[str]
 
@@ -42,7 +50,7 @@ class EmbeddingParameters(TypedDict, total=False):
 
 
 class VertexEmbeddingRequest(TypedDict, total=False):
-    instances: Union[List[TextEmbeddingInput], List[TextEmbeddingFineTunedInput]]
+    instances: Union[List[TextEmbeddingInput], List[TextEmbeddingBGEInput], List[TextEmbeddingFineTunedInput]]
     parameters: Optional[Union[EmbeddingParameters, TextEmbeddingFineTunedParameters]]
 
 

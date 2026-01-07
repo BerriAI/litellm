@@ -1,8 +1,8 @@
 # Base image for building
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/python:latest-dev
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base
 
 # Runtime image
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/python:latest-dev
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base
 # Builder stage
 FROM $LITELLM_BUILD_IMAGE AS builder
 
@@ -12,11 +12,9 @@ WORKDIR /app
 USER root
 
 # Install build dependencies
-RUN apk add --no-cache gcc python3-dev openssl openssl-dev
+RUN apk add --no-cache bash gcc py3-pip python3 python3-dev openssl openssl-dev
 
-
-RUN pip install --upgrade pip && \
-    pip install build
+RUN python -m pip install build
 
 # Copy the current directory contents into the container at /app
 COPY . .
@@ -41,9 +39,6 @@ RUN pip uninstall jwt -y
 RUN pip uninstall PyJWT -y
 RUN pip install PyJWT==2.9.0 --no-cache-dir
 
-# Build Admin UI
-RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
-
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
@@ -51,7 +46,7 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 USER root
 
 # Install runtime dependencies
-RUN apk add --no-cache openssl tzdata
+RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip
 
 WORKDIR /app
 # Copy the current directory contents into the container at /app
@@ -65,8 +60,12 @@ COPY --from=builder /wheels/ /wheels/
 # Install the built wheel using pip; again using a wildcard if it's the only file
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
 
-# Install semantic_router without dependencies
-RUN pip install semantic_router --no-deps
+# Remove test files and keys from dependencies
+RUN find /usr/lib -type f -path "*/tornado/test/*" -delete && \
+    find /usr/lib -type d -path "*/tornado/test" -delete
+
+# Install semantic_router and aurelio-sdk using script
+RUN chmod +x docker/install_auto_router.sh && ./docker/install_auto_router.sh
 
 # Generate prisma client
 RUN prisma generate

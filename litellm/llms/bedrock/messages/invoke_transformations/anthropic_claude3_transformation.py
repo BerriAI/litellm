@@ -1,7 +1,18 @@
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import httpx
 
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
@@ -12,6 +23,9 @@ from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
+from litellm.llms.bedrock.common_utils import get_anthropic_beta_from_headers
+from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import GenericStreamingChunk
 from litellm.types.utils import GenericStreamingChunk as GChunk
@@ -25,12 +39,13 @@ else:
     LiteLLMLoggingObj = Any
 
 
-class AmazonAnthropicClaude3MessagesConfig(
+class AmazonAnthropicClaudeMessagesConfig(
     AnthropicMessagesConfig,
     AmazonInvokeConfig,
 ):
     """
     Call Claude model family in the /v1/messages API spec
+    Supports anthropic_beta parameter for beta features.
     """
 
     DEFAULT_BEDROCK_ANTHROPIC_API_VERSION = "bedrock-2023-05-31"
@@ -93,6 +108,27 @@ class AmazonAnthropicClaude3MessagesConfig(
             stream=stream,
         )
 
+    def _remove_ttl_from_cache_control(
+        self, anthropic_messages_request: Dict
+    ) -> None:
+        """
+        Remove `ttl` field from cache_control in messages.
+        Bedrock doesn't support the ttl field in cache_control.
+        
+        Args:
+            anthropic_messages_request: The request dictionary to modify in-place
+        """
+        if "messages" in anthropic_messages_request:
+            for message in anthropic_messages_request["messages"]:
+                if isinstance(message, dict) and "content" in message:
+                    content = message["content"]
+                    if isinstance(content, list):
+                        for item in content:
+                            if isinstance(item, dict) and "cache_control" in item:
+                                cache_control = item["cache_control"]
+                                if isinstance(cache_control, dict) and "ttl" in cache_control:
+                                    cache_control.pop("ttl", None)
+
     def transform_anthropic_messages_request(
         self,
         model: str,
@@ -109,7 +145,6 @@ class AmazonAnthropicClaude3MessagesConfig(
             litellm_params=litellm_params,
             headers=headers,
         )
-
         #########################################################
         ############## BEDROCK Invoke SPECIFIC TRANSFORMATION ###
         #########################################################
@@ -127,6 +162,45 @@ class AmazonAnthropicClaude3MessagesConfig(
         # 3. `model` is not allowed in request body for bedrock invoke
         if "model" in anthropic_messages_request:
             anthropic_messages_request.pop("model", None)
+
+        # 4. Remove `ttl` field from cache_control in messages (Bedrock doesn't support it)
+        self._remove_ttl_from_cache_control(anthropic_messages_request)
+            
+        # 5. AUTO-INJECT beta headers based on features used
+        anthropic_model_info = AnthropicModelInfo()
+        tools = anthropic_messages_optional_request_params.get("tools")
+        messages_typed = cast(List[AllMessageValues], messages)
+        tool_search_used = anthropic_model_info.is_tool_search_used(tools)
+        programmatic_tool_calling_used = anthropic_model_info.is_programmatic_tool_calling_used(
+            tools
+        )
+        input_examples_used = anthropic_model_info.is_input_examples_used(tools)
+
+        beta_set = set(get_anthropic_beta_from_headers(headers))
+        auto_betas = anthropic_model_info.get_anthropic_beta_list(
+            model=model,
+            optional_params=anthropic_messages_optional_request_params,
+            computer_tool_used=anthropic_model_info.is_computer_tool_used(tools),
+            prompt_caching_set=False,
+            file_id_used=anthropic_model_info.is_file_id_used(messages_typed),
+            mcp_server_used=anthropic_model_info.is_mcp_server_used(
+                anthropic_messages_optional_request_params.get("mcp_servers")
+            ),
+        )
+        beta_set.update(auto_betas)
+
+        if (
+            tool_search_used
+            and not (programmatic_tool_calling_used or input_examples_used)
+        ):
+            beta_set.discard(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
+            if "opus-4" in model.lower() or "opus_4" in model.lower():
+                beta_set.add("tool-search-tool-2025-10-19")
+
+        if beta_set:
+            anthropic_messages_request["anthropic_beta"] = list(beta_set)
+        
+            
         return anthropic_messages_request
 
     def get_async_streaming_response_iterator(

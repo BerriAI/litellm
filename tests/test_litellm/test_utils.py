@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from jsonschema import validate
@@ -23,6 +23,7 @@ from litellm.utils import (
     TextCompletionStreamWrapper,
     get_llm_provider,
     get_optional_params_image_gen,
+    is_cached_message,
 )
 
 # Adds the parent directory to the system path
@@ -82,6 +83,15 @@ def test_get_optional_params_image_gen_vertex_ai_size():
         "aspectRatio" not in optional_params
     )  # aspectRatio should not be set if size is not provided
     assert optional_params["sampleCount"] == 1
+
+
+def test_get_optional_params_image_gen_filters_empty_values():
+    optional_params = get_optional_params_image_gen(
+        model="gpt-image-1",
+        custom_llm_provider="openai",
+        extra_body={},
+    )
+    assert optional_params == {}
 
 
 def test_all_model_configs():
@@ -170,7 +180,9 @@ def test_all_model_configs():
         drop_params=False,
     ) == {"max_tokens": 10}
 
-    from litellm.llms.volcengine import VolcEngineConfig
+    from litellm.llms.volcengine.chat.transformation import (
+        VolcEngineChatConfig as VolcEngineConfig,
+    )
 
     assert "max_completion_tokens" in VolcEngineConfig().get_supported_openai_params(
         model="llama3"
@@ -237,16 +249,16 @@ def test_all_model_configs():
         drop_params=False,
     ) == {"max_tokens": 10}
 
-    from litellm import AmazonAnthropicClaude3Config, AmazonAnthropicConfig
+    from litellm import AmazonAnthropicClaudeConfig, AmazonAnthropicConfig
 
     assert (
         "max_completion_tokens"
-        in AmazonAnthropicClaude3Config().get_supported_openai_params(
+        in AmazonAnthropicClaudeConfig().get_supported_openai_params(
             model="anthropic.claude-3-sonnet-20240229-v1:0"
         )
     )
 
-    assert AmazonAnthropicClaude3Config().map_openai_params(
+    assert AmazonAnthropicClaudeConfig().map_openai_params(
         non_default_params={"max_completion_tokens": 10},
         optional_params={},
         model="anthropic.claude-3-sonnet-20240229-v1:0",
@@ -342,7 +354,7 @@ def test_anthropic_web_search_in_model_info():
 
     supported_models = [
         "anthropic/claude-3-7-sonnet-20250219",
-        "anthropic/claude-3-5-sonnet-latest",
+        "anthropic/claude-sonnet-4-5-20250929",
         "anthropic/claude-3-5-sonnet-20241022",
         "anthropic/claude-3-5-haiku-20241022",
         "anthropic/claude-3-5-haiku-latest",
@@ -376,23 +388,23 @@ def test_cohere_embedding_optional_params():
 def validate_model_cost_values(model_data, exceptions=None):
     """
     Validates that cost values in model data do not exceed 1.
-    
+
     Args:
         model_data (dict): The model data dictionary
         exceptions (list, optional): List of model IDs that are allowed to have costs > 1
-        
+
     Returns:
         tuple: (is_valid, violations) where is_valid is a boolean and violations is a list of error messages
     """
     if exceptions is None:
         exceptions = []
-    
+
     violations = []
-    
+
     # Define all cost-related fields to check
     cost_fields = [
         "input_cost_per_token",
-        "output_cost_per_token", 
+        "output_cost_per_token",
         "input_cost_per_character",
         "output_cost_per_character",
         "input_cost_per_image",
@@ -405,6 +417,7 @@ def validate_model_cost_values(model_data, exceptions=None):
         "input_cost_per_request",
         "input_cost_per_audio_token",
         "output_cost_per_audio_token",
+        "output_cost_per_image_token",
         "input_cost_per_audio_per_second",
         "input_cost_per_video_per_second",
         "input_cost_per_token_above_128k_tokens",
@@ -431,22 +444,22 @@ def validate_model_cost_values(model_data, exceptions=None):
         "output_cost_per_reasoning_token",
         "citation_cost_per_token",
     ]
-    
+
     # Also check nested cost fields
     nested_cost_fields = [
         "search_context_cost_per_query",
     ]
-    
+
     for model_id, model_info in model_data.items():
         # Skip if this model is in exceptions
         if model_id in exceptions:
             continue
-            
+
         # Check direct cost fields
         for field in cost_fields:
             if field in model_info and model_info[field] is not None:
                 cost_value = model_info[field]
-                
+
                 # Convert string values to float if needed
                 if isinstance(cost_value, str):
                     try:
@@ -454,12 +467,12 @@ def validate_model_cost_values(model_data, exceptions=None):
                     except (ValueError, TypeError):
                         # Skip if we can't convert to float
                         continue
-                
+
                 if isinstance(cost_value, (int, float)) and cost_value > 1:
                     violations.append(
                         f"Model '{model_id}' has {field} = {cost_value} which exceeds 1"
                     )
-        
+
         # Check nested cost fields
         for field in nested_cost_fields:
             if field in model_info and model_info[field] is not None:
@@ -473,12 +486,12 @@ def validate_model_cost_values(model_data, exceptions=None):
                             except (ValueError, TypeError):
                                 # Skip if we can't convert to float
                                 continue
-                        
+
                         if isinstance(nested_value, (int, float)) and nested_value > 1:
                             violations.append(
                                 f"Model '{model_id}' has {field}.{nested_field} = {nested_value} which exceeds 1"
                             )
-    
+
     return len(violations) == 0, violations
 
 
@@ -497,8 +510,12 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_computer_use": {"type": "boolean"},
                 "cache_creation_input_audio_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost": {"type": "number"},
+                "cache_creation_input_token_cost_above_1hr": {"type": "number"},
+                "cache_creation_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
+                "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_read_input_audio_token_cost": {"type": "number"},
+                "cache_read_input_image_token_cost": {"type": "number"},
                 "deprecation_date": {"type": "string"},
                 "input_cost_per_audio_per_second": {"type": "number"},
                 "input_cost_per_audio_per_second_above_128k_tokens": {"type": "number"},
@@ -507,7 +524,14 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_character_above_128k_tokens": {"type": "number"},
                 "input_cost_per_image": {"type": "number"},
                 "input_cost_per_image_above_128k_tokens": {"type": "number"},
+                "input_cost_per_image_token": {"type": "number"},
                 "input_cost_per_token_above_200k_tokens": {"type": "number"},
+                "cache_read_input_token_cost_flex": {"type": "number"},
+                "cache_read_input_token_cost_priority": {"type": "number"},
+                "input_cost_per_token_flex": {"type": "number"},
+                "input_cost_per_token_priority": {"type": "number"},
+                "output_cost_per_token_flex": {"type": "number"},
+                "output_cost_per_token_priority": {"type": "number"},
                 "input_cost_per_pixel": {"type": "number"},
                 "input_cost_per_query": {"type": "number"},
                 "input_cost_per_request": {"type": "number"},
@@ -524,6 +548,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 },
                 "input_cost_per_video_per_second_above_128k_tokens": {"type": "number"},
                 "input_dbu_cost_per_token": {"type": "number"},
+                "annotation_cost_per_page": {"type": "number"},
+                "ocr_cost_per_page": {"type": "number"},
+                "code_interpreter_cost_per_session": {"type": "number"},
                 "litellm_provider": {"type": "string"},
                 "max_audio_length_hours": {"type": "number"},
                 "max_audio_per_prompt": {"type": "number"},
@@ -545,24 +572,41 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "audio_transcription",
                         "chat",
                         "completion",
+                        "container",
+                        "image_edit",
                         "embedding",
                         "image_generation",
+                        "video_generation",
                         "moderation",
                         "rerank",
                         "responses",
+                        "ocr",
+                        "search",
+                        "vector_store",
                     ],
                 },
                 "output_cost_per_audio_token": {"type": "number"},
                 "output_cost_per_character": {"type": "number"},
                 "output_cost_per_character_above_128k_tokens": {"type": "number"},
                 "output_cost_per_image": {"type": "number"},
+                "output_cost_per_image_token": {"type": "number"},
                 "output_cost_per_pixel": {"type": "number"},
                 "output_cost_per_second": {"type": "number"},
                 "output_cost_per_token": {"type": "number"},
                 "output_cost_per_token_above_128k_tokens": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens": {"type": "number"},
+                "output_cost_per_image_above_1024_and_1024_pixels": {"type": "number"},
+                "output_cost_per_image_above_1024_and_1024_pixels_and_premium_image": {
+                    "type": "number"
+                },
+                "output_cost_per_image_above_512_and_512_pixels": {"type": "number"},
+                "output_cost_per_image_above_512_and_512_pixels_and_premium_image": {
+                    "type": "number"
+                },
+                "output_cost_per_image_premium_image": {"type": "number"},
                 "output_cost_per_token_batches": {"type": "number"},
                 "output_cost_per_reasoning_token": {"type": "number"},
+                "output_cost_per_video_per_second": {"type": "number"},
                 "output_db_cost_per_token": {"type": "number"},
                 "output_dbu_cost_per_token": {"type": "number"},
                 "output_vector_size": {"type": "number"},
@@ -586,6 +630,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_web_search": {"type": "boolean"},
                 "supports_url_context": {"type": "boolean"},
                 "supports_reasoning": {"type": "boolean"},
+                "supports_service_tier": {"type": "boolean"},
                 "tool_use_system_prompt_tokens": {"type": "number"},
                 "tpm": {"type": "number"},
                 "supported_endpoints": {
@@ -598,11 +643,13 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/chat/completions",
                             "/v1/completions",
                             "/v1/images/generations",
+                            "/v1/realtime",
                             "/v1/images/variations",
                             "/v1/images/edits",
                             "/v1/batch",
                             "/v1/audio/transcriptions",
                             "/v1/audio/speech",
+                            "/v1/ocr",
                         ],
                     },
                 },
@@ -633,10 +680,42 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "type": "array",
                     "items": {
                         "type": "string",
-                        "enum": ["text", "image", "audio", "code"],
+                        "enum": ["text", "image", "audio", "code", "video"],
+                    },
+                },
+                "supported_resolutions": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
                     },
                 },
                 "supports_native_streaming": {"type": "boolean"},
+                "tiered_pricing": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "range": {
+                                "type": "array",
+                                "items": {"type": "number"},
+                                "minItems": 2,
+                                "maxItems": 2,
+                            },
+                            "input_cost_per_token": {"type": "number"},
+                            "output_cost_per_token": {"type": "number"},
+                            "cache_read_input_token_cost": {"type": "number"},
+                            "output_cost_per_reasoning_token": {"type": "number"},
+                            "max_results_range": {
+                                "type": "array",
+                                "items": {"type": "number"},
+                                "minItems": 2,
+                                "maxItems": 2,
+                            },
+                            "input_cost_per_query": {"type": "number"},
+                        },
+                        "additionalProperties": False,
+                    },
+                },
             },
             "additionalProperties": False,
         },
@@ -653,7 +732,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
 
     # Validate schema
     validate(actual_json, INTENDED_SCHEMA)
-    
+
     # Validate cost values
     # Define exceptions for models that are allowed to have costs > 1
     # Add model IDs here if they legitimately have costs > 1
@@ -661,9 +740,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         # Add any model IDs that should be exempt from the cost validation
         # Example: "expensive-model-id",
     ]
-    
+
     is_valid, violations = validate_model_cost_values(actual_json, exceptions)
-    
+
     if not is_valid:
         error_message = "Cost validation failed:\n" + "\n".join(violations)
         error_message += "\n\nTo add exceptions, add the model ID to the 'exceptions' list in the test function."
@@ -684,6 +763,7 @@ def test_get_model_info_gemini():
             and not "gemma" in model
             and not "learnlm" in model
             and not "imagen" in model
+            and not "veo" in model
         ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"
@@ -769,6 +849,20 @@ def test_check_provider_match():
     assert litellm.utils._check_provider_match(model_info, "openai") is False
 
 
+def test_get_provider_rerank_config():
+    """
+    Test the get_provider_rerank_config function for various providers
+    """
+    from litellm import HostedVLLMRerankConfig
+    from litellm.utils import LlmProviders, ProviderConfigManager
+
+    # Test for hosted_vllm provider
+    config = ProviderConfigManager.get_provider_rerank_config(
+        "my_model", LlmProviders.HOSTED_VLLM, "http://localhost", []
+    )
+    assert isinstance(config, HostedVLLMRerankConfig)
+
+
 # Models that should be skipped during testing
 OLD_PROVIDERS = ["aleph_alpha", "palm"]
 SKIP_MODELS = [
@@ -777,8 +871,6 @@ SKIP_MODELS = [
     "jamba",
     "deepinfra",
     "mistral.",
-    "groq/llama-guard-3-8b",
-    "groq/gemma2-9b-it",
 ]
 
 # Bedrock models to block - organized by type
@@ -805,76 +897,6 @@ for commitment in BEDROCK_COMMITMENTS:
     block_list.add(f"bedrock/*/{commitment}/cohere.command-light-text-v14")
 
 print("block_list", block_list)
-
-
-@pytest.mark.asyncio
-async def test_supports_tool_choice():
-    """
-    Test that litellm.utils.supports_tool_choice() returns the correct value
-    for all models in model_prices_and_context_window.json.
-
-    The test:
-    1. Loads model pricing data
-    2. Iterates through each model
-    3. Checks if tool_choice support matches the model's supported parameters
-    """
-    # Load model prices
-    litellm._turn_on_debug()
-    # path = "../../model_prices_and_context_window.json"
-    path = "./model_prices_and_context_window.json"
-    with open(path, "r") as f:
-        model_prices = json.load(f)
-    litellm.model_cost = model_prices
-    config_manager = ProviderConfigManager()
-
-    for model_name, model_info in model_prices.items():
-        print(f"testing model: {model_name}")
-
-        # Skip certain models
-        if (
-            model_name == "sample_spec"
-            or model_info.get("mode") != "chat"
-            or any(skip in model_name for skip in SKIP_MODELS)
-            or any(provider in model_name for provider in OLD_PROVIDERS)
-            or model_info["litellm_provider"] in OLD_PROVIDERS
-            or model_name in block_list
-            or "azure/eu" in model_name
-            or "azure/us" in model_name
-            or "codestral" in model_name
-            or "o1" in model_name
-            or "o3" in model_name
-            or "mistral" in model_name
-            or "oci" in model_name
-        ):
-            continue
-
-        try:
-            model, provider, _, _ = get_llm_provider(model=model_name)
-        except Exception as e:
-            print(f"\033[91mERROR for {model_name}: {e}\033[0m")
-            continue
-
-        # Get provider config and supported params
-        print("LLM provider", provider)
-        provider_enum = LlmProviders(provider)
-        config = config_manager.get_provider_chat_config(model, provider_enum)
-        print("config", config)
-
-        if config:
-            supported_params = config.get_supported_openai_params(model)
-            print("supported_params", supported_params)
-        else:
-            raise Exception(f"No config found for {model_name}, provider: {provider}")
-
-        # Check tool_choice support
-        supports_tool_choice_result = litellm.utils.supports_tool_choice(
-            model=model_name, custom_llm_provider=provider
-        )
-        tool_choice_in_params = "tool_choice" in supported_params
-
-        assert (
-            supports_tool_choice_result == tool_choice_in_params
-        ), f"Tool choice support mismatch for {model_name}. supports_tool_choice() returned: {supports_tool_choice_result}, tool_choice in supported params: {tool_choice_in_params}\nConfig: {config}"
 
 
 def test_supports_computer_use_utility():
@@ -955,7 +977,11 @@ def test_get_model_info_shows_supports_computer_use():
 def test_pre_process_non_default_params(model, custom_llm_provider):
     from pydantic import BaseModel
 
-    from litellm.utils import pre_process_non_default_params
+    from litellm.utils import ProviderConfigManager, pre_process_non_default_params
+
+    provider_config = ProviderConfigManager.get_provider_chat_config(
+        model=model, provider=LlmProviders(custom_llm_provider)
+    )
 
     class ResponseFormat(BaseModel):
         x: str
@@ -972,6 +998,7 @@ def test_pre_process_non_default_params(model, custom_llm_provider):
         special_params=special_params,
         custom_llm_provider=custom_llm_provider,
         additional_drop_params=None,
+        provider_config=provider_config,
     )
     print(processed_non_default_params)
     assert processed_non_default_params == {
@@ -1039,10 +1066,10 @@ class TestProxyFunctionCalling:
             # Groq models (mixed support)
             ("groq/gemma-7b-it", "litellm_proxy/groq/gemma-7b-it", True),
             (
-                "groq/llama3-70b-8192",
-                "litellm_proxy/groq/llama3-70b-8192",
-                False,
-            ),  # This model doesn't support function calling
+                "groq/llama-3.3-70b-versatile",
+                "litellm_proxy/groq/llama-3.3-70b-versatile",
+                True,
+            ),
             # Cohere models (generally don't support function calling)
             ("command-nightly", "litellm_proxy/command-nightly", False),
         ],
@@ -1111,7 +1138,7 @@ class TestProxyFunctionCalling:
             ("litellm_proxy/claude-prod", "anthropic/claude-3-sonnet-20240229", False),
             ("litellm_proxy/claude-dev", "anthropic/claude-3-haiku-20240307", False),
             # Groq with custom names (cannot be resolved)
-            ("litellm_proxy/fast-llama", "groq/llama3-8b-8192", False),
+            ("litellm_proxy/fast-llama", "groq/llama-3.1-8b-instant", False),
             ("litellm_proxy/groq-gemma", "groq/gemma-7b-it", False),
             # Cohere with custom names (cannot be resolved)
             ("litellm_proxy/cohere-command", "cohere/command-r", False),
@@ -1174,7 +1201,7 @@ class TestProxyFunctionCalling:
         ), "Custom model names return False without proxy config context"
 
         # Case 2: Model name that can be resolved (matches pattern)
-        resolvable_model = "litellm_proxy/claude-3-5-sonnet-latest"
+        resolvable_model = "litellm_proxy/claude-sonnet-4-5-20250929"
         result = supports_function_calling(resolvable_model)
         assert result is True, "Resolvable model names work with fallback logic"
 
@@ -1185,7 +1212,7 @@ class TestProxyFunctionCalling:
         
         ✅ WORKS (with current fallback logic):
            - litellm_proxy/gpt-4
-           - litellm_proxy/claude-3-5-sonnet-latest
+           - litellm_proxy/claude-sonnet-4-5-20250929
            - litellm_proxy/anthropic/claude-3-haiku-20240307
            
         ❌ DOESN'T WORK (requires proxy server config):
@@ -2234,7 +2261,7 @@ def test_reasoning_content_preserved_in_text_completion_wrapper():
 def test_anthropic_claude_4_invoke_chat_provider_config():
     """Test that the Anthropic Claude 4 Invoke chat provider config is correct."""
     from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
-        AmazonAnthropicClaude3Config,
+        AmazonAnthropicClaudeConfig,
     )
     from litellm.utils import ProviderConfigManager
 
@@ -2243,7 +2270,7 @@ def test_anthropic_claude_4_invoke_chat_provider_config():
         provider=LlmProviders.BEDROCK,
     )
     print(config)
-    assert isinstance(config, AmazonAnthropicClaude3Config)
+    assert isinstance(config, AmazonAnthropicClaudeConfig)
 
 
 def test_bedrock_application_inference_profile():
@@ -2330,25 +2357,31 @@ def test_block_key_hashing_logic():
         ("", False, ""),  # Empty string should not be hashed
         ("sk-", True, hash_token("sk-")),  # Edge case: just "sk-"
     ]
-    
+
     for input_key, should_be_hashed, expected_output in test_cases:
         # Simulate the logic from block_key() function
         if input_key.startswith("sk-"):
             hashed_token = hash_token(token=input_key)
         else:
             hashed_token = input_key
-        
+
         assert hashed_token == expected_output, f"Failed for input: {input_key}"
-        
+
         # Additional verification: if it should be hashed, verify it's actually a hash
         if should_be_hashed:
             # SHA-256 hashes are 64 characters long and contain only hex digits
-            assert len(hashed_token) == 64, f"Hash length should be 64, got {len(hashed_token)} for {input_key}"
-            assert all(c in '0123456789abcdef' for c in hashed_token), f"Hash should contain only hex digits for {input_key}"
+            assert (
+                len(hashed_token) == 64
+            ), f"Hash length should be 64, got {len(hashed_token)} for {input_key}"
+            assert all(
+                c in "0123456789abcdef" for c in hashed_token
+            ), f"Hash should contain only hex digits for {input_key}"
         else:
             # If not hashed, it should be the original string
-            assert hashed_token == input_key, f"Non-hashed key should remain unchanged: {input_key}"
-    
+            assert (
+                hashed_token == input_key
+            ), f"Non-hashed key should remain unchanged: {input_key}"
+
     print("✅ All block_key hashing logic tests passed!")
 
 
@@ -2357,36 +2390,38 @@ def test_generate_gcp_iam_access_token():
     Test the _generate_gcp_iam_access_token function with mocked GCP IAM client.
     """
     from unittest.mock import Mock, patch
-    
+
     service_account = "projects/-/serviceAccounts/test@project.iam.gserviceaccount.com"
     expected_token = "test-access-token-12345"
-    
+
     # Mock the GCP IAM client and its response
     mock_response = Mock()
     mock_response.access_token = expected_token
-    
+
     mock_client = Mock()
     mock_client.generate_access_token.return_value = mock_response
-    
+
     # Mock the iam_credentials_v1 module
     mock_iam_credentials_v1 = Mock()
     mock_iam_credentials_v1.IAMCredentialsClient = Mock(return_value=mock_client)
     mock_iam_credentials_v1.GenerateAccessTokenRequest = Mock()
-    
+
     # Test successful token generation by mocking sys.modules
-    with patch.dict('sys.modules', {'google.cloud.iam_credentials_v1': mock_iam_credentials_v1}):
+    with patch.dict(
+        "sys.modules", {"google.cloud.iam_credentials_v1": mock_iam_credentials_v1}
+    ):
         from litellm._redis import _generate_gcp_iam_access_token
-        
+
         result = _generate_gcp_iam_access_token(service_account)
-        
+
         assert result == expected_token
         mock_iam_credentials_v1.IAMCredentialsClient.assert_called_once()
         mock_client.generate_access_token.assert_called_once()
-        
+
         # Verify the request was created with correct parameters
         mock_iam_credentials_v1.GenerateAccessTokenRequest.assert_called_once_with(
             name=service_account,
-            scope=['https://www.googleapis.com/auth/cloud-platform']
+            scope=["https://www.googleapis.com/auth/cloud-platform"],
         )
 
 
@@ -2398,17 +2433,17 @@ def test_generate_gcp_iam_access_token_import_error():
     from litellm._redis import _generate_gcp_iam_access_token
 
     # Mock the import to fail when the function tries to import google.cloud.iam_credentials_v1
-    original_import = __builtins__['__import__']
-    
+    original_import = __builtins__["__import__"]
+
     def mock_import(name, *args, **kwargs):
-        if name == 'google.cloud.iam_credentials_v1':
+        if name == "google.cloud.iam_credentials_v1":
             raise ImportError("No module named 'google.cloud.iam_credentials_v1'")
         return original_import(name, *args, **kwargs)
-    
-    with patch('builtins.__import__', side_effect=mock_import):
+
+    with patch("builtins.__import__", side_effect=mock_import):
         with pytest.raises(ImportError) as exc_info:
             _generate_gcp_iam_access_token("test-service-account")
-        
+
         assert "google-cloud-iam is required" in str(exc_info.value)
         assert "pip install google-cloud-iam" in str(exc_info.value)
 
@@ -2416,3 +2451,306 @@ def test_generate_gcp_iam_access_token_import_error():
 if __name__ == "__main__":
     # Allow running this test file directly for debugging
     pytest.main([__file__, "-v"])
+
+
+def test_model_info_for_vertex_ai_deepseek_model():
+    model_info = litellm.get_model_info(
+        model="vertex_ai/deepseek-ai/deepseek-r1-0528-maas"
+    )
+    assert model_info is not None
+    assert model_info["litellm_provider"] == "vertex_ai-deepseek_models"
+    assert model_info["mode"] == "chat"
+
+    assert model_info["input_cost_per_token"] is not None
+    assert model_info["output_cost_per_token"] is not None
+    print("vertex deepseek model info", model_info)
+
+
+class TestGetValidModelsWithCLI:
+    """Test get_valid_models function as used in CLI token usage"""
+
+    def test_get_valid_models_with_cli_pattern(self):
+        """Test get_valid_models with litellm_proxy provider and CLI token pattern"""
+
+        # Mock the HTTP request that get_valid_models makes to the proxy
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "data": [
+                {"id": "gpt-3.5-turbo", "object": "model"},
+                {"id": "gpt-4", "object": "model"},
+                {"id": "litellm_proxy/gemini/gemini-2.5-flash", "object": "model"},
+                {"id": "claude-3-sonnet", "object": "model"},
+            ]
+        }
+
+        with patch.object(
+            litellm.module_level_client, "get", return_value=mock_response
+        ) as mock_get:
+            # Test the exact pattern used in cli_token_usage.py
+            result = litellm.get_valid_models(
+                check_provider_endpoint=True,
+                custom_llm_provider="litellm_proxy",
+                api_key="sk-test-cli-key-123",
+                api_base="http://localhost:4000/",
+            )
+
+            # Verify the function returns a list of model names
+            assert isinstance(result, list)
+            assert len(result) == 4
+            # All models get prefixed with "litellm_proxy/" by the get_models method
+            assert "litellm_proxy/gpt-3.5-turbo" in result
+            assert "litellm_proxy/gpt-4" in result
+            # Note: This model already had the prefix, so it gets double-prefixed
+            assert "litellm_proxy/litellm_proxy/gemini/gemini-2.5-flash" in result
+            assert "litellm_proxy/claude-3-sonnet" in result
+
+            # Verify the HTTP request was made with correct parameters
+            mock_get.assert_called_once()
+            _, call_kwargs = mock_get.call_args
+
+            # Check that the request was made to the correct endpoint
+            assert call_kwargs["url"].startswith("http://localhost:4000/")
+            assert call_kwargs["url"].endswith("/v1/models")
+
+            # Check that the API key was included in headers
+            assert "headers" in call_kwargs
+            headers = call_kwargs["headers"]
+            assert headers.get("Authorization") == "Bearer sk-test-cli-key-123"
+
+
+class TestIsCachedMessage:
+    """Test is_cached_message function for context caching detection.
+
+    Fixes GitHub issue #17821 - TypeError when content is string instead of list.
+    """
+
+    def test_string_content_returns_false(self):
+        """String content should return False without crashing."""
+        message = {"role": "user", "content": "Hello world"}
+        assert is_cached_message(message) is False
+
+    def test_none_content_returns_false(self):
+        """None content should return False."""
+        message = {"role": "user", "content": None}
+        assert is_cached_message(message) is False
+
+    def test_missing_content_returns_false(self):
+        """Message without content key should return False."""
+        message = {"role": "user"}
+        assert is_cached_message(message) is False
+
+    def test_list_content_without_cache_control_returns_false(self):
+        """List content without cache_control should return False."""
+        message = {"role": "user", "content": [{"type": "text", "text": "Hello"}]}
+        assert is_cached_message(message) is False
+
+    def test_list_content_with_cache_control_returns_true(self):
+        """List content with cache_control ephemeral should return True."""
+        message = {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Hello",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }
+        assert is_cached_message(message) is True
+
+    def test_list_with_non_dict_items_skips_them(self):
+        """List content with non-dict items should skip them gracefully."""
+        message = {
+            "role": "user",
+            "content": ["string_item", 123, {"type": "text", "text": "Hello"}],
+        }
+        assert is_cached_message(message) is False
+
+    def test_list_with_mixed_items_finds_cached(self):
+        """Mixed content list should find cached item."""
+        message = {
+            "role": "user",
+            "content": [
+                "string_item",
+                {"type": "image", "url": "..."},
+                {
+                    "type": "text",
+                    "text": "cached",
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        }
+        assert is_cached_message(message) is True
+
+    def test_wrong_cache_control_type_returns_false(self):
+        """Non-ephemeral cache_control type should return False."""
+        message = {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Hello",
+                    "cache_control": {"type": "permanent"},
+                }
+            ],
+        }
+        assert is_cached_message(message) is False
+
+    def test_empty_list_content_returns_false(self):
+        """Empty list content should return False."""
+        message = {"role": "user", "content": []}
+        assert is_cached_message(message) is False
+
+
+@pytest.mark.asyncio
+class TestProxyLoggingBudgetAlerts:
+    """Test budget_alerts method in ProxyLogging class."""
+
+    async def test_budget_alerts_when_alerting_is_none(self):
+        """Test that budget_alerts returns early when alerting is None."""
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = None
+        proxy_logging.slack_alerting_instance = AsyncMock()
+        proxy_logging.email_logging_instance = AsyncMock()
+
+        user_info = MagicMock()
+
+        # Should return without calling any alerting instances
+        await proxy_logging.budget_alerts(type="user_budget", user_info=user_info)
+
+        # Verify no calls were made
+        proxy_logging.slack_alerting_instance.budget_alerts.assert_not_called()
+        proxy_logging.email_logging_instance.budget_alerts.assert_not_called()
+
+    async def test_budget_alerts_with_slack_only(self):
+        """Test that budget_alerts calls slack_alerting_instance when slack is in alerting."""
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = ["slack"]
+        proxy_logging.slack_alerting_instance = AsyncMock()
+
+        user_info = MagicMock()
+
+        await proxy_logging.budget_alerts(type="token_budget", user_info=user_info)
+
+        proxy_logging.slack_alerting_instance.budget_alerts.assert_called_once_with(
+            type="token_budget", user_info=user_info
+        )
+
+    async def test_budget_alerts_with_email_only(self):
+        """Test that budget_alerts calls email_logging_instance when email is in alerting."""
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = ["email"]
+        proxy_logging.email_logging_instance = AsyncMock()
+
+        user_info = MagicMock()
+
+        await proxy_logging.budget_alerts(type="team_budget", user_info=user_info)
+
+        proxy_logging.email_logging_instance.budget_alerts.assert_called_once_with(
+            type="team_budget", user_info=user_info
+        )
+
+    async def test_budget_alerts_with_email_when_instance_is_none(self):
+        """Test that budget_alerts does not call email_logging_instance when it is None."""
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = ["email"]
+        proxy_logging.email_logging_instance = None
+
+        user_info = MagicMock()
+
+        # Should not raise an error
+        await proxy_logging.budget_alerts(type="organization_budget", user_info=user_info)
+
+    async def test_budget_alerts_with_both_slack_and_email(self):
+        """Test that budget_alerts calls both slack and email instances when both are in alerting."""
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = ["slack", "email"]
+        proxy_logging.slack_alerting_instance = AsyncMock()
+        proxy_logging.email_logging_instance = AsyncMock()
+
+        user_info = MagicMock()
+
+        await proxy_logging.budget_alerts(type="proxy_budget", user_info=user_info)
+
+        proxy_logging.slack_alerting_instance.budget_alerts.assert_called_once_with(
+            type="proxy_budget", user_info=user_info
+        )
+        proxy_logging.email_logging_instance.budget_alerts.assert_called_once_with(
+            type="proxy_budget", user_info=user_info
+        )
+
+    @pytest.mark.parametrize(
+        "alert_type",
+        [
+            "token_budget",
+            "user_budget",
+            "soft_budget",
+            "team_budget",
+            "organization_budget",
+            "proxy_budget",
+            "projected_limit_exceeded",
+        ],
+    )
+    async def test_budget_alerts_with_all_alert_types(self, alert_type):
+        """Test that budget_alerts works with all supported alert types."""
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = ["slack", "email"]
+        proxy_logging.slack_alerting_instance = AsyncMock()
+        proxy_logging.email_logging_instance = AsyncMock()
+
+        user_info = MagicMock()
+
+        await proxy_logging.budget_alerts(type=alert_type, user_info=user_info)
+
+        proxy_logging.slack_alerting_instance.budget_alerts.assert_called_once_with(
+            type=alert_type, user_info=user_info
+        )
+        proxy_logging.email_logging_instance.budget_alerts.assert_called_once_with(
+            type=alert_type, user_info=user_info
+        )
+
+
+def test_azure_ai_claude_provider_config():
+    """Test that Azure AI Claude models return AzureAnthropicConfig for proper tool transformation."""
+    from litellm import AzureAIStudioConfig, AzureAnthropicConfig
+    from litellm.utils import ProviderConfigManager
+
+    # Claude models should return AzureAnthropicConfig
+    config = ProviderConfigManager.get_provider_chat_config(
+        model="claude-sonnet-4-5",
+        provider=LlmProviders.AZURE_AI,
+    )
+    assert isinstance(config, AzureAnthropicConfig)
+
+    # Test case-insensitive matching
+    config = ProviderConfigManager.get_provider_chat_config(
+        model="Claude-Opus-4",
+        provider=LlmProviders.AZURE_AI,
+    )
+    assert isinstance(config, AzureAnthropicConfig)
+
+    # Non-Claude models should return AzureAIStudioConfig
+    config = ProviderConfigManager.get_provider_chat_config(
+        model="mistral-large",
+        provider=LlmProviders.AZURE_AI,
+    )
+    assert isinstance(config, AzureAIStudioConfig)

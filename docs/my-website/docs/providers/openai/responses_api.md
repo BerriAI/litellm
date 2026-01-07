@@ -37,6 +37,29 @@ for event in response:
     print(event)
 ```
 
+#### Image Generation with Streaming
+```python showLineNumbers title="OpenAI Streaming Image Generation"
+import litellm
+import base64
+
+# Streaming image generation with partial images
+stream = litellm.responses(
+    model="gpt-4.1",  # Use an actual image generation model
+    input="Generate a gorgeous image of a river made of white owl feathers",
+    stream=True,
+    tools=[{"type": "image_generation", "partial_images": 2}],
+
+)
+
+for event in stream:
+    if event.type == "response.image_generation_call.partial_image":
+        idx = event.partial_image_index
+        image_base64 = event.partial_image_b64
+        image_bytes = base64.b64decode(image_base64)
+        with open(f"river{idx}.png", "wb") as f:
+            f.write(image_bytes)
+```
+
 #### GET a Response
 ```python showLineNumbers title="Get Response by ID"
 import litellm
@@ -148,6 +171,33 @@ response = client.responses.create(
 
 for event in response:
     print(event)
+```
+
+#### Image Generation with Streaming
+```python showLineNumbers title="OpenAI Proxy Streaming Image Generation"
+from openai import OpenAI
+import base64
+
+# Initialize client with your proxy URL
+client = OpenAI(api_key="sk-1234", base_url="http://localhost:4000")
+
+stream = client.responses.create(
+    model="gpt-4.1",
+    input="Draw a gorgeous image of a river made of white owl feathers, snaking its way through a serene winter landscape",
+    stream=True,
+    tools=[{"type": "image_generation", "partial_images": 2}],
+)
+
+
+for event in stream:
+    print(f"event: {event}")
+    if event.type == "response.image_generation_call.partial_image":
+        idx = event.partial_image_index
+        image_base64 = event.partial_image_b64
+        image_bytes = base64.b64decode(image_base64)
+        with open(f"river{idx}.png", "wb") as f:
+            f.write(image_bytes)
+
 ```
 
 #### GET a Response
@@ -573,6 +623,58 @@ display(styled_df)
 </TabItem>
 </Tabs>
 
+## Function Calling
+
+```python showLineNumbers title="Function Calling with Parallel Tool Calls"
+import litellm
+import json
+
+tools = [
+    {
+        "type": "function",
+        "name": "get_weather",
+        "description": "Get current weather for a location",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "location": {"type": "string"}
+            },
+            "required": ["location"]
+        }
+    }
+]
+
+# Step 1: Request with tools (parallel_tool_calls=True allows multiple calls)
+response = litellm.responses(
+    model="openai/gpt-4o",
+    input=[{"role": "user", "content": "What's the weather in Paris and Tokyo?"}],
+    tools=tools,
+    parallel_tool_calls=True, # Defaults = True
+)
+
+# Step 2: Execute tool calls and collect results
+tool_results = []
+for output in response.output:
+    if output.type == "function_call":
+        result = {"temperature": 15, "condition": "sunny"}  # Your function logic here
+        tool_results.append({
+            "type": "function_call_output",
+            "call_id": output.call_id,
+            "output": json.dumps(result)
+        })
+
+# Step 3: Send results back
+final_response = litellm.responses(
+    model="openai/gpt-4o",
+    input=tool_results,
+    tools=tools,
+)
+
+print(final_response.output)
+```
+
+Set `parallel_tool_calls=False` to ensure zero or one tool is called per turn. [More details](https://platform.openai.com/docs/guides/function-calling#parallel-function-calling).
+
 ## Free-form Function Calling
 
 <Tabs>
@@ -583,7 +685,6 @@ display(styled_df)
 import litellm
 
 response = litellm.responses(
-    response = client.responses.create(
     model="gpt-5-mini",
     input="Please use the code_exec tool to calculate the area of a circle with radius equal to the number of 'r's in strawberry",
     text={"format": {"type": "text"}},

@@ -17,6 +17,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.utils import CallTypesLiteral
 from litellm.utils import get_formatted_prompt
 
 
@@ -63,7 +64,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
                         analyze_url, json=analyze_payload
                     ) as response:
                         redacted_text = await response.json()
-                verbose_proxy_logger.info(
+                verbose_proxy_logger.debug(
                     f"LLM Guard: Received response - {redacted_text}"
                 )
                 if redacted_text is not None:
@@ -120,15 +121,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "responses",
-            "mcp_call",
-        ],
+        call_type: CallTypesLiteral,
     ):
         """
         - Calls the LLM Guard Endpoint

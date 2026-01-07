@@ -14,6 +14,7 @@ import litellm
 from litellm._logging import verbose_router_logger
 from litellm.constants import (
     DEFAULT_COOLDOWN_TIME_SECONDS,
+    DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS,
     DEFAULT_FAILURE_THRESHOLD_PERCENT,
     SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD,
 )
@@ -62,6 +63,8 @@ def _is_cooldown_required(
                     return False
 
         if isinstance(exception_status, str):
+            if len(exception_status) == 0:
+                return False
             exception_status = int(exception_status)
 
         if exception_status >= 400 and exception_status < 500:
@@ -118,16 +121,16 @@ def _should_run_cooldown_logic(
             "Should Not Run Cooldown Logic: deployment id is none or model group can't be found."
         )
         return False
-    
+
     #########################################################
     # If time_to_cooldown is 0 or 0.0000000, don't run cooldown logic
     #########################################################
     if time_to_cooldown is not None and math.isclose(
-        a=time_to_cooldown, 
-        b=0.0, 
-        abs_tol=1e-9
+        a=time_to_cooldown, b=0.0, abs_tol=1e-9
     ):
-        verbose_router_logger.debug("Should Not Run Cooldown Logic: time_to_cooldown is effectively 0")
+        verbose_router_logger.debug(
+            "Should Not Run Cooldown Logic: time_to_cooldown is effectively 0"
+        )
         return False
 
     if litellm_router_instance.disable_cooldowns:
@@ -229,8 +232,10 @@ def _should_cooldown_deployment(
             return True
         elif (
             percent_fails > DEFAULT_FAILURE_THRESHOLD_PERCENT
+            and total_requests_this_minute >= DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS
             and not is_single_deployment_model_group  # by default we should avoid cooldowns on single deployment model groups
         ):
+            # Only apply error rate cooldown when we have enough requests to make the percentage meaningful
             return True
 
         elif (
@@ -275,8 +280,8 @@ def _set_cooldown_deployments(
     if (
         _should_run_cooldown_logic(
             litellm_router_instance=litellm_router_instance,
-            deployment=deployment, 
-            exception_status=exception_status, 
+            deployment=deployment,
+            exception_status=exception_status,
             original_exception=original_exception,
             time_to_cooldown=time_to_cooldown,
         )
@@ -290,9 +295,9 @@ def _set_cooldown_deployments(
     verbose_router_logger.debug(f"Attempting to add {deployment} to cooldown list")
 
     if _should_cooldown_deployment(
-        litellm_router_instance=litellm_router_instance, 
-        deployment=deployment, 
-        exception_status=exception_status, 
+        litellm_router_instance=litellm_router_instance,
+        deployment=deployment,
+        exception_status=exception_status,
         original_exception=original_exception,
     ):
         litellm_router_instance.cooldown_cache.add_deployment_to_cooldown(

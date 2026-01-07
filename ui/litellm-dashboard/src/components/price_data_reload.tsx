@@ -1,7 +1,13 @@
 import React, { useState, useEffect } from "react";
-import { Button, Popconfirm, message, Modal, InputNumber, Space, Typography, Tag, Card } from "antd";
+import { Button, Popconfirm, Modal, InputNumber, Space, Typography, Tag, Card } from "antd";
 import { ReloadOutlined, ClockCircleOutlined, StopOutlined } from "@ant-design/icons";
-import { reloadModelCostMap, scheduleModelCostMapReload, cancelModelCostMapReload, getModelCostMapReloadStatus } from "./networking";
+import {
+  reloadModelCostMap,
+  scheduleModelCostMapReload,
+  cancelModelCostMapReload,
+  getModelCostMapReloadStatus,
+} from "./networking";
+import NotificationsManager from "./molecules/notifications_manager";
 
 const { Text } = Typography;
 
@@ -11,7 +17,6 @@ interface ReloadStatus {
   last_run: string | null;
   next_run: string | null;
 }
-
 
 interface PriceDataReloadProps {
   accessToken: string;
@@ -43,18 +48,18 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
   // Fetch status on component mount and periodically
   useEffect(() => {
     fetchReloadStatus();
-    
+
     // Refresh status every 30 seconds to keep it up to date
     const interval = setInterval(() => {
       fetchReloadStatus();
     }, 30000);
-    
+
     return () => clearInterval(interval);
   }, [accessToken]);
 
   const fetchReloadStatus = async () => {
     if (!accessToken) return;
-    
+
     setLoadingStatus(true);
     try {
       console.log("Fetching reload status...");
@@ -68,7 +73,7 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
         scheduled: false,
         interval_hours: null,
         last_run: null,
-        next_run: null
+        next_run: null,
       });
     } finally {
       setLoadingStatus(false);
@@ -77,56 +82,54 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
 
   const handleHardRefresh = async () => {
     if (!accessToken) {
-      message.error("No access token available");
+      NotificationsManager.fromBackend("No access token available");
       return;
     }
-    
+
     setIsLoading(true);
     try {
       const response = await reloadModelCostMap(accessToken);
 
       if (response.status === "success") {
-        message.success(
-          `Price data reloaded successfully! ${response.models_count || 0} models updated.`
-        );
+        NotificationsManager.success(`Price data reloaded successfully! ${response.models_count || 0} models updated.`);
         onReloadSuccess?.();
         // Refresh status after successful reload
         await fetchReloadStatus();
       } else {
-        message.error("Failed to reload price data");
+        NotificationsManager.fromBackend("Failed to reload price data");
       }
     } catch (error) {
       console.error("Error reloading price data:", error);
-      message.error("Failed to reload price data. Please try again.");
+      NotificationsManager.fromBackend("Failed to reload price data. Please try again.");
     } finally {
       setIsLoading(false);
     }
   };
   const handleScheduleReload = async () => {
     if (!accessToken) {
-      message.error("No access token available");
+      NotificationsManager.fromBackend("No access token available");
       return;
     }
 
     if (hours <= 0) {
-      message.error("Hours must be greater than 0");
+      NotificationsManager.fromBackend("Hours must be greater than 0");
       return;
     }
-    
+
     setIsScheduling(true);
     try {
       const response = await scheduleModelCostMapReload(accessToken, hours);
-      
+
       if (response.status === "success") {
-        message.success(`Periodic reload scheduled for every ${hours} hours`);
+        NotificationsManager.success(`Periodic reload scheduled for every ${hours} hours`);
         setShowScheduleModal(false);
         await fetchReloadStatus();
       } else {
-        message.error("Failed to schedule periodic reload");
+        NotificationsManager.fromBackend("Failed to schedule periodic reload");
       }
     } catch (error) {
       console.error("Error scheduling reload:", error);
-      message.error("Failed to schedule periodic reload. Please try again.");
+      NotificationsManager.fromBackend("Failed to schedule periodic reload. Please try again.");
     } finally {
       setIsScheduling(false);
     }
@@ -134,23 +137,23 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
 
   const handleCancelReload = async () => {
     if (!accessToken) {
-      message.error("No access token available");
+      NotificationsManager.fromBackend("No access token available");
       return;
     }
-    
+
     setIsCancelling(true);
     try {
       const response = await cancelModelCostMapReload(accessToken);
-      
+
       if (response.status === "success") {
-        message.success("Periodic reload cancelled successfully");
+        NotificationsManager.success("Periodic reload cancelled successfully");
         await fetchReloadStatus();
       } else {
-        message.error("Failed to cancel periodic reload");
+        NotificationsManager.fromBackend("Failed to cancel periodic reload");
       }
     } catch (error) {
       console.error("Error cancelling reload:", error);
-      message.error("Failed to cancel periodic reload. Please try again.");
+      NotificationsManager.fromBackend("Failed to cancel periodic reload. Please try again.");
     } finally {
       setIsCancelling(false);
     }
@@ -166,15 +169,15 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
   };
 
   const getStatusText = () => {
-    if (!reloadStatus?.scheduled) return 'Not scheduled';
-    if (!reloadStatus.last_run) return 'Ready';
-    return 'Active';
+    if (!reloadStatus?.scheduled) return "Not scheduled";
+    if (!reloadStatus.last_run) return "Ready";
+    return "Active";
   };
 
   const getStatusColor = () => {
-    if (!reloadStatus?.scheduled) return 'default';
-    if (!reloadStatus.last_run) return 'processing';
-    return 'success';
+    if (!reloadStatus?.scheduled) return "default";
+    if (!reloadStatus.last_run) return "processing";
+    return "success";
   };
 
   return (
@@ -188,7 +191,7 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
           onConfirm={handleHardRefresh}
           okText="Yes"
           cancelText="No"
-          okButtonProps={{ 
+          okButtonProps={{
             style: {
               backgroundColor: "#6366f1",
               borderColor: "#6366f1",
@@ -283,15 +286,15 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
 
       {/* Status Card */}
       {reloadStatus && (
-        <Card 
-          size="small" 
-          style={{ 
-            backgroundColor: '#f8f9fa', 
-            border: '1px solid #e9ecef',
-            borderRadius: 8
+        <Card
+          size="small"
+          style={{
+            backgroundColor: "#f8f9fa",
+            border: "1px solid #e9ecef",
+            borderRadius: 8,
           }}
         >
-          <Space direction="vertical" size="small" style={{ width: '100%' }}>
+          <Space direction="vertical" size="small" style={{ width: "100%" }}>
             {reloadStatus.scheduled ? (
               <div>
                 <Tag color="green" icon={<ClockCircleOutlined />}>
@@ -301,22 +304,28 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
             ) : (
               <Text type="secondary">No periodic reload scheduled</Text>
             )}
-            
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text type="secondary" style={{ fontSize: '12px' }}>Last run:</Text>
-              <Text style={{ fontSize: '12px' }}>{formatDateTime(reloadStatus.last_run)}</Text>
+
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <Text type="secondary" style={{ fontSize: "12px" }}>
+                Last run:
+              </Text>
+              <Text style={{ fontSize: "12px" }}>{formatDateTime(reloadStatus.last_run)}</Text>
             </div>
-            
+
             {reloadStatus.scheduled && (
               <>
                 {reloadStatus.next_run && (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Text type="secondary" style={{ fontSize: '12px' }}>Next run:</Text>
-                    <Text style={{ fontSize: '12px' }}>{formatDateTime(reloadStatus.next_run)}</Text>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <Text type="secondary" style={{ fontSize: "12px" }}>
+                      Next run:
+                    </Text>
+                    <Text style={{ fontSize: "12px" }}>{formatDateTime(reloadStatus.next_run)}</Text>
                   </div>
                 )}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <Text type="secondary" style={{ fontSize: '12px' }}>Status:</Text>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <Text type="secondary" style={{ fontSize: "12px" }}>
+                    Status:
+                  </Text>
                   <Tag color={getStatusColor()}>{getStatusText()}</Tag>
                 </div>
               </>
@@ -352,7 +361,7 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
             value={hours}
             onChange={(value) => setHours(value || 6)}
             addonAfter="hours"
-            style={{ width: '100%' }}
+            style={{ width: "100%" }}
           />
         </div>
         <div>
@@ -365,4 +374,4 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
   );
 };
 
-export default PriceDataReload; 
+export default PriceDataReload;

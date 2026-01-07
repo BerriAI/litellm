@@ -4,7 +4,7 @@ import TabItem from '@theme/TabItem';
 
 # /images/edits
 
-LiteLLM provides image editing functionality that maps to OpenAI's `/images/edits` API endpoint.
+LiteLLM provides image editing functionality that maps to OpenAI's `/images/edits` API endpoint. Now supports both single and multiple image editing.
 
 | Feature | Supported | Notes |
 |---------|-----------|--------|
@@ -13,10 +13,13 @@ LiteLLM provides image editing functionality that maps to OpenAI's `/images/edit
 | End-user Tracking | ✅ | |
 | Fallbacks | ✅ | Works between supported models |
 | Loadbalancing | ✅ | Works between supported models |
-| Supported operations | Create image edits | |
-| Supported LiteLLM SDK Versions | 1.63.8+ | |
-| Supported LiteLLM Proxy Versions | 1.71.1+ | |
-| Supported LLM providers | **OpenAI** | Currently only `openai` is supported |
+| Supported operations | Create image edits | Single and multiple images supported |
+| Supported LiteLLM SDK Versions | 1.63.8+ | Gemini support requires 1.79.3+ |
+| Supported LiteLLM Proxy Versions | 1.71.1+ | Gemini support requires 1.79.3+ |
+| Supported LLM providers | **OpenAI**, **Gemini (Google AI Studio)**, **Vertex AI**, **Stability AI**, **AWS Bedrock (Stability)** | Gemini supports the new `gemini-2.5-flash-image` family. Vertex AI supports both Gemini and Imagen models. Stability AI and Bedrock Stability support various image editing operations. |
+
+ #### ⚡️See all supported models and providers at [models.litellm.ai](https://models.litellm.ai/)
+
 
 ## Usage
 
@@ -34,6 +37,26 @@ response = litellm.image_edit(
     model="gpt-image-1",
     image=open("original_image.png", "rb"),
     prompt="Add a red hat to the person in the image",
+    n=1,
+    size="1024x1024"
+)
+
+print(response)
+```
+
+#### Multiple Images Edit
+```python showLineNumbers title="OpenAI Multiple Images Edit"
+import litellm
+
+# Edit multiple images with a prompt
+response = litellm.image_edit(
+    model="gpt-image-1",
+    image=[
+        open("image1.png", "rb"),
+        open("image2.png", "rb"),
+        open("image3.png", "rb")
+    ],
+    prompt="Apply vintage filter to all images",
     n=1,
     size="1024x1024"
 )
@@ -80,6 +103,30 @@ response = asyncio.run(edit_image())
 print(response)
 ```
 
+#### Async Multiple Images Edit
+```python showLineNumbers title="Async OpenAI Multiple Images Edit"
+import litellm
+import asyncio
+
+async def edit_multiple_images():
+    response = await litellm.aimage_edit(
+        model="gpt-image-1",
+        image=[
+            open("portrait1.png", "rb"),
+            open("portrait2.png", "rb")
+        ],
+        prompt="Add professional lighting to the portraits",
+        n=1,
+        size="1024x1024",
+        response_format="url"
+    )
+    return response
+
+# Run the async function
+response = asyncio.run(edit_multiple_images())
+print(response)
+```
+
 #### Image Edit with Custom Parameters
 ```python showLineNumbers title="OpenAI Image Edit with Custom Parameters"
 import litellm
@@ -100,6 +147,101 @@ response = litellm.image_edit(
 print(f"Generated {len(response.data)} image variations")
 for i, image_data in enumerate(response.data):
     print(f"Image {i+1}: {image_data.url}")
+```
+
+```
+
+</TabItem>
+
+<TabItem value="gemini" label="Gemini">
+
+#### Basic Image Edit
+```python showLineNumbers title="Gemini Image Edit"
+import base64
+import os
+from litellm import image_edit
+
+os.environ["GEMINI_API_KEY"] = "your-api-key"
+
+response = image_edit(
+    model="gemini/gemini-2.5-flash-image",
+    image=open("original_image.png", "rb"),
+    prompt="Add aurora borealis to the night sky",
+    size="1792x1024",  # mapped to aspectRatio=16:9 for Gemini
+)
+
+edited_image_bytes = base64.b64decode(response.data[0].b64_json)
+with open("edited_image.png", "wb") as f:
+    f.write(edited_image_bytes)
+```
+
+#### Multiple Images Edit
+```python showLineNumbers title="Gemini Multiple Images Edit"
+import base64
+import os
+from litellm import image_edit
+
+os.environ["GEMINI_API_KEY"] = "your-api-key"
+
+response = image_edit(
+    model="gemini/gemini-2.5-flash-image",
+    image=[
+        open("scene.png", "rb"),
+        open("style_reference.png", "rb"),
+    ],
+    prompt="Blend the reference style into the scene while keeping the subject sharp.",
+)
+
+for idx, image_obj in enumerate(response.data):
+    with open(f"gemini_edit_{idx}.png", "wb") as f:
+        f.write(base64.b64decode(image_obj.b64_json))
+```
+
+</TabItem>
+
+<TabItem value="vertex_ai" label="Vertex AI">
+
+#### Basic Image Edit (Gemini)
+```python showLineNumbers title="Vertex AI Gemini Image Edit"
+import os
+import litellm
+
+# Set Vertex AI credentials
+os.environ["VERTEXAI_PROJECT"] = "your-gcp-project-id"
+os.environ["VERTEXAI_LOCATION"] = "us-central1"
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/path/to/service-account.json"
+
+response = litellm.image_edit(
+    model="vertex_ai/gemini-2.5-flash",
+    image=open("original_image.png", "rb"),
+    prompt="Add neon lights in the background",
+    size="1024x1024",
+)
+
+print(response)
+```
+
+#### Image Edit with Imagen (Supports Masks)
+```python showLineNumbers title="Vertex AI Imagen Image Edit"
+import os
+import litellm
+
+# Set Vertex AI credentials
+os.environ["VERTEXAI_PROJECT"] = "your-gcp-project-id"
+os.environ["VERTEXAI_LOCATION"] = "us-central1"
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/path/to/service-account.json"
+
+# Imagen supports mask for inpainting
+response = litellm.image_edit(
+    model="vertex_ai/imagen-3.0-capability-001",
+    image=open("original_image.png", "rb"),
+    mask=open("mask_image.png", "rb"),  # Optional: for inpainting
+    prompt="Turn this into watercolor style scenery",
+    n=2,  # Number of variations
+    size="1024x1024",
+)
+
+print(response)
 ```
 
 </TabItem>
@@ -161,6 +303,99 @@ curl -X POST "http://localhost:4000/v1/images/edits" \
   -F "n=1" \
   -F "size=1024x1024" \
   -F "response_format=url"
+```
+
+#### cURL Multiple Images Example
+```bash showLineNumbers title="cURL Multiple Images Edit Request"
+curl -X POST "http://localhost:4000/v1/images/edits" \
+  -H "Authorization: Bearer your-api-key" \
+  -F "model=gpt-image-1" \
+  -F "image=@image1.png" \
+  -F "image=@image2.png" \
+  -F "image=@image3.png" \
+  -F "prompt=Apply artistic filter to all images" \
+  -F "n=1" \
+  -F "size=1024x1024" \
+  -F "response_format=url"
+```
+
+```
+
+</TabItem>
+
+<TabItem value="gemini" label="Gemini">
+
+1. Add the Gemini image edit model to your `config.yaml`:
+```yaml showLineNumbers title="Gemini Proxy Configuration"
+model_list:
+  - model_name: gemini-image-edit
+    litellm_params:
+      model: gemini/gemini-2.5-flash-image
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start the LiteLLM proxy server:
+```bash showLineNumbers title="Start LiteLLM Proxy Server"
+litellm --config /path/to/config.yaml
+```
+
+3. Make an image edit request (Gemini responses are base64-only):
+```bash showLineNumbers title="Gemini Proxy Image Edit"
+curl -X POST "http://0.0.0.0:4000/v1/images/edits" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -F "model=gemini-image-edit" \
+  -F "image=@original_image.png" \
+  -F "prompt=Add a warm golden-hour glow to the scene" \
+  -F "size=1024x1024"
+```
+
+</TabItem>
+
+<TabItem value="vertex_ai" label="Vertex AI">
+
+1. Add Vertex AI image edit models to your `config.yaml`:
+```yaml showLineNumbers title="Vertex AI Proxy Configuration"
+model_list:
+  - model_name: vertex-gemini-image-edit
+    litellm_params:
+      model: vertex_ai/gemini-2.5-flash
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: os.environ/VERTEXAI_LOCATION
+      vertex_credentials: os.environ/GOOGLE_APPLICATION_CREDENTIALS
+
+  - model_name: vertex-imagen-image-edit
+    litellm_params:
+      model: vertex_ai/imagen-3.0-capability-001
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: os.environ/VERTEXAI_LOCATION
+      vertex_credentials: os.environ/GOOGLE_APPLICATION_CREDENTIALS
+```
+
+2. Start the LiteLLM proxy server:
+```bash showLineNumbers title="Start LiteLLM Proxy Server"
+litellm --config /path/to/config.yaml
+```
+
+3. Make an image edit request:
+```bash showLineNumbers title="Vertex AI Gemini Proxy Image Edit"
+curl -X POST "http://0.0.0.0:4000/v1/images/edits" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -F "model=vertex-gemini-image-edit" \
+  -F "image=@original_image.png" \
+  -F "prompt=Add neon lights in the background" \
+  -F "size=1024x1024"
+```
+
+4. Imagen image edit with mask:
+```bash showLineNumbers title="Vertex AI Imagen Proxy Image Edit with Mask"
+curl -X POST "http://0.0.0.0:4000/v1/images/edits" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -F "model=vertex-imagen-image-edit" \
+  -F "image=@original_image.png" \
+  -F "mask=@mask_image.png" \
+  -F "prompt=Turn this into watercolor style scenery" \
+  -F "n=2" \
+  -F "size=1024x1024"
 ```
 
 </TabItem>

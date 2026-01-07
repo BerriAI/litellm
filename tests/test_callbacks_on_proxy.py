@@ -26,7 +26,7 @@ async def config_update(session, routing_strategy=None):
         },
         "general_settings": {
             "alert_to_webhook_url": {
-                "llm_exceptions": "https://hooks.slack.com/services/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"
+                "llm_exceptions": "example-slack-webhook-url"
             },
             "alert_types": ["llm_exceptions", "db_exceptions"],
         },
@@ -108,7 +108,7 @@ async def test_check_num_callbacks():
     -> sleep for 30 seconds
     -> check current callbacks
     """
-    import uuid
+    from litellm._uuid import uuid
 
     async with aiohttp.ClientSession() as session:
         await asyncio.sleep(30)
@@ -158,7 +158,7 @@ async def test_check_num_callbacks_on_lowest_latency():
     -> check current callbacks
     -> update back to original routing-strategy
     """
-    import uuid
+    from litellm._uuid import uuid
 
     async with aiohttp.ClientSession() as session:
         await asyncio.sleep(30)
