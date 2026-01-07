@@ -53,10 +53,11 @@ def setup_and_teardown():
     import asyncio
 
     # Reload litellm to ensure clean state
-    # Ensure litellm is in sys.modules before reloading (fixes xdist parallel execution)
-    if 'litellm' in sys.modules:
+    # Handle race conditions in xdist parallel execution
+    try:
         importlib.reload(litellm)
-    else:
+    except (ImportError, KeyError):
+        # Module not in sys.modules (can happen in parallel execution)
         import litellm as _litellm
         globals()['litellm'] = _litellm
 
