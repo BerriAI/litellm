@@ -493,10 +493,10 @@ class InMemoryGuardrailHandler:
 
         This initializes it by adding it to the litellm callback manager
         """
-        if not config_file_path:
-            raise Exception(
-                "GuardrailsAIException - Please pass the config_file_path to initialize_guardrails_v2"
-            )
+        # if not config_file_path:
+        #     raise Exception(
+        #         "GuardrailsAIException - Please pass the config_file_path to initialize_guardrails_v2"
+        #     )
 
         _file_name, _class_name = guardrail_type.split(".")
         verbose_proxy_logger.debug(
@@ -506,7 +506,7 @@ class InMemoryGuardrailHandler:
             _class_name,
         )
 
-        directory = os.path.dirname(config_file_path)
+        directory = os.path.dirname(config_file_path) if config_file_path else os.getcwd()
         module_file_path = os.path.join(directory, _file_name) + ".py"
 
         spec = importlib.util.spec_from_file_location(_class_name, module_file_path)  # type: ignore
@@ -529,7 +529,8 @@ class InMemoryGuardrailHandler:
         _guardrail_callback = _guardrail_class(
             guardrail_name=guardrail["guardrail_name"],
             event_hook=mode,
-            default_on=default_on,
+            # default_on=default_on,
+            **litellm_params.model_dump()
         )
         litellm.logging_callback_manager.add_litellm_callback(_guardrail_callback)  # type: ignore
 
