@@ -4909,6 +4909,15 @@
             "/v1/images/generations"
         ]
     },
+    "azure_ai/flux.2-pro": {
+        "litellm_provider": "azure_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://ai.azure.com/explore/models/flux.2-pro/version/1/registry/azureml-blackforestlabs",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
     "azure_ai/Llama-3.2-11B-Vision-Instruct": {
         "input_cost_per_token": 3.7e-07,
         "litellm_provider": "azure_ai",
