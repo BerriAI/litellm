@@ -3176,6 +3176,11 @@ def _convert_to_bedrock_tool_call_invoke(
                 id = tool["id"]
                 name = tool["function"].get("name", "")
                 arguments = tool["function"].get("arguments", "")
+                arguments_dict = json.loads(arguments) if arguments else {}
+                # Ensure arguments_dict is always a dict (Bedrock requires toolUse.input to be an object)
+                # When some providers return arguments: '""' (JSON-encoded empty string), json.loads returns ""
+                if not isinstance(arguments_dict, dict):
+                    arguments_dict = {}
                 if not arguments or not arguments.strip():
                     arguments_dict = {}
                 else:
