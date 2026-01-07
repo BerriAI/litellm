@@ -100,7 +100,7 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
     TeamMemberAddResult,
     UpdateTeamMemberPermissionsRequest,
 )
-
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 router = APIRouter()
 
 
@@ -904,7 +904,7 @@ async def new_team(  # noqa: PLR0915
         
         # Serialize router_settings to JSON (matching key creation pattern)
         router_settings_value = getattr(data, "router_settings", None)
-        router_settings_json = json.dumps(router_settings_value) if router_settings_value is not None else json.dumps({})
+        router_settings_json = safe_dumps(router_settings_value) if router_settings_value is not None else safe_dumps({})
         complete_team_data_dict["router_settings"] = router_settings_json
         
         complete_team_data_dict = prisma_client.jsonify_team_object(
@@ -1391,7 +1391,7 @@ async def update_team(   # noqa: PLR0915
 
         # Serialize router_settings to JSON if present (matching key update pattern)
         if "router_settings" in updated_kv and updated_kv["router_settings"] is not None:
-            updated_kv["router_settings"] = json.dumps(updated_kv["router_settings"])
+            updated_kv["router_settings"] = safe_dumps(updated_kv["router_settings"])
 
         updated_kv = prisma_client.jsonify_team_object(db_data=updated_kv)
         team_row: Optional[LiteLLM_TeamTable] = (
