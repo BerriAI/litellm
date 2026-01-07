@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import Request, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
 from litellm._uuid import uuid
@@ -11,6 +11,7 @@ from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     ProxyConfig,
+    _extract_error_from_sse_chunk,
     _get_cost_breakdown_from_logging_obj,
     _parse_event_data_for_error,
     create_response,
@@ -602,6 +603,10 @@ class TestCommonRequestProcessingHelpers:
         assert await _parse_event_data_for_error(event_line) == expected_code
 
     async def test_create_streaming_response_first_chunk_is_error(self):
+        """
+        Test that when the first chunk is an error, a JSON error response is returned
+        instead of an SSE streaming response
+        """
         async def mock_generator():
             yield 'data: {"error": {"code": 403, "message": "forbidden"}}\n\n'
             yield 'data: {"content": "more data"}\n\n'
@@ -610,13 +615,15 @@ class TestCommonRequestProcessingHelpers:
         response = await create_response(
             mock_generator(), "text/event-stream", {}
         )
+        # Should return JSONResponse instead of StreamingResponse
+        assert isinstance(response, JSONResponse)
         assert response.status_code == status.HTTP_403_FORBIDDEN
-        content = await self.consume_stream(response)
-        assert content == [
-            'data: {"error": {"code": 403, "message": "forbidden"}}\n\n',
-            'data: {"content": "more data"}\n\n',
-            "data: [DONE]\n\n",
-        ]
+        # Verify the response is in standard JSON error format
+        import json
+        body = json.loads(response.body.decode())
+        assert "error" in body
+        assert body["error"]["code"] == 403
+        assert body["error"]["message"] == "forbidden"
 
     async def test_create_streaming_response_first_chunk_not_error(self):
         async def mock_generator():
@@ -682,6 +689,9 @@ class TestCommonRequestProcessingHelpers:
         assert content[1] == "data: [DONE]\n\n"
 
     async def test_create_streaming_response_first_chunk_error_string_code(self):
+        """
+        Test that when the first chunk contains a string error code, a JSON error response is returned
+        """
         async def mock_generator():
             yield 'data: {"error": {"code": "429", "message": "too many requests"}}\n\n'
             yield "data: [DONE]\n\n"
@@ -689,12 +699,14 @@ class TestCommonRequestProcessingHelpers:
         response = await create_response(
             mock_generator(), "text/event-stream", {}
         )
+        assert isinstance(response, JSONResponse)
         assert response.status_code == status.HTTP_429_TOO_MANY_REQUESTS
-        content = await self.consume_stream(response)
-        assert content == [
-            'data: {"error": {"code": "429", "message": "too many requests"}}\n\n',
-            "data: [DONE]\n\n",
-        ]
+        # Verify the response is in standard JSON error format
+        import json
+        body = json.loads(response.body.decode())
+        assert "error" in body
+        assert body["error"]["code"] == "429"
+        assert body["error"]["message"] == "too many requests"
 
     async def test_create_streaming_response_custom_headers(self):
         async def mock_generator():
@@ -810,7 +822,10 @@ class TestCommonRequestProcessingHelpers:
                 ), f"Call {i} should have operation name 'streaming.chunk.yield', got {args[0]}"
 
     async def test_create_streaming_response_dd_trace_with_error_chunk(self):
-        """Test that dd trace is applied even when the first chunk contains an error"""
+        """
+        Test that when the first chunk contains an error, JSONResponse is returned
+        and tracing is not triggered (since it's not a streaming response)
+        """
         from unittest.mock import patch
 
         # Create a mock tracer
@@ -831,24 +846,103 @@ class TestCommonRequestProcessingHelpers:
                 mock_generator(), "text/event-stream", {}
             )
 
-            # Even with error, status should be set to error code but tracing should still work
+            # Should return JSONResponse instead of StreamingResponse
+            assert isinstance(response, JSONResponse)
             assert response.status_code == 400
 
-            # Consume the stream to trigger the tracer calls
-            content = await self.consume_stream(response)
+            # Verify the response is in standard JSON error format
+            import json
+            body = json.loads(response.body.decode())
+            assert "error" in body
+            assert body["error"]["code"] == 400
+            assert body["error"]["message"] == "bad request"
 
-            # Verify all chunks are present
-            assert len(content) == 3
+            # Since JSONResponse is returned instead of StreamingResponse, streaming tracing should not be triggered
+            # tracer.trace should not be called
+            assert mock_tracer.trace.call_count == 0
 
-            # Verify that tracer.trace was called for each chunk
-            assert mock_tracer.trace.call_count == 3
 
-            # Verify that each call was made with the correct operation name
-            actual_calls = mock_tracer.trace.call_args_list
-            assert len(actual_calls) == 3
+class TestExtractErrorFromSSEChunk:
+    """Tests for _extract_error_from_sse_chunk function"""
 
-            for i, call in enumerate(actual_calls):
-                args, kwargs = call
-                assert (
-                    args[0] == "streaming.chunk.yield"
-                ), f"Call {i} should have operation name 'streaming.chunk.yield', got {args[0]}"
+    def test_extract_error_from_sse_chunk_with_valid_error(self):
+        """Test extracting error information from a standard SSE chunk"""
+        chunk = 'data: {"error": {"code": 403, "message": "forbidden", "type": "auth_error", "param": "api_key"}}\n\n'
+        error = _extract_error_from_sse_chunk(chunk)
+
+        assert error["code"] == 403
+        assert error["message"] == "forbidden"
+        assert error["type"] == "auth_error"
+        assert error["param"] == "api_key"
+
+    def test_extract_error_from_sse_chunk_with_string_code(self):
+        """Test error code as string type"""
+        chunk = 'data: {"error": {"code": "429", "message": "too many requests"}}\n\n'
+        error = _extract_error_from_sse_chunk(chunk)
+
+        assert error["code"] == "429"
+        assert error["message"] == "too many requests"
+
+    def test_extract_error_from_sse_chunk_with_bytes(self):
+        """Test input as bytes type"""
+        chunk = b'data: {"error": {"code": 500, "message": "internal error"}}\n\n'
+        error = _extract_error_from_sse_chunk(chunk)
+
+        assert error["code"] == 500
+        assert error["message"] == "internal error"
+
+    def test_extract_error_from_sse_chunk_with_done(self):
+        """Test [DONE] marker should return default error"""
+        chunk = "data: [DONE]\n\n"
+        error = _extract_error_from_sse_chunk(chunk)
+
+        assert error["message"] == "Unknown error"
+        assert error["type"] == "internal_server_error"
+        assert error["code"] == "500"
+        assert error["param"] is None
+
+    def test_extract_error_from_sse_chunk_without_error_field(self):
+        """Test missing error field should return default error"""
+        chunk = 'data: {"content": "some content"}\n\n'
+        error = _extract_error_from_sse_chunk(chunk)
+
+        assert error["message"] == "Unknown error"
+        assert error["type"] == "internal_server_error"
+        assert error["code"] == "500"
+
+    def test_extract_error_from_sse_chunk_with_invalid_json(self):
+        """Test invalid JSON should return default error"""
+        chunk = 'data: {invalid json}\n\n'
+        error = _extract_error_from_sse_chunk(chunk)
+
+        assert error["message"] == "Unknown error"
+        assert error["type"] == "internal_server_error"
+        assert error["code"] == "500"
+
+    def test_extract_error_from_sse_chunk_without_data_prefix(self):
+        """Test missing 'data:' prefix should return default error"""
+        chunk = '{"error": {"code": 400, "message": "bad request"}}\n\n'
+        error = _extract_error_from_sse_chunk(chunk)
+
+        assert error["message"] == "Unknown error"
+        assert error["type"] == "internal_server_error"
+        assert error["code"] == "500"
+
+    def test_extract_error_from_sse_chunk_with_empty_string(self):
+        """Test empty string should return default error"""
+        chunk = ""
+        error = _extract_error_from_sse_chunk(chunk)
+
+        assert error["message"] == "Unknown error"
+        assert error["type"] == "internal_server_error"
+        assert error["code"] == "500"
+
+    def test_extract_error_from_sse_chunk_with_minimal_error(self):
+        """Test minimal error object"""
+        chunk = 'data: {"error": {"message": "error occurred"}}\n\n'
+        error = _extract_error_from_sse_chunk(chunk)
+
+        assert error["message"] == "error occurred"
+        # Other fields should be obtained from the original error object (if exists)
+
+
