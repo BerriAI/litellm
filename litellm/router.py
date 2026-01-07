@@ -713,6 +713,23 @@ class Router:
         self, routing_strategy: Union[RoutingStrategy, str], routing_strategy_args: dict
     ):
         verbose_router_logger.info(f"Routing strategy: {routing_strategy}")
+
+        # Validate routing_strategy value to fail fast with helpful error
+        # See: https://github.com/BerriAI/litellm/issues/11330
+        # Derive valid strategies from RoutingStrategy enum + "simple-shuffle" (default, not in enum)
+        valid_strategy_strings = ["simple-shuffle"] + [s.value for s in RoutingStrategy]
+
+        if routing_strategy is not None:
+            is_valid_string = isinstance(routing_strategy, str) and routing_strategy in valid_strategy_strings
+            is_valid_enum = isinstance(routing_strategy, RoutingStrategy)
+            if not is_valid_string and not is_valid_enum:
+                raise ValueError(
+                    f"Invalid routing_strategy: '{routing_strategy}'. "
+                    f"Valid options: {valid_strategy_strings}. "
+                    f"Check 'router_settings.routing_strategy' in your config.yaml "
+                    f"or the 'routing_strategy' parameter if using the Router SDK directly."
+                )
+
         if (
             routing_strategy == RoutingStrategy.LEAST_BUSY.value
             or routing_strategy == RoutingStrategy.LEAST_BUSY
@@ -811,6 +828,9 @@ class Router:
         )
         self.acancel_responses = self.factory_function(
             litellm.acancel_responses, call_type="acancel_responses"
+        )
+        self.acompact_responses = self.factory_function(
+            litellm.acompact_responses, call_type="acompact_responses"
         )
         self.adelete_responses = self.factory_function(
             litellm.adelete_responses, call_type="adelete_responses"
@@ -3924,6 +3944,7 @@ class Router:
             "anthropic_messages",
             "aresponses",
             "acancel_responses",
+            "acompact_responses",
             "responses",
             "aget_responses",
             "adelete_responses",
@@ -3982,6 +4003,8 @@ class Router:
             "retrieve_container",
             "adelete_container",
             "delete_container",
+            "aupload_container_file",
+            "upload_container_file",
             "alist_container_files",
             "list_container_files",
             "aretrieve_container_file",
@@ -4133,6 +4156,7 @@ class Router:
                 "alist_containers",
                 "aretrieve_container",
                 "adelete_container",
+                "aupload_container_file",
                 "alist_container_files",
                 "aretrieve_container_file",
                 "adelete_container_file",
@@ -4152,6 +4176,7 @@ class Router:
             elif call_type in (
                 "aget_responses",
                 "acancel_responses",
+                "acompact_responses",
                 "adelete_responses",
                 "alist_input_items",
             ):
@@ -4683,7 +4708,7 @@ class Router:
                 except Exception as e:
                     ## LOGGING
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
-                    remaining_retries = num_retries - current_attempt
+                    remaining_retries = num_retries - current_attempt - 1
                     _model: Optional[str] = kwargs.get("model")  # type: ignore
                     if _model is not None:
                         (
@@ -4706,7 +4731,15 @@ class Router:
 
             if type(original_exception) in litellm.LITELLM_EXCEPTION_TYPES:
                 setattr(original_exception, "max_retries", num_retries)
-                setattr(original_exception, "num_retries", current_attempt)
+                # current_attempt is 0-indexed (0 to num_retries-1), so after loop completion
+                # it represents the last attempt index. The actual number of retries attempted
+                # is current_attempt + 1, which equals num_retries when all retries are exhausted.
+                # We've already verified num_retries > 0 before entering the loop, so current_attempt
+                # will always be set (never None) when we reach this point.
+                actual_retries_attempted = (
+                    current_attempt + 1 if current_attempt is not None else num_retries
+                )
+                setattr(original_exception, "num_retries", actual_retries_attempted)
 
             raise original_exception
 

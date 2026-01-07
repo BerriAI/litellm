@@ -5,7 +5,7 @@ test.describe("Add Model", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
   test("Able to see all models for a specific provider in the model dropdown", async ({ page }) => {
-    await page.goto("http://localhost:4000/ui");
+    await page.goto("/ui");
 
     await page.getByText("Models + Endpoints").click();
     await page.getByRole("tab", { name: "Add Model" }).click();

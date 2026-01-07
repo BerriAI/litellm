@@ -24,9 +24,8 @@ litellm_settings:
   turn_off_message_logging: boolean  # prevent the messages and responses from being logged to on your callbacks, but request metadata will still be logged. Useful for privacy/compliance when handling sensitive data.
   redact_user_api_key_info: boolean  # Redact information about the user api key (hashed token, user_id, team id, etc.), from logs. Currently supported for Langfuse, OpenTelemetry, Logfire, ArizeAI logging.
   langfuse_default_tags: ["cache_hit", "cache_key", "proxy_base_url", "user_api_key_alias", "user_api_key_user_id", "user_api_key_user_email", "user_api_key_team_alias", "semantic-similarity", "proxy_base_url"] # default tags for Langfuse Logging
-  
   # Networking settings
-  request_timeout: 10 # (int) llm requesttimeout in seconds. Raise Timeout error if call takes longer than 10s. Sets litellm.request_timeout 
+  request_timeout: 10 # (int) llm requesttimeout in seconds. Raise Timeout error if call takes longer than 10s. Sets litellm.request_timeout
   force_ipv4: boolean # If true, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6 + Anthropic API
   
   # Debugging - see debugging docs for more options
@@ -35,63 +34,71 @@ litellm_settings:
 
   # Fallbacks, reliability
   default_fallbacks: ["claude-opus"] # set default_fallbacks, in case a specific model group is misconfigured / bad.
-  content_policy_fallbacks: [{"gpt-3.5-turbo-small": ["claude-opus"]}] # fallbacks for ContentPolicyErrors
-  context_window_fallbacks: [{"gpt-3.5-turbo-small": ["gpt-3.5-turbo-large", "claude-opus"]}] # fallbacks for ContextWindowExceededErrors
+  content_policy_fallbacks: [{ "gpt-3.5-turbo-small": ["claude-opus"] }] # fallbacks for ContentPolicyErrors
+  context_window_fallbacks: [{ "gpt-3.5-turbo-small": ["gpt-3.5-turbo-large", "claude-opus"] }] # fallbacks for ContextWindowExceededErrors
 
   # MCP Aliases - Map aliases to MCP server names for easier tool access
-  mcp_aliases: { "github": "github_mcp_server", "zapier": "zapier_mcp_server", "deepwiki": "deepwiki_mcp_server" } # Maps friendly aliases to MCP server names. Only the first alias for each server is used
+  mcp_aliases: {
+      "github": "github_mcp_server",
+      "zapier": "zapier_mcp_server",
+      "deepwiki": "deepwiki_mcp_server",
+    } # Maps friendly aliases to MCP server names. Only the first alias for each server is used
 
   # Caching settings
-  cache: true 
-  cache_params:        # set cache params for redis
-    type: redis        # type of cache to initialize
+  cache: true
+  cache_params: # set cache params for redis
+    type: redis # type of cache to initialize (options: "local", "redis", "s3", "gcs")
 
     # Optional - Redis Settings
-    host: "localhost"  # The host address for the Redis cache. Required if type is "redis".
-    port: 6379  # The port number for the Redis cache. Required if type is "redis".
-    password: "your_password"  # The password for the Redis cache. Required if type is "redis".
+    host: "localhost" # The host address for the Redis cache. Required if type is "redis".
+    port: 6379 # The port number for the Redis cache. Required if type is "redis".
+    password: "your_password" # The password for the Redis cache. Required if type is "redis".
     namespace: "litellm.caching.caching" # namespace for redis cache
     max_connections: 100  # [OPTIONAL] Set Maximum number of Redis connections. Passed directly to redis-py. 
-  
     # Optional - Redis Cluster Settings
-    redis_startup_nodes: [{"host": "127.0.0.1", "port": "7001"}] 
+    redis_startup_nodes: [{ "host": "127.0.0.1", "port": "7001" }]
 
     # Optional - Redis Sentinel Settings
     service_name: "mymaster"
     sentinel_nodes: [["localhost", 26379]]
 
     # Optional - GCP IAM Authentication for Redis
-    gcp_service_account: "projects/-/serviceAccounts/your-sa@project.iam.gserviceaccount.com"  # GCP service account for IAM authentication
-    gcp_ssl_ca_certs: "./server-ca.pem"  # Path to SSL CA certificate file for GCP Memorystore Redis
-    ssl: true  # Enable SSL for secure connections
-    ssl_cert_reqs: null  # Set to null for self-signed certificates
-    ssl_check_hostname: false  # Set to false for self-signed certificates
+    gcp_service_account: "projects/-/serviceAccounts/your-sa@project.iam.gserviceaccount.com" # GCP service account for IAM authentication
+    gcp_ssl_ca_certs: "./server-ca.pem" # Path to SSL CA certificate file for GCP Memorystore Redis
+    ssl: true # Enable SSL for secure connections
+    ssl_cert_reqs: null # Set to null for self-signed certificates
+    ssl_check_hostname: false # Set to false for self-signed certificates
 
     # Optional - Qdrant Semantic Cache Settings
     qdrant_semantic_cache_embedding_model: openai-embedding # the model should be defined on the model_list
     qdrant_collection_name: test_collection
     qdrant_quantization_config: binary
-    similarity_threshold: 0.8   # similarity threshold for semantic cache
+    similarity_threshold: 0.8 # similarity threshold for semantic cache
 
     # Optional - S3 Cache Settings
-    s3_bucket_name: cache-bucket-litellm   # AWS Bucket Name for S3
-    s3_region_name: us-west-2              # AWS Region Name for S3
-    s3_aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID  # us os.environ/<variable name> to pass environment variables. This is AWS Access Key ID for S3
-    s3_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY  # AWS Secret Access Key for S3
-    s3_endpoint_url: https://s3.amazonaws.com  # [OPTIONAL] S3 endpoint URL, if you want to use Backblaze/cloudflare s3 bucket
+    s3_bucket_name: cache-bucket-litellm # AWS Bucket Name for S3
+    s3_region_name: us-west-2 # AWS Region Name for S3
+    s3_aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID # us os.environ/<variable name> to pass environment variables. This is AWS Access Key ID for S3
+    s3_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY # AWS Secret Access Key for S3
+    s3_endpoint_url: https://s3.amazonaws.com # [OPTIONAL] S3 endpoint URL, if you want to use Backblaze/cloudflare s3 bucket
+
+    # Optional - GCS Cache Settings
+    gcs_bucket_name: cache-bucket-litellm # GCS Bucket Name for caching
+    gcs_path_service_account: os.environ/GCS_PATH_SERVICE_ACCOUNT # Path to GCS service account JSON file
+    gcs_path: cache/ # [OPTIONAL] GCS path prefix for cache objects
 
     # Common Cache settings
     # Optional - Supported call types for caching
-    supported_call_types: ["acompletion", "atext_completion", "aembedding", "atranscription"]
-                          # /chat/completions, /completions, /embeddings, /audio/transcriptions
+    supported_call_types:
+      ["acompletion", "atext_completion", "aembedding", "atranscription"]
+      # /chat/completions, /completions, /embeddings, /audio/transcriptions
     mode: default_off # if default_off, you need to opt in to caching on a per call basis
     ttl: 600 # ttl for caching
-    disable_copilot_system_to_assistant: False  # If false (default), converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility. Set to true to disable this behavior.
-
+    disable_copilot_system_to_assistant: False # If false (default), converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility. Set to true to disable this behavior.
 
 callback_settings:
   otel:
-    message_logging: boolean  # OTEL logging callback specific settings
+    message_logging: boolean # OTEL logging callback specific settings
 
 general_settings:
   completion_model: string
@@ -111,6 +118,7 @@ general_settings:
   master_key: string
   maximum_spend_logs_retention_period: 30d # The maximum time to retain spend logs before deletion.
   maximum_spend_logs_retention_interval: 1d # interval in which the spend log cleanup task should run in.
+  user_mcp_management_mode: restricted  # or "view_all"
 
   # Database Settings
   database_url: string
@@ -119,8 +127,8 @@ general_settings:
   allow_requests_on_db_unavailable: boolean  # if true, will allow requests that can not connect to the DB to verify Virtual Key to still work 
 
   custom_auth: string
-  max_parallel_requests: 0  # the max parallel requests allowed per deployment 
-  global_max_parallel_requests: 0  # the max parallel requests allowed on the proxy all up 
+  max_parallel_requests: 0 # the max parallel requests allowed per deployment
+  global_max_parallel_requests: 0 # the max parallel requests allowed on the proxy all up
   infer_model_from_keys: true
   background_health_checks: true
   health_check_interval: 300
@@ -230,6 +238,7 @@ router_settings:
 | image_generation_model | str | The default model to use for image generation - ignores model set in request |
 | store_model_in_db | boolean | If true, enables storing model + credential information in the DB. |
 | supported_db_objects | List[str] | Fine-grained control over which object types to load from the database when `store_model_in_db` is True. Available types: `"models"`, `"mcp"`, `"guardrails"`, `"vector_stores"`, `"pass_through_endpoints"`, `"prompts"`, `"model_cost_map"`. If not set, all object types are loaded (default behavior). Example: `supported_db_objects: ["mcp"]` to only load MCP servers from DB. |
+| user_mcp_management_mode | string | Controls what non-admins can see on the MCP dashboard. `restricted` (default) only lists MCP servers that the user’s teams are explicitly allowed to access. `view_all` lets every user see the full MCP server list. Tool list/call always respects per-key permissions, so users still cannot run MCP calls without access. |
 | store_prompts_in_spend_logs | boolean | If true, allows prompts and responses to be stored in the spend logs table. |
 | max_request_size_mb | int | The maximum size for requests in MB. Requests above this size will be rejected. |
 | max_response_size_mb | int | The maximum size for responses in MB. LLM Responses above this size will not be sent. |
@@ -264,13 +273,14 @@ router_settings:
 | forward_openai_org_id | boolean | If true, forwards the OpenAI Organization ID to the backend LLM call (if it's OpenAI). |
 | forward_client_headers_to_llm_api | boolean | If true, forwards the client headers (any `x-` headers and `anthropic-beta` headers) to the backend LLM call |
 | maximum_spend_logs_retention_period               | str                   | Used to set the max retention time for spend logs in the db, after which they will be auto-purged                                                                                                                                                                                                                             |
-| maximum_spend_logs_retention_interval | str | Used to set the interval in which the spend log cleanup task should run in.                                                                                                                                                                                                                                                   |
+| maximum_spend_logs_retention_interval             | str                   | Used to set the interval in which the spend log cleanup task should run in.                                                                                                                                                                                                                                                   |
+
 ### router_settings - Reference
 
 :::info
 
-Most values can also be set via `litellm_settings`. If you see overlapping values, settings on `router_settings` will override those on `litellm_settings`.
-:::
+Most values can also be set via `litellm_settings`. If you see overlapping values, settings on
+`router_settings` will override those on `litellm_settings`. :::
 
 ```yaml
 router_settings:
@@ -278,10 +288,10 @@ router_settings:
   redis_host: <your-redis-host>           # string
   redis_password: <your-redis-password>   # string
   redis_port: <your-redis-port>           # string
-  enable_pre_call_checks: true            # bool - Before call is made check if a call is within model context window 
-  allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
+  enable_pre_call_checks: true            # bool - Before call is made check if a call is within model context window
+  allowed_fails: 3 # cooldown model if it fails > 1 call in a minute.
   cooldown_time: 30 # (in seconds) how long to cooldown model if fails/min > allowed_fails
-  disable_cooldowns: True                  # bool - Disable cooldowns for all models 
+  disable_cooldowns: True                  # bool - Disable cooldowns for all models
   enable_tag_filtering: True                # bool - Use tag based routing for requests
   retry_policy: {                          # Dict[str, int]: retry policy for different types of exceptions
     "AuthenticationErrorRetries": 3,
@@ -292,11 +302,11 @@ router_settings:
   }
   allowed_fails_policy: {
     "BadRequestErrorAllowedFails": 1000, # Allow 1000 BadRequestErrors before cooling down a deployment
-    "AuthenticationErrorAllowedFails": 10, # int 
-    "TimeoutErrorAllowedFails": 12, # int 
-    "RateLimitErrorAllowedFails": 10000, # int 
-    "ContentPolicyViolationErrorAllowedFails": 15, # int 
-    "InternalServerErrorAllowedFails": 20, # int 
+    "AuthenticationErrorAllowedFails": 10, # int
+    "TimeoutErrorAllowedFails": 12, # int
+    "RateLimitErrorAllowedFails": 10000, # int
+    "ContentPolicyViolationErrorAllowedFails": 15, # int
+    "InternalServerErrorAllowedFails": 20, # int
   }
   content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}] # List[Dict[str, List[str]]]: Fallback model for content policy violations
   fallbacks=[{"claude-2": ["my-fallback-model"]}] # List[Dict[str, List[str]]]: Fallback model for all errors
@@ -488,6 +498,7 @@ router_settings:
 | DD_VERSION | Version identifier for Datadog logs. Defaults to "unknown"
 | DEBUG_OTEL | Enable debug mode for OpenTelemetry
 | DEFAULT_ALLOWED_FAILS | Maximum failures allowed before cooling down a model. Default is 3
+| DEFAULT_A2A_AGENT_TIMEOUT | Default timeout in seconds for A2A (Agent-to-Agent) protocol requests. Default is 6000
 | DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS | Default maximum tokens for Anthropic chat completions. Default is 4096
 | DEFAULT_BATCH_SIZE | Default batch size for operations. Default is 512
 | DEFAULT_CHUNK_OVERLAP | Default chunk overlap for RAG text splitters. Default is 200
@@ -669,6 +680,7 @@ router_settings:
 | LANGSMITH_DEFAULT_RUN_NAME | Default name for Langsmith run
 | LANGSMITH_PROJECT | Project name for Langsmith integration
 | LANGSMITH_SAMPLING_RATE | Sampling rate for Langsmith logging
+| LANGSMITH_TENANT_ID | Tenant ID for Langsmith multi-tenant deployments
 | LANGTRACE_API_KEY | API key for Langtrace service
 | LASSO_API_BASE | Base URL for Lasso API
 | LASSO_API_KEY | API key for Lasso service
@@ -688,6 +700,7 @@ router_settings:
 | LITELLM_EMAIL | Email associated with LiteLLM account
 | LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES | Maximum retries for parallel requests in LiteLLM
 | LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRY_TIMEOUT | Timeout for retries of parallel requests in LiteLLM
+| LITELLM_DISABLE_LAZY_LOADING | When set to "1", "true", "yes", or "on", disables lazy loading of attributes (currently only affects encoding/tiktoken). This ensures encoding is initialized before VCR starts recording HTTP requests, fixing VCR cassette creation issues. See [issue #18659](https://github.com/BerriAI/litellm/issues/18659)
 | LITELLM_MIGRATION_DIR | Custom migrations directory for prisma migrations, used for baselining db in read-only file systems.
 | LITELLM_HOSTED_UI | URL of the hosted UI for LiteLLM
 | LITELLM_UI_API_DOC_BASE_URL | Optional override for the API Reference base URL (used in sample code/docs) when the admin UI runs on a different host than the proxy. Defaults to `PROXY_BASE_URL` when unset.
@@ -707,6 +720,7 @@ router_settings:
 | LITELLM_MODE | Operating mode for LiteLLM (e.g., production, development)
 | LITELLM_NON_ROOT | Flag to run LiteLLM in non-root mode for enhanced security in Docker containers
 | LITELLM_RATE_LIMIT_WINDOW_SIZE | Rate limit window size for LiteLLM. Default is 60
+| LITELLM_REASONING_AUTO_SUMMARY | If set to "true", automatically enables detailed reasoning summaries for reasoning models (e.g., o1, o3-mini, deepseek-reasoner). When enabled, adds `summary: "detailed"` to reasoning effort configurations. Default is "false"
 | LITELLM_SALT_KEY | Salt key for encryption in LiteLLM
 | LITELLM_SSL_CIPHERS | SSL/TLS cipher configuration for faster handshakes. Controls cipher suite preferences for OpenSSL connections.
 | LITELLM_SECRET_AWS_KMS_LITELLM_LICENSE | AWS KMS encrypted license for LiteLLM
@@ -774,6 +788,7 @@ router_settings:
 | OTEL_EXPORTER_OTLP_HEADERS | Headers for OpenTelemetry requests
 | OTEL_SERVICE_NAME | Service name identifier for OpenTelemetry
 | OTEL_TRACER_NAME | Tracer name for OpenTelemetry tracing
+| OTEL_LOGS_EXPORTER | Exporter type for OpenTelemetry logs (e.g., console)
 | PAGERDUTY_API_KEY | API key for PagerDuty Alerting
 | PANW_PRISMA_AIRS_API_KEY | API key for PANW Prisma AIRS service
 | PANW_PRISMA_AIRS_API_BASE | Base URL for PANW Prisma AIRS service

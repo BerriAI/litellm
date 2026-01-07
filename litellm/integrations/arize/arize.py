@@ -51,6 +51,7 @@ class ArizeLogger(OpenTelemetry):
         space_id = os.environ.get("ARIZE_SPACE_ID")
         space_key = os.environ.get("ARIZE_SPACE_KEY")
         api_key = os.environ.get("ARIZE_API_KEY")
+        project_name = os.environ.get("ARIZE_PROJECT_NAME")
 
         grpc_endpoint = os.environ.get("ARIZE_ENDPOINT")
         http_endpoint = os.environ.get("ARIZE_HTTP_ENDPOINT")
@@ -74,6 +75,7 @@ class ArizeLogger(OpenTelemetry):
             api_key=api_key,
             protocol=protocol,
             endpoint=endpoint,
+            project_name=project_name,
         )
 
     async def async_service_success_hook(
