@@ -18,6 +18,7 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({ teams, value, onChange, dis
       value={value}
       onChange={onChange}
       disabled={disabled}
+      allowClear
       filterOption={(input, option) => {
         if (!option) return false;
         // Get team data from the option key
