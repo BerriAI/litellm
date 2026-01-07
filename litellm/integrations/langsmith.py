@@ -40,6 +40,7 @@ class LangsmithLogger(CustomBatchLogger):
         langsmith_project: Optional[str] = None,
         langsmith_base_url: Optional[str] = None,
         langsmith_sampling_rate: Optional[float] = None,
+        langsmith_tenant_id: Optional[str] = None,
         **kwargs,
     ):
         self.flush_lock = asyncio.Lock()
@@ -48,6 +49,7 @@ class LangsmithLogger(CustomBatchLogger):
             langsmith_api_key=langsmith_api_key,
             langsmith_project=langsmith_project,
             langsmith_base_url=langsmith_base_url,
+            langsmith_tenant_id=langsmith_tenant_id,
         )
         self.sampling_rate: float = (
             langsmith_sampling_rate
@@ -76,6 +78,7 @@ class LangsmithLogger(CustomBatchLogger):
         langsmith_api_key: Optional[str] = None,
         langsmith_project: Optional[str] = None,
         langsmith_base_url: Optional[str] = None,
+        langsmith_tenant_id: Optional[str] = None,
     ) -> LangsmithCredentialsObject:
         _credentials_api_key = langsmith_api_key or os.getenv("LANGSMITH_API_KEY")
         _credentials_project = (
@@ -86,11 +89,13 @@ class LangsmithLogger(CustomBatchLogger):
             or os.getenv("LANGSMITH_BASE_URL")
             or "https://api.smith.langchain.com"
         )
+        _credentials_tenant_id = langsmith_tenant_id or os.getenv("LANGSMITH_TENANT_ID")
 
         return LangsmithCredentialsObject(
             LANGSMITH_API_KEY=_credentials_api_key,
             LANGSMITH_BASE_URL=_credentials_base_url,
             LANGSMITH_PROJECT=_credentials_project,
+            LANGSMITH_TENANT_ID=_credentials_tenant_id,
         )
 
     def _prepare_log_data(
@@ -365,8 +370,11 @@ class LangsmithLogger(CustomBatchLogger):
         """
         langsmith_api_base = credentials["LANGSMITH_BASE_URL"]
         langsmith_api_key = credentials["LANGSMITH_API_KEY"]
+        langsmith_tenant_id = credentials.get("LANGSMITH_TENANT_ID")
         url = self._add_endpoint_to_url(langsmith_api_base, "runs/batch")
         headers = {"x-api-key": langsmith_api_key}
+        if langsmith_tenant_id:
+            headers["x-tenant-id"] = langsmith_tenant_id
         elements_to_log = [queue_object["data"] for queue_object in queue_objects]
 
         try:
@@ -418,6 +426,7 @@ class LangsmithLogger(CustomBatchLogger):
                 api_key=credentials["LANGSMITH_API_KEY"],
                 project=credentials["LANGSMITH_PROJECT"],
                 base_url=credentials["LANGSMITH_BASE_URL"],
+                tenant_id=credentials.get("LANGSMITH_TENANT_ID"),
             )
 
             if key not in log_queue_by_credentials:
@@ -466,6 +475,9 @@ class LangsmithLogger(CustomBatchLogger):
                 langsmith_base_url=standard_callback_dynamic_params.get(
                     "langsmith_base_url", None
                 ),
+                langsmith_tenant_id=standard_callback_dynamic_params.get(
+                    "langsmith_tenant_id", None
+                ),
             )
         else:
             credentials = self.default_credentials
@@ -491,13 +503,16 @@ class LangsmithLogger(CustomBatchLogger):
 
     def get_run_by_id(self, run_id):
         langsmith_api_key = self.default_credentials["LANGSMITH_API_KEY"]
-
         langsmith_api_base = self.default_credentials["LANGSMITH_BASE_URL"]
+        langsmith_tenant_id = self.default_credentials.get("LANGSMITH_TENANT_ID")
 
         url = f"{langsmith_api_base}/runs/{run_id}"
+        headers = {"x-api-key": langsmith_api_key}
+        if langsmith_tenant_id:
+            headers["x-tenant-id"] = langsmith_tenant_id
         response = litellm.module_level_client.get(
             url=url,
-            headers={"x-api-key": langsmith_api_key},
+            headers=headers,
         )
 
         return response.json()

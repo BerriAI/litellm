@@ -172,11 +172,107 @@ class TestOpenTelemetryCostBreakdown(unittest.TestCase):
         assert ("gen_ai.cost.original_cost", 0.004) not in call_args_list
 
 
+class TestOpenTelemetryProviderInitialization(unittest.TestCase):
+    """Test suite for verifying provider initialization respects existing providers"""
+
+    def test_init_tracing_respects_existing_tracer_provider(self):
+        """
+        Unit test: _init_tracing() should respect existing TracerProvider.
+
+        When a TracerProvider already exists (e.g., set by Langfuse SDK),
+        LiteLLM should use it instead of creating a new one.
+        """
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider
+
+        # Setup: Create and set an existing TracerProvider
+        tracer_provider = TracerProvider()
+        trace.set_tracer_provider(tracer_provider)
+        existing_provider = trace.get_tracer_provider()
+
+        # Act: Initialize OpenTelemetry integration (should detect existing provider)
+        otel_integration = OpenTelemetry()
+
+        # Assert: The existing provider should still be active
+        current_provider = trace.get_tracer_provider()
+        assert current_provider is existing_provider, (
+            "Existing TracerProvider should be respected and not overridden"
+        )
+
+    @patch.dict(os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_METRICS": "true"}, clear=True)
+    def test_init_metrics_respects_existing_meter_provider(self):
+        """
+        Unit test: _init_metrics() should respect existing MeterProvider.
+
+        When a MeterProvider already exists (e.g., set by Langfuse SDK),
+        LiteLLM should use it instead of creating a new one.
+        """
+        from opentelemetry import metrics
+        from opentelemetry.sdk.metrics import MeterProvider
+
+        # Create and set an existing MeterProvider
+        meter_provider = MeterProvider()
+        metrics.set_meter_provider(meter_provider)
+        existing_provider = metrics.get_meter_provider()
+
+        # Act: Initialize OpenTelemetry integration (should detect existing provider)
+        config = OpenTelemetryConfig.from_env()
+        otel_integration = OpenTelemetry(config=config)
+
+        # Assert: The existing provider should still be active
+        current_provider = metrics.get_meter_provider()
+        assert current_provider is existing_provider, (
+            "Existing MeterProvider should be respected and not overridden"
+        )
+
+    @patch.dict(os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS": "true"}, clear=True)
+    def test_init_logs_respects_existing_logger_provider(self):
+        """
+        Unit test: _init_logs() should respect existing LoggerProvider.
+
+        When a LoggerProvider already exists (e.g., set by Langfuse SDK),
+        LiteLLM should use it instead of creating a new one.
+        """
+        from opentelemetry._logs import get_logger_provider, set_logger_provider
+        from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
+
+        # Create and set an existing LoggerProvider
+        logger_provider = OTLoggerProvider()
+        set_logger_provider(logger_provider)
+        existing_provider = get_logger_provider()
+
+        # Act: Initialize OpenTelemetry integration (should detect existing provider)
+        config = OpenTelemetryConfig.from_env()
+        otel_integration = OpenTelemetry(config=config)
+
+        # Assert: The existing provider should still be active
+        current_provider = get_logger_provider()
+        assert current_provider is existing_provider, (
+            "Existing LoggerProvider should be respected and not overridden"
+        )
+
+
 class TestOpenTelemetry(unittest.TestCase):
     POLL_INTERVAL = 0.05
     POLL_TIMEOUT = 2.0
     MODEL = "arn:aws:bedrock:us-west-2:1234567890123:inference-profile/us.anthropic.claude-3-7-sonnet-20250219-v1:0"
     HERE = os.path.dirname(__file__)
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_open_telemetry_config_manual_defaults(self):
+        """Manual OpenTelemetryConfig creation should populate default identifiers."""
+        config = OpenTelemetryConfig(exporter="console", endpoint="http://collector")
+        self.assertEqual(config.service_name, "litellm")
+        self.assertEqual(config.deployment_environment, "production")
+        self.assertEqual(config.model_id, "litellm")
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_open_telemetry_config_custom_service_name(self):
+        """Model ID should inherit provided service name when not explicitly set."""
+        config = OpenTelemetryConfig(service_name="custom-service", exporter="console")
+        self.assertEqual(config.service_name, "custom-service")
+        self.assertEqual(config.deployment_environment, "production")
+        self.assertEqual(config.model_id, "custom-service")
 
     def wait_for_spans(self, exporter: InMemorySpanExporter, prefix: str):
         """Poll until we see at least one span with an attribute key starting with `prefix`."""
@@ -424,8 +520,6 @@ class TestOpenTelemetry(unittest.TestCase):
         self, mock_detector_cls, mock_resource_create
     ):
         """Test _get_litellm_resource with default values when no environment variables are set."""
-        from litellm.integrations.opentelemetry import _get_litellm_resource
-
         # Mock the Resource.create method
         mock_base_resource = MagicMock()
         mock_resource_create.return_value = mock_base_resource
@@ -440,8 +534,8 @@ class TestOpenTelemetry(unittest.TestCase):
         mock_merged_resource = MagicMock()
         mock_base_resource.merge.return_value = mock_merged_resource
 
-        # Call the function
-        result = _get_litellm_resource()
+        config = OpenTelemetryConfig()
+        result = OpenTelemetry._get_litellm_resource(config)
 
         # Verify Resource.create was called with correct default attributes
         expected_attributes = {
@@ -469,8 +563,6 @@ class TestOpenTelemetry(unittest.TestCase):
         self, mock_detector_cls, mock_resource_create
     ):
         """Test _get_litellm_resource with LiteLLM-specific environment variables."""
-        from litellm.integrations.opentelemetry import _get_litellm_resource
-
         # Mock the Resource.create method
         mock_base_resource = MagicMock()
         mock_resource_create.return_value = mock_base_resource
@@ -485,8 +577,8 @@ class TestOpenTelemetry(unittest.TestCase):
         mock_merged_resource = MagicMock()
         mock_base_resource.merge.return_value = mock_merged_resource
 
-        # Call the function
-        result = _get_litellm_resource()
+        config = OpenTelemetryConfig.from_env()
+        result = OpenTelemetry._get_litellm_resource(config)
 
         # Verify Resource.create was called with environment variable values
         expected_attributes = {
@@ -513,8 +605,6 @@ class TestOpenTelemetry(unittest.TestCase):
         self, mock_detector_cls, mock_resource_create
     ):
         """Test _get_litellm_resource with OTEL_RESOURCE_ATTRIBUTES environment variable."""
-        from litellm.integrations.opentelemetry import _get_litellm_resource
-
         # Mock the Resource.create method to simulate the actual behavior
         # In reality, Resource.create() would parse OTEL_RESOURCE_ATTRIBUTES and merge it
         mock_base_resource = MagicMock()
@@ -530,8 +620,8 @@ class TestOpenTelemetry(unittest.TestCase):
         mock_merged_resource = MagicMock()
         mock_base_resource.merge.return_value = mock_merged_resource
 
-        # Call the function
-        result = _get_litellm_resource()
+        config = OpenTelemetryConfig.from_env()
+        result = OpenTelemetry._get_litellm_resource(config)
 
         # Verify Resource.create was called with the base attributes
         # The actual OTEL_RESOURCE_ATTRIBUTES parsing is handled by OpenTelemetry SDK
@@ -548,10 +638,8 @@ class TestOpenTelemetry(unittest.TestCase):
     @patch.dict(os.environ, {}, clear=True)
     def test_get_litellm_resource_integration_with_real_resource(self):
         """Integration test to verify _get_litellm_resource works with actual OpenTelemetry Resource."""
-        from litellm.integrations.opentelemetry import _get_litellm_resource
-
-        # This test uses the real OpenTelemetry Resource.create() method
-        result = _get_litellm_resource()
+        config = OpenTelemetryConfig()
+        result = OpenTelemetry._get_litellm_resource(config)
 
         # Verify the result is a Resource instance
         from opentelemetry.sdk.resources import Resource
@@ -573,10 +661,8 @@ class TestOpenTelemetry(unittest.TestCase):
     )
     def test_get_litellm_resource_real_otel_resource_attributes(self):
         """Integration test to verify OTEL_RESOURCE_ATTRIBUTES is properly handled."""
-        from litellm.integrations.opentelemetry import _get_litellm_resource
-
-        # This test uses the real OpenTelemetry Resource.create() method
-        result = _get_litellm_resource()
+        config = OpenTelemetryConfig.from_env()
+        result = OpenTelemetry._get_litellm_resource(config)
 
         print("RESULT", result)
 
@@ -603,10 +689,8 @@ class TestOpenTelemetry(unittest.TestCase):
     )
     def test_get_litellm_resource_precedence(self):
         """Test that OTEL_SERVICE_NAME takes precedence over OTEL_RESOURCE_ATTRIBUTES according to OpenTelemetry spec."""
-        from litellm.integrations.opentelemetry import _get_litellm_resource
-
-        # This test verifies the OpenTelemetry standard behavior
-        result = _get_litellm_resource()
+        config = OpenTelemetryConfig.from_env()
+        result = OpenTelemetry._get_litellm_resource(config)
 
         # Verify the result is a Resource instance
         from opentelemetry.sdk.resources import Resource
@@ -618,7 +702,6 @@ class TestOpenTelemetry(unittest.TestCase):
         self.assertEqual(attributes.get("service.name"), "litellm-service")
         # But other attributes from OTEL_RESOURCE_ATTRIBUTES should still be present
         self.assertEqual(attributes.get("extra.attr"), "extra-value")
-
 
 
     def test_handle_success_spans_only(self):
@@ -687,11 +770,8 @@ class TestOpenTelemetry(unittest.TestCase):
         logs = log_exporter.get_finished_logs()
         self.assertFalse(logs, "Did not expect any logs")
 
+    @patch.dict(os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_METRICS": "true"}, clear=True)
     def test_handle_success_spans_and_metrics(self):
-        # only metrics on
-        os.environ.pop("LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS", None)
-        os.environ["LITELLM_OTEL_INTEGRATION_ENABLE_METRICS"] = "true"
-
         # ─── build in‐memory OTEL providers/exporters ─────────────────────────────
         span_exporter = InMemorySpanExporter()
         tracer_provider = TracerProvider()
@@ -1319,6 +1399,23 @@ class TestOpenTelemetryProtocolSelection(unittest.TestCase):
                 "http://collector:4317/v1/traces", "logs"
             )
             self.assertEqual(normalized, "http://collector:4317/v1/logs")
+
+    def test_get_metric_reader_uses_http_exporter_for_http_protobuf(self):
+        """Test that http/protobuf protocol uses OTLPMetricExporterHTTP"""
+        from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
+            OTLPMetricExporter,
+        )
+        from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+
+        config = OpenTelemetryConfig(
+            exporter="http/protobuf", endpoint="http://collector:4318"
+        )
+        otel = OpenTelemetry(config=config)
+
+        reader = otel._get_metric_reader()
+
+        self.assertIsInstance(reader, PeriodicExportingMetricReader)
+        self.assertIsInstance(reader._exporter, OTLPMetricExporter)
 
 
 class TestOpenTelemetryExternalSpan(unittest.TestCase):

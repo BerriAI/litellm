@@ -803,3 +803,99 @@ async def test_router_timeout_model_specific_and_global():
         mock_client.assert_called()
 
         assert mock_client.call_args.kwargs["timeout"] == 1
+
+
+@pytest.mark.asyncio
+async def test_router_retry_num_retries_tracking():
+    """
+    Test that num_retries attribute is correctly set on exceptions when all retries are exhausted.
+    
+    This verifies the fix for the bug where num_retries was incorrectly set to current_attempt
+    (0-indexed) instead of the actual number of retries attempted.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            }
+        ],
+        num_retries=3,  # Set at router level to ensure it's used
+    )
+
+    # Mock make_call to always raise a RateLimitError
+    async def mock_make_call(*args, **kwargs):
+        raise litellm.RateLimitError(
+            message="Rate limit exceeded",
+            model="gpt-3.5-turbo",
+            llm_provider="openai",
+        )
+
+    with patch.object(router, "make_call", side_effect=mock_make_call):
+        with patch.object(router, "_async_get_healthy_deployments", return_value=([{"model_info": {"id": "test-id"}}], [{"model_info": {"id": "test-id"}}])):
+            with patch.object(router, "_time_to_sleep_before_retry", return_value=0.01):  # Fast retries for testing
+                try:
+                    await router.acompletion(
+                        model="gpt-3.5-turbo",
+                        messages=[{"role": "user", "content": "Hello"}],
+                    )
+                    pytest.fail("Expected exception to be raised")
+                except litellm.RateLimitError as e:
+                    # Verify num_retries is correctly set to 3 (not 2, which would be current_attempt)
+                    assert hasattr(e, "num_retries"), "Exception should have num_retries attribute"
+                    assert hasattr(e, "max_retries"), "Exception should have max_retries attribute"
+                    assert e.num_retries == 3, f"Expected num_retries to be 3, got {e.num_retries}"
+                    assert e.max_retries == 3, f"Expected max_retries to be 3, got {e.max_retries}"
+                    
+                    # Verify the error message includes correct retry information
+                    error_str = str(e)
+                    assert "LiteLLM Retried: 3 times" in error_str, f"Error message should indicate 3 retries: {error_str}"
+                    assert "LiteLLM Max Retries: 3" in error_str, f"Error message should show max retries: {error_str}"
+
+
+@pytest.mark.asyncio
+async def test_router_retry_num_retries_single_retry():
+    """
+    Test num_retries tracking with a single retry to verify edge case handling.
+    """
+    from unittest.mock import patch
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            }
+        ],
+        num_retries=1,  # Set at router level - single retry
+    )
+
+    # Mock make_call to always raise a Timeout error
+    async def mock_make_call(*args, **kwargs):
+        raise litellm.Timeout(
+            message="Request timed out",
+            model="gpt-3.5-turbo",
+            llm_provider="openai",
+        )
+
+    with patch.object(router, "make_call", side_effect=mock_make_call):
+        with patch.object(router, "_async_get_healthy_deployments", return_value=([{"model_info": {"id": "test-id"}}], [{"model_info": {"id": "test-id"}}])):
+            with patch.object(router, "_time_to_sleep_before_retry", return_value=0.01):
+                try:
+                    await router.acompletion(
+                        model="gpt-3.5-turbo",
+                        messages=[{"role": "user", "content": "Hello"}],
+                    )
+                    pytest.fail("Expected exception to be raised")
+                except litellm.Timeout as e:
+                    # With num_retries=1, we should attempt 1 retry
+                    assert e.num_retries == 1, f"Expected num_retries to be 1, got {e.num_retries}"
+                    assert e.max_retries == 1, f"Expected max_retries to be 1, got {e.max_retries}"

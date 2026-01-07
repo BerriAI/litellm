@@ -7,9 +7,11 @@ from pathlib import PurePosixPath
 from typing import Any, Dict, Optional
 from urllib.parse import quote
 
-import httpx
-
 from litellm._logging import verbose_logger
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
@@ -214,28 +216,28 @@ def create_tool_function(
                 except (json.JSONDecodeError, TypeError):
                     json_body = {"data": body_value}
 
-        # Make HTTP request
-        async with httpx.AsyncClient() as client:
-            if original_method == "get":
-                response = await client.get(url, params=params, headers=headers)
-            elif original_method == "post":
-                response = await client.post(
-                    url, params=params, json=json_body, headers=headers
-                )
-            elif original_method == "put":
-                response = await client.put(
-                    url, params=params, json=json_body, headers=headers
-                )
-            elif original_method == "delete":
-                response = await client.delete(url, params=params, headers=headers)
-            elif original_method == "patch":
-                response = await client.patch(
-                    url, params=params, json=json_body, headers=headers
-                )
-            else:
-                return f"Unsupported HTTP method: {original_method}"
+        client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
 
-            return response.text
+        if original_method == "get":
+            response = await client.get(url, params=params, headers=headers)
+        elif original_method == "post":
+            response = await client.post(
+                url, params=params, json=json_body, headers=headers
+            )
+        elif original_method == "put":
+            response = await client.put(
+                url, params=params, json=json_body, headers=headers
+            )
+        elif original_method == "delete":
+            response = await client.delete(url, params=params, headers=headers)
+        elif original_method == "patch":
+            response = await client.patch(
+                url, params=params, json=json_body, headers=headers
+            )
+        else:
+            return f"Unsupported HTTP method: {original_method}"
+
+        return response.text
 
     return tool_function
 

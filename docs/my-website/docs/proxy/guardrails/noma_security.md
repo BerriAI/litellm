@@ -39,6 +39,8 @@ guardrails:
 - `pre_call` Run **before** LLM call, on **input**
 - `post_call` Run **after** LLM call, on **input & output**
 - `during_call` Run **during** LLM call, on **input**. Same as `pre_call` but runs in parallel with the LLM call. Response not returned until guardrail check completes
+- `pre_mcp_call`: Scan MCP tool call inputs before execution
+- `during_mcp_call`: Monitor MCP tool calls in real-time
 
 ### 2. Start LiteLLM Gateway
 
