@@ -111,7 +111,7 @@ extra_proxy = [
     "google-cloud-kms",
     "google-cloud-iam",
     "resend",
-    "redisvl",
+    "redisvl"
 ]
 
 utils = [
