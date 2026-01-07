@@ -2677,6 +2677,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langsmith_project: Optional[str]
     langsmith_base_url: Optional[str]
     langsmith_sampling_rate: Optional[float]
+    langsmith_tenant_id: Optional[str]
 
     # Humanloop dynamic params
     humanloop_api_key: Optional[str]
@@ -2946,6 +2947,7 @@ class LlmProviders(str, Enum):
     MISTRAL = "mistral"
     MILVUS = "milvus"
     GROQ = "groq"
+    GIGACHAT = "gigachat"
     NVIDIA_NIM = "nvidia_nim"
     CEREBRAS = "cerebras"
     AI21_CHAT = "ai21_chat"

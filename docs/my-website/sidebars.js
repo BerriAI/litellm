@@ -541,7 +541,14 @@ const sidebars = {
         },
         "realtime",
         "rerank",
-        "response_api",
+        {
+          type: "category",
+          label: "/responses",
+          items: [
+            "response_api",
+            "response_api_compact",
+          ]
+        },
         {
           type: "category",
           label: "/search",
@@ -731,6 +738,7 @@ const sidebars = {
         "providers/langgraph",
         "providers/lemonade",
         "providers/llamafile",
+        "providers/llamagate",
         "providers/lm_studio",
         "providers/meta_llama",
         "providers/milvus_vector_stores",
