@@ -1,18 +1,19 @@
 import os
 import sys
 from unittest.mock import MagicMock, patch
+
 import pytest
 
 sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm.integrations.gitlab.gitlab_client import GitLabClient
 from litellm.integrations.gitlab.gitlab_prompt_manager import (
+    GitLabPromptCache,
     GitLabPromptManager,
     GitLabPromptTemplate,
     GitLabTemplateManager,
-    GitLabPromptCache,
-    encode_prompt_id,
     decode_prompt_id,
+    encode_prompt_id,
 )
 
 # -----------------------
@@ -817,8 +818,10 @@ def test_cache_get_by_file_returns_exact_entry(mock_pm_cls, fake_managers):
     assert beta and beta["id"] == "nested/beta"
 
 
+@patch("litellm.integrations.gitlab.gitlab_prompt_manager.GitLabClient")
 @patch("litellm.integrations.gitlab.gitlab_prompt_manager.GitLabPromptManager")
-def test_encode_decode_helpers_roundtrip_in_cache_context(mock_pm_cls, fake_managers):
+def test_encode_decode_helpers_roundtrip_in_cache_context(mock_pm_cls, mock_client_cls, fake_managers):
+    """Test that encode/decode helpers work correctly in the cache context."""
     tm, wrapper = fake_managers
     tm._discoverable_ids = ["dir1/dir2/item"]
     mock_pm_cls.return_value = wrapper
@@ -826,10 +829,13 @@ def test_encode_decode_helpers_roundtrip_in_cache_context(mock_pm_cls, fake_mana
     cache = GitLabPromptCache({"project": "g/s/r", "access_token": "tkn"})
     cache.load_all()
 
+    # Verify mock was used
+    mock_pm_cls.assert_called_once()
+
     encoded = encode_prompt_id("dir1/dir2/item")
     assert encoded in cache.list_ids()
 
-    # decode → encode → lookup should still work
+    # decode -> encode -> lookup should still work
     decoded = decode_prompt_id(encoded)
     assert decoded == "dir1/dir2/item"
 
