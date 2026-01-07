@@ -726,64 +726,34 @@ class LiteLLMCompletionResponsesConfig:
         ]
     ]:
         """
-        ChatCompletionToolMessage is used to indicate the output from a tool call
+        ChatCompletionToolMessage is used to indicate the output from a tool call.
+
+        NOTE: We intentionally do NOT create assistant messages with tool_calls here.
+        This prevents duplicate tool_use IDs when the client sends both function_call
+        items (which create assistant messages) AND function_call_output items.
+
+        The _ensure_tool_results_have_corresponding_tool_calls function (called later
+        in the pipeline via async_responses_api_session_handler) handles adding
+        tool_calls to assistant messages when needed.
+
+        Fixes: https://github.com/BerriAI/litellm/issues/15178
         """
         call_id = tool_call_output.get("call_id")
         # If call_id is missing or empty, skip this message
         # Empty call_id means we can't create a valid tool message
         if not call_id:
             return []
-        
+
         tool_output_message = ChatCompletionToolMessage(
             role="tool",
             content=tool_call_output.get("output") or "",
             tool_call_id=str(call_id),
         )
 
-        _tool_use_definition = TOOL_CALLS_CACHE.get_cache(
-            key=tool_call_output.get("call_id") or "",
-        )
-        if _tool_use_definition:
-            """
-            Append the tool use definition to the list of messages
-
-
-            Providers like Anthropic require the tool use definition to be included with the tool output
-
-            - Input:
-                {'function':
-                    arguments:'{"command": ["echo","<html>\\n<head>\\n  <title>Hello</title>\\n</head>\\n<body>\\n  <h1>Hi</h1>\\n</body>\\n</html>",">","index.html"]}',
-                    name='shell',
-                    'id': 'toolu_018KFWsEySHjdKZPdUzXpymJ',
-                    'type': 'function'
-                }
-            - Output:
-                {
-                    "id": "toolu_018KFWsEySHjdKZPdUzXpymJ",
-                    "type": "function",
-                    "function": {
-                        "name": "get_weather",
-                        "arguments": "{\"latitude\":48.8566,\"longitude\":2.3522}"
-                        }
-                }
-
-            """
-            function: dict = _tool_use_definition.get("function") or {}
-            tool_call_chunk = ChatCompletionToolCallChunk(
-                id=_tool_use_definition.get("id") or "",
-                type=cast(Literal["function"], _tool_use_definition.get("type") or "function"),
-                function=ChatCompletionToolCallFunctionChunk(
-                    name=function.get("name") or "",
-                    arguments=str(function.get("arguments") or ""),
-                ),
-                index=0,
-            )
-            chat_completion_response_message = ChatCompletionResponseMessage(
-                tool_calls=[tool_call_chunk],
-                role="assistant",
-            )
-            return [chat_completion_response_message, tool_output_message]
-
+        # NOTE: Previously this function would create an assistant message with tool_calls
+        # from TOOL_CALLS_CACHE. This caused duplicate tool_use IDs when the client also
+        # sent function_call items. Now we rely on _ensure_tool_results_have_corresponding_tool_calls
+        # to add tool_calls to assistant messages when needed.
         return [tool_output_message]
 
     @staticmethod
