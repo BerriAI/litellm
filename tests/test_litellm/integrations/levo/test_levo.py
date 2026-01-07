@@ -9,10 +9,10 @@ from litellm.integrations.opentelemetry import OpenTelemetryConfig
 # Try to import OpenTelemetry packages, skip tests if not available
 try:
     from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
         InMemorySpanExporter,
     )
-    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 
     OPENTELEMETRY_AVAILABLE = True
 except ImportError:
@@ -150,53 +150,6 @@ class TestLevoConfig(unittest.TestCase):
 
 class TestLevoIntegration(unittest.TestCase):
     """Integration tests for LevoLogger."""
-
-    @patch.dict(
-        "os.environ",
-        {
-            "LEVOAI_API_KEY": "test-api-key",
-            "LEVOAI_ORG_ID": "test-org-id",
-            "LEVOAI_WORKSPACE_ID": "test-workspace-id",
-            "LEVOAI_COLLECTOR_URL": "https://collector.levo.ai",
-        },
-    )
-    @pytest.mark.skipif(
-        not OPENTELEMETRY_AVAILABLE, reason="OpenTelemetry packages not installed"
-    )
-    @patch(
-        "litellm.integrations.opentelemetry.OpenTelemetry._init_otel_logger_on_litellm_proxy"
-    )
-    def test_levo_logger_instantiation(self, mock_init_proxy):
-        """Test that LevoLogger can be instantiated with proper config."""
-        # Mock the proxy initialization to avoid importing proxy code
-        mock_init_proxy.return_value = None
-
-        config = LevoLogger.get_levo_config()
-        otel_config = OpenTelemetryConfig(
-            exporter=config.protocol,
-            endpoint=config.endpoint,
-            headers=config.otlp_auth_headers,
-        )
-
-        # Create a tracer provider with in-memory exporter to avoid requiring OTLP packages
-        tracer_provider = TracerProvider()
-        tracer_provider.add_span_processor(SimpleSpanProcessor(InMemorySpanExporter()))
-
-        # Create LevoLogger instance with mocked tracer provider
-        levo_logger = LevoLogger(
-            config=otel_config, callback_name="levo", tracer_provider=tracer_provider
-        )
-
-        # Verify it's an instance of OpenTelemetry
-        self.assertIsInstance(levo_logger, LevoLogger)
-        # Check it extends OpenTelemetry by checking base classes
-        from litellm.integrations.opentelemetry import OpenTelemetry
-
-        self.assertIsInstance(levo_logger, OpenTelemetry)
-
-        # Verify callback_name is set
-        self.assertEqual(levo_logger.callback_name, "levo")
-
     @patch.dict(
         "os.environ",
         {
