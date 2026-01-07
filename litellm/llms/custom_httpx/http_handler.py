@@ -31,6 +31,7 @@ from litellm.constants import (
     AIOHTTP_TTL_DNS_CACHE,
     DEFAULT_SSL_CIPHERS,
 )
+from litellm.litellm_core_utils.json_encoding_utils import prepare_json_request
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.types.llms.custom_http import *
 
@@ -451,6 +452,11 @@ class AsyncHTTPHandler:
                 data, content
             )
 
+            # Handle JSON with surrogate-safe encoding
+            if json is not None:
+                headers, request_content = prepare_json_request(json, headers, request_content)
+                json = None  # Clear json param since we're using content
+
             req = self.client.build_request(
                 "POST",
                 url,
@@ -531,6 +537,11 @@ class AsyncHTTPHandler:
                 data, content
             )
 
+            # Handle JSON with surrogate-safe encoding
+            if json is not None:
+                headers, request_content = prepare_json_request(json, headers, request_content)
+                json = None  # Clear json param since we're using content
+
             req = self.client.build_request(
                 "PUT", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
             )
@@ -596,6 +607,11 @@ class AsyncHTTPHandler:
             request_data, request_content = _prepare_request_data_and_content(
                 data, content
             )
+
+            # Handle JSON with surrogate-safe encoding
+            if json is not None:
+                headers, request_content = prepare_json_request(json, headers, request_content)
+                json = None  # Clear json param since we're using content
 
             req = self.client.build_request(
                 "PATCH", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
@@ -663,6 +679,11 @@ class AsyncHTTPHandler:
                 data, content
             )
 
+            # Handle JSON with surrogate-safe encoding
+            if json is not None:
+                headers, request_content = prepare_json_request(json, headers, request_content)
+                json = None  # Clear json param since we're using content
+
             req = self.client.build_request(
                 "DELETE", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
             )
@@ -714,6 +735,11 @@ class AsyncHTTPHandler:
         """
         # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
         request_data, request_content = _prepare_request_data_and_content(data, content)
+
+        # Handle JSON with surrogate-safe encoding
+        if json is not None:
+            headers, request_content = prepare_json_request(json, headers, request_content)
+            json = None  # Clear json param since we're using content
 
         req = client.build_request(
             "POST", url, data=request_data, json=json, params=params, headers=headers, content=request_content  # type: ignore
@@ -990,6 +1016,11 @@ class HTTPHandler:
                 data, content
             )
 
+            # Handle JSON with surrogate-safe encoding
+            if json is not None:
+                headers, request_content = prepare_json_request(json, headers, request_content)
+                json = None  # Clear json param since we're using content
+
             if timeout is not None:
                 req = self.client.build_request(
                     "POST",
@@ -1046,6 +1077,11 @@ class HTTPHandler:
                 data, content
             )
 
+            # Handle JSON with surrogate-safe encoding
+            if json is not None:
+                headers, request_content = prepare_json_request(json, headers, request_content)
+                json = None  # Clear json param since we're using content
+
             if timeout is not None:
                 req = self.client.build_request(
                     "PATCH", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
@@ -1095,6 +1131,11 @@ class HTTPHandler:
                 data, content
             )
 
+            # Handle JSON with surrogate-safe encoding
+            if json is not None:
+                headers, request_content = prepare_json_request(json, headers, request_content)
+                json = None  # Clear json param since we're using content
+
             if timeout is not None:
                 req = self.client.build_request(
                     "PUT", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
@@ -1130,6 +1171,11 @@ class HTTPHandler:
             request_data, request_content = _prepare_request_data_and_content(
                 data, content
             )
+
+            # Handle JSON with surrogate-safe encoding
+            if json is not None:
+                headers, request_content = prepare_json_request(json, headers, request_content)
+                json = None  # Clear json param since we're using content
 
             if timeout is not None:
                 req = self.client.build_request(
