@@ -498,6 +498,7 @@ router_settings:
 | DD_VERSION | Version identifier for Datadog logs. Defaults to "unknown"
 | DEBUG_OTEL | Enable debug mode for OpenTelemetry
 | DEFAULT_ALLOWED_FAILS | Maximum failures allowed before cooling down a model. Default is 3
+| DEFAULT_A2A_AGENT_TIMEOUT | Default timeout in seconds for A2A (Agent-to-Agent) protocol requests. Default is 6000
 | DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS | Default maximum tokens for Anthropic chat completions. Default is 4096
 | DEFAULT_BATCH_SIZE | Default batch size for operations. Default is 512
 | DEFAULT_CHUNK_OVERLAP | Default chunk overlap for RAG text splitters. Default is 200
@@ -699,6 +700,7 @@ router_settings:
 | LITELLM_EMAIL | Email associated with LiteLLM account
 | LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES | Maximum retries for parallel requests in LiteLLM
 | LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRY_TIMEOUT | Timeout for retries of parallel requests in LiteLLM
+| LITELLM_DISABLE_LAZY_LOADING | When set to "1", "true", "yes", or "on", disables lazy loading of attributes (currently only affects encoding/tiktoken). This ensures encoding is initialized before VCR starts recording HTTP requests, fixing VCR cassette creation issues. See [issue #18659](https://github.com/BerriAI/litellm/issues/18659)
 | LITELLM_MIGRATION_DIR | Custom migrations directory for prisma migrations, used for baselining db in read-only file systems.
 | LITELLM_HOSTED_UI | URL of the hosted UI for LiteLLM
 | LITELLM_UI_API_DOC_BASE_URL | Optional override for the API Reference base URL (used in sample code/docs) when the admin UI runs on a different host than the proxy. Defaults to `PROXY_BASE_URL` when unset.
