@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Azure AI Image Generation
+# Azure AI Image Generation (Black Forest Labs - Flux)
 
 Azure AI provides powerful image generation capabilities using FLUX models from Black Forest Labs to create high-quality images from text descriptions.
 
@@ -33,6 +33,7 @@ Get your API key and endpoint from [Azure AI Studio](https://ai.azure.com/).
 |------------|-------------|----------------|
 | `azure_ai/FLUX-1.1-pro` | Latest FLUX 1.1 Pro model for high-quality image generation | $0.04 |
 | `azure_ai/FLUX.1-Kontext-pro` | FLUX 1 Kontext Pro model with enhanced context understanding | $0.04 |
+| `azure_ai/flux.2-pro` | FLUX 2 Pro model for next-generation image generation | $0.04 |
 
 ## Image Generation
 
@@ -81,6 +82,32 @@ response = litellm.image_generation(
 )
 
 print(response.data[0].url)
+```
+
+</TabItem>
+
+<TabItem value="flux2" label="FLUX 2 Pro">
+
+```python showLineNumbers title="FLUX 2 Pro Image Generation"
+import litellm
+import os
+
+# Set your API credentials
+os.environ["AZURE_AI_API_KEY"] = "your-api-key-here"
+os.environ["AZURE_AI_API_BASE"] = "your-azure-ai-endpoint"  # e.g., https://litellm-ci-cd-prod.services.ai.azure.com
+
+# Generate image with FLUX 2 Pro
+response = litellm.image_generation(
+    model="azure_ai/flux.2-pro",
+    prompt="A photograph of a red fox in an autumn forest",
+    api_base=os.environ["AZURE_AI_API_BASE"],
+    api_key=os.environ["AZURE_AI_API_KEY"],
+    api_version="preview",
+    size="1024x1024",
+    n=1
+)
+
+print(response.data[0].b64_json)  # FLUX 2 returns base64 encoded images
 ```
 
 </TabItem>
@@ -162,6 +189,15 @@ model_list:
       model: azure_ai/FLUX-1.1-pro
       api_key: os.environ/AZURE_AI_API_KEY
       api_base: os.environ/AZURE_AI_API_BASE
+    model_info:
+      mode: image_generation
+
+  - model_name: azure-flux-2-pro
+    litellm_params:
+      model: azure_ai/flux.2-pro
+      api_key: os.environ/AZURE_AI_API_KEY
+      api_base: os.environ/AZURE_AI_API_BASE
+      api_version: preview
     model_info:
       mode: image_generation
 
