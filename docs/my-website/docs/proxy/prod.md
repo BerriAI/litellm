@@ -54,8 +54,8 @@ For optimal performance in production, we recommend the following minimum machin
 
 | Resource | Recommended Value |
 |----------|------------------|
-| CPU      | 2 vCPU           |
-| Memory   | 4 GB RAM         |
+| CPU      | 4 vCPU           |
+| Memory   | 8 GB RAM         |
 
 These specifications provide:
 - Sufficient compute power for handling concurrent requests
