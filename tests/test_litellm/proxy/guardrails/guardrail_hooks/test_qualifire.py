@@ -2,7 +2,6 @@
 Unit tests for Qualifire guardrail integration.
 """
 
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -75,9 +74,37 @@ class TestQualifireGuardrailInit:
 
         assert guardrail.on_flagged == "monitor"
 
+    def test_init_with_default_api_base(self):
+        """Test that default API base is set when not provided."""
+        from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import (
+            DEFAULT_QUALIFIRE_API_BASE,
+            QualifireGuardrail,
+        )
+
+        guardrail = QualifireGuardrail(
+            api_key="test_key",
+            guardrail_name="test_guardrail",
+        )
+
+        assert guardrail.qualifire_api_base == DEFAULT_QUALIFIRE_API_BASE
+
+    def test_init_with_custom_api_base(self):
+        """Test initialization with custom API base URL."""
+        from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import (
+            QualifireGuardrail,
+        )
+
+        guardrail = QualifireGuardrail(
+            api_key="test_key",
+            api_base="https://custom.qualifire.ai",
+            guardrail_name="test_guardrail",
+        )
+
+        assert guardrail.qualifire_api_base == "https://custom.qualifire.ai"
+
 
 class TestQualifireGuardrailMessageConversion:
-    """Tests for message conversion to Qualifire format."""
+    """Tests for message conversion to API format."""
 
     def test_convert_simple_messages(self):
         """Test conversion of simple text messages."""
@@ -95,15 +122,13 @@ class TestQualifireGuardrailMessageConversion:
             {"role": "assistant", "content": "Hi there!"},
         ]
 
-        # Create mock LLMMessage class
-        mock_llm_message = MagicMock()
+        result = guardrail._convert_messages_to_api_format(messages)
 
-        with patch(
-            "litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire.QualifireGuardrail._convert_messages_to_qualifire_format"
-        ) as mock_convert:
-            mock_convert.return_value = [mock_llm_message, mock_llm_message]
-            result = guardrail._convert_messages_to_qualifire_format(messages)
-            assert len(result) == 2
+        assert len(result) == 2
+        assert result[0]["role"] == "user"
+        assert result[0]["content"] == "Hello, world!"
+        assert result[1]["role"] == "assistant"
+        assert result[1]["content"] == "Hi there!"
 
     def test_convert_multimodal_messages(self):
         """Test conversion of multimodal messages with text parts."""
@@ -126,112 +151,258 @@ class TestQualifireGuardrailMessageConversion:
             },
         ]
 
-        with patch(
-            "litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire.QualifireGuardrail._convert_messages_to_qualifire_format"
-        ) as mock_convert:
-            mock_convert.return_value = [MagicMock()]
-            result = guardrail._convert_messages_to_qualifire_format(messages)
-            assert len(result) == 1
+        result = guardrail._convert_messages_to_api_format(messages)
+
+        assert len(result) == 1
+        assert result[0]["role"] == "user"
+        assert result[0]["content"] == "First part\nSecond part"
+
+    def test_convert_messages_with_tool_calls(self):
+        """Test conversion of messages with tool calls."""
+        from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import (
+            QualifireGuardrail,
+        )
+
+        guardrail = QualifireGuardrail(
+            api_key="test_key",
+            guardrail_name="test_guardrail",
+        )
+
+        messages = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_123",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"location": "NYC"}',
+                        },
+                    }
+                ],
+            },
+        ]
+
+        result = guardrail._convert_messages_to_api_format(messages)
+
+        assert len(result) == 1
+        assert result[0]["role"] == "assistant"
+        assert "tool_calls" in result[0]
+        assert len(result[0]["tool_calls"]) == 1
+        assert result[0]["tool_calls"][0]["id"] == "call_123"
+        assert result[0]["tool_calls"][0]["name"] == "get_weather"
+        assert result[0]["tool_calls"][0]["arguments"] == {"location": "NYC"}
 
 
-class TestQualifireGuardrailEvaluateKwargs:
-    """Tests for evaluate kwargs passed to Qualifire client."""
+class TestQualifireGuardrailToolConversion:
+    """Tests for tool definition conversion."""
+
+    def test_convert_openai_function_tools(self):
+        """Test conversion of OpenAI function tool format."""
+        from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import (
+            QualifireGuardrail,
+        )
+
+        guardrail = QualifireGuardrail(
+            api_key="test_key",
+            guardrail_name="test_guardrail",
+        )
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather for a location",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ]
+
+        result = guardrail._convert_tools_to_api_format(tools)
+
+        assert result is not None
+        assert len(result) == 1
+        assert result[0]["name"] == "get_weather"
+        assert result[0]["description"] == "Get weather for a location"
+
+    def test_convert_empty_tools(self):
+        """Test that empty tools returns None."""
+        from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import (
+            QualifireGuardrail,
+        )
+
+        guardrail = QualifireGuardrail(
+            api_key="test_key",
+            guardrail_name="test_guardrail",
+        )
+
+        result = guardrail._convert_tools_to_api_format(None)
+        assert result is None
+
+        result = guardrail._convert_tools_to_api_format([])
+        assert result is None
+
+
+class TestQualifireGuardrailAPICall:
+    """Tests for API call with httpx client."""
 
     @pytest.mark.asyncio
     async def test_evaluate_called_with_prompt_injections(self):
-        """Test that evaluate is called with prompt_injections enabled."""
-        # Mock the qualifire module and its types
-        mock_qualifire_types = MagicMock()
-        mock_llm_message = MagicMock()
-        mock_llm_tool_call = MagicMock()
-        mock_message_instance = MagicMock()
-        mock_llm_message.return_value = mock_message_instance
-        
-        mock_qualifire_types.LLMMessage = mock_llm_message
-        mock_qualifire_types.LLMToolCall = mock_llm_tool_call
-        
-        with patch.dict('sys.modules', {'qualifire': MagicMock(), 'qualifire.types': mock_qualifire_types}):
-            from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import (
-                QualifireGuardrail,
-            )
+        """Test that evaluate endpoint is called with prompt_injections enabled."""
+        from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import (
+            QualifireGuardrail,
+        )
 
-            guardrail = QualifireGuardrail(
-                api_key="test_key",
-                prompt_injections=True,
-                guardrail_name="test_guardrail",
-            )
+        guardrail = QualifireGuardrail(
+            api_key="test_key",
+            prompt_injections=True,
+            guardrail_name="test_guardrail",
+        )
 
-            # Mock the client
-            mock_client = MagicMock()
-            mock_result = MagicMock()
-            mock_result.score = 100
-            mock_result.status = "completed"
-            mock_result.evaluationResults = []
-            mock_client.evaluate.return_value = mock_result
-            guardrail._client = mock_client
+        # Mock the async HTTP handler
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "score": 100,
+            "status": "completed",
+            "evaluationResults": [],
+        }
+        mock_response.raise_for_status = MagicMock()
+        guardrail.async_handler.post = AsyncMock(return_value=mock_response)
 
-            messages = [{"role": "user", "content": "Hello, world!"}]
+        messages = [{"role": "user", "content": "Hello, world!"}]
 
-            await guardrail._run_qualifire_check(
-                messages=messages, output=None, dynamic_params={}
-            )
+        await guardrail._run_qualifire_check(
+            messages=messages, output=None, dynamic_params={}
+        )
 
-            # Verify evaluate was called with correct kwargs
-            mock_client.evaluate.assert_called_once()
-            call_kwargs = mock_client.evaluate.call_args[1]
-            assert call_kwargs["prompt_injections"] is True
-            assert "messages" in call_kwargs
+        # Verify the API was called
+        guardrail.async_handler.post.assert_called_once()
+        call_kwargs = guardrail.async_handler.post.call_args[1]
+
+        assert "json" in call_kwargs
+        payload = call_kwargs["json"]
+        assert payload["prompt_injections"] is True
+        assert "messages" in payload
+        assert call_kwargs["url"].endswith("/api/evaluation/evaluate")
 
     @pytest.mark.asyncio
     async def test_evaluate_called_with_multiple_checks(self):
         """Test that evaluate is called with multiple checks enabled."""
-        # Mock the qualifire module and its types
-        mock_qualifire_types = MagicMock()
-        mock_llm_message = MagicMock()
-        mock_llm_tool_call = MagicMock()
-        mock_message_instance = MagicMock()
-        mock_llm_message.return_value = mock_message_instance
-        
-        mock_qualifire_types.LLMMessage = mock_llm_message
-        mock_qualifire_types.LLMToolCall = mock_llm_tool_call
-        
-        with patch.dict('sys.modules', {'qualifire': MagicMock(), 'qualifire.types': mock_qualifire_types}):
-            from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import (
-                QualifireGuardrail,
-            )
+        from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import (
+            QualifireGuardrail,
+        )
 
-            guardrail = QualifireGuardrail(
-                api_key="test_key",
-                prompt_injections=True,
-                pii_check=True,
-                hallucinations_check=True,
-                assertions=["Output must be valid JSON"],
-                guardrail_name="test_guardrail",
-            )
+        guardrail = QualifireGuardrail(
+            api_key="test_key",
+            prompt_injections=True,
+            pii_check=True,
+            hallucinations_check=True,
+            assertions=["Output must be valid JSON"],
+            guardrail_name="test_guardrail",
+        )
 
-            # Mock the client
-            mock_client = MagicMock()
-            mock_result = MagicMock()
-            mock_result.score = 100
-            mock_result.status = "completed"
-            mock_result.evaluationResults = []
-            mock_client.evaluate.return_value = mock_result
-            guardrail._client = mock_client
+        # Mock the async HTTP handler
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "score": 100,
+            "status": "completed",
+            "evaluationResults": [],
+        }
+        mock_response.raise_for_status = MagicMock()
+        guardrail.async_handler.post = AsyncMock(return_value=mock_response)
 
-            messages = [{"role": "user", "content": "Hello, world!"}]
+        messages = [{"role": "user", "content": "Hello, world!"}]
 
-            await guardrail._run_qualifire_check(
-                messages=messages, output="Test output", dynamic_params={}
-            )
+        await guardrail._run_qualifire_check(
+            messages=messages, output="Test output", dynamic_params={}
+        )
 
-            # Verify evaluate was called with correct kwargs
-            mock_client.evaluate.assert_called_once()
-            call_kwargs = mock_client.evaluate.call_args[1]
-            assert call_kwargs["prompt_injections"] is True
-            assert call_kwargs["pii_check"] is True
-            assert call_kwargs["hallucinations_check"] is True
-            assert call_kwargs["assertions"] == ["Output must be valid JSON"]
-            assert call_kwargs["output"] == "Test output"
+        # Verify the API was called with correct payload
+        guardrail.async_handler.post.assert_called_once()
+        call_kwargs = guardrail.async_handler.post.call_args[1]
+
+        payload = call_kwargs["json"]
+        assert payload["prompt_injections"] is True
+        assert payload["pii_check"] is True
+        assert payload["hallucinations_check"] is True
+        assert payload["assertions"] == ["Output must be valid JSON"]
+        assert payload["output"] == "Test output"
+
+    @pytest.mark.asyncio
+    async def test_invoke_endpoint_used_with_evaluation_id(self):
+        """Test that invoke endpoint is used when evaluation_id is provided."""
+        from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import (
+            QualifireGuardrail,
+        )
+
+        guardrail = QualifireGuardrail(
+            api_key="test_key",
+            evaluation_id="eval_123",
+            guardrail_name="test_guardrail",
+        )
+
+        # Mock the async HTTP handler
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "score": 100,
+            "status": "completed",
+            "evaluationResults": [],
+        }
+        mock_response.raise_for_status = MagicMock()
+        guardrail.async_handler.post = AsyncMock(return_value=mock_response)
+
+        messages = [{"role": "user", "content": "Hello, world!"}]
+
+        await guardrail._run_qualifire_check(
+            messages=messages, output="Test output", dynamic_params={}
+        )
+
+        # Verify the invoke endpoint was called
+        guardrail.async_handler.post.assert_called_once()
+        call_kwargs = guardrail.async_handler.post.call_args[1]
+
+        assert call_kwargs["url"].endswith("/api/evaluation/invoke")
+        payload = call_kwargs["json"]
+        assert payload["evaluation_id"] == "eval_123"
+        assert payload["input"] == "Hello, world!"
+        assert payload["output"] == "Test output"
+
+    @pytest.mark.asyncio
+    async def test_correct_headers_sent(self):
+        """Test that correct headers are sent with the API request."""
+        from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import (
+            QualifireGuardrail,
+        )
+
+        guardrail = QualifireGuardrail(
+            api_key="my_api_key",
+            guardrail_name="test_guardrail",
+        )
+
+        # Mock the async HTTP handler
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "score": 100,
+            "status": "completed",
+            "evaluationResults": [],
+        }
+        mock_response.raise_for_status = MagicMock()
+        guardrail.async_handler.post = AsyncMock(return_value=mock_response)
+
+        messages = [{"role": "user", "content": "Hello!"}]
+
+        await guardrail._run_qualifire_check(
+            messages=messages, output=None, dynamic_params={}
+        )
+
+        call_kwargs = guardrail.async_handler.post.call_args[1]
+        headers = call_kwargs["headers"]
+
+        assert headers["X-Qualifire-API-Key"] == "my_api_key"
+        assert headers["Content-Type"] == "application/json"
 
 
 class TestQualifireGuardrailCheckIfFlagged:
@@ -248,12 +419,14 @@ class TestQualifireGuardrailCheckIfFlagged:
             guardrail_name="test_guardrail",
         )
 
-        # Mock result with completed status and no flagged items
-        mock_result = MagicMock()
-        mock_result.status = "completed"
-        mock_result.evaluationResults = []
+        # Result with completed status and no flagged items (dict format)
+        result = {
+            "status": "completed",
+            "score": 100,
+            "evaluationResults": [],
+        }
 
-        assert guardrail._check_if_flagged(mock_result) is False
+        assert guardrail._check_if_flagged(result) is False
 
     def test_check_if_flagged_returns_true_for_flagged_content(self):
         """Test that _check_if_flagged returns True when content is flagged."""
@@ -266,18 +439,25 @@ class TestQualifireGuardrailCheckIfFlagged:
             guardrail_name="test_guardrail",
         )
 
-        # Mock result with flagged item
-        mock_inner_result = MagicMock()
-        mock_inner_result.flagged = True
+        # Result with flagged item (dict format matching API response)
+        result = {
+            "status": "completed",
+            "score": 15,
+            "evaluationResults": [
+                {
+                    "type": "prompt_injection",
+                    "results": [
+                        {
+                            "flagged": True,
+                            "score": 0.15,
+                            "reason": "Prompt injection detected",
+                        }
+                    ],
+                }
+            ],
+        }
 
-        mock_eval_result = MagicMock()
-        mock_eval_result.results = [mock_inner_result]
-
-        mock_result = MagicMock()
-        mock_result.status = "completed"
-        mock_result.evaluationResults = [mock_eval_result]
-
-        assert guardrail._check_if_flagged(mock_result) is True
+        assert guardrail._check_if_flagged(result) is True
 
     def test_check_if_flagged_returns_false_when_no_flagged_items(self):
         """Test that _check_if_flagged returns False when no items are flagged."""
@@ -291,17 +471,24 @@ class TestQualifireGuardrailCheckIfFlagged:
         )
 
         # Result with evaluation results but nothing flagged
-        mock_inner_result = MagicMock()
-        mock_inner_result.flagged = False
+        result = {
+            "status": "completed",
+            "score": 95,
+            "evaluationResults": [
+                {
+                    "type": "prompt_injection",
+                    "results": [
+                        {
+                            "flagged": False,
+                            "score": 0.95,
+                            "reason": "No issues detected",
+                        }
+                    ],
+                }
+            ],
+        }
 
-        mock_eval_result = MagicMock()
-        mock_eval_result.results = [mock_inner_result]
-
-        mock_result = MagicMock()
-        mock_result.status = "success"
-        mock_result.evaluationResults = [mock_eval_result]
-
-        assert guardrail._check_if_flagged(mock_result) is False
+        assert guardrail._check_if_flagged(result) is False
 
 
 class TestQualifireGuardrailShouldRun:
