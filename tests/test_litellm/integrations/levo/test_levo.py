@@ -4,15 +4,15 @@ from unittest.mock import patch
 import pytest
 
 from litellm.integrations.levo.levo import LevoConfig, LevoLogger
-from litellm.integrations.opentelemetry import OpenTelemetryConfig
+from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 
 # Try to import OpenTelemetry packages, skip tests if not available
 try:
     from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
         InMemorySpanExporter,
     )
-    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 
     OPENTELEMETRY_AVAILABLE = True
 except ImportError:
@@ -190,8 +190,6 @@ class TestLevoIntegration(unittest.TestCase):
         # Verify it's an instance of OpenTelemetry
         self.assertIsInstance(levo_logger, LevoLogger)
         # Check it extends OpenTelemetry by checking base classes
-        from litellm.integrations.opentelemetry import OpenTelemetry
-
         self.assertIsInstance(levo_logger, OpenTelemetry)
 
         # Verify callback_name is set
