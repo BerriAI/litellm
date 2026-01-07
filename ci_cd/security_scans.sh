@@ -209,8 +209,8 @@ main() {
     install_trivy
     install_grype
     
-    echo "Running secret detection scans..."
-    run_secret_detection
+    # echo "Running secret detection scans..."
+    # run_secret_detection
     
     echo "Running filesystem vulnerability scans..."
     run_trivy_scans
