@@ -4393,3 +4393,162 @@ async def test_new_team_positive_budgets_accepted():
     )
     assert request.max_budget == 100.0
     assert request.team_member_budget == 50.0
+
+
+@pytest.mark.asyncio
+async def test_new_team_with_router_settings(mock_db_client, mock_admin_auth):
+    """
+    Test that /team/new correctly handles router_settings by:
+    1. Accepting router_settings as a dict parameter
+    2. Serializing router_settings to JSON when saving to database
+    3. Storing router_settings in the team record
+    """
+    # Configure mocked prisma client
+    mock_db_client.jsonify_team_object = lambda db_data: db_data
+    mock_db_client.get_data = AsyncMock(return_value=None)
+    mock_db_client.update_data = AsyncMock(return_value=MagicMock())
+    mock_db_client.db = MagicMock()
+
+    # Mock model table creation
+    mock_db_client.db.litellm_modeltable = MagicMock()
+    mock_db_client.db.litellm_modeltable.create = AsyncMock(
+        return_value=MagicMock(id="model123")
+    )
+
+    # Capture team table creation
+    team_create_result = MagicMock(
+        team_id="team-router-456",
+    )
+    team_create_result.model_dump.return_value = {
+        "team_id": "team-router-456",
+    }
+    mock_team_create = AsyncMock(return_value=team_create_result)
+    mock_team_count = AsyncMock(return_value=0)
+    mock_db_client.db.litellm_teamtable = MagicMock()
+    mock_db_client.db.litellm_teamtable.create = mock_team_create
+    mock_db_client.db.litellm_teamtable.count = mock_team_count
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(
+        return_value=team_create_result
+    )
+
+    # Mock user table
+    mock_db_client.db.litellm_usertable = MagicMock()
+    mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
+
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    # Test router_settings with sample data
+    router_settings_data = {
+        "routing_strategy": "usage-based",
+        "num_retries": 3,
+        "retry_policy": {"max_retries": 5},
+    }
+
+    # Build request with router_settings
+    team_request = NewTeamRequest(
+        team_alias="my-team-router",
+        router_settings=router_settings_data,
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    # Execute the endpoint function
+    await new_team(
+        data=team_request,
+        http_request=dummy_request,
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    # Verify team creation was called
+    assert mock_team_create.call_count == 1
+    created_team_kwargs = mock_team_create.call_args.kwargs
+    team_data = created_team_kwargs["data"]
+
+    # Verify router_settings is serialized to JSON string
+    assert "router_settings" in team_data
+    assert isinstance(team_data["router_settings"], str)
+
+    # Verify router_settings can be deserialized and matches input
+    deserialized_settings = json.loads(team_data["router_settings"])
+    assert deserialized_settings == router_settings_data
+
+
+@pytest.mark.asyncio
+async def test_update_team_with_router_settings(mock_db_client, mock_admin_auth):
+    """
+    Test that /team/update correctly handles router_settings by:
+    1. Accepting router_settings as a dict parameter
+    2. Serializing router_settings to JSON when updating database
+    3. Updating router_settings in the team record
+    """
+    # Configure mocked prisma client
+    mock_db_client.jsonify_team_object = lambda db_data: db_data
+    mock_db_client.db = MagicMock()
+
+    # Mock existing team row
+    existing_team_mock = MagicMock()
+    existing_team_mock.team_id = "team-router-update-789"
+    existing_team_mock.organization_id = None
+    existing_team_mock.models = []
+    existing_team_mock.members_with_roles = []
+    existing_team_mock.model_dump.return_value = {
+        "team_id": "team-router-update-789",
+        "organization_id": None,
+        "models": [],
+        "members_with_roles": [],
+    }
+
+    # Mock team table find_unique and update
+    updated_team_result = MagicMock(
+        team_id="team-router-update-789",
+    )
+    updated_team_result.model_dump.return_value = {
+        "team_id": "team-router-update-789",
+    }
+    mock_team_find_unique = AsyncMock(return_value=existing_team_mock)
+    mock_team_update = AsyncMock(return_value=updated_team_result)
+    mock_db_client.db.litellm_teamtable = MagicMock()
+    mock_db_client.db.litellm_teamtable.find_unique = mock_team_find_unique
+    mock_db_client.db.litellm_teamtable.update = mock_team_update
+
+    from fastapi import Request
+
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    # Test router_settings with updated data
+    router_settings_data = {
+        "routing_strategy": "latency-based",
+        "num_retries": 2,
+    }
+
+    # Build update request with router_settings
+    team_update_request = UpdateTeamRequest(
+        team_id="team-router-update-789",
+        router_settings=router_settings_data,
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    # Execute the endpoint function
+    await update_team(
+        data=team_update_request,
+        http_request=dummy_request,
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    # Verify team update was called
+    assert mock_team_update.call_count == 1
+    updated_team_kwargs = mock_team_update.call_args.kwargs
+    team_data = updated_team_kwargs["data"]
+
+    # Verify router_settings is serialized to JSON string
+    assert "router_settings" in team_data
+    assert isinstance(team_data["router_settings"], str)
+
+    # Verify router_settings can be deserialized and matches input
+    deserialized_settings = json.loads(team_data["router_settings"])
+    assert deserialized_settings == router_settings_data
