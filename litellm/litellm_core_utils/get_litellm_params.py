@@ -148,4 +148,3 @@ def get_litellm_params(
             litellm_params[key] = value
 
     return litellm_params
-

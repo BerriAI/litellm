@@ -4,9 +4,7 @@ Test to reproduce issue #18216: Custom litellm_params in config.yaml not passed 
 This test verifies that custom parameters defined in litellm_params are passed through to custom handlers.
 """
 
-import pytest
-from unittest.mock import MagicMock, patch
-from typing import Any, Optional, Union, Callable
+from typing import Optional, Union, Callable
 
 import litellm
 from litellm import CustomLLM, ModelResponse
@@ -19,6 +17,9 @@ class TestCustomLLM(CustomLLM):
     """A test custom LLM handler that captures litellm_params for inspection."""
 
     captured_litellm_params: Optional[dict] = None
+
+    def __init__(self):
+        super().__init__()
 
     def completion(
         self,
@@ -41,7 +42,6 @@ class TestCustomLLM(CustomLLM):
     ):
         # Capture the litellm_params for inspection
         TestCustomLLM.captured_litellm_params = litellm_params
-        print(f"\n🔍 Captured litellm_params: {litellm_params}")
 
         # Return a mock response with proper structure
         from litellm.types.utils import Choices, Message
@@ -62,10 +62,10 @@ class TestCustomParamsBug18216:
 
     def test_get_litellm_params_drops_custom_params(self):
         """
-        Test that demonstrates get_litellm_params() drops unknown/custom parameters.
+        Test that demonstrates get_litellm_params() preserves custom parameters.
 
         This is the core of issue #18216 - custom params like 'context_id' are passed
-        in via kwargs but are NOT included in the returned dictionary.
+        in via kwargs and should be included in the returned dictionary.
         """
         # Simulate params that would come from config.yaml litellm_params
         result = get_litellm_params(
@@ -75,15 +75,7 @@ class TestCustomParamsBug18216:
             # These are custom params that a user might define in config.yaml
             context_id="gemini-2.5-pro",  # Custom param from config
             use_case="my-use-case",  # Another custom param
-            rpm=1,  # This is actually a known param but let's check
         )
-
-        print(f"\n📋 Result from get_litellm_params():")
-        print(f"   api_key: {result.get('api_key')}")
-        print(f"   custom_llm_provider: {result.get('custom_llm_provider')}")
-        print(f"   metadata: {result.get('metadata')}")
-        print(f"   context_id: {result.get('context_id')}")
-        print(f"   use_case: {result.get('use_case')}")
 
         # These should be present (known params)
         assert result.get("api_key") == "test-key", "api_key should be present"
@@ -96,19 +88,15 @@ class TestCustomParamsBug18216:
         context_id = result.get("context_id")
         use_case = result.get("use_case")
 
-        print(f"\n✅ FIX VERIFICATION:")
-        print(f"   context_id in result: {context_id is not None}")
-        print(f"   use_case in result: {use_case is not None}")
-
         # These assertions verify the fix works
-        assert context_id == "gemini-2.5-pro", "context_id should be preserved after fix"
+        assert (
+            context_id == "gemini-2.5-pro"
+        ), "context_id should be preserved after fix"
         assert use_case == "my-use-case", "use_case should be preserved after fix"
-        
-        print("\n🎉 SUCCESS: Custom params are now correctly passed through!")
 
     def test_custom_handler_receives_incomplete_params(self):
         """
-        End-to-end test showing that custom handlers don't receive custom params.
+        End-to-end test showing that custom handlers receive custom params correctly.
         """
         # Register our test custom handler
         my_custom_llm = TestCustomLLM()
@@ -120,7 +108,7 @@ class TestCustomParamsBug18216:
         try:
             # Make a completion call with custom params
             # In real usage, these would come from config.yaml
-            response = litellm.completion(
+            litellm.completion(
                 model="test-custom-provider/test-model",
                 messages=[{"role": "user", "content": "Hello"}],
                 # Custom params that should be passed through
@@ -130,47 +118,22 @@ class TestCustomParamsBug18216:
 
             # Check what the handler received
             captured = TestCustomLLM.captured_litellm_params
-            print(f"\n📦 Handler received litellm_params: {captured}")
 
             assert captured is not None, "Handler should have received litellm_params"
-            
+
             context_id = captured.get("context_id")
             use_case = captured.get("use_case")
 
-            print(f"\n🔍 Checking for custom params in handler:")
-            print(f"   context_id: {context_id}")
-            print(f"   use_case: {use_case}")
-
             # AFTER FIX: These should now be present
-            assert context_id == "my-context-id", "context_id should be passed to custom handler"
-            assert use_case == "my-use-case", "use_case should be passed to custom handler"
-            
-            print("\n🎉 SUCCESS: Custom handler received all custom params!")
-
-        except Exception as e:
-            print(f"\n⚠️ Error during test: {e}")
-            # The test might fail for other reasons, but we still want to see the params issue
-            if TestCustomLLM.captured_litellm_params:
-                print(f"   Captured params before error: {TestCustomLLM.captured_litellm_params}")
-            raise
+            assert (
+                context_id == "my-context-id"
+            ), "context_id should be passed to custom handler"
+            assert (
+                use_case == "my-use-case"
+            ), "use_case should be passed to custom handler"
 
         finally:
             # Cleanup
             litellm.custom_provider_map = []
             if "test-custom-provider" in litellm._custom_providers:
                 litellm._custom_providers.remove("test-custom-provider")
-
-
-if __name__ == "__main__":
-    # Run the tests directly
-    test = TestCustomParamsBug18216()
-
-    print("=" * 60)
-    print("TEST 1: get_litellm_params drops custom params")
-    print("=" * 60)
-    test.test_get_litellm_params_drops_custom_params()
-
-    print("\n" + "=" * 60)
-    print("TEST 2: Custom handler receives incomplete params")
-    print("=" * 60)
-    test.test_custom_handler_receives_incomplete_params()
