@@ -255,6 +255,7 @@ class Router:
         ] = {},
         enable_pre_call_checks: bool = False,
         enable_tag_filtering: bool = False,
+        tag_filtering_match_any: bool = True,
         retry_after: int = 0,  # min time to wait before retrying a failed request
         retry_policy: Optional[
             Union[RetryPolicy, dict]
@@ -363,6 +364,7 @@ class Router:
         self.debug_level = debug_level
         self.enable_pre_call_checks = enable_pre_call_checks
         self.enable_tag_filtering = enable_tag_filtering
+        self.tag_filtering_match_any = tag_filtering_match_any
         from litellm._service_logger import ServiceLogging
 
         self.service_logger_obj: ServiceLogging = ServiceLogging()

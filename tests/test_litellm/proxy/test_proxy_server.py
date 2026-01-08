@@ -3038,6 +3038,94 @@ def test_get_image_root_case_uses_current_dir(monkeypatch):
         assert mock_file_response.called, "FileResponse should be called"
 
 
+def test_get_config_normalizes_string_callbacks(monkeypatch):
+    """
+    Test that /get/config/callbacks normalizes string callbacks to lists.
+    """
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    config_data = {
+        "litellm_settings": {
+            "success_callback": "langfuse",
+            "failure_callback": None,
+            "callbacks": ["prometheus", "datadog"],
+        },
+        "general_settings": {},
+        "environment_variables": {},
+    }
+
+    mock_router = MagicMock()
+    mock_router.get_settings.return_value = {}
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr(
+        proxy_config, "get_config", AsyncMock(return_value=config_data)
+    )
+
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+
+    client = TestClient(app)
+    try:
+        response = client.get("/get/config/callbacks")
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200
+    callbacks = response.json()["callbacks"]
+
+    success_callbacks = [cb["name"] for cb in callbacks if cb.get("type") == "success"]
+    failure_callbacks = [cb["name"] for cb in callbacks if cb.get("type") == "failure"]
+    success_and_failure_callbacks = [
+        cb["name"] for cb in callbacks if cb.get("type") == "success_and_failure"
+    ]
+
+    assert "langfuse" in success_callbacks
+    assert len(failure_callbacks) == 0
+    assert "prometheus" in success_and_failure_callbacks
+    assert "datadog" in success_and_failure_callbacks
+
+
+def test_deep_merge_dicts_skips_none_and_empty_lists(monkeypatch):
+    """
+    Test that _update_config_fields deep merge skips None values and empty lists.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    current_config = {
+        "general_settings": {
+            "max_parallel_requests": 10,
+            "allowed_models": ["gpt-3.5-turbo", "gpt-4"],
+            "nested": {
+                "key1": "value1",
+                "key2": "value2",
+            },
+        }
+    }
+
+    db_param_value = {
+        "max_parallel_requests": None,
+        "allowed_models": [],
+        "new_key": "new_value",
+        "nested": {
+            "key1": "updated_value1",
+            "key3": "value3",
+        },
+    }
+
+    result = proxy_config._update_config_fields(
+        current_config, "general_settings", db_param_value
+    )
+
+    assert result["general_settings"]["max_parallel_requests"] == 10
+    assert result["general_settings"]["allowed_models"] == ["gpt-3.5-turbo", "gpt-4"]
+    assert result["general_settings"]["new_key"] == "new_value"
+    assert result["general_settings"]["nested"]["key1"] == "updated_value1"
+    assert result["general_settings"]["nested"]["key2"] == "value2"
+    assert result["general_settings"]["nested"]["key3"] == "value3"
+
+
 @pytest.mark.asyncio
 async def test_get_hierarchical_router_settings():
     """

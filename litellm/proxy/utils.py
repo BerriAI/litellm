@@ -1195,7 +1195,7 @@ class ProxyLogging:
                     and _callback.__class__.async_pre_call_hook
                     != CustomLogger.async_pre_call_hook
                 ):
-                    if call_type == "mcp_call" and user_api_key_dict is None:
+                    if call_type == "call_mcp_tool" and user_api_key_dict is None:
                         continue
 
                     response = await _callback.async_pre_call_hook(
