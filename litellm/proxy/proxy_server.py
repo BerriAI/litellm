@@ -533,9 +533,9 @@ except ImportError:
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
-premium_user_data: Optional["EnterpriseLicenseData"] = (
-    _license_check.airgapped_license_data
-)
+premium_user_data: Optional[
+    "EnterpriseLicenseData"
+] = _license_check.airgapped_license_data
 global_max_parallel_request_retries_env: Optional[str] = os.getenv(
     "LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES"
 )
@@ -1083,9 +1083,7 @@ try:
     # In non-root Docker, we restructure in /var/lib/litellm/ui.
     try:
         _restructure_ui_html_files(ui_path)
-        verbose_proxy_logger.info(
-            f"Restructured UI directory: {ui_path}"
-        )
+        verbose_proxy_logger.info(f"Restructured UI directory: {ui_path}")
     except PermissionError as e:
         verbose_proxy_logger.exception(
             f"Permission error while restructuring UI directory {ui_path}: {e}"
@@ -1171,9 +1169,9 @@ master_key: Optional[str] = None
 config_agents: Optional[List[AgentConfig]] = None
 otel_logging = False
 prisma_client: Optional[PrismaClient] = None
-shared_aiohttp_session: Optional["ClientSession"] = (
-    None  # Global shared session for connection reuse
-)
+shared_aiohttp_session: Optional[
+    "ClientSession"
+] = None  # Global shared session for connection reuse
 user_api_key_cache = DualCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
@@ -1181,9 +1179,9 @@ model_max_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(
     dual_cache=user_api_key_cache
 )
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
-redis_usage_cache: Optional[RedisCache] = (
-    None  # redis cache used for tracking spend, tpm/rpm limits
-)
+redis_usage_cache: Optional[
+    RedisCache
+] = None  # redis cache used for tracking spend, tpm/rpm limits
 polling_via_cache_enabled: Union[Literal["all"], List[str], bool] = False
 polling_cache_ttl: int = 3600  # Default 1 hour TTL for polling cache
 user_custom_auth = None
@@ -1522,9 +1520,9 @@ async def update_cache(  # noqa: PLR0915
         _id = "team_id:{}".format(team_id)
         try:
             # Fetch the existing cost for the given user
-            existing_spend_obj: Optional[LiteLLM_TeamTable] = (
-                await user_api_key_cache.async_get_cache(key=_id)
-            )
+            existing_spend_obj: Optional[
+                LiteLLM_TeamTable
+            ] = await user_api_key_cache.async_get_cache(key=_id)
             if existing_spend_obj is None:
                 # do nothing if team not in api key cache
                 return
@@ -1876,7 +1874,6 @@ class ProxyConfig:
                 "environment_variables" in config_to_save
                 and config_to_save["environment_variables"]
             ):
-
                 # decrypt the environment_variables - in case a caller function has already encrypted the environment_variables
                 decrypted_env_vars = self._decrypt_and_set_db_env_variables(
                     environment_variables=config_to_save["environment_variables"],
@@ -2794,21 +2791,21 @@ class ProxyConfig:
         verbose_proxy_logger.debug(f"_alerting_callbacks: {general_settings}")
         if _alerting_callbacks is None:
             return
-        
+
         # Ensure proxy_logging_obj.alerting is set for all alerting types
         _alerting_value = general_settings.get("alerting", None)
-        verbose_proxy_logger.debug(f"_load_alerting_settings: Calling update_values with alerting={_alerting_value}")
+        verbose_proxy_logger.debug(
+            f"_load_alerting_settings: Calling update_values with alerting={_alerting_value}"
+        )
         proxy_logging_obj.update_values(
             alerting=_alerting_value,
             alerting_threshold=general_settings.get("alerting_threshold", 600),
             alert_types=general_settings.get("alert_types", None),
-            alert_to_webhook_url=general_settings.get(
-                "alert_to_webhook_url", None
-            ),
+            alert_to_webhook_url=general_settings.get("alert_to_webhook_url", None),
             alerting_args=general_settings.get("alerting_args", None),
             redis_cache=redis_usage_cache,
         )
-        
+
         for _alert in _alerting_callbacks:
             if _alert == "slack":
                 # [OLD] v0 implementation - already handled by update_values above
@@ -3357,7 +3354,7 @@ class ProxyConfig:
             proxy_logging_obj: ProxyLogging
         """
         _general_settings = config_data.get("general_settings", {})
-    
+
         if _general_settings is not None and "alerting" in _general_settings:
             if (
                 general_settings is not None
@@ -3372,7 +3369,8 @@ class ProxyConfig:
                 _merged_alerting = list(_yaml_alerting.union(_db_alerting))
                 # Preserve order: YAML values first, then DB values
                 _merged_alerting = list(general_settings["alerting"]) + [
-                    item for item in _general_settings["alerting"] 
+                    item
+                    for item in _general_settings["alerting"]
                     if item not in general_settings["alerting"]
                 ]
                 verbose_proxy_logger.debug(
@@ -3686,7 +3684,6 @@ class ProxyConfig:
             await self._init_vector_stores_in_db(prisma_client=prisma_client)
 
         if self._should_load_db_object(object_type="vector_store_indexes"):
-
             await self._init_vector_store_indexes_in_db(prisma_client=prisma_client)
 
         if self._should_load_db_object(object_type="mcp"):
@@ -3885,10 +3882,10 @@ class ProxyConfig:
         )
 
         try:
-            guardrails_in_db: List[Guardrail] = (
-                await GuardrailRegistry.get_all_guardrails_from_db(
-                    prisma_client=prisma_client
-                )
+            guardrails_in_db: List[
+                Guardrail
+            ] = await GuardrailRegistry.get_all_guardrails_from_db(
+                prisma_client=prisma_client
             )
             verbose_proxy_logger.debug(
                 "guardrails from the DB %s", str(guardrails_in_db)
@@ -4215,9 +4212,9 @@ async def initialize(  # noqa: PLR0915
         user_api_base = api_base
         dynamic_config[user_model]["api_base"] = api_base
     if api_version:
-        os.environ["AZURE_API_VERSION"] = (
-            api_version  # set this for azure - litellm can read this from the env
-        )
+        os.environ[
+            "AZURE_API_VERSION"
+        ] = api_version  # set this for azure - litellm can read this from the env
     if max_tokens:  # model-specific param
         dynamic_config[user_model]["max_tokens"] = max_tokens
     if temperature:  # model-specific param
@@ -4735,10 +4732,14 @@ class ProxyStartupEvent:
                     replace_existing=True,
                     misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
                 )
-                verbose_proxy_logger.info("Responses cost check job scheduled successfully")
+                verbose_proxy_logger.info(
+                    "Responses cost check job scheduled successfully"
+                )
 
             except Exception as e:
-                verbose_proxy_logger.debug(f"Failed to setup responses cost checking: {e}")
+                verbose_proxy_logger.debug(
+                    f"Failed to setup responses cost checking: {e}"
+                )
                 verbose_proxy_logger.debug(
                     "Checking responses cost for LiteLLM Managed Files is an Enterprise Feature. Skipping..."
                 )
@@ -4762,8 +4763,9 @@ class ProxyStartupEvent:
         """
         Initialize the spend tracking and other background jobs
         1. CloudZero Background Job
-        2. Prometheus Background Job
-        3. Key Rotation Background Job
+        2. Focus Background Job
+        3. Prometheus Background Job
+        4. Key Rotation Background Job
 
         Args:
             scheduler: The scheduler to add the background jobs to
@@ -4772,10 +4774,16 @@ class ProxyStartupEvent:
         # CloudZero Background Job
         ########################################################
         from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
+        from litellm.integrations.focus.focus_logger import FocusLogger
         from litellm.proxy.spend_tracking.cloudzero_endpoints import is_cloudzero_setup
 
         if await is_cloudzero_setup():
             await CloudZeroLogger.init_cloudzero_background_job(scheduler=scheduler)
+
+        ########################################################
+        # Focus Background Job
+        ########################################################
+        await FocusLogger.init_focus_export_background_job(scheduler=scheduler)
 
         ########################################################
         # Prometheus Background Job
@@ -6018,7 +6026,6 @@ async def realtime_websocket_endpoint(
     ),
     user_api_key_dict=Depends(user_api_key_auth_websocket),
 ):
-
     await websocket.accept()
 
     # Only use explicit parameters, not all query params
@@ -9606,9 +9613,9 @@ async def get_config_list(
                             hasattr(sub_field_info, "description")
                             and sub_field_info.description is not None
                         ):
-                            nested_fields[idx].field_description = (
-                                sub_field_info.description
-                            )
+                            nested_fields[
+                                idx
+                            ].field_description = sub_field_info.description
                         idx += 1
 
                     _stored_in_db = None
