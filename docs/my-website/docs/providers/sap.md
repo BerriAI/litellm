@@ -34,31 +34,20 @@ AICORE_BASE_URL="https://api.ai.<your-region>.cfapps.sap.hana.ondemand.com/v2"
 </TabItem>
 <TabItem value="service-key-json" label="Alternative: JSON Object">
 
-You can provide the entire service key as a single JSON string to the `AICORE_SERVICE_KEY` environment variable. This can be useful in environments where managing a single variable is easier.
+Alternatively, you can provide the entire service key as a single JSON string called `AICORE_SERVICE_KEY` environment variable. This can be useful in environments where managing a single variable is easier.
 
 The JSON object must include `clientid`, `clientsecret`, `url`, `apiurl`, and `resourcegroup`.
-
-```python showLineNumbers title="Set Environment Variable"
-import os
-import json
-
-service_key = {
-    "clientid": "your-client-id",
-    "clientsecret": "your-client-secret",
-    "url": "https://<your-instance>.authentication.sap.hana.ondemand.com/oauth/token",
-    "apiurl": "https://api.ai.<your-region>.cfapps.sap.hana.ondemand.com/v2",
-    "resourcegroup": "your-resource-group"
-}
-
-os.environ["AICORE_SERVICE_KEY"] = json.dumps(service_key)
-```
 
 </TabItem>
 </Tabs>
 
-> **Note on Model Naming:** SAP AI Core uses a specific naming convention for certain models. For example, Anthropic models are prefixed with `anthropic--` (double dashes), such as `sap/anthropic--claude-4.5-sonnet` and `sap/anthropic--claude-3.5-sonnet`.
-
 ## Usage - LiteLLM Python SDK
+
+:::important Model Naming for Direct SDK Usage
+When using the LiteLLM Python SDK directly (not through the proxy), you **must** include the `sap/` prefix in the model name. This prefix tells LiteLLM to route your request to the SAP Gen AI Hub provider.
+
+Example: `model="sap/anthropic--claude-4.5-sonnet"`
+:::
 
 The SDK will automatically detect which authentication method you have configured.
 
@@ -72,7 +61,7 @@ from litellm import completion
 
 # Assumes AICORE_AUTH_URL, AICORE_CLIENT_ID, etc. are set in your environment
 response = completion(
-    model="sap/gpt-4",
+    model="sap/anthropic--claude-4.5-sonnet",
     messages=[{"role": "user", "content": "Hello from LiteLLM"}]
 )
 print(response)
@@ -96,7 +85,7 @@ service_key = {
 os.environ["AICORE_SERVICE_KEY"] = json.dumps(service_key)
 
 response = completion(
-    model="sap/gpt-4",
+    model="sap/anthropic--claude-4.5-sonnet",
     messages=[{"role": "user", "content": "Hello from LiteLLM"}]
 )
 print(response)
@@ -106,6 +95,12 @@ print(response)
 </Tabs>
 
 ## Usage - LiteLLM Proxy
+
+:::important Model Naming for Proxy Usage
+When using clients through the LiteLLM Proxy, you use the **friendly `model_name`** defined in your proxy configuration (e.g., `claude-4.5-sonnet`, `gpt-5`). The proxy internally handles routing to the correct SAP provider using the `sap/` prefix specified in `litellm_params.model`.
+
+**Do not** include the `sap/` prefix in your client requests - the proxy configuration handles this automatically.
+:::
 
 You can configure the proxy to use either authentication method.
 
@@ -184,7 +179,7 @@ curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your-proxy-api-key" \
   -d '{
-    "model": "gpt-4",
+    "model": "gpt-5",
     "messages": [{"role": "user", "content": "Hello"}]
   }'
 ```
@@ -201,7 +196,7 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="gpt-4",
+    model="gpt-5",
     messages=[{"role": "user", "content": "Hello"}]
 )
 print(response.choices[0].message.content)
@@ -216,7 +211,7 @@ import litellm
 os.environ["LITELLM_PROXY_API_KEY"] = "your-proxy-api-key"
 litellm.use_litellm_proxy = True  # it is important to set this parameter
 response = litellm.completion(
-    model="gpt-4o",
+    model="claude-4.5-sonnet",
     messages=[{ "content": "Hello, how are you?","role": "user"}],
     api_base="http://your-proxy-api-base"
 )
@@ -226,6 +221,109 @@ print(response)
 
 </TabItem>
 </Tabs>
+
+## Advanced Usage
+
+### Streaming Responses
+
+SAP Gen AI Hub supports streaming for real-time response generation:
+
+```python showLineNumbers title="Streaming Chat Completion"
+from litellm import completion
+
+response = completion(
+    model="sap/gpt-4o",
+    messages=[{"role": "user", "content": "Count from 1 to 5"}],
+    stream=True
+)
+
+for chunk in response:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="", flush=True)
+```
+
+### Response Format
+
+SAP Gen AI Hub supports structured JSON output through response formatting.
+
+#### JSON Schema (Recommended)
+
+Use `json_schema` for structured output with schema validation:
+
+```python showLineNumbers title="JSON Schema Response"
+from litellm import completion
+
+response = completion(
+    model="sap/gpt-4o",
+    messages=[{
+        "role": "user",
+        "content": "Generate info about a city with name, population, and country"
+    }],
+    response_format={
+        "type": "json_schema",
+        "json_schema": {
+            "name": "city_info",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "population": {"type": "number"},
+                    "country": {"type": "string"}
+                },
+                "required": ["name", "population", "country"],
+                "additionalProperties": False
+            },
+            "strict": True
+        }
+    }
+)
+
+print(response.choices[0].message.content)
+# Output: {"name":"Tokyo","population":37000000,"country":"Japan"}
+```
+
+#### JSON Object Format
+
+When using `response_format: {type: "json_object"}`, SAP requires that your prompt explicitly mentions "json" to ensure intentional JSON output:
+
+```python showLineNumbers title="JSON Object Response"
+from litellm import completion
+
+response = completion(
+    model="sap/gpt-4o",
+    messages=[{
+        "role": "user",
+        "content": "Generate a person object in JSON format with name and age fields"
+    }],
+    response_format={"type": "json_object"}
+)
+
+print(response.choices[0].message.content)
+```
+
+:::note SAP Platform Requirement
+When using `json_object` type, SAP's orchestration service requires the word "json" to appear in your prompt. This ensures users explicitly request JSON formatting. Alternatively, use `json_schema` (recommended) which doesn't have this requirement.
+:::
+
+### Multi-turn Conversations
+
+SAP Gen AI Hub maintains context across conversation turns:
+
+```python showLineNumbers title="Multi-turn Conversation"
+from litellm import completion
+
+response = completion(
+    model="sap/gpt-4o",
+    messages=[
+        {"role": "user", "content": "My name is Alice"},
+        {"role": "assistant", "content": "Hello Alice! Nice to meet you."},
+        {"role": "user", "content": "What is my name?"}
+    ]
+)
+
+print(response.choices[0].message.content)
+# Output: Your name is Alice.
+```
 
 ## Supported Parameters
 
