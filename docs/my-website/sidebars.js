@@ -109,6 +109,7 @@ const sidebars = {
       label: "AI Tools (OpenWebUI, Claude Code, etc.)",
       items: [
         "tutorials/claude_responses_api",
+        "tutorials/claude_model_loadbalancing",
         "tutorials/cost_tracking_coding",
         "tutorials/cursor_integration",
         "tutorials/github_copilot_integration",
@@ -871,6 +872,7 @@ const sidebars = {
         "tutorials/elasticsearch_logging",
         "tutorials/gemini_realtime_with_audio",
         "tutorials/claude_responses_api",
+        "tutorials/claude_model_loadbalancing",
         {
           type: "category",
           label: "LiteLLM Python SDK Tutorials",
