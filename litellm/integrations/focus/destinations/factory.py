@@ -26,7 +26,9 @@ class FocusDestinationFactory:
         )
         if provider_lower == "s3":
             return FocusS3Destination(prefix=prefix, config=normalized_config)
-        raise NotImplementedError(f"Provider '{provider}' not supported for Focus export")
+        raise NotImplementedError(
+            f"Provider '{provider}' not supported for Focus export"
+        )
 
     @staticmethod
     def _resolve_config(
@@ -50,9 +52,7 @@ class FocusDestinationFactory:
                 or os.getenv("FOCUS_S3_SESSION_TOKEN"),
             }
             if not resolved.get("bucket_name"):
-                raise ValueError(
-                    "FOCUS_S3_BUCKET_NAME must be provided for S3 exports"
-                )
+                raise ValueError("FOCUS_S3_BUCKET_NAME must be provided for S3 exports")
             return {k: v for k, v in resolved.items() if v is not None}
         raise NotImplementedError(
             f"Provider '{provider}' not supported for Focus export configuration"
