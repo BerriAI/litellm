@@ -496,13 +496,17 @@ class AnthropicTokenCounter(BaseTokenCounter):
         contents: Optional[List[Dict[str, Any]]],
         deployment: Optional[Dict[str, Any]] = None,
         request_model: str = "",
+        system: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
     ) -> Optional[TokenCountResponse]:
         from litellm.proxy.utils import count_tokens_with_anthropic_api
-        
+
         result = await count_tokens_with_anthropic_api(
             model_to_use=model_to_use,
             messages=messages,
             deployment=deployment,
+            system=system,
+            tools=tools,
         )
         
         if result is not None:
