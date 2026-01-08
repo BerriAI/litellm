@@ -784,11 +784,13 @@ def function_setup(  # noqa: PLR0915
         all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
 
         if len(all_callbacks) > 0:
+            from litellm import _custom_logger_compatible_callbacks_literal
+
             for callback in all_callbacks:
                 # check if callback is a string - e.g. "lago", "openmeter"
                 if isinstance(callback, str):
                     callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
-                        callback,
+                        cast(_custom_logger_compatible_callbacks_literal, callback),
                         internal_usage_cache=None,
                         llm_router=None,  # type: ignore
                     )
