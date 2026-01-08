@@ -143,11 +143,11 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
         - Converting content lists to strings (Moonshot doesn't support list format)
         - Adding tool_choice="required" message if needed
         - Temperature and parameter validation
-        
-        Important: Strips routing prefixes (bedrock/, invoke/) from model name
-        before passing to parent class to ensure the request body contains only
-        the actual model ID (e.g., moonshot.kimi-k2-thinking).
+
         """
+        # Filter out AWS credentials using the existing method from BaseAWSLLM
+        self._get_boto_credentials_from_optional_params(optional_params, model)
+        
         # Strip routing prefixes to get the actual model ID
         clean_model_id = self._get_model_id(model)
         
