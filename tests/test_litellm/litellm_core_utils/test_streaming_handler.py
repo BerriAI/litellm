@@ -4,6 +4,7 @@ import sys
 import time
 from unittest.mock import MagicMock, Mock, patch
 
+from litellm.types.llms.openai import ChatCompletionToolCallChunk, ChatCompletionToolCallFunctionChunk
 import pytest
 
 sys.path.insert(
@@ -1185,3 +1186,68 @@ def test_is_chunk_non_empty_with_valid_tool_calls(
         )
         is True
     )
+
+@pytest.mark.asyncio
+async def test_anthropic_tool_call_streaming_remaps_single_choice_index_1_to_0(logging_obj: Logging):
+    """
+    Test that anthropic tool call streaming manage to remap choice[0].index from 1 to 0.
+
+    Companion test for https://github.com/BerriAI/litellm/issues/18535
+    single value in choice with index 1 should be corrected to 0 that resolve the 3rd party dependency datadog v3.8.1 issue.
+    """
+
+    
+    anthropic_chunks = [
+         ModelResponseStream(
+            id="chatcmpl-d249def8-a78b-464c-87b5-3a6f43565292",
+            created=1742056047,
+            model="global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=1,
+                    delta=Delta(
+                        provider_specific_fields=None,
+                        content="",
+                        role="assistant",
+                        function_call=None,
+                        tool_calls=[ChatCompletionToolCallChunk(id="tooluse_EXZ_wRyMRL6T3fLil6hNzA", type='function', index=0, function=ChatCompletionToolCallFunctionChunk(name="get_weather"))],
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields={},
+            usage=None,
+        ),
+    ]
+
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class MockCallback(CustomLogger):
+        pass
+
+    mock_callback = MockCallback()
+    litellm.success_callback = [mock_callback, "langfuse"]
+
+    completion_stream = ModelResponseListIterator(
+        model_responses=anthropic_chunks, delay=0.1
+    )
+
+    response = CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model="bedrock/claude-3-5-sonnet-20240620-v1:0",
+        logging_obj=logging_obj,
+    )
+
+    is_index_corrected_to_zero = False
+    
+    async for chunk in response:
+        print(chunk)
+        if chunk and len(chunk.choices) == 1 and "delta" in chunk.choices[0] and "tool_calls" in chunk.choices[0].delta and chunk.choices[0].delta.tool_calls is not None:
+            if chunk.choices[0].index == 0:
+                is_index_corrected_to_zero = True
+    
+    assert is_index_corrected_to_zero

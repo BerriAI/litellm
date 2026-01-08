@@ -902,6 +902,17 @@ class CustomStreamWrapper:
                                     choices.append(StreamingChoices(**choice_json))
                             except Exception:
                                 choices.append(StreamingChoices())
+
+                        ## issue 18535: remap anthropic tool call streaming single choice index from not zero to zero.
+                        if (
+                            len(choices) == 1
+                            and choices[0].index != 0
+                            and "delta" in choices[0]
+                            and "tool_calls" in choices[0].delta
+                            and choices[0].delta.tool_calls is not None
+                        ):
+                            choices[0].index = 0
+
                         print_verbose(f"choices in streaming: {choices}")
                         setattr(model_response, "choices", choices)
                     else:
