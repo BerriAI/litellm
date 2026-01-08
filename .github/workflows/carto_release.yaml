@@ -51,6 +51,11 @@ on:
         required: true
         type: string
         default: 'carto/main'
+      manual_notes:
+        description: 'Optional: Paste release notes directly (skips auto-generation)'
+        required: false
+        type: string
+        default: ''
 
 env:
   REGISTRY: ghcr.io
@@ -247,8 +252,20 @@ jobs:
           echo "   Release type: ${RELEASE_TYPE}"
           echo "   Is upstream sync: ${IS_UPSTREAM_SYNC}"
 
+      - name: Use manual release notes (if provided)
+        id: manual-notes
+        if: github.event.inputs.manual_notes != ''
+        run: |
+          echo "::group::Using manually provided release notes"
+          echo "${{ github.event.inputs.manual_notes }}" > release_notes.md
+          echo "notes_generated=true" >> $GITHUB_OUTPUT
+          echo "Generated release_notes.md from manual input"
+          cat release_notes.md
+          echo "::endgroup::"
+
       - name: Generate intelligent release notes with Claude
         id: release-notes
+        if: steps.manual-notes.outputs.notes_generated != 'true'
         uses: anthropics/claude-code-action@v1
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
