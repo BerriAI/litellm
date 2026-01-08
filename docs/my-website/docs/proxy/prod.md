@@ -19,7 +19,11 @@ general_settings:
   master_key: sk-1234      # enter your own master key, ensure it starts with 'sk-'
   alerting: ["slack"]      # Setup slack alerting - get alerts on LLM exceptions, Budget Alerts, Slow LLM Responses
   proxy_batch_write_at: 60 # Batch write spend updates every 60s
-  database_connection_pool_limit: 10 # limit the number of database connections to = MAX Number of DB Connections/Number of instances of litellm proxy (Around 10-20 is good number)
+  database_connection_pool_limit: 10 # connection pool limit per worker process. Total connections = limit × workers × instances. Calculate: MAX_DB_CONNECTIONS / (instances × workers). Default: 10.
+
+:::warning
+**Multiple instances:** If running multiple LiteLLM instances (e.g., Kubernetes pods), remember each instance multiplies your total connections. Example: 3 instances × 4 workers × 10 connections = 120 total connections.
+:::
 
   # OPTIONAL Best Practices
   disable_error_logs: True # turn off writing LLM Exceptions to DB
