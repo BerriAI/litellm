@@ -28,7 +28,6 @@ class UnifiedLLMGuardrails(CustomLogger):
         self,
         **kwargs,
     ):
-
         # store kwargs as optional_params
         self.optional_params = kwargs
 
@@ -63,6 +62,9 @@ class UnifiedLLMGuardrails(CustomLogger):
             return data
 
         event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call
+        if call_type == CallTypes.call_mcp_tool.value:
+            event_type = GuardrailEventHooks.pre_mcp_call
+
         if (
             guardrail_to_apply.should_run_guardrail(data=data, event_type=event_type)
             is not True
@@ -114,6 +116,9 @@ class UnifiedLLMGuardrails(CustomLogger):
             return data
 
         event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
+        if call_type == CallTypes.call_mcp_tool.value:
+            event_type = GuardrailEventHooks.during_mcp_call
+
         if (
             guardrail_to_apply.should_run_guardrail(data=data, event_type=event_type)
             is not True
@@ -128,7 +133,10 @@ class UnifiedLLMGuardrails(CustomLogger):
             endpoint_guardrail_translation_mappings = (
                 load_guardrail_translation_mappings()
             )
-        if CallTypes(call_type) not in endpoint_guardrail_translation_mappings:
+        if (
+            call_type is not None
+            and CallTypes(call_type) not in endpoint_guardrail_translation_mappings
+        ):
             return data
 
         endpoint_translation = endpoint_guardrail_translation_mappings[
@@ -180,10 +188,10 @@ class UnifiedLLMGuardrails(CustomLogger):
         call_type: Optional[CallTypesLiteral] = None
         if user_api_key_dict.request_route is not None:
             call_types = get_call_types_for_route(user_api_key_dict.request_route)
-            if call_types is not None:
-                call_type = call_types[0]
+            if call_types is not None and len(call_types) > 0:  # type: ignore
+                call_type = call_types[0]  # type: ignore
         if call_type is None:
-            call_type = _infer_call_type(call_type=None, completion_response=response)
+            call_type = _infer_call_type(call_type=None, completion_response=response)  # type: ignore
 
         if call_type is None:
             return response
@@ -213,7 +221,7 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         return response
 
-    async def async_post_call_streaming_iterator_hook(
+    async def async_post_call_streaming_iterator_hook(  # noqa: PLR0915
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response: Any,
@@ -238,18 +246,35 @@ class UnifiedLLMGuardrails(CustomLogger):
             "guardrail_to_apply", None
         )
 
-        # Get sampling rate from guardrail config or optional_params, default to 5
+        # Get streaming configuration from guardrail or optional_params
         sampling_rate = 5
+        end_of_stream_only = False  # If True, only apply guardrail at end of stream
+
         if guardrail_to_apply is not None:
-            # Check guardrail config first
-            guardrail_config = getattr(guardrail_to_apply, "guardrail_config", {})
-            sampling_rate = guardrail_config.get(
-                "streaming_sampling_rate", sampling_rate
+            # Check direct attributes on guardrail first
+            sampling_rate = getattr(
+                guardrail_to_apply, "streaming_sampling_rate", sampling_rate
             )
+            end_of_stream_only = getattr(
+                guardrail_to_apply, "streaming_end_of_stream_only", end_of_stream_only
+            )
+
+            # Also check guardrail_config dict if present
+            guardrail_config = getattr(guardrail_to_apply, "guardrail_config", {})
+            if isinstance(guardrail_config, dict):
+                sampling_rate = guardrail_config.get(
+                    "streaming_sampling_rate", sampling_rate
+                )
+                end_of_stream_only = guardrail_config.get(
+                    "streaming_end_of_stream_only", end_of_stream_only
+                )
 
         # Also check optional_params as fallback
         sampling_rate = self.optional_params.get(
             "streaming_sampling_rate", sampling_rate
+        )
+        end_of_stream_only = self.optional_params.get(
+            "streaming_end_of_stream_only", end_of_stream_only
         )
 
         if guardrail_to_apply is None:
@@ -291,10 +316,10 @@ class UnifiedLLMGuardrails(CustomLogger):
             if call_type is None and user_api_key_dict.request_route is not None:
                 call_types = get_call_types_for_route(user_api_key_dict.request_route)
                 if call_types is not None:
-                    call_type = call_types[0]
+                    call_type = call_types[0].value
 
             if call_type is None:
-                call_type = _infer_call_type(call_type=None, completion_response=item)
+                call_type = _infer_call_type(call_type=None, completion_response=item)  # type: ignore
 
             # If call type not supported, just pass through all chunks
             if (
@@ -306,9 +331,13 @@ class UnifiedLLMGuardrails(CustomLogger):
                     yield remaining_item
                 return
 
+            # If end_of_stream_only mode, yield chunks without processing
+            if end_of_stream_only:
+                yield item
+                continue
+
             # Process chunk based on sampling rate
             if chunk_counter % sampling_rate == 0:
-
                 verbose_proxy_logger.debug(
                     "Processing streaming chunk %s (sampling_rate=%s) with guardrail %s",
                     chunk_counter,

@@ -8,6 +8,7 @@ import * as networking from "../networking";
 // Mock the networking module
 vi.mock("../networking", () => ({
   fetchMCPServers: vi.fn(),
+  fetchMCPServerHealth: vi.fn(),
   deleteMCPServer: vi.fn(),
   getProxyBaseUrl: vi.fn().mockReturnValue("http://localhost:4000"),
 }));
@@ -32,7 +33,7 @@ const createQueryClient = () =>
 
 describe("MCPServers", () => {
   const defaultProps = {
-    accessToken: "test-token",
+    accessToken: "123",
     userRole: "Admin",
     userID: "admin-user-id",
   };
@@ -120,6 +121,111 @@ describe("MCPServers", () => {
     expect(getByText("test-server-2")).toBeInTheDocument();
 
     // Verify the API was called
-    expect(networking.fetchMCPServers).toHaveBeenCalledWith("test-token");
+    // Note: useMCPServers uses useAuthorized() internally, which returns "123" from global mock
+    expect(networking.fetchMCPServers).toHaveBeenCalledWith("123");
+  });
+
+  it("should fetch and merge health status for servers", async () => {
+    // Mock MCP servers data without health status
+    const mockServers = [
+      {
+        server_id: "server-1",
+        server_name: "Test Server 1",
+        alias: "test-server-1",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "none",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+        teams: [],
+        mcp_access_groups: [],
+        status: undefined,
+      },
+      {
+        server_id: "server-2",
+        server_name: "Test Server 2",
+        alias: "test-server-2",
+        url: "https://example2.com/mcp",
+        transport: "sse",
+        auth_type: "api_key",
+        created_at: "2024-01-02T00:00:00Z",
+        created_by: "user-2",
+        updated_at: "2024-01-02T00:00:00Z",
+        updated_by: "user-2",
+        teams: [],
+        mcp_access_groups: ["group-1"],
+        status: undefined,
+      },
+    ];
+
+    // Mock health status data
+    const mockHealthStatuses = [
+      { server_id: "server-1", status: "healthy" },
+      { server_id: "server-2", status: "unhealthy" },
+    ];
+
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue(mockServers);
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue(mockHealthStatuses);
+
+    const queryClient = createQueryClient();
+    const { getByText } = render(
+      <QueryClientProvider client={queryClient}>
+        <MCPServers {...defaultProps} />
+      </QueryClientProvider>,
+    );
+
+    // Wait for the component to load
+    await waitFor(() => {
+      expect(getByText("MCP Servers")).toBeInTheDocument();
+    });
+
+    // Verify the health check API was called with server IDs
+    await waitFor(() => {
+      expect(networking.fetchMCPServerHealth).toHaveBeenCalledWith("123", ["server-1", "server-2"]);
+    });
+  });
+
+  it("should display loading state while health check is in progress", async () => {
+    const mockServers = [
+      {
+        server_id: "server-1",
+        server_name: "Test Server 1",
+        alias: "test-server-1",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "none",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+        teams: [],
+        mcp_access_groups: [],
+      },
+    ];
+
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue(mockServers);
+    // Mock health check to never resolve (to test loading state)
+    vi.mocked(networking.fetchMCPServerHealth).mockImplementation(
+      () => new Promise(() => {}), // Never resolves
+    );
+
+    const queryClient = createQueryClient();
+    const { getByText } = render(
+      <QueryClientProvider client={queryClient}>
+        <MCPServers {...defaultProps} />
+      </QueryClientProvider>,
+    );
+
+    // Wait for the component to load
+    await waitFor(() => {
+      expect(getByText("MCP Servers")).toBeInTheDocument();
+    });
+
+    // Verify that health check was initiated
+    await waitFor(() => {
+      expect(networking.fetchMCPServerHealth).toHaveBeenCalled();
+    });
   });
 });

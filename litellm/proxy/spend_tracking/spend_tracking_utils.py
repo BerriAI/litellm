@@ -11,11 +11,15 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB, REDACTED_BY_LITELM_STRING
-from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+from litellm.litellm_core_utils.core_helpers import (
+    get_litellm_metadata_from_kwargs,
+    reconstruct_model_name,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.utils import (
+    CostBreakdown,
     StandardLoggingGuardrailInformation,
     StandardLoggingMCPToolCall,
     StandardLoggingModelInformation,
@@ -55,6 +59,8 @@ def _get_spend_logs_metadata(
     usage_object: Optional[dict] = None,
     model_map_information: Optional[StandardLoggingModelInformation] = None,
     cold_storage_object_key: Optional[str] = None,
+    litellm_overhead_time_ms: Optional[float] = None,
+    cost_breakdown: Optional[CostBreakdown] = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -78,6 +84,8 @@ def _get_spend_logs_metadata(
             usage_object=None,
             guardrail_information=None,
             cold_storage_object_key=cold_storage_object_key,
+            litellm_overhead_time_ms=None,
+            cost_breakdown=None,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "
@@ -95,13 +103,15 @@ def _get_spend_logs_metadata(
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
-    clean_metadata["vector_store_request_metadata"] = (
-        _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
-    )
+    clean_metadata[
+        "vector_store_request_metadata"
+    ] = _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
     clean_metadata["guardrail_information"] = guardrail_information
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
+    clean_metadata["litellm_overhead_time_ms"] = litellm_overhead_time_ms
+    clean_metadata["cost_breakdown"] = cost_breakdown
 
     return clean_metadata
 
@@ -298,6 +308,12 @@ def get_logging_payload(  # noqa: PLR0915
     _model_id = metadata.get("model_info", {}).get("id", "")
     _model_group = metadata.get("model_group", "")
 
+    # Extract overhead from hidden_params if available
+    litellm_overhead_time_ms = None
+    if standard_logging_payload is not None:
+        hidden_params = standard_logging_payload.get("hidden_params", {})
+        litellm_overhead_time_ms = hidden_params.get("litellm_overhead_time_ms")
+
     # clean up litellm metadata
     clean_metadata = _get_spend_logs_metadata(
         metadata,
@@ -343,6 +359,12 @@ def get_logging_payload(  # noqa: PLR0915
             if standard_logging_payload is not None
             else None
         ),
+        litellm_overhead_time_ms=litellm_overhead_time_ms,
+        cost_breakdown=(
+            standard_logging_payload.get("cost_breakdown", None)
+            if standard_logging_payload is not None
+            else None
+        ),
     )
 
     special_usage_fields = ["completion_tokens", "prompt_tokens", "total_tokens"]
@@ -374,6 +396,9 @@ def get_logging_payload(  # noqa: PLR0915
 
     # Extract agent_id for A2A requests (set directly on model_call_details)
     agent_id: Optional[str] = kwargs.get("agent_id")
+    custom_llm_provider = kwargs.get("custom_llm_provider")
+    raw_model = cast(str, kwargs.get("model") or "")
+    model_name = reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
 
     try:
         payload: SpendLogsPayload = SpendLogsPayload(
@@ -384,7 +409,7 @@ def get_logging_payload(  # noqa: PLR0915
             startTime=_ensure_datetime_utc(start_time),
             endTime=_ensure_datetime_utc(end_time),
             completionStartTime=_ensure_datetime_utc(completion_start_time),
-            model=kwargs.get("model", "") or "",
+            model=model_name,
             user=metadata.get("user_api_key_user_id", "") or "",
             team_id=metadata.get("user_api_key_team_id", "") or "",
             organization_id=metadata.get("user_api_key_org_id") or "",
@@ -430,7 +455,7 @@ def get_logging_payload(  # noqa: PLR0915
 
         # Explicitly clear large intermediate objects to reduce memory pressure
         del response_obj_dict, usage, clean_metadata, additional_usage_values
-        
+
         return payload
     except Exception as e:
         verbose_proxy_logger.exception(

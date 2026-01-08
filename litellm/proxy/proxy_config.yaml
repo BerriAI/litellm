@@ -1,20 +1,8 @@
 model_list:
-  - model_name: openai/gpt-4o-mini
+  - model_name: anthropic/*
     litellm_params:
-      model: openai/gpt-4o-mini
-      tpm: 1000
-
-  # LangGraph models
-  - model_name: langgraph/*
+      model: anthropic/*
+  - model_name: openai/*
     litellm_params:
-      model: langgraph/*
-
-litellm_settings:
-  callbacks: ["dynamic_rate_limiter_v3"]
-  priority_reservation:
-    "prod": 0.9 # 90% reserved for production
-    "dev": 0.1 # 10% reserved for development
-
-
-
+      model: openai/*
 

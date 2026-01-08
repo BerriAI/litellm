@@ -54,7 +54,10 @@ from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
 )
 from litellm.types.utils import Message as LitellmMessage
-from litellm.types.utils import PromptTokensDetailsWrapper, ServerToolUse
+from litellm.types.utils import (
+    PromptTokensDetailsWrapper,
+    ServerToolUse,
+)
 from litellm.utils import (
     ModelResponse,
     Usage,
@@ -204,9 +207,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )  # Relevant issue: https://github.com/BerriAI/litellm/issues/7755
 
     def get_cache_control_headers(self) -> dict:
+        # Anthropic no longer requires the prompt-caching beta header
+        # Prompt caching now works automatically when cache_control is used in messages
+        # Reference: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
         return {
             "anthropic-version": "2023-06-01",
-            "anthropic-beta": "prompt-caching-2024-07-31",
         }
 
     def _map_tool_choice(
@@ -942,6 +947,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         self, headers: dict, optional_params: dict
     ) -> dict:
         """Update headers with optional anthropic beta."""
+        
+        # Skip adding beta headers for Vertex requests
+        # Vertex AI handles these headers differently
+        is_vertex_request = optional_params.get("is_vertex_request", False)
+        if is_vertex_request:
+            return headers
 
         _tools = optional_params.get("tools", [])
         for tool in _tools:
@@ -1028,7 +1039,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             anthropic_messages = anthropic_messages_pt(
                 model=model,
                 messages=messages,
-                llm_provider="anthropic",
+                llm_provider=self.custom_llm_provider or "anthropic",
             )
         except Exception as e:
             raise AnthropicError(
@@ -1066,6 +1077,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             and _valid_user_id(_litellm_metadata["user_id"])
         ):
             optional_params["metadata"] = {"user_id": _litellm_metadata["user_id"]}
+
+        # Remove internal LiteLLM parameters that should not be sent to Anthropic API
+        optional_params.pop("is_vertex_request", None)
 
         data = {
             "model": model,
@@ -1132,19 +1146,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if content["type"] == "text":
                 text_content += content["text"]
             ## TOOL CALLING
-            elif content["type"] == "tool_use":
+            elif content["type"] == "tool_use" or content["type"] == "server_tool_use":
                 tool_call = AnthropicConfig.convert_tool_use_to_openai_format(
                     anthropic_tool_content=content,
-                    index=idx,
-                )
-                tool_calls.append(tool_call)
-            ## SERVER TOOL USE (for tool search)
-            elif content["type"] == "server_tool_use":
-                # Server tool use blocks are for tool search - treat as tool calls
-                # Note: using .get("input", {}) for server_tool_use as input may not be present
-                content_with_input = {**content, "input": content.get("input", {})}
-                tool_call = AnthropicConfig.convert_tool_use_to_openai_format(
-                    anthropic_tool_content=content_with_input,
                     index=idx,
                 )
                 tool_calls.append(tool_call)
@@ -1261,14 +1265,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             cache_creation_tokens=cache_creation_input_tokens,
             cache_creation_token_details=cache_creation_token_details,
         )
-        completion_token_details = (
-            CompletionTokensDetailsWrapper(
-                reasoning_tokens=token_counter(
-                    text=reasoning_content, count_response_tokens=True
-                )
-            )
+        # Always populate completion_token_details, not just when there's reasoning_content
+        reasoning_tokens = (
+            token_counter(text=reasoning_content, count_response_tokens=True)
             if reasoning_content
-            else None
+            else 0
+        )
+        completion_token_details = CompletionTokensDetailsWrapper(
+            reasoning_tokens=reasoning_tokens if reasoning_tokens > 0 else None,
+            text_tokens=completion_tokens - reasoning_tokens if reasoning_tokens > 0 else completion_tokens,
         )
         total_tokens = prompt_tokens + completion_tokens
 
@@ -1343,6 +1348,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 "context_management"
             )
 
+            container: Optional[Dict] = completion_response.get("container")
+
             provider_specific_fields: Dict[str, Any] = {
                 "citations": citations,
                 "thinking_blocks": thinking_blocks,
@@ -1351,7 +1358,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 provider_specific_fields["context_management"] = context_management
             if web_search_results is not None:
                 provider_specific_fields["web_search_results"] = web_search_results
-
+            if container is not None:
+                provider_specific_fields["container"] = container
+                
             _message = litellm.Message(
                 tool_calls=tool_calls,
                 content=text_content or None,

@@ -24,6 +24,7 @@ from litellm.constants import (
     DEFAULT_IN_MEMORY_TTL,
     DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
     DEFAULT_MAX_RECURSE_DEPTH,
+    EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.proxy._types import (
@@ -175,6 +176,15 @@ async def common_checks(
             )
 
     ## 4.2 check team member budget, if team key
+    await _check_team_member_budget(
+        team_object=team_object,
+        user_object=user_object,
+        valid_token=valid_token,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
     # 5. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
     if end_user_object is not None and end_user_object.litellm_budget_table is not None:
         end_user_budget = end_user_object.litellm_budget_table.max_budget
@@ -1362,6 +1372,195 @@ async def get_team_object(
         )
 
 
+@log_db_metrics
+async def get_team_object_by_alias(
+    team_alias: str,
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+    parent_otel_span: Optional["Span"] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
+) -> LiteLLM_TeamTableCachedObj:
+    """
+    Look up a team by its team_alias (name) in the database.
+
+    Args:
+        team_alias: The team name/alias to look up
+        prisma_client: Database client
+        user_api_key_cache: Cache for storing results
+        parent_otel_span: Optional OpenTelemetry span
+        proxy_logging_obj: Optional proxy logging object
+
+    Returns:
+        LiteLLM_TeamTableCachedObj: The team object if found
+
+    Raises:
+        HTTPException: If team doesn't exist or multiple teams have the same alias
+    """
+    if prisma_client is None:
+        raise Exception(
+            "No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys"
+        )
+
+    # Check cache first (keyed by alias)
+    cache_key = "team_alias:{}".format(team_alias)
+
+    cached_team_obj = await _get_team_object_from_cache(
+        key=cache_key,
+        proxy_logging_obj=proxy_logging_obj,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=parent_otel_span,
+    )
+
+    if cached_team_obj is not None:
+        return cached_team_obj
+
+    # Query database by team_alias
+    try:
+        teams = await prisma_client.db.litellm_teamtable.find_many(
+            where={"team_alias": team_alias}
+        )
+
+        if not teams:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": f"Team with alias '{team_alias}' doesn't exist in db. Create team via `/team/new` call."
+                },
+            )
+
+        if len(teams) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Multiple teams found with alias '{team_alias}'. Please use team_id_jwt_field instead or ensure team aliases are unique."
+                },
+            )
+
+        team = teams[0]
+        team_obj = LiteLLM_TeamTableCachedObj(**team.model_dump())
+
+        # Cache the result by both alias and team_id
+        await user_api_key_cache.async_set_cache(
+            key=cache_key,
+            value=team_obj,
+            ttl=DEFAULT_IN_MEMORY_TTL,
+        )
+        # Also cache by team_id for consistency
+        team_id_cache_key = "team_id:{}".format(team_obj.team_id)
+        await user_api_key_cache.async_set_cache(
+            key=team_id_cache_key,
+            value=team_obj,
+            ttl=DEFAULT_IN_MEMORY_TTL,
+        )
+
+        return team_obj
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "Error looking up team by alias: %s", team_alias
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": f"Error looking up team by alias '{team_alias}': {str(e)}"
+            },
+        )
+
+
+@log_db_metrics
+async def get_org_object_by_alias(
+    org_alias: str,
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+    parent_otel_span: Optional["Span"] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
+) -> Optional[LiteLLM_OrganizationTable]:
+    """
+    Look up an organization by its organization_alias in the database.
+
+    Args:
+        org_alias: The organization name/alias to look up
+        prisma_client: Database client
+        user_api_key_cache: Cache for storing results
+        parent_otel_span: Optional OpenTelemetry span
+        proxy_logging_obj: Optional proxy logging object
+
+    Returns:
+        LiteLLM_OrganizationTable if found, None otherwise
+
+    Raises:
+        HTTPException: If organization not found or multiple orgs have the same alias
+    """
+    if prisma_client is None:
+        raise Exception(
+            "No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys"
+        )
+
+    # Check cache first (keyed by alias)
+    cache_key = "org_alias:{}".format(org_alias)
+    cached_org_obj = await user_api_key_cache.async_get_cache(key=cache_key)
+    if cached_org_obj is not None:
+        if isinstance(cached_org_obj, dict):
+            return LiteLLM_OrganizationTable(**cached_org_obj)
+        elif isinstance(cached_org_obj, LiteLLM_OrganizationTable):
+            return cached_org_obj
+
+    # Query database by organization_alias
+    try:
+        orgs = await prisma_client.db.litellm_organizationtable.find_many(
+            where={"organization_alias": org_alias}
+        )
+
+        if not orgs:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": f"Organization with alias '{org_alias}' doesn't exist in db. Create organization via `/organization/new` call."
+                },
+            )
+
+        if len(orgs) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Multiple organizations found with alias '{org_alias}'. Please use org_id_jwt_field instead or ensure organization aliases are unique."
+                },
+            )
+
+        org = orgs[0]
+        org_obj = LiteLLM_OrganizationTable(**org.model_dump())
+
+        # Cache the result
+        await user_api_key_cache.async_set_cache(
+            key=cache_key,
+            value=org_obj.model_dump(),
+            ttl=DEFAULT_IN_MEMORY_TTL,
+        )
+        # Also cache by org_id for consistency
+        await user_api_key_cache.async_set_cache(
+            key="org_id:{}".format(org_obj.organization_id),
+            value=org_obj.model_dump(),
+            ttl=DEFAULT_IN_MEMORY_TTL,
+        )
+
+        return org_obj
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "Error looking up organization by alias: %s", org_alias
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": f"Error looking up organization by alias '{org_alias}': {str(e)}"
+            },
+        )
+
+
 class ExperimentalUIJWTToken:
     @staticmethod
     def get_experimental_ui_login_jwt_auth_token(user_info: LiteLLM_UserTable) -> str:
@@ -1911,6 +2110,7 @@ async def _virtual_key_max_budget_check(
             token=valid_token.token,
             spend=valid_token.spend,
             max_budget=valid_token.max_budget,
+            soft_budget=valid_token.soft_budget,
             user_id=valid_token.user_id,
             team_id=valid_token.team_id,
             organization_id=valid_token.org_id,
@@ -1939,6 +2139,7 @@ async def _virtual_key_max_budget_check(
 async def _virtual_key_soft_budget_check(
     valid_token: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLogging,
+    user_obj: Optional[LiteLLM_UserTable] = None,
 ):
     """
     Triggers a budget alert if the token is over it's soft budget.
@@ -1961,16 +2162,107 @@ async def _virtual_key_soft_budget_check(
             team_id=valid_token.team_id,
             team_alias=valid_token.team_alias,
             organization_id=valid_token.org_id,
-            user_email=None,
+            user_email=user_obj.user_email if user_obj else None,
             key_alias=valid_token.key_alias,
             event_group=Litellm_EntityType.KEY,
         )
+
         asyncio.create_task(
             proxy_logging_obj.budget_alerts(
                 type="soft_budget",
                 user_info=call_info,
             )
         )
+
+
+async def _virtual_key_max_budget_alert_check(
+    valid_token: UserAPIKeyAuth,
+    proxy_logging_obj: ProxyLogging,
+    user_obj: Optional[LiteLLM_UserTable] = None,
+):
+    """
+    Triggers a budget alert if the token has reached EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
+    (default 80%) of its max budget.
+    This is a warning alert before the token actually exceeds the max budget.
+
+    """
+
+    if (
+        valid_token.max_budget is not None
+        and valid_token.spend is not None
+        and valid_token.spend > 0
+    ):
+        alert_threshold = valid_token.max_budget * EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
+        
+        # Only alert if we've crossed the threshold but haven't exceeded max_budget yet
+        if valid_token.spend >= alert_threshold and valid_token.spend < valid_token.max_budget:
+            verbose_proxy_logger.debug(
+                "Reached Max Budget Alert Threshold for token %s, spend %s, max_budget %s, alert_threshold %s",
+                valid_token.token,
+                valid_token.spend,
+                valid_token.max_budget,
+                alert_threshold,
+            )
+            call_info = CallInfo(
+                token=valid_token.token,
+                spend=valid_token.spend,
+                max_budget=valid_token.max_budget,
+                soft_budget=valid_token.soft_budget,
+                user_id=valid_token.user_id,
+                team_id=valid_token.team_id,
+                team_alias=valid_token.team_alias,
+                organization_id=valid_token.org_id,
+                user_email=user_obj.user_email if user_obj else None,
+                key_alias=valid_token.key_alias,
+                event_group=Litellm_EntityType.KEY,
+            )
+
+            asyncio.create_task(
+                proxy_logging_obj.budget_alerts(
+                    type="max_budget_alert",
+                    user_info=call_info,
+                )
+            )
+
+
+async def _check_team_member_budget(
+    team_object: Optional[LiteLLM_TeamTable],
+    user_object: Optional[LiteLLM_UserTable],
+    valid_token: Optional[UserAPIKeyAuth],
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+    proxy_logging_obj: ProxyLogging,
+):
+    """Check if team member is over their max budget within the team."""
+    if (
+        team_object is not None
+        and team_object.team_id is not None
+        and user_object is not None
+        and valid_token is not None
+        and valid_token.user_id is not None
+    ):
+        team_membership = await get_team_membership(
+            user_id=valid_token.user_id,
+            team_id=team_object.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        
+        if (
+            team_membership is not None
+            and team_membership.litellm_budget_table is not None
+            and team_membership.litellm_budget_table.max_budget is not None
+        ):
+            team_member_budget = team_membership.litellm_budget_table.max_budget
+            team_member_spend = team_membership.spend or 0.0
+            
+            if team_member_spend > team_member_budget:
+                raise litellm.BudgetExceededError(
+                    current_cost=team_member_spend,
+                    max_budget=team_member_budget,
+                    message=f"Budget has been exceeded! User={valid_token.user_id} in Team={team_object.team_id} Current cost: {team_member_spend}, Max budget: {team_member_budget}",
+                )
 
 
 async def _team_max_budget_check(

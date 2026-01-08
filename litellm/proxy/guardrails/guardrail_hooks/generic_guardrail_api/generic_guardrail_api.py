@@ -54,6 +54,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         self,
         headers: Optional[Dict[str, Any]] = None,
         api_base: Optional[str] = None,
+        api_key: Optional[str] = None,
         additional_provider_specific_params: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
@@ -61,6 +62,11 @@ class GenericGuardrailAPI(CustomGuardrail):
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
         self.headers = headers or {}
+
+        # If api_key is provided, add it as x-api-key header
+        if api_key:
+            self.headers["x-api-key"] = api_key
+
         base_url = api_base or os.environ.get("GENERIC_GUARDRAIL_API_BASE")
 
         if not base_url:

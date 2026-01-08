@@ -984,6 +984,7 @@ async def test_vertex_ai_token_counter_routes_partner_models():
     to the partner models token counter instead of the Gemini token counter.
     """
     from unittest.mock import AsyncMock, patch
+
     from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
     from litellm.types.utils import TokenCountResponse
 
@@ -1021,12 +1022,60 @@ async def test_vertex_ai_token_counter_routes_partner_models():
 
 
 @pytest.mark.asyncio
+async def test_vertex_ai_token_counter_uses_count_tokens_location():
+    """
+    Test that VertexAITokenCounter uses vertex_count_tokens_location to override
+    vertex_location when counting tokens for partner models.
+
+    Count tokens API is not available on global location for partner models:
+    https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/count-tokens
+    """
+    from unittest.mock import patch
+
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+    from litellm.types.utils import TokenCountResponse
+
+    token_counter = VertexAITokenCounter()
+
+    # Mock the partner models handler
+    with patch(
+        "litellm.llms.vertex_ai.vertex_ai_partner_models.main.VertexAIPartnerModels.count_tokens"
+    ) as mock_partner_count_tokens:
+        mock_partner_count_tokens.return_value = {
+            "input_tokens": 42,
+            "tokenizer_used": "vertex_ai_partner_models",
+        }
+
+        # Test with vertex_count_tokens_location overriding vertex_location
+        await token_counter.count_tokens(
+            model_to_use="claude-3-5-sonnet-20241022",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "vertex_project": "test-project",
+                    "vertex_location": "global",  # Original location (not supported for count_tokens)
+                    "vertex_count_tokens_location": "us-east5",  # Override for count_tokens
+                }
+            },
+            request_model="vertex_ai/claude-3-5-sonnet-20241022",
+        )
+
+        # Verify the partner models handler was called with the overridden location
+        assert mock_partner_count_tokens.called
+        call_kwargs = mock_partner_count_tokens.call_args.kwargs
+        assert call_kwargs["vertex_location"] == "us-east5"
+        assert call_kwargs["vertex_project"] == "test-project"
+
+
+@pytest.mark.asyncio
 async def test_vertex_ai_token_counter_routes_gemini_models():
     """
     Test that VertexAITokenCounter correctly routes Gemini models
     to the Gemini token counter (not partner models).
     """
     from unittest.mock import AsyncMock, patch
+
     from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
     from litellm.types.utils import TokenCountResponse
 
@@ -1124,3 +1173,97 @@ def test_vertex_ai_moonshot_uses_openai_handler():
     assert VertexAIPartnerModels.should_use_openai_handler(
         "moonshotai/kimi-k2-thinking-maas"
     )
+
+
+def test_vertex_ai_zai_uses_openai_handler():
+    """
+    Ensure ZAI partner models re-use the OpenAI-format handler.
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+        VertexAIPartnerModels,
+    )
+
+    assert VertexAIPartnerModels.should_use_openai_handler(
+        "zai-org/glm-4.7-maas"
+    )
+
+
+def test_vertex_ai_zai_is_partner_model():
+    """
+    Ensure ZAI models are detected as Vertex AI partner models.
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+        VertexAIPartnerModels,
+    )
+
+    assert VertexAIPartnerModels.is_vertex_partner_model("zai-org/glm-4.7-maas")
+
+
+def test_build_vertex_schema_empty_properties():
+    """
+    Test _build_vertex_schema handles empty properties objects correctly.
+    
+    This test verifies the fix for the issue where Gemini rejects schemas 
+    with empty properties objects like {"properties": {}, "type": "object"}.
+    
+    Error from Gemini: "GenerateContentRequest.generation_config.response_schema
+    .properties[\"action\"].items.any_of[0].properties[\"go_back\"].properties: 
+    should be non-empty for OBJECT type"
+    
+    The fix removes empty properties objects and their associated type/required fields.
+    """
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    # Input: Schema with empty properties (the problematic case from real request)
+    input_schema = {
+        "properties": {
+            "action": {
+                "description": "List of actions to execute",
+                "items": {
+                    "anyOf": [
+                        {
+                            "properties": {
+                                "go_back": {
+                                    "properties": {},
+                                    "type": "object",
+                                    "additionalProperties": False,
+                                    "description": "Go back",
+                                    "required": []
+                                }
+                            },
+                            "required": ["go_back"],
+                            "type": "object",
+                            "additionalProperties": False
+                        }
+                    ]
+                },
+                "type": "array"
+            }
+        },
+        "type": "object",
+        "additionalProperties": False
+    }
+
+    # Apply the transformation
+    result = _build_vertex_schema(input_schema)
+
+    # Verify the transformation removed empty properties
+    # Navigate to the go_back schema
+    go_back_schema = result["properties"]["action"]["items"]["anyOf"][0]["properties"]["go_back"]
+    
+    # Verify empty properties was removed
+    assert "properties" not in go_back_schema, "Empty properties should be removed"
+    
+    # Verify type was also removed (since object without properties is invalid in Gemini)
+    assert "type" not in go_back_schema, "Type should be removed when properties is empty"
+    
+    # Verify required was also removed
+    assert "required" not in go_back_schema, "Required should be removed when properties is empty"
+    
+    # Verify description is preserved
+    assert go_back_schema.get("description") == "Go back", "Description should be preserved"
+    
+    # Verify parent schema still has proper structure
+    parent_schema = result["properties"]["action"]["items"]["anyOf"][0]
+    assert parent_schema["type"] == "object", "Parent schema should still have object type"
+    assert "go_back" in parent_schema["properties"], "go_back should still be in parent properties"

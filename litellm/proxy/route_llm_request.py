@@ -25,6 +25,7 @@ ROUTE_ENDPOINT_MAPPING = {
     "alist_input_items": "/responses/{response_id}/input_items",
     "aimage_edit": "/images/edits",
     "acancel_responses": "/responses/{response_id}/cancel",
+    "acompact_responses": "/responses/compact",
     "aocr": "/ocr",
     "asearch": "/search",
     "avideo_generation": "/videos",
@@ -37,6 +38,7 @@ ROUTE_ENDPOINT_MAPPING = {
     "aretrieve_container": "/containers/{container_id}",
     "adelete_container": "/containers/{container_id}",
     # Auto-generated container file routes
+    "aupload_container_file": "/containers/{container_id}/files",
     "alist_container_files": "/containers/{container_id}/files",
     "aretrieve_container_file": "/containers/{container_id}/files/{file_id}",
     "adelete_container_file": "/containers/{container_id}/files/{file_id}",
@@ -46,6 +48,11 @@ ROUTE_ENDPOINT_MAPPING = {
     "aget_skill": "/skills/{skill_id}",
     "adelete_skill": "/skills/{skill_id}",
     "aingest": "/rag/ingest",
+    # Google Interactions API routes
+    "acreate_interaction": "/interactions",
+    "aget_interaction": "/interactions/{interaction_id}",
+    "adelete_interaction": "/interactions/{interaction_id}",
+    "acancel_interaction": "/interactions/{interaction_id}/cancel",
 }
 
 
@@ -111,6 +118,7 @@ async def route_request(
         "aget_responses",
         "adelete_responses",
         "acancel_responses",
+        "acompact_responses",
         "acreate_response_reply",
         "alist_input_items",
         "_arealtime",  # private function for realtime API
@@ -137,6 +145,7 @@ async def route_request(
         "alist_containers",
         "aretrieve_container",
         "adelete_container",
+        "aupload_container_file",
         "alist_container_files",
         "aretrieve_container_file",
         "adelete_container_file",
@@ -147,6 +156,10 @@ async def route_request(
         "adelete_skill",
         "aingest",
         "anthropic_messages",
+        "acreate_interaction",
+        "aget_interaction",
+        "adelete_interaction",
+        "acancel_interaction",
     ],
 ):
     """
@@ -193,10 +206,18 @@ async def route_request(
             "alist_containers",
             "aretrieve_container",
             "adelete_container",
+            "aupload_container_file",
             "alist_container_files",
             "aretrieve_container_file",
             "adelete_container_file",
             "aretrieve_container_file_content",
+        ]:
+            return getattr(llm_router, f"{route_type}")(**data)
+        # Interactions API: get/delete/cancel don't need model routing
+        if route_type in [
+            "aget_interaction",
+            "adelete_interaction",
+            "acancel_interaction",
         ]:
             return getattr(llm_router, f"{route_type}")(**data)
         if route_type in [
@@ -269,6 +290,7 @@ async def route_request(
                 "alist_containers",
                 "aretrieve_container",
                 "adelete_container",
+                "aupload_container_file",
                 "alist_container_files",
                 "aretrieve_container_file",
                 "adelete_container_file",

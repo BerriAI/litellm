@@ -39,6 +39,8 @@ class TestKeyManagementEventHooksIndependentOperations:
         # Create mock objects for the hook parameters
         mock_data = MagicMock()
         mock_data.key_alias = "test-key-alias"
+        mock_data.team_id = None
+        mock_data.send_invite_email = True
 
         mock_response = MagicMock()
         mock_response.model_dump.return_value = {"key": "sk-test", "token": "test-token"}
@@ -58,6 +60,10 @@ class TestKeyManagementEventHooksIndependentOperations:
             KeyManagementEventHooks,
             "_store_virtual_key_in_secret_manager",
             side_effect=mock_store_secret,
+        ), patch.object(
+            KeyManagementEventHooks,
+            "_is_email_sending_enabled",
+            return_value=True,
         ), patch(
             "litellm.store_audit_logs", False
         ), patch(
@@ -94,6 +100,8 @@ class TestKeyManagementEventHooksIndependentOperations:
         # Create mock objects for the hook parameters
         mock_data = MagicMock()
         mock_data.key_alias = "test-key-alias"
+        mock_data.team_id = None
+        mock_data.send_invite_email = True
 
         mock_response = MagicMock()
         mock_response.model_dump.return_value = {"key": "sk-test", "token": "test-token"}
@@ -113,6 +121,10 @@ class TestKeyManagementEventHooksIndependentOperations:
             KeyManagementEventHooks,
             "_store_virtual_key_in_secret_manager",
             side_effect=mock_store_secret_raises,
+        ), patch.object(
+            KeyManagementEventHooks,
+            "_is_email_sending_enabled",
+            return_value=True,
         ), patch(
             "litellm.store_audit_logs", False
         ), patch(
@@ -127,4 +139,3 @@ class TestKeyManagementEventHooksIndependentOperations:
 
         # Email should have been called despite secret manager failure
         assert email_called["called"] is True
-
