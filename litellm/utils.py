@@ -8321,7 +8321,8 @@ class ProviderConfigManager:
             from litellm.llms.vertex_ai.ocr.common_utils import get_vertex_ai_ocr_config
 
             return get_vertex_ai_ocr_config(model=model)
-MistralOCRConfig = getattr(sys.modules[__name__], 'MistralOCRConfig')
+
+        MistralOCRConfig = getattr(sys.modules[__name__], 'MistralOCRConfig')
         PROVIDER_TO_CONFIG_MAP = {
             litellm.LlmProviders.MISTRAL: MistralOCRConfig,
         }
