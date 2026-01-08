@@ -164,9 +164,8 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if extra_body:
             base_request.update(extra_body)
         
-        verbose_logger.debug(
-            f"Manus: Using agent_profile={agent_profile}, task_mode=agent"
-        )
+        # Avoid logging potentially sensitive agent_profile value
+        verbose_logger.debug("Manus: Using task_mode=agent")
         
         return base_request
 
